@@ -1,0 +1,60 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/effect_name_bound_twice.fe
+---
+error[3-0093]: `s` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:14:39
+   │
+14 │ fn labelled() -> u256 uses (s: Store, s: Other) { s.n }
+   │                             --------  ^^^^^^^^ `s` is bound again here
+   │                             │
+   │                             `s` is first bound here
+
+error[3-0093]: `Store` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:16:38
+   │
+16 │ fn unlabelled() -> u256 uses (Store, a::Store) { Store.n }
+   │                               -----  ^^^^^^^^ `Store` is bound again here
+   │                               │
+   │                               `Store` is first bound here
+
+error[3-0093]: `a` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:33:25
+   │
+33 │     uses E = (a: Store, a: Other)
+   │               --------  ^^^^^^^^ `a` is bound again here
+   │               │
+   │               `a` is first bound here
+
+error[3-0093]: `also` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:46:31
+   │
+46 │     fn log(mut self) uses (E, also: Other) {}
+   │                            -  ^^^^^^^^^^^ `also` is bound again here
+   │                            │
+   │                            `also` is first bound here
+
+error[3-0093]: `x` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:65:28
+   │
+65 │         A -> u256 uses (x, x) { x }
+   │                         -  ^ `x` is bound again here
+   │                         │
+   │                         `x` is first bound here
+
+error[3-0093]: `ctx` is bound by more than one effect
+   ┌─ effect_name_bound_twice.fe:69:35
+   │
+69 │ pub contract Root uses (ctx: Ctx, ctx: Log) {
+   │                         --------  ^^^^^^^^ `ctx` is bound again here
+   │                         │
+   │                         `ctx` is first bound here
+
+error[8-0134]: `s` is also bound by an effect
+   ┌─ effect_name_bound_twice.fe:18:38
+   │
+18 │ fn param_and_effect(_ s: u256) uses (s: Store) {}
+   │                       -              ^^^^^^^^ `s` is bound again here
+   │                       │
+   │                       `s` is first bound here

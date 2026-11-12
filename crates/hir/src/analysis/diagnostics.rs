@@ -1933,6 +1933,53 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 primary_diag(Severity::Error, message, label, span.resolve(db), error_code)
             }
 
+            Self::EffectKeyNamedTwice { span, first, key } => {
+                let key = key.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("effect `{key}` is required twice"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{key}` is required again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{key}` is first required here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "an effect is identified by its key, and a caller provides one value per key"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::EffectNameBoundTwice { span, first, name } => {
+                let name = name.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{name}` is bound by more than one effect"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` is bound again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is first bound here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
+            }
+
             Self::MaybeMutWithoutResult(span) => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a `mut?` function's result needs a `mut?` part".to_string(),
@@ -3392,9 +3439,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
-                primary_diag(Severity::Error, "multiple effect candidates found", format!(
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple effect candidates found".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
                             "effect `{key_str}` is ambiguous when calling `{func_name}`"
-                        ), primary.resolve(db), error_code)
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "choose its provider with `with ({key_str} = value) {{ .. }}`"
+                    )],
+                    error_code,
+                }
             }
 
             Self::EffectMutabilityMismatch {
@@ -3634,6 +3693,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ), format!(
                             "`{given_ty}` does not implement `{trait_str}` for effect `{key_str}`"
                         ), primary.resolve(db), error_code)
+            }
+
+            Self::DuplicateWithKey {
+                primary,
+                first,
+                key,
+            } => {
+                let key_str = key.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("effect `{key_str}` is provided twice in one `with`"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{key_str}` is provided again here"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{key_str}` is first provided here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
             }
 
             Self::WithEffectTypeUnsatisfied {

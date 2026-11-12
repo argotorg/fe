@@ -185,11 +185,14 @@ enum EffectResolution<'db> {
     Ambiguous,
 }
 
-fn evidence_provider<'db>(evidence: &EffectEvidence<'db>) -> ProvidedEffect<'db> {
-    match evidence {
-        EffectEvidence::Keyed { provider, .. }
-        | EffectEvidence::UnkeyedType { provider, .. }
-        | EffectEvidence::UnkeyedTrait { provider, .. } => *provider,
+/// The one viable provider of a frame; two are ambiguous, whatever their
+/// names: `with (Key = value)` chooses one.
+fn choose_effect_evidence<'db>(
+    viable: SmallVec<[EffectEvidence<'db>; 2]>,
+) -> EffectResolution<'db> {
+    match viable.as_slice() {
+        [only] => EffectResolution::Chosen(Box::new(only.clone())),
+        _ => EffectResolution::Ambiguous,
     }
 }
 
@@ -1915,6 +1918,8 @@ impl<'db> TyChecker<'db> {
         result_discarded: bool,
     ) -> ExprProp<'db> {
         self.env.effect_env_mut().push_frame();
+        // The keys this `with` provides, each with its binding's span.
+        let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
 
         for binding in bindings {
             let value_prop = self.check_expr_unknown(binding.value);
@@ -1966,6 +1971,18 @@ impl<'db> TyChecker<'db> {
                                     self.insert_effect_barrier(barrier);
                                     continue;
                                 }
+                                let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+                                if let Some((_, first)) =
+                                    keyed.iter().find(|(key, _)| *key == witness.key)
+                                {
+                                    self.push_diag(BodyDiag::DuplicateWithKey {
+                                        primary: span,
+                                        first: first.clone(),
+                                        key: key_path,
+                                    });
+                                    continue;
+                                }
+                                keyed.push((witness.key.clone(), span));
                                 let (scope, assumptions) =
                                     (self.env.scope(), self.env.assumptions());
                                 self.env.effect_env_mut().insert_witness(
@@ -2557,11 +2574,11 @@ impl<'db> TyChecker<'db> {
                 .copied()
                 .flatten();
 
-            let mut resolution = self.resolve_effect_query(req.clone(), query.clone());
+            let mut resolution = self.resolve_effect_query(query.clone());
             if matches!(resolution, EffectResolution::Missing)
                 && self.provide_closure_effect(req, &query)
             {
-                resolution = self.resolve_effect_query(req.clone(), query.clone());
+                resolution = self.resolve_effect_query(query.clone());
             }
             match resolution {
                 EffectResolution::Chosen(evidence) => {
@@ -2947,11 +2964,7 @@ impl<'db> TyChecker<'db> {
         })
     }
 
-    fn resolve_effect_query(
-        &mut self,
-        req: EffectRequirementDecl<'db>,
-        query: EffectQuery<'db>,
-    ) -> EffectResolution<'db> {
+    fn resolve_effect_query(&mut self, query: EffectQuery<'db>) -> EffectResolution<'db> {
         let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
         let effect_env = self.env.effect_env().clone();
         for frame in effect_env.lookup_effect_frames(&query, self) {
@@ -2974,7 +2987,7 @@ impl<'db> TyChecker<'db> {
                             EffectResolution::Missing
                         };
                     }
-                    return self.choose_effect_evidence(req.name, viable);
+                    return choose_effect_evidence(viable);
                 }
                 FrameLookupResult::KeyedFamily { entries, providers } => {
                     let mut family_viable = SmallVec::new();
@@ -2997,7 +3010,7 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     if !family_viable.is_empty() {
-                        return self.choose_effect_evidence(req.name, family_viable);
+                        return choose_effect_evidence(family_viable);
                     }
                 }
                 FrameLookupResult::Unkeyed { providers } => {
@@ -3015,48 +3028,12 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     if !viable.is_empty() {
-                        return self.choose_effect_evidence(req.name, viable);
+                        return choose_effect_evidence(viable);
                     }
                 }
             }
         }
         EffectResolution::Missing
-    }
-
-    fn choose_effect_evidence(
-        &self,
-        required_name: Option<IdentId<'db>>,
-        viable: SmallVec<[EffectEvidence<'db>; 2]>,
-    ) -> EffectResolution<'db> {
-        if let [only] = viable.as_slice() {
-            EffectResolution::Chosen(Box::new(only.clone()))
-        } else {
-            let Some(required_name) = required_name else {
-                return EffectResolution::Ambiguous;
-            };
-            let mut name_matches = viable.into_iter().filter(|evidence| {
-                let provider = evidence_provider(evidence);
-                match (provider.origin, provider.binding) {
-                    (
-                        EffectOrigin::Param {
-                            name: Some(name), ..
-                        },
-                        _,
-                    ) => name == required_name,
-                    (EffectOrigin::With { .. }, Some(binding)) => {
-                        binding.binding_name(&self.env) == required_name
-                    }
-                    _ => false,
-                }
-            });
-            if let Some(best) = name_matches.next()
-                && name_matches.next().is_none()
-            {
-                EffectResolution::Chosen(Box::new(best))
-            } else {
-                EffectResolution::Ambiguous
-            }
-        }
     }
 
     fn evaluate_keyed_entry(

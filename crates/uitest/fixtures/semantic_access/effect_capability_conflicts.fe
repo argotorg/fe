@@ -1,0 +1,46 @@
+// A capability that addresses slots directly or starts an external
+// execution reaches all persistent state, so it may not be provided beside
+// a `mut` storage effect: the callee could read the slot, or halt, while its
+// write is still in a packed lane's copy.
+use std::evm::{RawOps, RawStorage, read_storage_word}
+use core::ptr::MemSpan
+
+fn write_then_read8() -> u256 uses (x: mut u8, storage: RawStorage) {
+    x = 7
+    read_storage_word(0)
+}
+
+fn bump_maybe_halt(_ halt: bool) uses (x: mut u8, raw: mut RawOps) {
+    x += 1
+    if halt { raw.return_data(data: MemSpan::empty()) }
+}
+
+msg Msg {
+    #[selector = 1]
+    Read {} -> u256,
+    #[selector = 2]
+    Halt { halt: bool },
+    #[selector = 3]
+    Copied {} -> u256,
+}
+
+pub contract P {
+    mut a: u8,
+    mut b: u8,
+
+    recv Msg {
+        // Rejected.
+        Read {} -> u256 uses (mut a, storage: RawStorage) {
+            with (a) { write_then_read8() }
+        }
+        // Rejected.
+        Halt { halt } uses (mut a, raw: mut RawOps) {
+            with (a) { bump_maybe_halt(halt) }
+        }
+        // Accepted: a memory copy of the field.
+        Copied {} -> u256 uses (a, storage: RawStorage) {
+            var copy = a
+            with (copy) { write_then_read8() }
+        }
+    }
+}

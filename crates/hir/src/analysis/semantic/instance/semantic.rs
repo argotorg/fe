@@ -8,7 +8,9 @@ use crate::{
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
             SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            access::{CallSiteRefinements, provisional_call_site_provider_refinements},
+            access::{
+                CallSiteRefinements, keys_may_share, provisional_call_site_provider_refinements,
+            },
             concrete_layout_fault,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
@@ -1312,6 +1314,60 @@ impl<'db> SemanticInstance<'db> {
             .collect()
     }
 
+    /// The instance's effects, instantiated: its owner's declared effects,
+    /// then the components of the rows they name.
+    pub fn effect_requirements(self, db: &'db dyn HirAnalysisDb) -> &'db [EffectRequirement<'db>] {
+        instantiated_effect_env(db, self).map_or(&[], |env| env.requirements(db).as_slice())
+    }
+
+    /// The binding indices of the instance's effects that may be one place
+    /// with another of its effects, one of the two `mut`: a provider may
+    /// satisfy both keys, as of generic keys that are one type here or two
+    /// trait keys. A caller gives such effects one place or disjoint ones,
+    /// so neither is exclusive to its slot. A snapshot effect is a copy, no
+    /// place.
+    #[salsa::tracked(returns(ref))]
+    pub fn shared_effects(self, db: &'db dyn HirAnalysisDb) -> Vec<u32> {
+        let copies: Vec<_> = self
+            .effect_bindings(db)
+            .into_iter()
+            .filter_map(|binding| match binding {
+                LocalBinding::EffectParam {
+                    idx, is_mut: false, ..
+                } if self.binding_role(db, binding)
+                    == SemanticLocalRole::DirectValue {
+                        provenance: ValueProvenance::Ordinary,
+                    } =>
+                {
+                    Some(idx as u32)
+                }
+                _ => None,
+            })
+            .collect();
+        let effects: Vec<_> = self
+            .effect_requirements(db)
+            .iter()
+            .filter(|effect| {
+                matches!(
+                    effect.key.kind(),
+                    EffectKeyKind::Type | EffectKeyKind::Trait
+                ) && !copies.contains(&effect.binding_idx)
+            })
+            .collect();
+        let (scope, assumptions) = (self.normalization_scope(db), self.assumptions(db));
+        effects
+            .iter()
+            .filter(|effect| {
+                effects.iter().any(|other| {
+                    other.binding_idx != effect.binding_idx
+                        && (effect.is_mut || other.is_mut)
+                        && keys_may_share(db, scope, assumptions, &effect.key, &other.key)
+                })
+            })
+            .map(|effect| effect.binding_idx)
+            .collect()
+    }
+
     /// The bindings of the instance's effects: its owner's declared effects,
     /// then the components of the rows they name.
     pub fn effect_bindings(self, db: &'db dyn HirAnalysisDb) -> Vec<LocalBinding<'db>> {
@@ -2439,13 +2495,13 @@ fn classify_binding_role<'db>(
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
         return SemanticLocalRole::PlaceCarrier { provider, value_ty };
     }
-    // A read-only effect of a snapshot type provided by a memory place is
-    // passed as a copy, as a view parameter is: nothing can write the place
-    // during the call, and a reentrant call has memory of its own.
+    // A read-only effect of a snapshot type is a copy taken at the call, as
+    // a snapshot view parameter is, in any space: the call's other effects
+    // and arguments may write its place. An entry's effects are its own.
     if let Some(provider) = &provider
+        && matches!(owner, BodyOwner::Func(..) | BodyOwner::Closure { .. })
         && matches!(binding, LocalBinding::EffectParam { is_mut: false, .. })
-        && provider.semantics.kind == ProviderKind::Place
-        && provider.semantics.address_space == Some(AddressSpace::Memory)
+        && !matches!(provider.source, ProviderSource::RootProvider { .. })
         && ty_is_snapshot(db, scope, ty, assumptions)
     {
         return SemanticLocalRole::DirectValue {

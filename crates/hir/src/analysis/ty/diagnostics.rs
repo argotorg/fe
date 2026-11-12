@@ -133,6 +133,18 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         entry: bool,
     },
+    /// A `uses` list names `key` twice.
+    EffectKeyNamedTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: HirTypeId<'db>,
+    },
+    /// Two effects of a `uses` list bind `name`.
+    EffectNameBoundTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
     /// A spread parameter, `..A`, that is not the last of a trait method's
     /// declaration.
     MisplacedSpread(DynLazySpan<'db>),
@@ -396,6 +408,8 @@ impl TyLowerDiag<'_> {
             Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
+            Self::EffectKeyNamedTwice { .. } => 92,
+            Self::EffectNameBoundTwice { .. } => 93,
             Self::MisplacedSpread(_) => 80,
             Self::SpreadOfNonShape { .. } => 81,
             Self::MaybeMutBound(_) => 71,
@@ -732,6 +746,13 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
+    },
+
+    /// Two keyed bindings of one `with` provide one key.
+    DuplicateWithKey {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: PathId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -1511,6 +1532,7 @@ impl<'db> BodyDiag<'db> {
             Self::EffectTraitUnsatisfied { .. } => 39,
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
+            Self::DuplicateWithKey { .. } => 159,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,

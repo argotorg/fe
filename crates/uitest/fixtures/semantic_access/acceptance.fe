@@ -351,7 +351,8 @@ pub contract Case22OwnReservation {
     }
 }
 
-// 22. Rejected: the same with an outstanding storage data access.
+// 22. Rejected: the same with an outstanding storage data access, whose
+// effects a caller may not provide from storage together with `mut Call`.
 pub contract Case22OutstandingAccess {
     mut vault: Vault,
     init() uses (mut vault, call: mut Call) {

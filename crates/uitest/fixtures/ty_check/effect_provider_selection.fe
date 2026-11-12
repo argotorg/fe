@@ -1,0 +1,61 @@
+// One key has one provider per scope. Names never choose between two: a
+// callee's effect label is invisible at its call.
+struct Store { n: u256 }
+struct Log { n: u256 }
+
+fn read() -> u256 uses (store: Store) {
+    store.n
+}
+
+fn bump() uses (store: mut Store) {
+    store.n += 1
+}
+
+// Rejected: two unkeyed providers of `Store` in one frame, though one is
+// named like the callee's effect.
+fn two_in_one_frame() {
+    var store = Store { n: 0 }
+    var other = Store { n: 1 }
+    with (store, other) {
+        bump()
+    }
+}
+
+// Accepted: a keyed binding chooses one; unkeyed providers of other keys
+// are unaffected.
+fn keyed_chooses() -> u256 {
+    var a = Store { n: 0 }
+    var b = Store { n: 1 }
+    let log = Log { n: 2 }
+    with (Store = b, a, log) {
+        read()
+    }
+}
+
+// Accepted: an inner frame shadows an outer one.
+fn inner_shadows() -> u256 {
+    let a = Store { n: 0 }
+    let b = Store { n: 1 }
+    with (a) {
+        with (b) {
+            read()
+        }
+    }
+}
+
+// Rejected: two keyed bindings of one key in one `with`.
+fn keyed_twice() -> u256 {
+    let a = Store { n: 0 }
+    let b = Store { n: 1 }
+    with (Store = a, Store = b) {
+        read()
+    }
+}
+
+// Accepted: a `with` shadows the function's own effect of the same key.
+fn own_shadowed() -> u256 uses (store: Store) {
+    let other = Store { n: 1 }
+    with (other) {
+        read()
+    }
+}

@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/effect_provider_selection.fe
+---
+error[8-0040]: multiple effect candidates found
+   ┌─ effect_provider_selection.fe:20:9
+   │
+20 │         bump()
+   │         ^^^^^^ effect `Store` is ambiguous when calling `bump`
+   │
+   = choose its provider with `with (Store = value) { .. }`
+
+error[8-0159]: effect `Store` is provided twice in one `with`
+   ┌─ effect_provider_selection.fe:50:30
+   │
+50 │     with (Store = a, Store = b) {
+   │                   -          ^ `Store` is provided again here
+   │                   │
+   │                   `Store` is first provided here

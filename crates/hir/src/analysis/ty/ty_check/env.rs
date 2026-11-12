@@ -1260,7 +1260,6 @@ impl<'db> TyCheckEnv<'db> {
             origin: EffectOrigin::Param {
                 site: info.requirement.binding_site,
                 index: info.requirement.binding_idx as usize,
-                name: Some(name),
             },
             ty,
             is_mut: true,
@@ -1828,11 +1827,7 @@ impl<'db> TyChecker<'db> {
                 .unwrap_or_else(|| panic!("missing provider binding for effect at index {idx}"));
             let local_binding = LocalBinding::effect_param(&resolved_binding);
             let provided = ProvidedEffect {
-                origin: EffectOrigin::Param {
-                    site,
-                    index: idx,
-                    name: Some(resolved_binding.requirement.binding_name),
-                },
+                origin: EffectOrigin::Param { site, index: idx },
                 ty: EffectEnvView::new(site)
                     .visible_effect_binding_ty(self.db, idx)
                     .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
@@ -1860,7 +1855,6 @@ impl<'db> TyChecker<'db> {
                 origin: EffectOrigin::Param {
                     site,
                     index: requirement.binding_idx as usize,
-                    name: Some(requirement.binding_name),
                 },
                 ty: self.env.lookup_binding_ty(&local_binding),
                 is_mut: local_binding.is_mut(),
@@ -1911,7 +1905,6 @@ impl<'db> TyChecker<'db> {
         let origin = EffectOrigin::Param {
             site: binding.binding_site,
             index: idx,
-            name: Some(binding.binding_name),
         };
 
         let resolved_binding = self
@@ -2286,7 +2279,6 @@ pub(crate) enum EffectOrigin<'db> {
     Param {
         site: EffectParamSite<'db>,
         index: usize,
-        name: Option<IdentId<'db>>,
     },
     With {
         value_expr: ExprId,
