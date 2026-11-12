@@ -16,11 +16,7 @@ use crate::{
 };
 
 use super::{
-    classify::{
-        BodyEnv, carrier_value_class, provider_erases_runtime_root,
-        runtime_class_for_direct_value_provider_in_env,
-        runtime_class_for_effect_binding_provider_in_env,
-    },
+    classify::{BodyEnv, carrier_value_class, provider_erases_runtime_root},
     semantic_body::{RuntimeOperand, RuntimeSemanticBody},
     type_info::runtime_array_len,
 };
@@ -202,33 +198,15 @@ impl<'a, 'carriers, 'roots, 'db> RuntimeSourceQuery<'a, 'carriers, 'roots, 'db> 
         &self,
         provider: &hir::semantic::ProviderBinding<'db>,
     ) -> bool {
-        if self
-            .env
+        self.env
             .actual_runtime_visible_root_provider_class(self.carriers, provider)
             .is_some()
-        {
-            return true;
-        }
-        if provider_erases_runtime_root(
-            self.env.db(),
-            provider,
-            self.env.scope(),
-            self.env.assumptions(),
-        ) {
-            return false;
-        }
-        runtime_class_for_effect_binding_provider_in_env(
-            self.env.db(),
-            self.env.type_env(),
-            provider,
-        )
-        .is_some()
-            || runtime_class_for_direct_value_provider_in_env(
+            || !provider_erases_runtime_root(
                 self.env.db(),
-                self.env.type_env(),
                 provider,
+                self.env.scope(),
+                self.env.assumptions(),
             )
-            .is_some()
     }
 
     pub(super) fn transport_semantic_value_is_available(&self, local: SLocalId) -> bool {

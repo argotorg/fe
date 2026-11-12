@@ -26,7 +26,7 @@ use super::{
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
-        runtime_class_for_direct_value_provider_in_env,
+        runtime_class_for_provider,
     },
     realize::SelectedRuntimeArg,
     semantic_body::RuntimeOperand,
@@ -551,19 +551,20 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             return Some(SelectedRuntimeArg::local_value(local, selected));
         }
         if let Some(value_class) = self.env.semantic_value_class(self.carriers, local) {
-            if let Some(provider) = local_data.role.root_provider(&self.env.body().locals)
-                && let Some(root_class) = self
+            if let Some(provider) = local_data.role.root_provider(&self.env.body().locals) {
+                let root_class = self
                     .env
                     .actual_runtime_visible_root_provider_class(self.carriers, &provider)
-                    .map(|(_, class)| class)
-                    .or_else(|| {
-                        runtime_class_for_direct_value_provider_in_env(
-                            self.env.db(),
-                            self.env.type_env(),
-                            &provider,
-                        )
-                    })
-            {
+                    .map_or_else(
+                        || {
+                            runtime_class_for_provider(
+                                self.env.db(),
+                                self.env.type_env(),
+                                &provider,
+                            )
+                        },
+                        |(_, class)| class,
+                    );
                 let class = crate::runtime::place::ref_class_for_place_result(
                     self.env.db(),
                     &root_class,
