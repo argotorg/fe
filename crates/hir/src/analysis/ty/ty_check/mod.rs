@@ -2966,7 +2966,7 @@ impl<'db> TyChecker<'db> {
                 Err(CallGenericArgUnifyError::UnificationFailed) if undecided_generic_arg => {
                     return Viability::Undecided;
                 }
-                Err(CallGenericArgUnifyError::ArityMismatch { .. })
+                Err(CallGenericArgUnifyError::TooManyArgs { .. })
                 | Err(CallGenericArgUnifyError::UnificationFailed)
                 | Err(CallGenericArgUnifyError::InvalidArgument(_)) => {
                     return Viability::Incompatible;

@@ -49,7 +49,7 @@ use crate::hir_def::CallableDef;
 use crate::hir_def::params::FuncParamMode;
 
 pub(super) enum CallGenericArgUnifyError<'db> {
-    ArityMismatch { given: usize, expected: usize },
+    TooManyArgs { given: usize, expected: usize },
     UnificationFailed,
     InvalidArgument(GenericArgError<'db>),
 }
@@ -181,37 +181,32 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
 ) -> Result<(), CallGenericArgUnifyError<'db>> {
     let db = tc.db;
     let lowering_cx = LoweringContext::new();
-    let given_args = args.is_given(db).then(|| {
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
-    });
-    let given_count = given_args.as_ref().map_or(0, Vec::len);
     let offset = callable.callable_def.offset_to_explicit_params_position(db);
     let explicit_arg_count = callable.generic_args.len() - offset;
+    let given_count = args.len(db);
+    if given_count > explicit_arg_count {
+        return Err(CallGenericArgUnifyError::TooManyArgs {
+            given: given_count,
+            expected: explicit_arg_count,
+        });
+    }
 
+    // The given arguments fill the explicit parameters from the left. An
+    // omitted parameter takes its default, or else stays the inference
+    // variable the callee was instantiated with.
+    let mut provided =
+        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx);
+    let inferred = &callable.generic_args[offset..];
     let completed_args = match callable.callable_def {
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
             let required = param_set.required_explicit_param_count(db);
-            if given_args.is_some() && !(required..=explicit_arg_count).contains(&given_count) {
-                return Err(CallGenericArgUnifyError::ArityMismatch {
-                    given: given_count,
-                    expected: if given_count < required {
-                        required
-                    } else {
-                        explicit_arg_count
-                    },
-                });
-            }
-
-            // Without explicit arguments, required parameters stay inferred.
-            let provided = given_args
-                .as_deref()
-                .unwrap_or_else(|| &callable.generic_args[offset..offset + required]);
+            provided.extend_from_slice(&inferred[given_count.min(required)..required]);
             param_set
                 .complete_args(
                     db,
                     &callable.generic_args[..offset],
-                    provided,
+                    &provided,
                     match phase {
                         CallGenericArgPhase::Probe => {
                             DefaultApplication::StructuralMetadata(&lowering_cx)
@@ -223,17 +218,12 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
                 )
                 .map_err(CallGenericArgUnifyError::InvalidArgument)?
         }
-        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => given_args
-            .clone()
-            .unwrap_or_else(|| callable.generic_args[offset..].to_vec()),
+        CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => {
+            provided.extend_from_slice(&inferred[given_count..]);
+            provided
+        }
     };
-
-    if completed_args.len() != explicit_arg_count {
-        return Err(CallGenericArgUnifyError::ArityMismatch {
-            given: given_count,
-            expected: explicit_arg_count,
-        });
-    }
+    debug_assert_eq!(completed_args.len(), explicit_arg_count);
 
     for (idx, (completed, current)) in completed_args
         .into_iter()
@@ -632,8 +622,8 @@ impl<'db> Callable<'db> {
             },
         ) {
             Ok(()) => true,
-            Err(CallGenericArgUnifyError::ArityMismatch { given, expected }) => {
-                tc.push_diag(BodyDiag::CallGenericArgNumMismatch {
+            Err(CallGenericArgUnifyError::TooManyArgs { given, expected }) => {
+                tc.push_diag(BodyDiag::TooManyCallGenericArgs {
                     primary: span.into(),
                     def_span: self.callable_def.name_span(),
                     given,

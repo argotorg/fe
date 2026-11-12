@@ -1168,7 +1168,8 @@ pub enum BodyDiag<'db> {
         func_ty: TyId<'db>,
     },
 
-    CallGenericArgNumMismatch {
+    /// More generic arguments at a call than the callee has parameters.
+    TooManyCallGenericArgs {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
         given: usize,
@@ -1614,7 +1615,7 @@ impl<'db> BodyDiag<'db> {
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
-            Self::CallGenericArgNumMismatch { .. } => 22,
+            Self::TooManyCallGenericArgs { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,

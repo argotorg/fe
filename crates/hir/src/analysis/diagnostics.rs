@@ -4981,20 +4981,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::CallGenericArgNumMismatch {
+            Self::TooManyCallGenericArgs {
                 primary,
                 def_span,
                 given,
                 expected,
             } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "given generic argument number mismatch".to_string(),
+                message: "too many generic arguments".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "expected {expected} generic arguments, but {given} given"
-                        ),
+                        message: match expected {
+                            0 => format!("expected no generic arguments, but {given} given"),
+                            1 => format!("expected at most 1 generic argument, but {given} given"),
+                            _ => format!(
+                                "expected at most {expected} generic arguments, but {given} given"
+                            ),
+                        },
                         span: primary.resolve(db),
                     },
                     SubDiagnostic {

@@ -1,0 +1,76 @@
+// A call gives some of its callee's generic arguments and infers the rest:
+// each instance runs with the constant it is given and the type its
+// arguments infer.
+trait Rules {
+    const DUPN: bool = false
+}
+
+struct Osaka {}
+struct Amsterdam {}
+
+impl Rules for Osaka {}
+impl Rules for Amsterdam {
+    const DUPN: bool = true
+}
+
+struct Cursor<F: Rules> { gas: u64 }
+
+impl<F: Rules> Copy for Cursor<F> {}
+
+trait Tracer {
+    fn trace(mut self, _ n: u64)
+}
+
+struct Count { calls: u64, sum: u64 }
+
+impl Tracer for Count {
+    fn trace(mut self, _ n: u64) {
+        self.calls += 1
+        self.sum += n
+    }
+}
+
+fn op<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+    if F::DUPN { c.gas + N } else { c.gas }
+}
+
+fn scaled<const N: u64, F: Rules, const SCALE: u64 = 10>(_ c: Cursor<F>) -> u64 {
+    op<N>(c) * SCALE
+}
+
+struct Vm { pc: u64 }
+
+impl Vm {
+    fn op_push<const N: u64, F: Rules, T: Tracer>(self, _ c: Cursor<F>, _ tracer: mut T) -> u64 {
+        tracer.trace(N)
+        self.pc + op<N>(c)
+    }
+
+    fn step<F: Rules, T: Tracer>(self, _ c: Cursor<F>, _ tracer: mut T) -> u64 {
+        self.op_push<1>(c, mut tracer) + self.op_push<2, F>(c, mut tracer)
+    }
+}
+
+fn run<F: Rules>(_ c: Cursor<F>) -> u64 {
+    op<1>(c)
+}
+
+#[test]
+fn omitted_arguments_are_inferred() {
+    assert!(run(Cursor<Amsterdam> { gas: 5 }) == 6)
+    assert!(run(Cursor<Osaka> { gas: 5 }) == 5)
+    assert!(scaled<3>(Cursor<Amsterdam> { gas: 1 }) == 40)
+    assert!(scaled<3, Osaka, 2>(Cursor<Osaka> { gas: 1 }) == 2)
+}
+
+#[test]
+fn omitted_method_arguments_are_inferred() {
+    let vm = Vm { pc: 100 }
+    var tracer = Count { calls: 0, sum: 0 }
+    assert!(
+        vm.step(Cursor<Amsterdam> { gas: 5 }, mut tracer) == 106 + 107,
+    )
+    assert!(vm.step(Cursor<Osaka> { gas: 5 }, mut tracer) == 105 + 105)
+    assert!(tracer.calls == 4)
+    assert!(tracer.sum == 6)
+}
