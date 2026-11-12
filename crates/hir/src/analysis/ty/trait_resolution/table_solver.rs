@@ -741,7 +741,17 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 // Seq> Tr for W<T> where W<T::Tail>: Tr` answers `W<Nil>: Tr`
                 // by `W<<Nil as Seq>::Tail>: Tr`, which it answers by the next
                 // tail, without end.
-                remaining_goals.extend(projection_traits(self.db, normalized_goal));
+                //
+                // An assumption that is the trait reference answers it here: a
+                // subgoal's search would try every assumption for it.
+                let assumptions = query.assumptions.list(self.db);
+                remaining_goals.extend(
+                    projection_traits(self.db, normalized_goal)
+                        .into_iter()
+                        .filter(|inst| {
+                            !goal_can_use_assumptions(self.db, *inst) || !assumptions.contains(inst)
+                        }),
+                );
                 let branch = Branch {
                     table,
                     root_goal: query.goal,
