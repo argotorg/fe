@@ -496,8 +496,8 @@ fn insert_param_mapping<'db>(
 }
 
 /// The trait method's params as the impl method's, the pairs of their
-/// effects at the methods' modes, and whether every effect of the trait
-/// method has its pair. An impl method's extra effects are stricter bounds.
+/// effects at the methods' modes, and whether every effect of either method
+/// has its pair.
 pub(crate) fn trait_to_impl_param_subst<'db>(
     db: &'db dyn HirAnalysisDb,
     (impl_m, impl_mode): (CallableDef<'db>, Option<BorrowKind>),
@@ -658,7 +658,7 @@ fn map_effect_provider_params_by_identity<'db>(
             insert_param_mapping(db, out, trait_param, impl_param);
         }
     }
-    let paired = effect_pairs.len() == trait_effects;
+    let paired = effect_pairs.len() == trait_effects && effect_pairs.len() == impl_entries.len();
     (effect_pairs, paired)
 }
 

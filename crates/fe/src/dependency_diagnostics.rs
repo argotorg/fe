@@ -402,11 +402,11 @@ mod tests {
 
         let core_url = Url::parse(BUILTIN_CORE_BASE_URL)
             .unwrap()
-            .join("src/effect_ref.fe")
+            .join("src/marker.fe")
             .unwrap();
         let core_file = db.workspace().get(&db, &core_url).unwrap();
         let mut core_source = core_file.text(&db).to_string();
-        core_source.push_str("\nfn invalid_self_ingot_path() { core::effect_ref::read(0) }\n");
+        core_source.push_str("\nfn invalid_self_ingot_path() { core::marker::read(0) }\n");
         db.workspace().update(&mut db, core_url, core_source);
 
         let diagnostics = collect(&db, &root_url);

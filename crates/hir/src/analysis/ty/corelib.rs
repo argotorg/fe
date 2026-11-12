@@ -580,17 +580,13 @@ pub fn bounded_by_sealed_capabilities<'db>(
     let Some(seal) = resolve_lib_trait_path(db, scope, EVM_CAPABILITY_SEAL) else {
         return false;
     };
-    // An effect's provider evidence (`EffectRef`) names its binding, not a
-    // trait an implementation could make reach more.
-    let effect_ref = resolve_core_trait(db, scope, &["EffectRef"]);
     let own = params(ty);
     !own.is_empty()
         && assumptions.list(db).iter().all(|bound| {
-            effect_ref.is_some_and(|effect_ref| trait_reaches(db, bound.def(db), effect_ref))
-                || !bound
-                    .args(db)
-                    .iter()
-                    .any(|arg| !params(*arg).is_disjoint(&own))
+            bound
+                .args(db)
+                .iter()
+                .all(|arg| params(*arg).is_disjoint(&own))
                 || trait_reaches(db, bound.def(db), seal)
         })
 }
