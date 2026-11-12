@@ -71,6 +71,8 @@ msg Msg {
     #[selector = 8]
     Peek -> u256,
     #[selector = 9]
+    BetweenCalls -> u256,
+    #[selector = 10]
     Get -> u256,
 }
 
@@ -103,6 +105,14 @@ pub contract Packed {
         }
         Peek -> u256 uses (b) {
             with (Counter = b) { peek() }
+        }
+        // The field is borrowed for each call, not for the block.
+        BetweenCalls -> u256 uses (mut b) {
+            with (Counter = b) {
+                bump()
+                b += 10
+                bump()
+            }
         }
         // The neighbours of each written lane keep their zeroes.
         Get -> u256 uses (a, b, pair) {
@@ -182,6 +192,14 @@ fn read_only() uses (evm: mut Evm) {
     let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::Peek {})
     assert!(v == 1)
     assert!(get(c) == 10000)
+}
+
+#[test]
+fn field_written_between_calls() uses (evm: mut Evm) {
+    let c = deploy()
+    let v: u256 = evm.call(addr: c, gas: 200000, value: Wei::zero(), message: Msg::BetweenCalls {})
+    assert!(v == 12)
+    assert!(get(c) == 120000)
 }
 
 #[test]
