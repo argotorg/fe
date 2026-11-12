@@ -1,7 +1,8 @@
 // Effects that are one place share one copy of a packed storage lane, which
 // is stored back once: no effect's write is lost. A read-only effect of a
 // snapshot type is a copy taken at the call, in storage too.
-use std::evm::Evm
+use std::abi::sol::Uint24
+use std::evm::{Evm, RawStorage, SolArray}
 
 trait Bump {
     fn bump(mut self, _ by: u8)
@@ -10,6 +11,12 @@ trait Bump {
 impl Bump for u8 {
     fn bump(mut self, _ by: u8) {
         self += by
+    }
+}
+
+impl Bump for u32 {
+    fn bump(mut self, _ by: u8) {
+        self += by as u32
     }
 }
 
@@ -80,4 +87,18 @@ fn snapshot_effects_copy_storage() uses (evm: mut Evm) {
     let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 2)
     assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Snapshots {}) == 1002)
     assert(evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::GetWide {}) == 6012)
+}
+
+// The two effects share the copy of element 1, at its `val` field.
+#[test]
+fn one_lane_for_two_effects_on_an_element_field() uses (evm: mut Evm) {
+    with (RawStorage = evm) {
+        let arr = unsafe { mut SolArray<Uint24>::at(0) }
+        arr.push(Uint24 { val: 1 })
+        arr.push(Uint24 { val: 2 })
+        with (mut arr[1].val) { pair<u32, u32>() }
+        let v0 = arr[0].val
+        let v1 = arr[1].val
+        assert(v0 == 1 && v1 == 113)
+    }
 }

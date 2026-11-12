@@ -1286,7 +1286,8 @@ impl<'db> RmirEmitter<'db> {
                     self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
                     return;
                 }
-                let (value, copy) = self.lower_place_address(
+                let (place, copy) = self.resolve_place_address(bb, place);
+                let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
                     bb,
                     place,
@@ -5494,17 +5495,15 @@ impl<'db> RmirEmitter<'db> {
         zero
     }
 
-    /// The address of `place` as a `target`, and the lane copy it lies in:
-    /// a lane has no address, so it is referenced as a memory copy, which
-    /// the access's users store back.
-    fn lower_place_address(
+    /// `place` resolved to be addressed, and the lane copy it lies in: a lane
+    /// has no address, so it is referenced as a memory copy, which the
+    /// access's users store back.
+    fn resolve_place_address(
         &mut self,
-        semantic_ty: TyId<'db>,
         bb: RBlockId,
         place: &NPlace<'db>,
-        target: RuntimeClass<'db>,
-    ) -> (RLocalId, Option<RLocalId>) {
-        let (place, copy) = match self.resolve_place(bb, place) {
+    ) -> (RuntimePlace<'db>, Option<RLocalId>) {
+        match self.resolve_place(bb, place) {
             ResolvedPlace::Lane(lane) => {
                 let copy = self.hold_lane(bb, lane);
                 let place = RuntimePlace {
@@ -5517,9 +5516,7 @@ impl<'db> RmirEmitter<'db> {
                 let copy = self.lane_copy_root(&place);
                 (place, copy)
             }
-        };
-        let value = self.lower_place_addr_of_for_class(semantic_ty, bb, place, target);
-        (value, copy)
+        }
     }
 
     fn alloc_word_const(&mut self, bb: RBlockId, value: u64) -> RLocalId {
@@ -6102,9 +6099,9 @@ impl<'db> RmirEmitter<'db> {
 struct RuntimeArgLowerer<'emitter, 'db> {
     emitter: &'emitter mut RmirEmitter<'db>,
     bb: RBlockId,
-    /// The lane copies the call's arguments hold, by the place each holds:
-    /// effects that are one place share one copy.
-    held: Vec<(NPlace<'db>, RLocalId)>,
+    /// The places in lane copies the call's arguments hold, by the place
+    /// each provides: effects that are one place share one copy.
+    held: Vec<(NPlace<'db>, RuntimePlace<'db>)>,
 }
 
 impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
@@ -6178,30 +6175,23 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
             (RuntimeArgSource::PlaceAddress(source, semantic_ty), use_plan) => {
-                let value = match self.held.iter().find(|(place, _)| place == source) {
-                    Some(&(_, copy)) => self.emitter.lower_place_addr_of_for_class(
-                        *semantic_ty,
-                        self.bb,
-                        RuntimePlace {
-                            root: PlaceRoot::Slot(copy),
-                            path: Box::default(),
-                        },
-                        selected.class.clone(),
-                    ),
+                let place = match self.held.iter().find(|(held, _)| held == source) {
+                    Some((_, place)) => place.clone(),
                     None => {
-                        let (value, copy) = self.emitter.lower_place_address(
-                            *semantic_ty,
-                            self.bb,
-                            source,
-                            selected.class.clone(),
-                        );
+                        let (place, copy) = self.emitter.resolve_place_address(self.bb, source);
                         if let Some(copy) = copy {
-                            self.held.push((source.clone(), copy));
+                            self.held.push((source.clone(), place.clone()));
                             self.emitter.call_lane_copies.push((source.clone(), copy));
                         }
-                        value
+                        place
                     }
                 };
+                let value = self.emitter.lower_place_addr_of_for_class(
+                    *semantic_ty,
+                    self.bb,
+                    place,
+                    selected.class.clone(),
+                );
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (RuntimeArgSource::PlaceValue(place, semantic_ty), use_plan) => {
