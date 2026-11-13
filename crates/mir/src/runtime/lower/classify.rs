@@ -10,8 +10,8 @@ use hir::analysis::{
         FieldIndex, Mutability, SConst, SLocal, SLocalId, SemanticInstance, SemanticLocalKind,
         SemanticLocalRole, ValueProvenance, VariantIndex,
         normalized::{
-            NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace, NPlaceBase,
-            NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
+            NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
+            NPlaceBase, NRootKind, NStatementKind, NValueDefinition, NValueId, copied_scalar_ty,
         },
     },
     ty::{
@@ -19,7 +19,7 @@ use hir::analysis::{
         corelib::{ContractMetadataKind, runtime_builtin_func_kind},
         provider::registered_root_providers,
         trait_resolution::PredicateListId,
-        ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
+        ty_check::{BodyOwner, EffectParamSite, LocalBinding, ParamSite},
         ty_def::{CapabilityKind, TyData, TyId},
     },
 };
@@ -1335,10 +1335,8 @@ fn local_disallows_const_ref_storage(body: &RuntimeSemanticBody<'_>, local: SLoc
                 } => effect_args.iter().any(|arg| {
                     arg.required_mut
                         && match &arg.arg {
-                            hir::analysis::semantic::normalized::NEffectArgValue::Place(place) => {
-                                place_uses_local(place)
-                            }
-                            hir::analysis::semantic::normalized::NEffectArgValue::Value(value) => {
+                            NEffectArgValue::Place(place) => place_uses_local(place),
+                            NEffectArgValue::Value(value) => {
                                 body.operand_local(*value) == Some(local)
                             }
                         }
@@ -1591,9 +1589,7 @@ impl<'db> ExprStaticFactsBuilder<'_, 'db> {
                     input_plan: needs_input_plan.then(|| {
                         compile_call_input_plan_for_semantic(
                             db,
-                            body,
                             semantic,
-                            RuntimeTypeEnv::for_semantic(db, semantic),
                             effect_args,
                             boundary_sites,
                         )
@@ -2703,38 +2699,6 @@ fn project_variant_field_place_class<'db>(
     }
 }
 
-pub(crate) fn desired_runtime_effect_arg_boundary<'db>(
-    db: &'db dyn MirDb,
-    env: RuntimeTypeEnv<'db>,
-    arg: &NEffectArg<'db>,
-    plan: Option<&RuntimeEffectBindingPlan<'db>>,
-    effect_space: AddressSpace,
-) -> Option<RuntimeBoundarySpec<'db>> {
-    if let Some(plan) = plan {
-        return Some(plan.boundary.clone());
-    }
-    let target_ty = arg.provider_target_ty?;
-    if runtime_zero_sized_ty(db, target_ty, env.scope, env.assumptions) {
-        return None;
-    }
-    Some(match arg.pass_mode {
-        EffectPassMode::ByPlace | EffectPassMode::ByTempPlace => RuntimeBoundarySpec::BorrowLike {
-            pointee: stored_class_for_ty_in_env(db, env, target_ty),
-            access: BorrowAccess::ReadWrite,
-            allow: default_borrow_transport_set(BorrowAccess::ReadWrite, effect_space),
-        },
-        EffectPassMode::ByValue | EffectPassMode::Unknown => boundary_spec_for_ty_in_env(
-            db,
-            env,
-            target_ty,
-            effect_space,
-        )
-        .unwrap_or(RuntimeBoundarySpec::ExactShape(
-            provider_class_for_target_in_env(db, env, Some(target_ty), effect_space),
-        )),
-    })
-}
-
 pub(crate) enum ContractMetadataBuiltin<'db> {
     InitCodeOffset(RuntimeCodeRegion<'db>),
     InitCodeLen(RuntimeCodeRegion<'db>),
@@ -3030,7 +2994,6 @@ mod tests {
 
     fn call_input_plan_for_test<'db>(
         db: &'db DriverDataBase,
-        body: &RuntimeSemanticBody<'db>,
         call_facts: &CallStaticFacts<'db>,
         effect_args: &[NEffectArg<'db>],
     ) -> CompiledCallInputPlan<'db> {
@@ -3038,9 +3001,7 @@ mod tests {
             let mut boundary_sites = BoundarySiteAllocator::default();
             compile_call_input_plan_for_semantic(
                 db,
-                body,
                 call_facts.semantic,
-                RuntimeTypeEnv::for_semantic(db, call_facts.semantic),
                 effect_args,
                 &mut boundary_sites,
             )
@@ -3892,8 +3853,7 @@ uses (slot: Slot<u256>)
                     let receiver_materialized = receiver.and_then(|local| {
                         evaluator.selected_materialized_operand(copy_operand(local))
                     });
-                    let input_plan =
-                        call_input_plan_for_test(&db, &normalized, call_facts, effect_args);
+                    let input_plan = call_input_plan_for_test(&db, call_facts, effect_args);
                     let selected = evaluator.selected_call_inputs(args, effect_args, &input_plan);
                     let selected_classes = selected
                         .iter()
@@ -4025,8 +3985,7 @@ fn caller() -> u256 {
                 else {
                     panic!("missing staged call facts for {block_idx}:{stmt_idx}");
                 };
-                let input_plan =
-                    call_input_plan_for_test(&db, &normalized, call_facts, effect_args);
+                let input_plan = call_input_plan_for_test(&db, call_facts, effect_args);
                 let mut class_cache = InferClassCache::new(normalized.locals.len());
                 let classes: Vec<_> =
                     RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
@@ -4145,7 +4104,7 @@ fn caller() -> u256 {
             })
             .expect("SelectAndMutate should call set_scaled");
         let mut class_cache = InferClassCache::new(normalized.locals.len());
-        let input_plan = call_input_plan_for_test(&db, &normalized, &call_facts, &effect_args);
+        let input_plan = call_input_plan_for_test(&db, &call_facts, &effect_args);
         let inferred_param_classes =
             RuntimeArgSelector::new(env, &inferred.carriers, Some(&mut class_cache))
                 .selected_call_inputs(&args, &effect_args, &input_plan)

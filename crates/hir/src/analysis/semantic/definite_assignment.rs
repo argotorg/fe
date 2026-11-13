@@ -36,7 +36,7 @@ use crate::{
             },
         },
         ty::{
-            ty_check::{BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite},
+            ty_check::{BodyOwner, EffectParamSite, LocalBinding, ParamSite},
             ty_def::BorrowKind,
         },
     },
@@ -423,10 +423,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                     requirement_idx,
                 } if *func == callee_func => effect_args
                     .iter()
-                    .find(|arg| {
-                        arg.binding_idx == *requirement_idx
-                            && arg.pass_mode == EffectPassMode::ByPlace
-                    })
+                    .find(|arg| arg.binding_idx == *requirement_idx)
                     .and_then(|arg| match &arg.arg {
                         NEffectArgValue::Place(place) => self.write_target_of_place(place),
                         NEffectArgValue::Value(_) => None,

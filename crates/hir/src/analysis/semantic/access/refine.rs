@@ -22,7 +22,7 @@ use crate::analysis::{
     },
     ty::{
         provider::AddressSpace,
-        ty_check::{BodyOwner, EffectParamSite, EffectPassMode},
+        ty_check::{BodyOwner, EffectParamSite},
     },
 };
 
@@ -167,9 +167,6 @@ fn input_refinements<'db>(
                 }
             }
             for arg in effect_args {
-                if matches!(arg.pass_mode, EffectPassMode::Unknown) {
-                    continue;
-                }
                 let (regions, origin) = match &arg.arg {
                     NEffectArgValue::Place(place) => {
                         (analysis.resolve(place).regions, statement.origin)

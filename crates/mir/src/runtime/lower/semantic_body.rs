@@ -322,32 +322,14 @@ impl<'db> RuntimeSemanticBody<'db> {
                             .unwrap_or(false)
                 });
                 for arg in effect_args {
-                    match &arg.arg {
-                        // A provider the callee takes by value is only read.
-                        NEffectArgValue::Place(place)
-                            if self.place_source(place) == Some(local)
-                                && runtime_effect_binding_plan_for_binding_idx(
-                                    db,
-                                    callee,
-                                    arg.binding_idx,
-                                )
-                                .is_none_or(|plan| plan.class.is_transport()) =>
-                        {
-                            demand.passed_by_place = true;
-                            demand.mut_borrowed_or_addr_taken |= arg.required_mut;
-                        }
-                        NEffectArgValue::Value(value)
-                            if arg.required_mut
-                                && matches!(
-                                    arg.pass_mode,
-                                    hir::analysis::ty::ty_check::EffectPassMode::ByTempPlace
-                                )
-                                && self.operand_local(*value) == Some(local) =>
-                        {
-                            demand.passed_by_place = true;
-                            demand.mut_borrowed_or_addr_taken = true;
-                        }
-                        NEffectArgValue::Place(_) | NEffectArgValue::Value(_) => {}
+                    // A provider the callee takes by value is only read.
+                    if let NEffectArgValue::Place(place) = &arg.arg
+                        && self.place_source(place) == Some(local)
+                        && runtime_effect_binding_plan_for_binding_idx(db, callee, arg.binding_idx)
+                            .is_none_or(|plan| plan.class.is_transport())
+                    {
+                        demand.passed_by_place = true;
+                        demand.mut_borrowed_or_addr_taken |= arg.required_mut;
                     }
                 }
             }

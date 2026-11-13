@@ -12,9 +12,8 @@ use crate::{
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
-            AddressSpace, ProviderKind,
+            AddressSpace,
             effects::EffectKeyKind,
-            provider::provider_semantics,
             ty_check::{BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding},
         },
     },
@@ -26,8 +25,9 @@ use crate::{
 
 use super::body::SmirLowerCtxt;
 
-/// A root object is borrowed from this place on each call. Handle values retain
-/// their explicit transport and are evaluated once when entering the block.
+/// A provider that names a place is borrowed from it on each call, and one
+/// that is a value from a temporary holding it. A capability is itself the
+/// provider, evaluated once when entering the block.
 #[derive(Clone)]
 pub(super) enum WithBindingSource<'db> {
     Place(SPlace<'db>),
@@ -44,25 +44,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
-            let source = if self.is_root_provider_expr(value_expr) {
-                if let Some(place) = self.try_lower_place_expr(value_expr, true) {
-                    WithBindingSource::Place(place)
-                } else {
-                    let value = self.lower_expr(value_expr);
-                    let local =
-                        self.alloc_local(self.expr_ty(value_expr), Mutability::Immutable, None);
-                    self.push_stmt(
-                        SemOrigin::Expr(value_expr),
-                        SStmtKind::Assign {
-                            dst: local,
-                            expr: SExpr::UseValue(SOperand::expr(value, value_expr)),
-                        },
-                    );
-                    WithBindingSource::Temporary(local)
-                }
-            } else {
+            let value_ty = self.expr_ty(value_expr);
+            let source = if value_ty.as_capability(self.db).is_some() {
                 let value = self.lower_expr(value_expr);
                 WithBindingSource::Value(SOperand::expr(value, value_expr))
+            } else if let Some(place) = self.try_lower_place_expr(value_expr, true) {
+                WithBindingSource::Place(place)
+            } else {
+                let value = self.lower_expr(value_expr);
+                let local = self.alloc_local(value_ty, Mutability::Immutable, None);
+                self.push_stmt(
+                    SemOrigin::Expr(value_expr),
+                    SStmtKind::Assign {
+                        dst: local,
+                        expr: SExpr::UseValue(SOperand::expr(value, value_expr)),
+                    },
+                );
+                WithBindingSource::Temporary(local)
             };
             saved.push((
                 value_expr,
@@ -91,7 +89,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             EffectArg::Binding(binding) => self
                 .binding_provider(*binding)
                 .and_then(|provider| provider.semantics.address_space),
-            EffectArg::Value(_) | EffectArg::Unknown => None,
+            EffectArg::Value(_) => None,
         })
     }
 
@@ -111,18 +109,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         args: &[CallEffectArg<'db>],
     ) -> Box<[SEffectArg<'db>]> {
         args.iter().map(|arg| self.lower_effect_arg(arg)).collect()
-    }
-
-    fn is_root_provider_expr(&self, expr: ExprId) -> bool {
-        if let Some(place) = self.typed_body.expr_place(expr)
-            && place.projections.is_empty()
-        {
-            let PlaceBase::Binding(binding) = place.base;
-            if let Some(provider) = self.binding_provider(binding) {
-                return provider.semantics.kind == ProviderKind::RootObject;
-            }
-        }
-        provider_semantics(self.db, self.expr_ty(expr)).kind == ProviderKind::RootObject
     }
 
     fn lower_effect_arg(&mut self, arg: &CallEffectArg<'db>) -> SEffectArg<'db> {
@@ -154,31 +140,27 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             None => match &arg.arg {
                 EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
+                // The caller's own provider, passed on: its place, or the
+                // capability it is.
                 EffectArg::Binding(binding) => {
                     let local = self.alloc_binding_local(*binding);
-                    if matches!(arg.pass_mode, EffectPassMode::ByPlace)
-                        || self.binding_provider(*binding).is_some_and(|provider| {
-                            provider.semantics.kind == ProviderKind::RootObject
-                        })
+                    if self.locals[local.index()]
+                        .ty
+                        .as_capability(self.db)
+                        .is_some()
                     {
-                        SEffectArgValue::Place(SPlace::new(local))
-                    } else {
                         SEffectArgValue::Value(SOperand::inherited(local))
+                    } else {
+                        SEffectArgValue::Place(SPlace::new(local))
                     }
                 }
-                EffectArg::Value(expr) => SEffectArgValue::Value(self.lower_expr_operand(*expr)),
-                EffectArg::Unknown => {
-                    SEffectArgValue::Value(SOperand::synthetic(self.unit_value()))
+                EffectArg::Value(_) => {
+                    unreachable!("a `with` value is captured where its block is entered")
                 }
             },
         };
         SEffectArg {
             binding_idx: arg.binding_idx,
-            pass_mode: if matches!(value, SEffectArgValue::Place(_)) {
-                EffectPassMode::ByPlace
-            } else {
-                arg.pass_mode
-            },
             arg: value,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,

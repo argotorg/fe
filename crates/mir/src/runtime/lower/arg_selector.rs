@@ -22,9 +22,8 @@ use super::{
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
-        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledEffectPlacePlan,
-        CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
-        compile_value_pass_plan,
+        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledMaterializationPlan,
+        CompiledValuePassPlan, compile_value_pass_plan,
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
@@ -272,7 +271,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledValuePassPlan::VisibleValue => {
                 self.select_materialized_operand_value(local, arg)
             }
-            CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
             CompiledValuePassPlan::ExactTransport(exact) => {
                 Some(self.selected_semantic_operand_for_class(arg, exact))
             }
@@ -717,48 +715,42 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         arg: &NEffectArg<'db>,
         plan: &CompiledEffectArgPlan<'db>,
     ) -> Option<SelectedRuntimeArg<'db>> {
-        match (EffectArgInput::new(arg), plan) {
+        let db = self.env.db();
+        match (&arg.arg, plan) {
             (_, CompiledEffectArgPlan::Erased) => None,
-            (EffectArgInput::Value(value), CompiledEffectArgPlan::Value(plan)) => {
-                self.select_value_effect_arg(value, plan)
+            (NEffectArgValue::Value(value), CompiledEffectArgPlan::Value(plan)) => {
+                let value = self.env.body().runtime_operand(*value)?;
+                self.selected_value_pass_plan(value, plan)
             }
-            (EffectArgInput::Place(place), CompiledEffectArgPlan::Place(plan)) => {
-                Some(self.select_place_effect_arg(arg, place, plan))
+            (NEffectArgValue::Place(place), CompiledEffectArgPlan::Place(boundary)) => {
+                // Like value arguments, place arguments carry their actual aggregate
+                // layout. Project the whole place: a field or indexed provider need not
+                // have the same layout as its containing root.
+                let layout = self
+                    .env
+                    .normalized_place_class(self.carriers, place)
+                    .and_then(|class| class.aggregate_layout());
+                let boundary =
+                    specialize_boundary_for_aggregate_layout(db, &boundary.boundary, layout)
+                        .into_owned();
+                let target_ty = arg.provider_target_ty.unwrap_or_else(|| TyId::unit(db));
+                let selected = self
+                    .select_place_for_boundary(place.clone(), target_ty, boundary.clone())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
+                            self.env.body().owner().key(db).owner(db),
+                        )
+                    });
+                Some(selected)
             }
-            (EffectArgInput::Value(_), CompiledEffectArgPlan::Place(_))
-            | (EffectArgInput::Place(_), CompiledEffectArgPlan::Value(_)) => {
+            (NEffectArgValue::Value(_), CompiledEffectArgPlan::Place(_))
+            | (NEffectArgValue::Place(_), CompiledEffectArgPlan::Value(_)) => {
                 panic!(
                     "compiled effect arg source kind mismatch: owner={:?}; arg={arg:?}; plan={plan:?}",
-                    self.env
-                        .body()
-                        .owner()
-                        .key(self.env.db())
-                        .owner(self.env.db()),
+                    self.env.body().owner().key(db).owner(db),
                 )
             }
-        }
-    }
-
-    fn select_value_effect_arg(
-        &mut self,
-        value: SemanticOperand,
-        plan: &CompiledEffectValuePlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        let value = self.env.body().runtime_operand(value)?;
-        match plan {
-            CompiledEffectValuePlan::ErasedPlainValue => {
-                self.select_materialized_operand_value(value.local, value)
-            }
-            CompiledEffectValuePlan::ByValue(plan) => self.selected_value_pass_plan(value, plan),
-            CompiledEffectValuePlan::ByValueFallback(fallback) => self
-                .try_selected_semantic_operand_for_class(value, fallback)
-                .or_else(|| self.select_actual_operand_value(value.local, value))
-                .or_else(|| {
-                    Some(SelectedRuntimeArg::placeholder(
-                        self.env.body().locals[value.local.index()].ty,
-                        fallback.clone(),
-                    ))
-                }),
         }
     }
 
@@ -801,57 +793,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         Some(selected)
     }
 
-    fn select_place_effect_arg(
-        &self,
-        arg: &NEffectArg<'db>,
-        place: &NPlace<'db>,
-        plan: &CompiledEffectPlacePlan<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        match plan {
-            CompiledEffectPlacePlan::Boundary(boundary) => {
-                self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone())
-            }
-            CompiledEffectPlacePlan::Fallback(fallback) => self.select_effect_place_for_boundary(
-                arg,
-                place,
-                RuntimeBoundarySpec::ExactTransport(fallback.clone()),
-            ),
-        }
-    }
-
-    fn select_effect_place_for_boundary(
-        &self,
-        arg: &NEffectArg<'db>,
-        place: &NPlace<'db>,
-        boundary: RuntimeBoundarySpec<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        // Like value arguments, place arguments carry their actual aggregate
-        // layout. Project the whole place: a field or indexed provider need not
-        // have the same layout as its containing root.
-        let layout = self
-            .env
-            .normalized_place_class(self.carriers, place)
-            .and_then(|class| class.aggregate_layout());
-        let boundary =
-            specialize_boundary_for_aggregate_layout(self.env.db(), &boundary, layout).into_owned();
-        self.select_place_for_boundary(
-            place.clone(),
-            self.effect_arg_target_ty(arg),
-            boundary.clone(),
-        )
-        .unwrap_or_else(|| {
-            panic!(
-                "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                self.env.body().owner().key(self.env.db()).owner(self.env.db()),
-            )
-        })
-    }
-
-    fn effect_arg_target_ty(&self, arg: &NEffectArg<'db>) -> TyId<'db> {
-        arg.provider_target_ty
-            .unwrap_or_else(|| TyId::unit(self.env.db()))
-    }
-
     fn specialized_boundary(
         &mut self,
         local: SLocalId,
@@ -879,19 +820,5 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         self.concrete_value_classes?
             .get(arg.value?.index())?
             .clone()
-    }
-}
-
-enum EffectArgInput<'arg, 'db> {
-    Value(SemanticOperand),
-    Place(&'arg NPlace<'db>),
-}
-
-impl<'arg, 'db> EffectArgInput<'arg, 'db> {
-    fn new(arg: &'arg NEffectArg<'db>) -> Self {
-        match &arg.arg {
-            NEffectArgValue::Value(value) => Self::Value(*value),
-            NEffectArgValue::Place(place) => Self::Place(place),
-        }
     }
 }

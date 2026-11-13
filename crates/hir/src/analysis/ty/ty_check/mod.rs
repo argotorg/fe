@@ -4336,7 +4336,6 @@ pub enum EffectArg<'db> {
     Place(Place<'db>),
     Value(ExprId),
     Binding(LocalBinding<'db>),
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -4346,7 +4345,6 @@ pub enum EffectPassMode {
     /// The provided effect is an rvalue; materialize it into a block-scoped temp place.
     ByTempPlace,
     ByValue,
-    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
@@ -6341,7 +6339,6 @@ impl<'db> TypedBody<'db> {
                             seen,
                             visited_locals,
                         ),
-                        EffectArg::Unknown => None,
                     }
                 }
             }?;
