@@ -56,7 +56,7 @@ use crate::{
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
             ty_lower::{ParamSchemaId, SubstError},
-            visitor::{TyVisitable, TyVisitor, collect_flags},
+            visitor::{TyVisitable, TyVisitor},
         },
     },
     hir_def::{
@@ -76,7 +76,7 @@ use thin_vec::ThinVec;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv,
-    const_ref::{body_effect, is_ground, root_impl_env},
+    const_ref::{body_effect, root_impl_env},
     instantiate_typed_body, provisional_semantic_callee_key,
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
@@ -101,10 +101,12 @@ pub struct SemanticInstanceKey<'db> {
 
 impl<'db> SemanticInstanceKey<'db> {
     /// The key for `owner`'s instance with `subst`, given the proofs a use
-    /// supplies of the assumptions its body is checked under. One with
-    /// closed arguments retains only non-ordinary proof trees. Ordinary
-    /// assumptions can be reconstructed by `instance_evidence`; chosen
-    /// dictionaries must survive specialization to concrete types.
+    /// supplies of the assumptions its body is checked under. A key retains
+    /// only non-ordinary proof trees, with remaining assumptions named only by
+    /// owner and position. Ordinary assumptions can be reconstructed by
+    /// `instance_evidence`, and a key never holds a proof whose types can hold
+    /// the key: an assumption's list can hold a constant computed by the key.
+    /// Chosen dictionaries must survive specialization to concrete types.
     pub fn of(
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
@@ -113,19 +115,16 @@ impl<'db> SemanticInstanceKey<'db> {
         impl_env: ImplEnv<'db>,
         supplied: EvidenceList<'db>,
     ) -> Self {
-        let evidence = if is_ground(collect_flags(db, subst.generic_args(db))) {
-            EvidenceList::of(
-                db,
-                supplied
-                    .entries(db)
-                    .iter()
-                    .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
-                    .collect(),
-            )
-            .with_rows(db, supplied.rows(db).clone())
-        } else {
+        let evidence = EvidenceList::of(
+            db,
             supplied
-        };
+                .entries(db)
+                .iter()
+                .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
+                .collect(),
+        )
+        .with_rows(db, supplied.rows(db).clone())
+        .nominal(db);
         Self::new(db, owner, subst, effect_providers, impl_env, evidence)
     }
 
@@ -472,7 +471,7 @@ pub fn instantiated_typed_body<'db>(
             db,
             &mut CaptureClosureEvidence {
                 defining_body,
-                bound,
+                bound: bound.nominal(db),
             },
         );
     }

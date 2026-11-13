@@ -964,3 +964,271 @@ const fn qualified_name() -> u256 { with (options::Qualified) { Item::value() } 
         ],
     );
 }
+
+#[test]
+fn conditional_named_implementation_in_where_clause_const_terminates() {
+    // Lowering these `where` clause constants reaches a fixed point: the
+    // retained named implementation's condition leaf names its assumption by
+    // owner and position instead of carrying the caller's assumption list.
+    // `S1` is refused with 8-0138 because its written type's own constant
+    // selects a named implementation (see docs/language/named-implementations.md).
+    let codes = diagnostics(
+        r#"
+struct Wrap<T> {
+    value: T,
+}
+
+trait Len {
+    const LEN: usize
+}
+
+trait Pick {
+    const fn value() -> usize
+}
+
+impl<T: Len> Pick for Wrap<T> {
+    const fn value() -> usize { T::LEN }
+}
+
+impl<T: Len> Pick for Wrap<T> as ChosenWrap {
+    const fn value() -> usize { T::LEN }
+}
+
+trait Indexed<const I: usize> {
+    const V: usize
+}
+
+const fn read_pick<U: Pick>() -> usize {
+    U::value()
+}
+
+const fn via_wrap<T: Len>() -> usize {
+    with (ChosenWrap) {
+        read_pick<Wrap<T>>()
+    }
+}
+
+struct S1<T, const L: usize = 5>
+where
+    T: Len + Indexed<{ with (ChosenWrap) { read_pick<Wrap<T>>() } }>,
+{
+    t: T,
+}
+
+struct S2<T, const L: usize = 5>
+where
+    T: Len + Indexed<{ via_wrap<T>() }>,
+{
+    t: T,
+}
+"#,
+    );
+    assert_eq!(codes, vec!["8-0138".to_string()]);
+}
+
+#[test]
+fn supertrait_projection_and_effect_rows_in_where_clause_consts_terminate() {
+    // A supertrait projection (`T: Sub + Len`) combined with a `where` clause
+    // constant and a caller-side `with (ShortLen)` instantiation.
+    let projection_codes = diagnostics(
+        r#"
+struct Item {}
+
+trait Len {
+    const LEN: usize
+    const fn len() -> usize
+}
+
+impl Len for Item {
+    const LEN: usize = 5
+    const fn len() -> usize { 100 }
+}
+
+impl Len for Item as ShortLen {
+    const LEN: usize = 5
+    const fn len() -> usize { 5 }
+}
+
+trait Sub: Len {}
+impl Sub for Item {}
+
+trait Indexed<const I: usize> {
+    const V: usize
+}
+
+impl Indexed<5> for Item {
+    const V: usize = 1
+}
+
+const fn read_len<T: Len>() -> usize {
+    T::LEN
+}
+
+struct S1<T, const L: usize = 5>
+where
+    T: Sub + Len + Indexed<{ read_len<T>() }>,
+{
+    t: T,
+}
+
+fn use_s1(_ x: S1<Item>) {}
+
+fn caller() {
+    with (ShortLen) {
+        let s = S1 { t: Item {} }
+        use_s1(s)
+    }
+}
+"#,
+    );
+    assert!(projection_codes.is_empty(), "{projection_codes:?}");
+
+    // A trait-keyed effect provider paired with a named implementation inside
+    // a helper called from a `where` clause constant under a defaulted const
+    // parameter.
+    let provider_codes = diagnostics(
+        r#"
+struct Item {}
+
+trait Price {
+    const fn amount(self) -> usize
+}
+
+impl Price for Item {
+    const fn amount(self) -> usize { 100 }
+}
+
+impl Price for Item as Wholesale {
+    const fn amount(self) -> usize { 5 }
+}
+
+trait Len {
+    const LEN: usize
+}
+
+trait Indexed<const I: usize> {
+    const V: usize
+}
+
+const fn charge() -> usize uses (p: Price) {
+    p.amount()
+}
+
+const fn read_len<T: Len>() -> usize {
+    with (Wholesale, Price = Item {}) {
+        let _ = charge()
+        T::LEN
+    }
+}
+
+struct S1<T, const L: usize = 5>
+where
+    T: Len + Indexed<{ read_len<T>() }>,
+{
+    t: T,
+}
+"#,
+    );
+    assert!(provider_codes.is_empty(), "{provider_codes:?}");
+}
+
+#[test]
+fn wrapped_length_where_clause_consts_terminate_with_expected_outcomes() {
+    // The first three programs read `T::len()` of a type parameter, which is
+    // not an integer in `T::len() + 1`, so constant evaluation refuses them
+    // with 3-0052 before the instance key matters. The last two read `T::LEN`
+    // and lower through the instance key.
+    let inline_choice_codes = diagnostics(
+        r#"
+trait Len { const fn len() -> usize }
+trait Indexed<const I: usize> {}
+struct Wrap<T> { t: T }
+impl<T: Len> Len for Wrap<T> as WrapLen { const fn len() -> usize { T::len() + 1 } }
+const fn read_len<T: Len>() -> usize { T::len() }
+struct S<T>
+where
+    T: Len + Indexed<{ with (WrapLen) { read_len<Wrap<T>>() } }>,
+{ t: T }
+"#,
+    );
+    assert!(
+        inline_choice_codes.contains(&"3-0052".to_string()),
+        "{inline_choice_codes:?}"
+    );
+
+    let helper_choice_codes = diagnostics(
+        r#"
+trait Len { const fn len() -> usize }
+trait Indexed<const I: usize> {}
+struct Wrap<T> { t: T }
+impl<T: Len> Len for Wrap<T> as WrapLen { const fn len() -> usize { T::len() + 1 } }
+const fn read_len<T: Len>() -> usize { T::len() }
+const fn via_wrap<T: Len>() -> usize { with (WrapLen) { read_len<Wrap<T>>() } }
+struct S2<T> where T: Len + Indexed<{ via_wrap<T>() }> { t: T }
+"#,
+    );
+    assert!(
+        helper_choice_codes.contains(&"3-0052".to_string()),
+        "{helper_choice_codes:?}"
+    );
+
+    let provider_len_codes = diagnostics(
+        r#"
+struct Item {}
+trait Price { const fn amount(self) -> usize }
+impl Price for Item { const fn amount(self) -> usize { 1 } }
+const Q: Item = Item {}
+trait Len { const fn len() -> usize }
+trait Indexed<const I: usize> {}
+const fn read_len<T: Len>() -> usize uses (p: Price) { p.amount() + T::len() }
+struct S<T>
+where
+    T: Len + Indexed<{ with (Price = Q) { read_len<T>() } }>,
+{ t: T }
+"#,
+    );
+    assert!(
+        provider_len_codes.contains(&"3-0052".to_string()),
+        "{provider_len_codes:?}"
+    );
+
+    let generic_provider_codes = diagnostics(
+        r#"
+struct Wrap<T> {}
+trait Len { const LEN: usize }
+trait Price { const fn amount(self) -> usize }
+impl<T: Len> Price for Wrap<T> { const fn amount(self) -> usize { 1 } }
+trait Indexed<const I: usize> {}
+const fn read_len<T: Len>() -> usize uses (p: Price) { T::LEN }
+struct S<T>
+where
+    T: Len + Indexed<{ with (Price = Wrap<T> {}) { read_len<T>() } }>,
+{ t: T }
+"#,
+    );
+    assert!(
+        generic_provider_codes.is_empty(),
+        "{generic_provider_codes:?}"
+    );
+
+    let default_param_codes = diagnostics(
+        r#"
+trait Len {
+    const LEN: usize
+}
+trait Indexed<const I: usize> {
+    const V: usize
+}
+const fn read_len<T: Len>() -> usize {
+    T::LEN
+}
+struct S1<T, const L: usize = 5>
+where
+    T: Len + Indexed<{ read_len<T>() }>,
+{
+    t: T,
+}
+"#,
+    );
+    assert!(default_param_codes.is_empty(), "{default_param_codes:?}");
+}

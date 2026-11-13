@@ -54,6 +54,45 @@ pub enum BoundOwner<'db> {
     Context,
 }
 
+impl<'db> BoundOwner<'db> {
+    fn slots(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        match self {
+            Self::Body(BodyOwner::Func(func, mode)) => {
+                func_signature(db, func, BodyOwner::func_at(db, func, mode).mode())
+            }
+            Self::Body(BodyOwner::AnonConstBody { body, .. }) => {
+                const_body_assumptions(db, body.scope()).extend_all_bounds(db)
+            }
+            Self::Body(BodyOwner::Const(const_)) => {
+                const_body_assumptions(db, const_.scope()).extend_all_bounds(db)
+            }
+            Self::Body(
+                owner @ (BodyOwner::ContractInit { .. }
+                | BodyOwner::ContractRecvArm { .. }
+                | BodyOwner::Closure { .. }),
+            ) => super::ty_check::infer_body(db, owner).1.assumptions(),
+            Self::MethodBasis {
+                body,
+                nominal,
+                mode,
+            } => impl_method_evidence(db, body, nominal, mode)
+                .as_ref()
+                .map_or_else(
+                    || PredicateListId::empty_list(db),
+                    |adaptation| adaptation.source.slots(db),
+                ),
+            Self::ConstBasis(body) => impl_const_evidence(db, body).as_ref().map_or_else(
+                || PredicateListId::empty_list(db),
+                |adaptation| adaptation.source.slots(db),
+            ),
+            Self::ImplementationConditions(selected) => {
+                selected.constraints(db).extend_all_bounds(db)
+            }
+            Self::Context => PredicateListId::empty_list(db),
+        }
+    }
+}
+
 /// The namespace of assumption slots. Declaration ownership does not depend on
 /// an instance key. Slots describe the declaration layout; instantiated goals
 /// live in the body's signature and a slot's applied view, not its namespace.
@@ -70,6 +109,19 @@ pub struct BoundSchemaId<'db> {
 impl<'db> BoundSchemaId<'db> {
     fn context(db: &'db dyn HirAnalysisDb, slots: PredicateListId<'db>) -> Self {
         Self::new(db, BoundOwner::Context, slots)
+    }
+
+    pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(db, self.owner(db), PredicateListId::empty_list(db))
+    }
+
+    fn basis_slots(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        let slots = self.slots(db);
+        if slots.is_empty(db) {
+            self.owner(db).slots(db)
+        } else {
+            slots
+        }
     }
 
     pub fn slot(self, db: &'db dyn HirAnalysisDb, index: usize) -> Option<BoundSlotRef<'db>> {
@@ -97,6 +149,24 @@ pub struct BoundSlotRef<'db> {
     pub applied: PredicateListId<'db>,
 }
 
+impl<'db> BoundSlotRef<'db> {
+    pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self {
+            schema: self.schema.nominal(db),
+            index: self.index,
+            applied: PredicateListId::empty_list(db),
+        }
+    }
+
+    fn applied_slots(self, db: &'db dyn HirAnalysisDb) -> PredicateListId<'db> {
+        if self.applied.is_empty(db) {
+            self.schema.basis_slots(db)
+        } else {
+            self.applied
+        }
+    }
+}
+
 /// Supplies for a particular namespace. Index equality alone never authorizes
 /// replacement. A prefix supply leaves closure-added slots unresolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -106,15 +176,22 @@ pub struct BoundEvidence<'db> {
 }
 
 impl<'db> BoundEvidence<'db> {
+    pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self {
+            schema: self.schema.nominal(db),
+            entries: self.entries.nominal(db),
+        }
+    }
+
     fn get(self, db: &'db dyn HirAnalysisDb, slot: BoundSlotRef<'db>) -> Option<EvidenceId<'db>> {
         let same_basis = self.schema == slot.schema
             || (matches!(self.schema.owner(db), BoundOwner::Body(_))
                 && self.schema.owner(db) == slot.schema.owner(db)
                 && self
                     .schema
-                    .slots(db)
+                    .basis_slots(db)
                     .list(db)
-                    .starts_with(slot.schema.slots(db).list(db)));
+                    .starts_with(slot.schema.basis_slots(db).list(db)));
         same_basis
             .then(|| self.entries.get(db, slot.index as usize))
             .flatten()
@@ -332,6 +409,28 @@ impl<'db> EvidenceId<'db> {
         }
     }
 
+    /// This proof with every assumption named only by its owner and position.
+    pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        match self.data(db) {
+            Evidence::Assumption(slot) => {
+                EvidenceId::new(db, Evidence::Assumption(slot.nominal(db)))
+            }
+            Evidence::Impl {
+                selected,
+                instantiated,
+                conds,
+            } => EvidenceId::new(
+                db,
+                Evidence::Impl {
+                    selected: *selected,
+                    instantiated: *instantiated,
+                    conds: conds.iter().map(|proof| proof.nominal(db)).collect(),
+                },
+            ),
+            Evidence::DeferredSolCodec { .. } => self,
+        }
+    }
+
     /// Whether this proof names no assumption: it holds in any body.
     pub fn is_closed(self, db: &'db dyn HirAnalysisDb) -> bool {
         evidence_is_closed(db, self)
@@ -510,6 +609,10 @@ impl<'db> EvidenceList<'db> {
 
     pub(crate) fn qualify(self, db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Self {
         self.map_proofs(db, |proof| proof.qualify(db, owner))
+    }
+
+    pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
+        self.map_proofs(db, |proof| proof.nominal(db))
     }
 
     fn map_proofs(
@@ -836,7 +939,7 @@ pub(crate) fn implied_bound_evidence<'db>(
         // Use the producer's positional view, not a newly deduplicated list.
         // Substitution can make two different declaration slots equal.
         let index = slot
-            .applied
+            .applied_slots(db)
             .list(db)
             .iter()
             .position(|&bound| bound == goal)?;
