@@ -3803,6 +3803,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_struct",
     "abi_unpadded_dynamic_payload",
     "acceptance",
+    "access_control",
     "address_call_method",
     "address_static_method",
     "address_validation",
