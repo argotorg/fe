@@ -6,10 +6,10 @@ use rustc_hash::FxHashSet;
 use crate::analysis::{
     HirAnalysisDb,
     semantic::{
-        LayoutBackingPlace, SBlock, SBlockId, SConst, SEffectArgValue, SExpr, SLocalId, SStmt,
-        SStmtKind, STerminatorKind, SemConstId, SemConstValue, SemanticBody, array_const,
-        enum_const, instance::SemanticInstance, reify_runtime_const_for_ty, sem_const_from_ty,
-        struct_const, tuple_const,
+        LayoutBackingPlace, SBlock, SBlockId, SConst, SExpr, SLocalId, SStmt, SStmtKind,
+        STerminatorKind, SemConstId, SemConstValue, SemanticBody, array_const, enum_const,
+        instance::SemanticInstance, reify_runtime_const_for_ty, sem_const_from_ty, struct_const,
+        tuple_const,
     },
     ty::{
         const_ty::evaluate_type_level_const_ty,
@@ -223,15 +223,10 @@ fn canonicalize_stmt<'db>(
                     }
                 }
                 for arg in effect_args {
-                    let local = match &arg.arg {
-                        SEffectArgValue::Value(value) => value.value,
-                        SEffectArgValue::Place(place) => {
-                            if arg.required_mut {
-                                locals[place.local.index()] = None;
-                            }
-                            place.local
-                        }
-                    };
+                    let local = arg.place.local;
+                    if arg.required_mut {
+                        locals[local.index()] = None;
+                    }
                     for root in &cx.local_roots[local.index()] {
                         locals[root.index()] = None;
                     }
@@ -305,15 +300,10 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                         } => {
                             let mut sources = args.iter().map(|arg| arg.value).collect::<Vec<_>>();
                             for arg in effect_args {
-                                sources.push(match &arg.arg {
-                                    SEffectArgValue::Value(value) => value.value,
-                                    SEffectArgValue::Place(place) => {
-                                        if arg.required_mut {
-                                            writes.push(place.local);
-                                        }
-                                        place.local
-                                    }
-                                });
+                                if arg.required_mut {
+                                    writes.push(arg.place.local);
+                                }
+                                sources.push(arg.place.local);
                             }
                             for source in &sources {
                                 writes.extend(roots[source.index()].iter().copied());
@@ -350,10 +340,12 @@ fn collect_local_roots(body: &SemanticBody<'_>) -> LocalRoots {
                 ..
             } = &statement.kind
             {
-                reachable.extend(effect_args.iter().filter_map(|arg| match &arg.arg {
-                    SEffectArgValue::Place(place) if arg.required_mut => Some(place.local),
-                    SEffectArgValue::Place(_) | SEffectArgValue::Value(_) => None,
-                }));
+                reachable.extend(
+                    effect_args
+                        .iter()
+                        .filter(|arg| arg.required_mut)
+                        .map(|arg| arg.place.local),
+                );
             }
             for target in writes.into_iter().chain([dst]) {
                 let target = &mut roots[target.index()];

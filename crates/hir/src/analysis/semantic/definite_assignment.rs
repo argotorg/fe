@@ -30,8 +30,8 @@ use crate::{
             BlockedSemanticBody, SConst, SemConstScalar, SemConstValue, SemanticDiagnosticId,
             SemanticInstance, SemanticNormalizationFailure, identity_semantic_instance_key,
             normalized::{
-                NBlockId, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NOperand, NPlace,
-                NPlaceBase, NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
+                NBlockId, NDataProjection, NEffectArg, NExpr, NOperand, NPlace, NPlaceBase,
+                NRootKind, NStatementKind, NTerminatorKind, NValueId, NormalizedBody,
                 SemanticBodyAdmission, semantic_body_admission,
             },
         },
@@ -424,10 +424,7 @@ impl<'a, 'db> DefiniteAssignment<'a, 'db> {
                 } if *func == callee_func => effect_args
                     .iter()
                     .find(|arg| arg.binding_idx == *requirement_idx)
-                    .and_then(|arg| match &arg.arg {
-                        NEffectArgValue::Place(place) => self.write_target_of_place(place),
-                        NEffectArgValue::Value(_) => None,
-                    }),
+                    .and_then(|arg| self.write_target_of_place(&arg.place)),
                 AssignedTarget::FuncParam { func, input_idx } if *func == callee_func => args
                     .get(*input_idx as usize)
                     .and_then(|arg| match self.borrowed_place_of(arg.value) {

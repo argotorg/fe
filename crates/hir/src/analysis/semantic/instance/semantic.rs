@@ -4,7 +4,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     analysis::{
         HirAnalysisDb,
-        place::{Place, PlaceBase},
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
             SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
@@ -39,9 +38,8 @@ use crate::{
                 tree_size_within,
             },
             provider::{
-                AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderScope, provider_semantics_for_specialized_call,
-                registered_root_providers,
+                AddressSpace, ProviderKind, RootProviderRegistration, RootProviderScope,
+                provider_semantics_for_specialized_call, registered_root_providers,
             },
             shape::Shape,
             subst::substitute_complete,
@@ -51,9 +49,9 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
-                EffectParamSite, EffectPassMode, EffectProviderProvenance,
-                EffectProviderSpecialization, ForLoopStep, LocalBinding, ParamSite,
-                ResolvedEffectArg, SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
+                ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
+                SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
@@ -61,7 +59,9 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    hir_def::{CallableDef, Contract, ExprId, FuncParamMode, StmtId, scope_graph::ScopeId},
+    hir_def::{
+        CallableDef, Contract, ExprId, FuncParamMode, IdentId, StmtId, scope_graph::ScopeId,
+    },
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
         ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
@@ -189,7 +189,6 @@ pub struct CallEffectArg<'db> {
     pub binding_idx: u32,
     pub arg: EffectArg<'db>,
     pub with_source: Option<ExprId>,
-    pub pass_mode: EffectPassMode,
     pub required_mut: bool,
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
@@ -202,7 +201,6 @@ impl<'db> CallEffectArg<'db> {
             binding_idx,
             arg: arg.arg.clone(),
             with_source: arg.with_source,
-            pass_mode: arg.pass_mode,
             required_mut: arg.required_mut,
             instantiated_key_ty: arg.instantiated_key_ty,
             provider_target_ty: arg.provider_target_ty,
@@ -285,13 +283,12 @@ struct ProvisionalCallSiteData<'db, T: SalsaValue + PartialEq + Eq + Clone> {
 #[derive(Debug, Clone)]
 pub enum RootSemanticInstanceError<'db> {
     UnsupportedGenericParam {
-        owner: BodyOwner<'db>,
-        owner_scope: ScopeId<'db>,
         offending_ty: TyId<'db>,
         param_idx: usize,
     },
+    /// Nothing provides the named effect of a root.
     MissingRootProvider {
-        owner: BodyOwner<'db>,
+        effect: Option<IdentId<'db>>,
     },
     UnclosedEffectEnv(SemanticEffectEnvInstantiationError<'db>),
 }
@@ -600,21 +597,11 @@ fn instance_effect_args<'db>(
             else {
                 continue;
             };
-            let (arg, pass_mode) = match provider.semantics.transport {
-                ProviderTransport::ByValue => {
-                    (EffectArg::Binding(binding), EffectPassMode::ByValue)
-                }
-                ProviderTransport::ByPlace | ProviderTransport::ByTempPlace => (
-                    EffectArg::Place(Place::new(PlaceBase::Binding(binding))),
-                    EffectPassMode::ByPlace,
-                ),
-            };
             let target = callee.requirement.binding_idx;
             expanded.push(CallEffectArg {
                 binding_idx: target,
-                arg,
+                arg: EffectArg::Binding(binding),
                 with_source: None,
-                pass_mode,
                 required_mut: callee.requirement.is_mut,
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,
@@ -1177,7 +1164,6 @@ fn specialize_provider_address_space<'db>(
         provider.provider_ty,
         provider.semantics.target_ty,
         Some(address_space),
-        provider.semantics.transport,
     );
     specialization.provider.semantics = semantics;
 }
@@ -2312,7 +2298,6 @@ fn provisional_provider_binding_for_effect<'db>(
                         kind: ProviderKind::Place,
                         address_space: Some(field.address_space),
                         target_ty: Some(provider_ty),
-                        transport: ProviderTransport::ByValue,
                     },
                 });
             }
@@ -2515,8 +2500,12 @@ fn classify_binding_role<'db>(
     let scope = owner.scope();
     let ty = normalize_ty(db, ty, scope, assumptions);
     if let Some((_, value_ty)) = ty.as_capability(db) {
+        assert!(
+            provider.is_none(),
+            "an effect binding's type is never a borrow type"
+        );
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
-        return SemanticLocalRole::PlaceCarrier { provider, value_ty };
+        return SemanticLocalRole::PlaceCarrier { value_ty };
     }
     // A read-only effect of a snapshot type is a copy taken at the call, as
     // a snapshot view parameter is, in any space: the call's other effects
@@ -2803,13 +2792,15 @@ fn root_owner_effect_providers<'db>(
                     specialized_root_provider_target_ty(db, &requirement, root_provider),
                 )
             } else {
-                let target_ty = requirement.key.binding_ty(db)?;
-                let provider_ty = if requirement.is_mut {
-                    TyId::borrow_mut_of(db, target_ty)
-                } else {
-                    TyId::borrow_ref_of(db, target_ty)
+                // A root has no caller to provide the effect. A type key
+                // stands for a place of its own type, which only a
+                // zero-sized type needs no storage for. A trait key names no
+                // type to stand for it.
+                let EffectRequirementKey::Type(key_ty) = requirement.key else {
+                    return None;
                 };
-                (provider_ty, slot.source.clone(), Some(target_ty))
+                let target_ty = normalize_ty(db, key_ty, func.scope(), assumptions);
+                (target_ty, slot.source.clone(), Some(target_ty))
             };
             Some(ProviderBinding {
                 provider_idx: slot.provider_idx,
@@ -2821,7 +2812,6 @@ fn root_owner_effect_providers<'db>(
                     provider_ty,
                     target_ty,
                     Some(AddressSpace::Memory),
-                    ProviderTransport::ByValue,
                 ),
             })
         })
@@ -2836,7 +2826,9 @@ fn root_provider_satisfies_effect_requirement<'db>(
     requirement: &EffectRequirement<'db>,
 ) -> bool {
     match requirement.key {
-        EffectRequirementKey::Type(provider_ty) => provider_ty == root_provider.provider_ty,
+        EffectRequirementKey::Type(provider_ty) => {
+            normalize_ty(db, provider_ty, func.scope(), assumptions) == root_provider.provider_ty
+        }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
             matches!(
@@ -2868,8 +2860,6 @@ fn root_func_generic_args<'db>(
     if provider_param_idxs.is_empty() {
         if let Some((param_idx, &offending_ty)) = params.iter().enumerate().next() {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty,
                 param_idx,
             });
@@ -2881,7 +2871,9 @@ fn root_func_generic_args<'db>(
         .into_iter()
         .map(|provider| (provider.provider_idx, provider.provider_ty))
         .collect::<FxHashMap<_, _>>();
-    let resolved_provider_by_effect = EffectEnvView::new(site)
+    let view = EffectEnvView::new(site);
+    let requirements = view.requirements(db);
+    let resolved_provider_by_effect = view
         .resolutions(db)
         .into_iter()
         .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
@@ -2900,8 +2892,6 @@ fn root_func_generic_args<'db>(
         );
         if !is_effect_provider {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty: param_ty,
                 param_idx,
             });
@@ -2911,18 +2901,17 @@ fn root_func_generic_args<'db>(
         .iter()
         .enumerate()
         .map(|(param_idx, _)| {
-            let effect_idx = effect_idx_by_param
-                .get(&param_idx)
+            let effect_idx = effect_idx_by_param.get(&param_idx);
+            effect_idx
+                .and_then(|effect_idx| resolved_provider_by_effect.get(effect_idx))
+                .and_then(|provider_idx| provider_ty_by_idx.get(provider_idx))
                 .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            let provider_idx = resolved_provider_by_effect
-                .get(&effect_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            provider_ty_by_idx
-                .get(&provider_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })
+                .ok_or_else(|| RootSemanticInstanceError::MissingRootProvider {
+                    effect: requirements
+                        .iter()
+                        .find(|requirement| Some(&(requirement.binding_idx as usize)) == effect_idx)
+                        .map(|requirement| requirement.binding_name),
+                })
         })
         .collect()
 }
@@ -2994,7 +2983,6 @@ fn instantiate_provider_binding<'db>(
             provider_ty,
             target_ty,
             provider.semantics.address_space,
-            provider.semantics.transport,
         );
         // A root object lies where its binding says, which its type alone
         // cannot tell (`effect_param_provider_semantics`).

@@ -4340,10 +4340,13 @@ pub enum EffectArg<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum EffectPassMode {
-    /// The provided effect is already a place; pass it directly.
+    /// The provider of a type key names a place, which is passed.
     ByPlace,
-    /// The provided effect is an rvalue; materialize it into a block-scoped temp place.
+    /// The provider of a type key is a `with` value that names no place;
+    /// a temporary holds it for the block.
     ByTempPlace,
+    /// The provider is the callee's provider as it is: a trait key's, whose
+    /// type implements the trait, or a row's, passed on.
     ByValue,
 }
 

@@ -42,10 +42,10 @@ use crate::{
             effect_param_site,
             instance::{instance_limit_violation, row_expansion_for_key},
             normalized::{
-                NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NEffectArgValue,
-                NExpr, NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId,
-                NStatementKind, NStructuralPath, NTerminatorKind, NValueDefinition, NValueId,
-                NormalizedBody, ReadMode, access::AccessTarget,
+                NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NExpr, NOperand,
+                NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
+                NStructuralPath, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
+                ReadMode, access::AccessTarget,
             },
         },
         ty::{
@@ -1123,10 +1123,6 @@ impl<'a, 'db> Analysis<'a, 'db> {
         } else {
             BorrowKind::Ref
         };
-        let arg_ty = match &effect.arg {
-            NEffectArgValue::Place(place) => place.ty,
-            NEffectArgValue::Value(value) => self.body.values[value.value.index()].ty,
-        };
         let requirements = effect_param_site(callee.owner(self.db))
             .map(|site| effect_requirements_for_site(self.db, site))
             .unwrap_or_default();
@@ -1144,7 +1140,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
             EffectRequirementKey::Type(declared) => self.capability_state_access(
                 callee.owner(self.db),
                 Some(*declared),
-                arg_ty,
+                effect.place.ty,
                 effect.required_mut,
             ),
             key => effect_key_state_access(
@@ -1162,26 +1158,15 @@ impl<'a, 'db> Analysis<'a, 'db> {
                 parents: TokenSet::new(),
             });
         }
-        let (regions, parents) = match &effect.arg {
-            // A place that holds nothing has no footprint.
-            NEffectArgValue::Place(place) if self.holds_nothing(place.ty) => return None,
-            NEffectArgValue::Place(place) => {
-                let resolved = self.resolve(place);
-                (resolved.regions, resolved.direct)
-            }
-            NEffectArgValue::Value(value) => (
-                self.values[value.value.index()]
-                    .iter()
-                    .filter(|(token, _)| self.tokens[*token as usize].kind == TokenKind::Handle)
-                    .flat_map(|(token, _)| self.tokens[*token as usize].regions.clone())
-                    .collect(),
-                TokenSet::new(),
-            ),
-        };
-        (!regions.is_empty()).then_some(Footprint {
-            regions,
+        // A place that holds nothing has no footprint.
+        if self.holds_nothing(effect.place.ty) {
+            return None;
+        }
+        let resolved = self.resolve(&effect.place);
+        (!resolved.regions.is_empty()).then_some(Footprint {
+            regions: resolved.regions,
             mode,
-            parents,
+            parents: resolved.direct,
         })
     }
 
@@ -2807,7 +2792,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                     (&rhs_footprint.regions, rhs_footprint.mode),
                 ) && !(reaches_state(lhs_footprint) && reaches_state(rhs_footprint))
                     && !(self.effects_may_share(callee, lhs, rhs)
-                        && (lhs.arg == rhs.arg
+                        && (lhs.place == rhs.place
                             || self.whole_alias(&lhs_footprint.regions, &rhs_footprint.regions)))
                 {
                     return Err(self.effects_conflict(
@@ -2852,10 +2837,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
     /// Whether `effect` is a snapshot: a read-only effect of a scalar or
     /// handle type, which the callee takes as a copy in any space.
     fn is_snapshot_effect(&self, effect: &NEffectArg<'db>) -> bool {
-        let ty = match &effect.arg {
-            NEffectArgValue::Place(place) => place.ty,
-            NEffectArgValue::Value(value) => self.body.values[value.value.index()].ty,
-        };
+        let ty = effect.place.ty;
         let ty = ty.as_capability(self.db).map_or(ty, |(_, target)| target);
         !effect.required_mut && ty_is_snapshot(self.db, self.scope, ty, self.assumptions)
     }

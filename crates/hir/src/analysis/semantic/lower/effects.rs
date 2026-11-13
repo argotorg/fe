@@ -5,16 +5,15 @@ use crate::{
         HirAnalysisDb,
         place::PlaceBase,
         semantic::{
-            Mutability, SEffectArg, SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
-            SValueId, SemOrigin, instance::CallEffectArg,
-            provisional_provider_binding_for_instance_effect,
+            Mutability, SEffectArg, SExpr, SLocalId, SOperand, SPlace, SStmtKind, SValueId,
+            SemOrigin, instance::CallEffectArg, provisional_provider_binding_for_instance_effect,
             provisional_provider_idx_for_requirement,
             resolved_provider_binding_for_instance_effect,
         },
         ty::{
             AddressSpace,
             effects::EffectKeyKind,
-            ty_check::{BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, EffectArg, EffectParamSite, LocalBinding},
         },
     },
     hir_def::ExprId,
@@ -26,13 +25,11 @@ use crate::{
 use super::body::SmirLowerCtxt;
 
 /// A provider that names a place is borrowed from it on each call, and one
-/// that is a value from a temporary holding it. A capability is itself the
-/// provider, evaluated once when entering the block.
+/// that is a value from a temporary holding it.
 #[derive(Clone)]
 pub(super) enum WithBindingSource<'db> {
     Place(SPlace<'db>),
     Temporary(SLocalId),
-    Value(SOperand),
 }
 
 impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
@@ -45,10 +42,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         for binding in bindings {
             let value_expr = binding.value;
             let value_ty = self.expr_ty(value_expr);
-            let source = if value_ty.as_capability(self.db).is_some() {
-                let value = self.lower_expr(value_expr);
-                WithBindingSource::Value(SOperand::expr(value, value_expr))
-            } else if let Some(place) = self.try_lower_place_expr(value_expr, true) {
+            let source = if let Some(place) = self.try_lower_place_expr(value_expr, true) {
                 WithBindingSource::Place(place)
             } else {
                 let value = self.lower_expr(value_expr);
@@ -118,42 +112,20 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 .expect("effect provider should be captured by its with binding")
                 .clone()
         });
-        let value = match source {
-            Some(WithBindingSource::Place(place)) => SEffectArgValue::Place(place),
+        let place = match source {
+            Some(WithBindingSource::Place(place)) => place,
             Some(WithBindingSource::Temporary(local)) => {
                 // Only owned temporaries acquire mutability from their uses. Read-only
                 // providers can remain const-backed, and captured places keep their access.
                 if arg.required_mut {
                     self.locals[local.index()].mutability = Mutability::Mutable;
                 }
-                SEffectArgValue::Place(SPlace::new(local))
-            }
-            Some(WithBindingSource::Value(value)) => {
-                if matches!(
-                    arg.pass_mode,
-                    EffectPassMode::ByPlace | EffectPassMode::ByTempPlace
-                ) {
-                    SEffectArgValue::Place(SPlace::new(value.value))
-                } else {
-                    SEffectArgValue::Value(value)
-                }
+                SPlace::new(local)
             }
             None => match &arg.arg {
-                EffectArg::Place(place) => SEffectArgValue::Place(self.lower_place_data(place)),
-                // The caller's own provider, passed on: its place, or the
-                // capability it is.
-                EffectArg::Binding(binding) => {
-                    let local = self.alloc_binding_local(*binding);
-                    if self.locals[local.index()]
-                        .ty
-                        .as_capability(self.db)
-                        .is_some()
-                    {
-                        SEffectArgValue::Value(SOperand::inherited(local))
-                    } else {
-                        SEffectArgValue::Place(SPlace::new(local))
-                    }
-                }
+                EffectArg::Place(place) => self.lower_place_data(place),
+                // The caller's own provider, passed on.
+                EffectArg::Binding(binding) => SPlace::new(self.alloc_binding_local(*binding)),
                 EffectArg::Value(_) => {
                     unreachable!("a `with` value is captured where its block is entered")
                 }
@@ -161,7 +133,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         SEffectArg {
             binding_idx: arg.binding_idx,
-            arg: value,
+            place,
             required_mut: arg.required_mut,
             provider_target_ty: arg.provider_target_ty,
             provider: self.effect_arg_provider_space(arg),

@@ -1,13 +1,11 @@
 use cranelift_entity::EntityRef;
 
-use crate::semantic::ProviderBinding;
 use crate::{
     analysis::{
         semantic::{
             FieldIndex, LayoutBackingPlace, LayoutBackingProjection, LayoutBackingSource,
-            PlaceProvenance, SEffectArgValue, SExpr, SLocalId, SPlace, SStmtKind,
-            SemanticLocalRole, SemanticProjectionPath, ValueProvenance, VariantIndex,
-            layout_backing_query,
+            PlaceProvenance, SExpr, SLocalId, SPlace, SStmtKind, SemanticLocalRole,
+            SemanticProjectionPath, ValueProvenance, VariantIndex, layout_backing_query,
         },
         ty::{
             adt_def::instantiate_adt_field_shape,
@@ -68,7 +66,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let ty = normalize_ty(self.db, ty, self.body.scope(), self.assumptions);
         if let Some((_, value_ty)) = ty.as_capability(self.db) {
             return SemanticLocalRole::PlaceCarrier {
-                provider: None,
                 value_ty: normalize_ty(self.db, value_ty, self.body.scope(), self.assumptions),
             };
         }
@@ -307,21 +304,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     else {
                         continue;
                     };
-                    match &effect_arg.arg {
-                        SEffectArgValue::Place(place) => (
-                            effect_arg
-                                .provider_target_ty
-                                .unwrap_or(self.locals[place.local.index()].ty),
-                            self.layout_backing_sources_for_place(place),
-                        ),
-                        SEffectArgValue::Value(value) => {
-                            let base = value.value;
-                            (
-                                self.locals[base.index()].ty,
-                                self.local_layout_backing_sources(base),
-                            )
-                        }
-                    }
+                    let place = &effect_arg.place;
+                    (
+                        effect_arg
+                            .provider_target_ty
+                            .unwrap_or(self.locals[place.local.index()].ty),
+                        self.layout_backing_sources_for_place(place),
+                    )
                 }
             };
             let Some((target, path)) =
@@ -493,19 +482,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SemanticLocalRole::DirectValue { provenance },
                 SemanticLocalRole::DirectValue { .. },
             ) => SemanticLocalRole::DirectValue { provenance },
-            (
-                SemanticLocalRole::PlaceCarrier {
-                    provider,
-                    value_ty: src_value_ty,
-                },
-                SemanticLocalRole::PlaceCarrier {
-                    value_ty: dst_value_ty,
-                    ..
-                },
-            ) if src_value_ty == *dst_value_ty => SemanticLocalRole::PlaceCarrier {
-                provider,
-                value_ty: src_value_ty,
-            },
             (
                 SemanticLocalRole::PlaceBoundValue {
                     provenance,
@@ -729,19 +705,6 @@ fn merge_local_roles<'db>(
             },
         ) => merge_direct_value_role(left_provenance, right_provenance).unwrap_or(fallback),
         (
-            SemanticLocalRole::PlaceCarrier {
-                provider: left_provider,
-                value_ty: left_value_ty,
-            },
-            SemanticLocalRole::PlaceCarrier {
-                provider: right_provider,
-                value_ty: right_value_ty,
-            },
-        ) if left_value_ty == right_value_ty => SemanticLocalRole::PlaceCarrier {
-            provider: merge_role_provider(left_provider, right_provider),
-            value_ty: left_value_ty,
-        },
-        (
             SemanticLocalRole::DirectValue {
                 provenance: ValueProvenance::Ordinary,
             },
@@ -755,13 +718,6 @@ fn merge_local_roles<'db>(
         ) => current,
         _ => fallback,
     }
-}
-
-fn merge_role_provider<'db>(
-    left: Option<ProviderBinding<'db>>,
-    right: Option<ProviderBinding<'db>>,
-) -> Option<ProviderBinding<'db>> {
-    (left == right).then_some(left).flatten()
 }
 
 fn merge_direct_value_role<'db>(

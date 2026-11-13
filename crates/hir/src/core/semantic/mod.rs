@@ -2657,7 +2657,6 @@ fn contract_provider_bindings_canonical<'db>(
                         }
                     }),
                     target_ty: Some(provider_ty),
-                    transport: crate::analysis::ty::ProviderTransport::ByValue,
                 },
             }
         })

@@ -1,0 +1,56 @@
+use core::abi::{load_word, store_word}
+use core::ptr
+use std::evm::{Call, Create, Evm, RawOps}
+
+// A manual contract root has no caller to provide `z`. `Z` is zero-sized, so
+// the root stands for it.
+struct Z {}
+
+trait Tick { fn tick(mut self) -> u256 }
+impl Tick for Z { fn tick(mut self) -> u256 { 7 } }
+
+trait Look { fn look(self) -> u256 }
+impl Look for Z { fn look(self) -> u256 { 3 } }
+
+fn tick() -> u256 uses (c: mut Tick) { c.tick() }
+fn tick_twice() -> u256 uses (c: mut Tick) { tick() + tick() }
+fn look() -> u256 uses (c: Look) { c.look() }
+fn look_through() -> u256 uses (c: Look) { look() }
+fn read() -> u256 uses (z: Z) { 1 }
+fn write() -> u256 uses (z: mut Z) { 100 }
+fn rekeyed() -> u256 uses (z: mut Z) { with (Tick = z) { tick() } * 1000 }
+
+#[contract_init(M)]
+fn init() uses (evm: mut Evm) {
+    let len = evm.code_region_len(runtime)
+    let offset = evm.code_region_offset(runtime)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
+    evm.codecopy(dest: mut dest, dest_offset: 0, src_offset: offset, len)
+    evm.return_data(data: dest.span())
+}
+
+#[contract_runtime(M)]
+fn runtime() uses (evm: mut Evm, z: mut Z) {
+    let ticks: u256 = with (Tick = z) { tick_twice() }
+    let looks: u256 = with (Look = z) { look_through() }
+    let direct: u256 = read() + write() + z.tick() + rekeyed()
+    let data = ptr::MemBuffer::new(32)
+    unsafe { store_word(ptr: data.ptr(), value: ticks + looks + direct) }
+    evm.return_data(data: data.span())
+}
+
+#[test]
+fn manual_root_stands_for_zero_sized_effect() uses (evm: mut Evm) {
+    let len = evm.code_region_len(init)
+    let offset = evm.code_region_offset(init)
+    var code = ptr::MemBuffer::new(len.downcast_unchecked())
+    evm.codecopy(dest: mut code, dest_offset: 0, src_offset: offset, len)
+    let addr = evm.create2_raw(value: Wei::zero(), init_code: code.span(), salt: 1)
+    assert(addr != Address::zero())
+
+    let out = evm.try_call_raw(addr, gas: 1000000, value: Wei::zero(), args: ptr::MemSpan::empty())
+    assert(out.success())
+    assert(out.returndata_len() == 32)
+    let word = unsafe { load_word(out.returndata().ptr()) }
+    assert(word == 14 + 3 + 1 + 100 + 7 + 7000)
+}

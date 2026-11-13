@@ -11,9 +11,9 @@ use hir::analysis::{
         SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
         core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
-            NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
-            NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
-            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
+            NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
+            NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
+            NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
         panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
     },
@@ -2968,10 +2968,9 @@ impl<'db> RmirEmitter<'db> {
         let lane_copies: Vec<_> = std::mem::take(&mut self.call_lane_copies)
             .into_iter()
             .filter(|(place, _)| {
-                effect_args.iter().any(|effect| {
-                    effect.required_mut
-                        && matches!(&effect.arg, NEffectArgValue::Place(arg) if arg == place)
-                })
+                effect_args
+                    .iter()
+                    .any(|effect| effect.required_mut && effect.place == *place)
             })
             .map(|(_, copy)| (copy, self.open_lane_hold(bb, copy)))
             .collect();

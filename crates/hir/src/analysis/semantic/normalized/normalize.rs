@@ -16,11 +16,11 @@ use crate::{
             eval_const_ref,
             lower::layout_backing_source_path_is_prefix,
             normalized::{
-                NBlock, NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg,
-                NEffectArgValue, NExpr, NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId,
-                NRootKind, NStatement, NStatementId, NStatementKind, NStructuralPath, NSuccessor,
-                NTerminator, NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody,
-                ReadMode, StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
+                NBlock, NBlockId, NDataPath, NDataProjection, NDropTarget, NEffectArg, NExpr,
+                NIndex, NOperand, NPlace, NPlaceBase, NRoot, NRootId, NRootKind, NStatement,
+                NStatementId, NStatementKind, NStructuralPath, NSuccessor, NTerminator,
+                NTerminatorKind, NValue, NValueDefinition, NValueId, NormalizedBody, ReadMode,
+                StructuralRepack, ViewAccess, copied_scalar_ty, is_literal_allocation,
                 layout_plan::{
                     NLayoutBackingSource, NLayoutPlan, NLayoutProjection, NLayoutSourcePath,
                     NLayoutUseBacking, NRootRepresentation, NValueRepresentation,
@@ -241,12 +241,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             }
                             SExpr::Call { effect_args, .. } => {
                                 for arg in effect_args {
-                                    if let crate::analysis::semantic::SEffectArgValue::Place(
-                                        place,
-                                    ) = &arg.arg
-                                    {
-                                        self.mark_address_root(place.local, &mut needs_slot);
-                                    }
+                                    self.mark_address_root(arg.place.local, &mut needs_slot);
                                 }
                             }
                             SExpr::Borrow { .. }
@@ -1145,29 +1140,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .map(|arg| {
                         Ok(NEffectArg {
                             binding_idx: arg.binding_idx,
-                            arg: match &arg.arg {
-                                crate::analysis::semantic::SEffectArgValue::Place(place) => {
-                                    NEffectArgValue::Place(
-                                        self.normalize_place(block, origin, place)?,
-                                    )
-                                }
-                                // A provider passed by value lends the effect
-                                // for the call; it does not move.
-                                crate::analysis::semantic::SEffectArgValue::Value(value) => {
-                                    let mode = if self.ty_is_copy(self.normalized_local_ty(value.value))
-                                    {
-                                        ReadMode::Copy
-                                    } else {
-                                        ReadMode::Read
-                                    };
-                                    NEffectArgValue::Value(self.read_operand(
-                                        block,
-                                        origin,
-                                        *value,
-                                        Some(mode),
-                                    )?)
-                                }
-                            },
+                            place: self.normalize_place(block, origin, &arg.place)?,
                             required_mut: arg.required_mut,
                             provider_target_ty: arg
                                 .provider_target_ty
@@ -2578,11 +2551,7 @@ fn semantic_root_provider<'db>(
         SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::RootProvider(provider),
         } => Some((provider.clone(), local_ty)),
-        SemanticLocalRole::PlaceCarrier {
-            provider: Some(provider),
-            value_ty,
-        }
-        | SemanticLocalRole::PlaceBoundValue {
+        SemanticLocalRole::PlaceBoundValue {
             provenance: PlaceProvenance::RootProvider(provider),
             value_ty,
         } => Some((provider.clone(), *value_ty)),
@@ -2590,7 +2559,7 @@ fn semantic_root_provider<'db>(
         | SemanticLocalRole::DirectValue {
             provenance: ValueProvenance::Ordinary,
         }
-        | SemanticLocalRole::PlaceCarrier { provider: None, .. }
+        | SemanticLocalRole::PlaceCarrier { .. }
         | SemanticLocalRole::PlaceBoundValue {
             provenance: PlaceProvenance::Derived(_),
             ..
@@ -3115,11 +3084,10 @@ mod tests {
                 BinaryOp, FieldIndex, Mutability, Overflow, SConst, SStmtId, SemanticInstance,
                 UnaryOp, VariantIndex, identity_semantic_instance_key,
                 normalized::{
-                    NDataPath, NDataProjection, NEffectArgValue, NExpr, NIndex, NOperand, NPlace,
-                    NPlaceBase, NRootId, NStatementKind, NTerminatorKind, NValueDefinition,
-                    NValueId, NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, ReadMode,
-                    StructuralRepack, normalize_raw_body, verify_normalized_body,
-                    verify_normalized_layout_plan,
+                    NDataPath, NDataProjection, NExpr, NIndex, NPlace, NPlaceBase, NRootId,
+                    NStatementKind, NTerminatorKind, NValueDefinition, NValueId,
+                    NormalizedBodyVerifyError, NormalizedLayoutPlanVerifyError, StructuralRepack,
+                    normalize_raw_body, verify_normalized_body, verify_normalized_layout_plan,
                 },
                 unit_const,
             },
@@ -3633,10 +3601,6 @@ fn call_effect() -> u256 uses (value: u256) {
     read_effect()
 }
 
-fn call_effect_from(seed: u256) -> u256 uses (value: u256) {
-    read_effect()
-}
-
 fn call_identity() -> u256 {
     identity(value: 1)
 }
@@ -3858,35 +3822,6 @@ fn generic_boundaries<T>(pair: (T, T), array: [T; 2]) -> (T, T) {
         *effect_args = Box::new([]);
         assert_eq!(
             verify_normalized_body(&db, &missing_effect_arg),
-            Err(NormalizedBodyVerifyError::ExpressionType)
-        );
-
-        let mut plain_effect_value = normalized_func(&db, top_mod, "call_effect_from").body;
-        let seed = plain_effect_value
-            .values
-            .iter()
-            .position(|value| matches!(value.definition, NValueDefinition::EntryParam { param: 0 }))
-            .map(NValueId::new)
-            .expect("seed parameter");
-        let effect_arg = plain_effect_value
-            .blocks
-            .iter_mut()
-            .flat_map(|block| &mut block.statements)
-            .find_map(|statement| match &mut statement.kind {
-                NStatementKind::Define {
-                    expr: NExpr::Call { effect_args, .. },
-                    ..
-                } => effect_args.first_mut(),
-                _ => None,
-            })
-            .expect("effectful call argument");
-        effect_arg.arg = NEffectArgValue::Value(NOperand {
-            value: seed,
-            origin: None,
-            mode: ReadMode::Copy,
-        });
-        assert_eq!(
-            verify_normalized_body(&db, &plain_effect_value),
             Err(NormalizedBodyVerifyError::ExpressionType)
         );
 

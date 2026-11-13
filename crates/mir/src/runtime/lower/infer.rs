@@ -380,8 +380,8 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
         }) {
             continue;
         }
-        let class = match (&local.role, provider.as_ref()) {
-            (SemanticLocalRole::DirectValue { .. }, Some(provider)) => env
+        if let (SemanticLocalRole::DirectValue { .. }, Some(provider)) = (&local.role, &provider)
+            && let Some(class) = env
                 .actual_runtime_visible_root_provider_class(carriers, provider)
                 .map(|(_, class)| class)
                 .or_else(|| {
@@ -390,20 +390,8 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
                         env.type_env(),
                         provider,
                     )
-                }),
-            (SemanticLocalRole::PlaceCarrier { .. }, Some(provider)) => env
-                .actual_runtime_visible_root_provider_class(carriers, provider)
-                .map(|(_, class)| class)
-                .or_else(|| {
-                    runtime_class_for_effect_binding_provider_in_env(
-                        env.db(),
-                        env.type_env(),
-                        provider,
-                    )
-                }),
-            _ => None,
-        };
-        if let Some(class) = class {
+                })
+        {
             carriers[idx] = RuntimeCarrier::Value(class);
         }
     }
@@ -538,27 +526,6 @@ fn lower_semantic_locals<'db>(
                                 "missing normalized place class for root-provider place-bound local {idx}"
                             )
                         }),
-                    provider_local,
-                ))
-            }
-            (SemanticLocalKind::PlaceCarrier, Some(provider)) => {
-                let (provider_local, provider_class) = cx
-                    .env
-                    .actual_runtime_visible_root_provider_class(carriers, provider)
-                    .or_else(|| {
-                        runtime_class_for_effect_binding_provider_in_env(db, type_env, provider)
-                            .map(|class| (local_id, class))
-                    })
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "missing place-carrier runtime class for semantic local {idx}: {}",
-                            local.ty.pretty_print(db),
-                        )
-                    });
-                Some((
-                    provider.clone(),
-                    provider_class,
-                    carrier_local_place_class(db, local, local_id, carriers, scope, assumptions),
                     provider_local,
                 ))
             }
@@ -1006,7 +973,6 @@ pub(super) fn fallback_root_transport_class<'db>(
         | SemanticLocalRole::DirectValue { .. }
         | SemanticLocalRole::PlaceBoundValue { .. } => None,
         SemanticLocalRole::PlaceCarrier {
-            provider,
             value_ty: target_ty,
         } => {
             if runtime_zero_sized_transport_ty(db, local.ty, scope, assumptions)
@@ -1014,20 +980,14 @@ pub(super) fn fallback_root_transport_class<'db>(
             {
                 return None;
             }
-            provider
-                .as_ref()
-                .and_then(|provider| {
-                    runtime_class_for_effect_binding_provider_in_env(db, env, provider)
-                })
-                .or_else(|| top_level_class_for_ty_in_env(db, env, local.ty, AddressSpace::Memory))
-                .or_else(|| {
-                    Some(provider_class_for_target_in_env(
-                        db,
-                        env,
-                        Some(*target_ty),
-                        AddressSpace::Memory,
-                    ))
-                })
+            top_level_class_for_ty_in_env(db, env, local.ty, AddressSpace::Memory).or_else(|| {
+                Some(provider_class_for_target_in_env(
+                    db,
+                    env,
+                    Some(*target_ty),
+                    AddressSpace::Memory,
+                ))
+            })
         }
     }
 }
