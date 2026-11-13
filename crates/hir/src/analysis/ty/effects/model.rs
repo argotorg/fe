@@ -517,7 +517,6 @@ pub fn stored_value_contains_out_of_scope_params<'db>(
     impl<'db> Finder<'db> {
         fn param_is_out_of_scope(&self, param: crate::analysis::ty::ty_def::TyParam<'db>) -> bool {
             !param.is_implicit()
-                && !param.is_effect()
                 && !param.is_effect_provider()
                 && !param.is_trait_self()
                 && !self.scope.is_transitive_child_of(self.db, param.owner)

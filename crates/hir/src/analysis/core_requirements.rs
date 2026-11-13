@@ -81,11 +81,7 @@ const CORE_OP_REQUIREMENTS: &[(&str, &str)] = &[
     ("core::ops::BitXorAssign", "bitxor_assign"),
 ];
 
-const CORE_TRAIT_REQUIREMENTS: &[&str] = &[
-    "core::EffectRef",
-    "core::message::MsgVariant",
-    "core::abi::Decode",
-];
+const CORE_TRAIT_REQUIREMENTS: &[&str] = &["core::message::MsgVariant", "core::abi::Decode"];
 
 pub fn check_core_requirements<'db>(
     db: &'db dyn HirAnalysisDb,

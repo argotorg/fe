@@ -352,6 +352,9 @@ fn func_effect_requirements_canonical<'db>(
         .collect()
 }
 
+/// A function's providers: one per type-keyed or trait-keyed effect, then
+/// its root's. A type key's provider is a place of the key's type, and a
+/// trait key's is of the function's provider parameter for the effect.
 fn func_provider_bindings_canonical<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
@@ -362,18 +365,18 @@ fn func_provider_bindings_canonical<'db>(
     let provider_params = CallableDef::Func(func).params(db);
     let mut providers = requirements
         .iter()
-        .filter(|requirement| {
-            matches!(
-                requirement.key.kind(),
-                EffectKeyKind::Type | EffectKeyKind::Trait
-            )
-        })
         .filter_map(|requirement| {
-            let provider_param_idx = provider_map
-                .get(requirement.binding_idx as usize)
-                .copied()
-                .flatten()?;
-            let provider_ty = *provider_params.get(provider_param_idx)?;
+            let provider_ty = match requirement.key {
+                EffectRequirementKey::Type(key_ty) => key_ty,
+                EffectRequirementKey::Trait(_) => {
+                    let provider_param_idx = provider_map
+                        .get(requirement.binding_idx as usize)
+                        .copied()
+                        .flatten()?;
+                    *provider_params.get(provider_param_idx)?
+                }
+                EffectRequirementKey::Row(_) | EffectRequirementKey::Other => return None,
+            };
             Some(ProviderBinding {
                 provider_idx: requirement.binding_idx,
                 provider_ty,
@@ -419,10 +422,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|provider| match provider.source {
             ProviderSource::UsesParam {
                 requirement_idx, ..
-            } => Some((
-                requirement_idx,
-                (provider.provider_idx, provider.semantics.kind),
-            )),
+            } => Some((requirement_idx, provider.provider_idx)),
             ProviderSource::RootProvider { .. } | ProviderSource::ContractField { .. } => None,
         })
         .collect::<FxHashMap<_, _>>();
@@ -442,7 +442,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|requirement| {
             explicit_provider_idx
                 .get(&requirement.binding_idx)
-                .map(|(provider_idx, _)| *provider_idx)
+                .copied()
                 .or(root_provider_idx)
                 .map(|provider_idx| ResolvedEffectBinding {
                     requirement_idx: requirement.binding_idx,
@@ -2347,21 +2347,24 @@ pub fn effect_requirements_for_site<'db>(
 }
 
 /// The canonical provider of `requirement`, a component of a row the body at
-/// `owner` is generic over (the closure's at `closure`, if any): the provider
-/// parameter its instances substitute.
+/// `owner` is generic over (the closure's at `closure`, if any): a place of
+/// a type key's type, or of the provider parameter the body's instances
+/// substitute for a trait key.
 pub(crate) fn row_effect_provider<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: ScopeId<'db>,
     closure: Option<ExprId>,
     requirement: &EffectRequirement<'db>,
 ) -> ProviderBinding<'db> {
-    let provider_ty = TyParam::row_effect_provider(
-        requirement.binding_name,
-        requirement.binding_idx as usize,
-        owner,
-        closure,
-    )
-    .ty(db);
+    let provider_ty = requirement.key.key_ty().unwrap_or_else(|| {
+        TyParam::row_effect_provider(
+            requirement.binding_name,
+            requirement.binding_idx as usize,
+            owner,
+            closure,
+        )
+        .ty(db)
+    });
     ProviderBinding {
         provider_idx: requirement.binding_idx,
         provider_ty,

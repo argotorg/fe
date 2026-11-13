@@ -967,7 +967,7 @@ where
         }
 
         let is_param = match ty.data(db) {
-            TyData::TyParam(param) => !param.is_effect(),
+            TyData::TyParam(_) => true,
             TyData::ConstTy(const_ty) => matches!(const_ty.data(db), ConstTyData::TyParam(..)),
             _ => false,
         };

@@ -2533,7 +2533,6 @@ impl<'db> TyChecker<'db> {
         // Each component of a callee row the call expands is resolved like the
         // callee's own effects, and named by its path.
         let rows = self.callee_rows(callable, func);
-        self.unify_row_provider_slots(callable, func);
         let reqs: Vec<(Option<&RowPath>, _)> =
             effect_requirement_decls_for_callable(self.db, callable.callable_def, callable.mode())
                 .into_iter()
@@ -2618,15 +2617,14 @@ impl<'db> TyChecker<'db> {
                     let place = instantiated_key_ty.and_then(|_| self.provider_place(provider));
                     let provider_target_ty =
                         instantiated_key_ty.map(|ty| self.table.fold_ty(self.db, ty));
-                    if let Some(provider_arg_idx) = provider_arg_idx_for_param
+                    // A trait key's provider is of the callee's provider
+                    // parameter for the effect.
+                    if instantiated_key_ty.is_none()
+                        && let Some(provider_arg_idx) = provider_arg_idx_for_param
                         && let Some(provider_var) =
                             callable.generic_args().get(provider_arg_idx).copied()
-                        && let Some(given) = self.inferred_provider_ty_for_effect_arg(
-                            provider,
-                            place.as_ref(),
-                            provider_target_ty,
-                        )
                     {
+                        let given = self.table.fold_ty(self.db, provider.ty);
                         let existing_provider = self.table.fold_ty(self.db, provider_var);
                         let snapshot = self.table.snapshot();
                         if self.table.unify(provider_var, given).is_err() {
@@ -2790,20 +2788,6 @@ impl<'db> TyChecker<'db> {
         *callable.effect_providers_mut() = providers;
 
         resolved_args
-    }
-
-    /// A row has no provider of its own: its reserved provider slot is `()`,
-    /// whether the function is called or used as a value.
-    fn unify_row_provider_slots(&mut self, callable: &Callable<'db>, func: Func<'db>) {
-        let provider_slots = place_effect_provider_param_index_map(self.db, func);
-        for requirement in func.effect_requirements(self.db, callable.mode()) {
-            if requirement.key.key_row().is_some()
-                && let Some(Some(slot)) = provider_slots.get(requirement.binding_idx as usize)
-                && let Some(&provider_var) = callable.generic_args().get(*slot)
-            {
-                self.table.unify(provider_var, TyId::unit(self.db)).ok();
-            }
-        }
     }
 
     /// The callee's rows as this call instantiates them.
@@ -3108,51 +3092,6 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// The type a call gives its callee's provider parameter for `provider`:
-    /// that of the place a type key's provider names, a pointer to the
-    /// temporary that holds it, or a trait key's provider's own.
-    fn inferred_provider_ty_for_effect_arg(
-        &mut self,
-        provider: ProvidedEffect<'db>,
-        place: Option<&Place<'db>>,
-        target_ty: Option<TyId<'db>>,
-    ) -> Option<TyId<'db>> {
-        let inferred = match (place, target_ty) {
-            (None, None) => provider.ty,
-            (None, Some(target_ty)) => TyId::ptr_to(self.db, target_ty),
-            (Some(place), _) => {
-                let PlaceBase::Binding(binding) = place.base;
-                match binding {
-                    LocalBinding::EffectParam { site, idx, .. } => self
-                        .env
-                        .resolved_provider_binding(site, idx)
-                        .map_or(provider.ty, |binding| binding.provider_ty),
-                    LocalBinding::Param {
-                        site: ParamSite::EffectField(effect_site),
-                        ..
-                    } => {
-                        let contract = match effect_site {
-                            EffectParamSite::Contract(contract)
-                            | EffectParamSite::ContractInit { contract }
-                            | EffectParamSite::ContractRecvArm { contract, .. } => contract,
-                            EffectParamSite::Func(..) | EffectParamSite::Closure(_) => {
-                                unreachable!(
-                                    "effect field bindings cannot originate from function sites"
-                                )
-                            }
-                        };
-                        let ident = binding.binding_name(&self.env);
-                        contract.fields(self.db).get(&ident)?.declared
-                    }
-                    LocalBinding::Local { .. }
-                    | LocalBinding::Param { .. }
-                    | LocalBinding::ParamPart { .. } => provider.ty,
-                }
-            }
-        };
-        Some(self.table.fold_ty(self.db, inferred))
-    }
-
     /// The provider a call gives a callee effect for `provided`, passed as
     /// `place` if it names one: the caller's own, passed on, or one the call
     /// makes.
@@ -3204,9 +3143,8 @@ impl<'db> TyChecker<'db> {
                 provenance,
             };
         }
-        let provider_ty = self
-            .inferred_provider_ty_for_effect_arg(provided, place, provider_target_ty)
-            .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
+        // A type key's provider is a place of the key's type.
+        let provider_ty = target_ty.unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
         let semantics = provider_semantics_for_specialized_call(
             self.db,
             provider_ty,
@@ -4048,9 +3986,6 @@ impl<'db> TyChecker<'db> {
                             .expect("function item path should resolve to callable");
                     if !unify_generic_args(self, &mut callable) {
                         return ExprProp::invalid(self.db);
-                    }
-                    if let CallableDef::Func(func) = callable.callable_def {
-                        self.unify_row_provider_slots(&callable, func);
                     }
                     // A call reports a direct `Drop::drop` as it finishes.
                     if !is_call_callee {
