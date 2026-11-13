@@ -1,7 +1,8 @@
 use super::{
-    EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
-    provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    resolved_provider_binding_for_instance_effect, row_expansion_for_key,
+    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
+    SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
+    provisional_provider_idx_for_requirement, resolved_provider_binding_for_instance_effect,
+    row_expansion_for_key,
 };
 use crate::{
     analysis::{
@@ -32,7 +33,6 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                ResolvedEffectArg,
             },
             ty_def::{BorrowKind, TyFlags, TyId},
             ty_lower::{ParamKey, ParamSchemaId},
@@ -331,11 +331,23 @@ pub(crate) struct SemanticCallCallee<'db> {
     pub drops_receiver: bool,
 }
 
+/// The callee body's effect that the callee's nominal effect `nominal` is. A
+/// callee with no pairs numbers its effects as its nominal function does.
+pub(super) fn body_effect(effect_pairs: &[(usize, usize)], nominal: usize) -> Option<usize> {
+    if effect_pairs.is_empty() {
+        return Some(nominal);
+    }
+    effect_pairs
+        .iter()
+        .find(|(index, _)| *index == nominal)
+        .map(|&(_, body)| body)
+}
+
 pub(crate) fn semantic_callee_key_with_effect_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     caller_key: SemanticInstanceKey<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
     effect_providers: &[EffectProviderSpecialization<'db>],
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
     let caller = SemanticInstance::new(db, caller_key);
@@ -355,7 +367,8 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     caller_key: SemanticInstanceKey<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
+    effect_providers: &[EffectProviderSpecialization<'db>],
     assumptions: PredicateListId<'db>,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
     semantic_callee_key_with_assumptions(
@@ -364,7 +377,7 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
         caller_key.impl_env(db),
         callable,
         effect_args,
-        callable.effect_providers(),
+        effect_providers,
         assumptions,
         ProviderResolutionMode::Provisional,
     )
@@ -495,7 +508,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     caller: Option<SemanticInstance<'db>>,
     impl_env: ImplEnv<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
     effect_providers: &[EffectProviderSpecialization<'db>],
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
@@ -667,18 +680,14 @@ fn semantic_callee_key_with_assumptions<'db>(
                         .then_some(effect as u32)
                 })
         };
-        let target_effect_args = effect_args
+        if let Some(arg) = effect_args
             .iter()
-            .map(|arg| {
-                let effect = effect_of(arg.binding_idx as usize).ok_or(
-                    MethodArgMapError::MissingEffectRole(arg.binding_idx as usize),
-                )?;
-                let mut arg = arg.clone();
-                arg.binding_idx = effect as u32;
-                arg.param_idx = effect;
-                Ok(arg)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .find(|arg| effect_of(arg.binding_idx as usize).is_none())
+        {
+            return Err(MethodArgMapError::MissingEffectRole(
+                arg.binding_idx as usize,
+            ));
+        }
         let target_providers: Vec<_> = effect_providers
             .iter()
             .filter_map(|specialization| {
@@ -694,7 +703,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             caller,
             impl_env,
             &target,
-            &target_effect_args,
+            effect_args,
             &target_providers,
             assumptions,
             provider_resolution_mode,
@@ -704,17 +713,6 @@ fn semantic_callee_key_with_assumptions<'db>(
         };
         // The function's effects and providers lie where its own call puts
         // them.
-        let body_effect = |effect: usize| {
-            if callee.effect_pairs.is_empty() {
-                Some(effect)
-            } else {
-                callee
-                    .effect_pairs
-                    .iter()
-                    .find(|(index, _)| *index == effect)
-                    .map(|&(_, body)| body)
-            }
-        };
         let body_provider = |provider: u32| {
             callee
                 .provider_pairs
@@ -724,7 +722,9 @@ fn semantic_callee_key_with_assumptions<'db>(
         };
         let effect_pairs = pairs
             .iter()
-            .filter_map(|&(nominal, effect)| Some((nominal, body_effect(effect)?)))
+            .filter_map(|&(nominal, effect)| {
+                Some((nominal, body_effect(&callee.effect_pairs, effect)?))
+            })
             .collect();
         let provider_pairs = pairs
             .iter()
@@ -742,14 +742,6 @@ fn semantic_callee_key_with_assumptions<'db>(
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
-    let checked_effect_inputs = effect_args
-        .iter()
-        .filter_map(|arg| {
-            arg.instantiated_key_ty
-                .or(arg.provider_target_ty)
-                .map(|ty| (arg.binding_idx as usize, ty))
-        })
-        .collect::<Vec<_>>();
     let mut subst_args = callable.generic_args().to_vec();
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(method) = callable.selected_method(
@@ -1024,9 +1016,10 @@ fn semantic_callee_key_with_assumptions<'db>(
                 .iter()
                 .all(|param| same_without_caller(param.shape.erased_ty(db)))
             && same_without_caller(callable.ret_ty(db))
-            && checked_effect_inputs
+            && effect_args
                 .iter()
-                .all(|&(_, ty)| same_without_caller(ty));
+                .filter_map(|arg| arg.instantiated_key_ty.or(arg.provider_target_ty))
+                .all(same_without_caller);
         (independent, true)
     } else {
         (false, true)

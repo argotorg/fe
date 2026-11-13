@@ -6,7 +6,9 @@ use super::{
     const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, TraitGoalSolution, TraitSolverQuery},
-    ty_check::{ClosureInfo, EffectArg, ExprProp, LocalBinding, ResolvedEffectArg},
+    ty_check::{
+        ClosureInfo, EffectArg, EffectArgTarget, ExprProp, LocalBinding, ResolvedEffectArg,
+    },
     ty_def::{
         AssocTy, ClosureTy, InvalidCause, PrimTy, TyBase, TyData, TyFlags, TyId, TyParam, TyVar,
     },
@@ -452,6 +454,9 @@ impl<'db> TyVisitable<'db> for ResolvedEffectArg<'db> {
     where
         V: TyVisitor<'db> + ?Sized,
     {
+        if let EffectArgTarget::Component { provider, .. } = &self.target {
+            provider.visit_with(visitor);
+        }
         self.arg.visit_with(visitor);
         if let Some(ty) = self.instantiated_key_ty {
             ty.visit_with(visitor);

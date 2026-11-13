@@ -6,7 +6,8 @@ use crate::{
         place::PlaceBase,
         semantic::{
             Mutability, SEffectArg, SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmtKind,
-            SValueId, SemOrigin, provisional_provider_binding_for_instance_effect,
+            SValueId, SemOrigin, instance::CallEffectArg,
+            provisional_provider_binding_for_instance_effect,
             provisional_provider_idx_for_requirement,
             resolved_provider_binding_for_instance_effect,
         },
@@ -14,10 +15,7 @@ use crate::{
             AddressSpace, ProviderKind,
             effects::EffectKeyKind,
             provider::provider_semantics,
-            ty_check::{
-                BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding,
-                ResolvedEffectArg,
-            },
+            ty_check::{BodyOwner, EffectArg, EffectParamSite, EffectPassMode, LocalBinding},
         },
     },
     hir_def::ExprId,
@@ -83,7 +81,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         body_value
     }
 
-    fn effect_arg_provider_space(&self, arg: &ResolvedEffectArg<'db>) -> Option<AddressSpace> {
+    fn effect_arg_provider_space(&self, arg: &CallEffectArg<'db>) -> Option<AddressSpace> {
         arg.provider.or_else(|| match &arg.arg {
             EffectArg::Place(place) => {
                 let PlaceBase::Binding(binding) = place.base;
@@ -110,7 +108,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     pub(super) fn lower_effect_arg_slice(
         &mut self,
-        args: &[ResolvedEffectArg<'db>],
+        args: &[CallEffectArg<'db>],
     ) -> Box<[SEffectArg<'db>]> {
         args.iter().map(|arg| self.lower_effect_arg(arg)).collect()
     }
@@ -127,7 +125,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         provider_semantics(self.db, self.expr_ty(expr)).kind == ProviderKind::RootObject
     }
 
-    fn lower_effect_arg(&mut self, arg: &ResolvedEffectArg<'db>) -> SEffectArg<'db> {
+    fn lower_effect_arg(&mut self, arg: &CallEffectArg<'db>) -> SEffectArg<'db> {
         let source = arg.with_source.map(|expr| {
             self.with_binding_sources
                 .get(&expr)

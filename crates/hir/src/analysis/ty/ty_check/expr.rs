@@ -16,8 +16,8 @@ use crate::core::{
 use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
-    BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, RecordLike,
-    RowArg, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
+    BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArgTarget,
+    RecordLike, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
@@ -77,7 +77,9 @@ use crate::analysis::ty::{
     trait_resolution::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
-    ty_check::callable::{Callable, EffectProviderProvenance, EffectProviderSpecialization},
+    ty_check::callable::{
+        Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
+    },
     ty_def::{
         BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, TyVarSort,
         int_literal_fits_prim, prim_int_bits,
@@ -113,7 +115,7 @@ use crate::analysis::{
 };
 use crate::core::semantic::storage_slot_span;
 use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
-use crate::semantic::{ProviderBinding, ProviderSource};
+use crate::semantic::ProviderBinding;
 use common::{compilation::Target, indexmap::IndexMap};
 
 #[derive(Debug, Clone, Copy)]
@@ -2528,23 +2530,23 @@ impl<'db> TyChecker<'db> {
         let callee_effect_env = crate::core::semantic::EffectEnvView::new(callee_site);
 
         // Each component of a callee row the call expands is resolved like the
-        // callee's own effects, in a slot numbered after them.
+        // callee's own effects, and named by its path.
         let rows = self.callee_rows(callable, func);
         self.unify_row_provider_slots(callable, func);
-        let row_paths: FxHashMap<u32, RowPath> = rows
-            .components
-            .iter()
-            .map(|component| (component.requirement.binding_idx, component.path.clone()))
-            .collect();
-        let reqs: Vec<_> =
+        let reqs: Vec<(Option<&RowPath>, _)> =
             effect_requirement_decls_for_callable(self.db, callable.callable_def, callable.mode())
                 .into_iter()
+                .map(|req| (None, req))
                 .chain(rows.components.iter().filter_map(|component| {
-                    EffectRequirementDecl::from_effect_requirement(self.db, &component.requirement)
+                    let req = EffectRequirementDecl::from_effect_requirement(
+                        self.db,
+                        &component.requirement,
+                    )?;
+                    Some((Some(&component.path), req))
                 }))
                 .collect();
         let in_drop = self.env.in_drop();
-        for (param_idx, req) in reqs.iter().enumerate() {
+        for &(path, ref req) in &reqs {
             let key_ty = req.key_ty;
             let mode = if req.required_mut {
                 ModeMarker::Mut
@@ -2561,16 +2563,15 @@ impl<'db> TyChecker<'db> {
             // A `mut?` call at `ref` may be raised, so its missing effect is
             // reported once its mode is final.
             let defer = call
-                .filter(|_| {
-                    callable.mode() == Some(BorrowKind::Ref)
-                        && !row_paths.contains_key(&req.binding_idx)
-                })
+                .filter(|_| callable.mode() == Some(BorrowKind::Ref) && path.is_none())
                 .map(|call| (call, req.binding_idx));
             let Some(query) = build_effect_query_for_call(self, callable, req) else {
                 continue;
             };
-            let provider_arg_idx_for_param = callee_provider_arg_idx_by_effect
-                .get(req.binding_idx as usize)
+            let provider_arg_idx_for_param = path
+                .is_none()
+                .then(|| callee_provider_arg_idx_by_effect.get(req.binding_idx as usize))
+                .flatten()
                 .copied()
                 .flatten();
 
@@ -2651,6 +2652,7 @@ impl<'db> TyChecker<'db> {
                     // A raise to `mut` requires the provider as this does.
                     if let Some(call) = call
                         && callable.mode() == Some(BorrowKind::Ref)
+                        && path.is_none()
                     {
                         self.effect_providers
                             .insert((call, req.binding_idx), provider);
@@ -2703,41 +2705,47 @@ impl<'db> TyChecker<'db> {
                             "effect arg provider space must be explicit for {pass_mode:?} at {key_ty:?}"
                         );
                     }
-                    let slot = if row_paths.contains_key(&req.binding_idx) {
-                        Some((
-                            req.binding_idx,
-                            ProviderSource::UsesParam {
-                                site: callee_site.slot_site(self.db, req.binding_idx),
-                                requirement_idx: req.binding_idx,
-                            },
-                        ))
-                    } else {
-                        callee_effect_env
-                            .resolved_binding(self.db, req.binding_idx as usize)
-                            .map(|binding| (binding.provider.provider_idx, binding.provider.source))
-                    };
-                    if let Some(slot) = slot {
-                        let provider_idx = slot.0;
-                        let specialization = self.specialize_effect_provider_binding(
-                            slot,
-                            provider,
-                            &arg,
-                            pass_mode,
-                            provider_target_ty,
-                            provider_space,
-                        );
-                        if let Some(previous) =
-                            specialized_providers.insert(provider_idx, specialization.clone())
-                        {
-                            assert_eq!(
-                                previous, specialization,
-                                "conflicting call-site provider specialization for function effect provider slot {provider_idx} at {key_ty:?}",
-                            );
+                    // A declared effect's provider has a slot in every view
+                    // of the callee. A component's is given one by each
+                    // instance of the call.
+                    let target = if let Some(path) = path {
+                        EffectArgTarget::Component {
+                            path: path.clone(),
+                            provider: self.effect_arg_provider(
+                                provider,
+                                &arg,
+                                pass_mode,
+                                provider_target_ty,
+                                provider_space,
+                            ),
                         }
-                    }
+                    } else {
+                        if let Some(binding) =
+                            callee_effect_env.resolved_binding(self.db, req.binding_idx as usize)
+                        {
+                            let provider_idx = binding.provider.provider_idx;
+                            let specialization = self
+                                .effect_arg_provider(
+                                    provider,
+                                    &arg,
+                                    pass_mode,
+                                    provider_target_ty,
+                                    provider_space,
+                                )
+                                .in_slot(provider_idx, binding.provider.source);
+                            if let Some(previous) =
+                                specialized_providers.insert(provider_idx, specialization.clone())
+                            {
+                                assert_eq!(
+                                    previous, specialization,
+                                    "conflicting call-site provider specialization for function effect provider slot {provider_idx} at {key_ty:?}",
+                                );
+                            }
+                        }
+                        EffectArgTarget::Declared(req.binding_idx)
+                    };
                     resolved_args.push(super::ResolvedEffectArg {
-                        param_idx,
-                        binding_idx: req.binding_idx,
+                        target,
                         key: key_ty,
                         arg,
                         with_source: match provider.origin {
@@ -2750,10 +2758,6 @@ impl<'db> TyChecker<'db> {
                         instantiated_key_ty,
                         provider_target_ty,
                         provider: provider_space,
-                        row_arg: row_paths
-                            .get(&req.binding_idx)
-                            .cloned()
-                            .map(RowArg::Component),
                     });
                 }
                 EffectResolution::BlockedByBarrier => {}
@@ -2792,8 +2796,7 @@ impl<'db> TyChecker<'db> {
         for (requirement, path, row) in forwarded {
             match self.own_row_binding(requirement, row) {
                 Some((binding, own)) => resolved_args.push(super::ResolvedEffectArg {
-                    param_idx: resolved_args.len(),
-                    binding_idx: requirement.binding_idx,
+                    target: EffectArgTarget::Forwarded { callee: path, own },
                     key: requirement.binding_ty,
                     arg: super::EffectArg::Binding(binding),
                     with_source: None,
@@ -2803,7 +2806,6 @@ impl<'db> TyChecker<'db> {
                     instantiated_key_ty: None,
                     provider_target_ty: None,
                     provider: None,
-                    row_arg: Some(RowArg::Forwarded { callee: path, own }),
                 }),
                 // A row of an instance no implementation satisfies is the
                 // unsatisfied bound's error, reported once.
@@ -3409,67 +3411,60 @@ impl<'db> TyChecker<'db> {
         matches!(binding, Some(LocalBinding::EffectParam { .. }))
     }
 
-    fn specialize_effect_provider_binding(
+    /// The provider `arg` gives a callee effect: the caller's own, passed
+    /// on, or one the call makes of `provided`.
+    fn effect_arg_provider(
         &mut self,
-        (slot_idx, source): (u32, ProviderSource<'db>),
         provided: ProvidedEffect<'db>,
         arg: &super::EffectArg<'db>,
         pass_mode: super::EffectPassMode,
         provider_target_ty: Option<TyId<'db>>,
         provider_space: Option<AddressSpace>,
-    ) -> EffectProviderSpecialization<'db> {
+    ) -> EffectArgProvider<'db> {
         let provenance = self
             .effect_provider_provenance(provided, arg)
             .unwrap_or_else(|| {
                 panic!(
-                    "missing call-site provider provenance for {slot_idx:?} in {:?}",
+                    "missing call-site provider provenance for {arg:?} in {:?}",
                     self.env.owner(),
                 )
             });
         let target_ty = provider_target_ty.map(|ty| self.table.fold_ty(self.db, ty));
-        let provider = self
+        if let Some(provider) = self
             .existing_provider_binding_for_effect_arg(provided, arg)
             .filter(|provider| {
                 target_ty.is_none_or(|target_ty| provider.effective_target_ty() == target_ty)
             })
-            .map_or_else(
-                || {
-                    let provider_ty = self
-                        .inferred_provider_ty_for_effect_arg(
-                            provided,
-                            arg,
-                            pass_mode,
-                            provider_target_ty,
-                        )
-                        .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
-                    let semantics = provider_semantics_for_specialized_call(
-                        self.db,
-                        provider_ty,
-                        target_ty,
-                        provider_space,
-                        match pass_mode {
-                            super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
-                            super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
-                            super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
-                                ProviderTransport::ByValue
-                            }
-                        },
-                    );
-                    ProviderBinding {
-                        provider_idx: slot_idx,
-                        provider_ty,
-                        is_mut: provided.is_mut,
-                        source,
-                        semantics,
-                    }
-                },
-                |provider| ProviderBinding {
-                    provider_idx: slot_idx,
-                    ..provider
-                },
-            );
-        EffectProviderSpecialization {
-            provider,
+        {
+            return EffectArgProvider {
+                provider_ty: provider.provider_ty,
+                is_mut: provider.is_mut,
+                semantics: provider.semantics,
+                source: Some(provider.source),
+                provenance,
+            };
+        }
+        let provider_ty = self
+            .inferred_provider_ty_for_effect_arg(provided, arg, pass_mode, provider_target_ty)
+            .unwrap_or_else(|| self.table.fold_ty(self.db, provided.ty));
+        let semantics = provider_semantics_for_specialized_call(
+            self.db,
+            provider_ty,
+            target_ty,
+            provider_space,
+            match pass_mode {
+                super::EffectPassMode::ByPlace => ProviderTransport::ByPlace,
+                super::EffectPassMode::ByTempPlace => ProviderTransport::ByTempPlace,
+                super::EffectPassMode::ByValue | super::EffectPassMode::Unknown => {
+                    ProviderTransport::ByValue
+                }
+            },
+        );
+        EffectArgProvider {
+            provider_ty,
+            is_mut: provided.is_mut,
+            semantics,
+            source: None,
             provenance,
         }
     }

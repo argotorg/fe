@@ -54,7 +54,9 @@ use crate::{
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
-pub use callable::{CallParam, Callable, EffectProviderProvenance, EffectProviderSpecialization};
+pub use callable::{
+    CallParam, Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
+};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
@@ -62,7 +64,7 @@ pub use env::{
     BindingAccess, ClosureCapture, ClosureInfo, EffectParamSite, ExprProp, LocalBinding, ParamSite,
     PatBindingMode, PathReadSemantics,
 };
-use env::{ProvidedEffect, TyCheckEnv, func_param_bindings};
+use env::{ProvidedEffect, TyCheckEnv, func_param_bindings, func_row_components};
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
@@ -4349,8 +4351,8 @@ pub enum EffectPassMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ResolvedEffectArg<'db> {
-    pub param_idx: usize,
-    pub binding_idx: u32,
+    /// The callee effect the argument is passed as.
+    pub target: EffectArgTarget<'db>,
     pub key: HirTyId<'db>,
     pub arg: EffectArg<'db>,
     /// The with-binding whose source was evaluated on entry to the block.
@@ -4361,16 +4363,21 @@ pub struct ResolvedEffectArg<'db> {
     pub instantiated_key_ty: Option<TyId<'db>>,
     pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<AddressSpace>,
-    /// For a component of one of the callee's rows, or a row it forwards,
-    /// where it sits: `binding_idx` numbers it only in the call's view.
-    pub row_arg: Option<RowArg>,
 }
 
-/// Where an effect argument sits among the callee's rows.
+/// The callee effect a call passes an argument as. An effect of the callee's
+/// rows has no index here: each view of the callee numbers the components it
+/// expands them to, and a path names the same one in every view.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub enum RowArg {
-    /// A component of one of the callee's rows.
-    Component(RowPath),
+pub enum EffectArgTarget<'db> {
+    /// The callee's declared effect of this index.
+    Declared(u32),
+    /// A component of one of the callee's rows, with the provider the call
+    /// gives it.
+    Component {
+        path: RowPath,
+        provider: EffectArgProvider<'db>,
+    },
     /// One of the callee's rows, which the call forwards from the caller's
     /// own row at `own`: one of its entries, or a component of one.
     Forwarded { callee: RowPath, own: RowPath },
@@ -6283,16 +6290,71 @@ impl<'db> TypedBody<'db> {
         let callee_sources = self.forwarded_return_param_sources_from_callable(db, func)?;
         let mut merged = FxHashSet::default();
         for callee_source in callee_sources {
-            for source in self.forwarded_return_sources_from_call_source(
+            let sources = match callee_source.origin {
+                CallableInputOrigin::Receiver => self.forwarded_return_param_sources_from_expr(
+                    db,
+                    body,
+                    *call_args.first()?,
+                    seen,
+                    visited_locals,
+                ),
+                CallableInputOrigin::ValueParam(param_idx) => self
+                    .forwarded_return_param_sources_from_expr(
+                        db,
+                        body,
+                        *call_args.get(param_idx)?,
+                        seen,
+                        visited_locals,
+                    ),
+                CallableInputOrigin::Effect(effect_idx) => {
+                    // The callee's body numbers the components of its rows; the
+                    // call names them by path.
+                    let component = func_row_components(db, func, BodyOwner::func(db, func).mode())
+                        .iter()
+                        .find(|component| component.requirement.binding_idx as usize == effect_idx)
+                        .map(|component| &component.path);
+                    let effect_args = self.call_effect_args(expr)?;
+                    let effect_arg = effect_args.iter().find(|arg| match &arg.target {
+                        EffectArgTarget::Declared(idx) => *idx as usize == effect_idx,
+                        EffectArgTarget::Component { path, .. } => component == Some(path),
+                        EffectArgTarget::Forwarded { .. } => false,
+                    })?;
+                    match &effect_arg.arg {
+                        EffectArg::Place(place) => self.forwarded_return_sources_from_place(
+                            db,
+                            body,
+                            place,
+                            seen,
+                            visited_locals,
+                        ),
+                        EffectArg::Value(expr) => self.forwarded_return_param_sources_from_expr(
+                            db,
+                            body,
+                            *expr,
+                            seen,
+                            visited_locals,
+                        ),
+                        EffectArg::Binding(binding) => self.forwarded_return_sources_from_place(
+                            db,
+                            body,
+                            &Place::new(PlaceBase::Binding(*binding)),
+                            seen,
+                            visited_locals,
+                        ),
+                        EffectArg::Unknown => None,
+                    }
+                }
+            }?;
+            let projection = self.instantiate_return_projection(
                 db,
+                body,
                 expr,
-                &callee_source,
+                &callee_source.projection,
                 call_args,
-                seen,
-                visited_locals,
-            )? {
-                merged.insert(source);
-            }
+            )?;
+            let mut sources = project_return_sources(sources, &projection)?;
+            prefix_return_sources(&mut sources, &callee_source.result_projection);
+            merged.extend(sources);
         }
         let mut out = merged.into_iter().collect::<Vec<_>>();
         out.sort_unstable();
@@ -6373,75 +6435,6 @@ impl<'db> TypedBody<'db> {
             })
             .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)
-    }
-
-    fn forwarded_return_sources_from_call_source(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        call_expr: ExprId,
-        callee_source: &ReturnSource,
-        call_args: &[ExprId],
-        seen: &mut FxHashSet<Func<'db>>,
-        visited_locals: &mut FxHashSet<PatId>,
-    ) -> Option<Vec<ReturnSource>> {
-        let body = self.body()?;
-        let sources = match callee_source.origin {
-            CallableInputOrigin::Receiver => self.forwarded_return_param_sources_from_expr(
-                db,
-                body,
-                *call_args.first()?,
-                seen,
-                visited_locals,
-            ),
-            CallableInputOrigin::ValueParam(param_idx) => self
-                .forwarded_return_param_sources_from_expr(
-                    db,
-                    body,
-                    *call_args.get(param_idx)?,
-                    seen,
-                    visited_locals,
-                ),
-            CallableInputOrigin::Effect(effect_idx) => {
-                let effect_arg = self
-                    .call_effect_args(call_expr)?
-                    .iter()
-                    .find(|arg| arg.binding_idx as usize == effect_idx)?;
-                match &effect_arg.arg {
-                    EffectArg::Place(place) => self.forwarded_return_sources_from_place(
-                        db,
-                        body,
-                        place,
-                        seen,
-                        visited_locals,
-                    ),
-                    EffectArg::Value(expr) => self.forwarded_return_param_sources_from_expr(
-                        db,
-                        body,
-                        *expr,
-                        seen,
-                        visited_locals,
-                    ),
-                    EffectArg::Binding(binding) => self.forwarded_return_sources_from_place(
-                        db,
-                        body,
-                        &Place::new(PlaceBase::Binding(*binding)),
-                        seen,
-                        visited_locals,
-                    ),
-                    EffectArg::Unknown => None,
-                }
-            }
-        }?;
-        let projection = self.instantiate_return_projection(
-            db,
-            body,
-            call_expr,
-            &callee_source.projection,
-            call_args,
-        )?;
-        let mut sources = project_return_sources(sources, &projection)?;
-        prefix_return_sources(&mut sources, &callee_source.result_projection);
-        Some(sources)
     }
 
     fn return_index_projection(

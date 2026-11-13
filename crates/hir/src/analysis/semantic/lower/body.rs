@@ -2593,6 +2593,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     caller,
                     callable,
                     &[],
+                    callable.effect_providers(),
                     self.assumptions,
                 ),
             }

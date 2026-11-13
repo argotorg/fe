@@ -1,0 +1,138 @@
+// A function forwards one of its callee's rows and gives the components of
+// another itself. The callee takes them in the order of its own effects,
+// whichever order the caller names them in.
+
+struct Store { n: u256 }
+struct Log { n: u256 }
+struct Other { m: u256, pad: u256 }
+
+trait Reader {
+    uses E
+    fn read(self) -> u256 uses E
+}
+
+struct R {}
+impl Copy for R {}
+impl Reader for R {
+    uses E = (store: Store)
+    fn read(self) -> u256 uses E { store.n }
+}
+
+struct Q {}
+impl Copy for Q {}
+impl Reader for Q {
+    uses E = (other: Other, log: mut Log)
+    fn read(self) -> u256 uses E {
+        log.n += 10
+        other.m
+    }
+}
+
+struct Both<A, B> { a: A, b: B }
+impl<A: Copy, B: Copy> Copy for Both<A, B> {}
+impl<A: Reader + Copy, B: Reader + Copy> Reader for Both<A, B> {
+    uses E = (A::E, B::E)
+    fn read(self) -> u256 uses E { self.a.read() * 100 + self.b.read() }
+}
+
+fn read_it<T: Reader>(_ t: T) -> u256 uses T::E { t.read() }
+
+fn read_two<A: Reader, B: Reader>(_ a: A, _ b: B) -> u256 uses (A::E, B::E) {
+    a.read() * 100 + b.read()
+}
+
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+
+// In each, `T::E` is forwarded and `Q::E` is expanded.
+fn two_rows<T: Reader>(_ t: T) -> u256 uses (T::E, other: Other, log: mut Log) {
+    read_two(t, Q {})
+}
+
+fn nested_row<T: Reader + Copy>(_ t: T) -> u256 uses (T::E, other: Other, log: mut Log) {
+    read_it(Both { a: t, b: Q {} })
+}
+
+fn in_closure<T: Reader + Copy>(_ t: T) -> u256 uses (T::E, log: mut Log, other: Other) {
+    log.n += 1
+    apply(|| read_it(Both { a: t, b: Q {} }))
+}
+
+#[test]
+fn test_two_rows() {
+    let s = Store { n: 7 }
+    let o = Other { m: 5, pad: 0 }
+    var l = Log { n: 0 }
+    with (Store = s, Other = o, Log = mut l) {
+        assert(read_two(R {}, Q {}) == 705)
+        assert(two_rows(R {}) == 705)
+    }
+    assert(l.n == 20)
+    assert(s.n == 7)
+}
+
+#[test]
+fn test_nested_row() {
+    let s = Store { n: 7 }
+    let o = Other { m: 5, pad: 0 }
+    var l = Log { n: 0 }
+    with (Store = s, Other = o, Log = mut l) {
+        assert(nested_row(R {}) == 705)
+    }
+    assert(l.n == 10)
+    assert(s.n == 7)
+}
+
+#[test]
+fn test_in_closure() {
+    let s = Store { n: 7 }
+    let o = Other { m: 5, pad: 0 }
+    var l = Log { n: 0 }
+    with (Store = s, Other = o, Log = mut l) {
+        assert(in_closure(R {}) == 705)
+    }
+    assert(l.n == 11)
+}
+
+trait Bump {
+    uses E
+    fn bump(self) uses E
+}
+
+struct BumpStore {}
+impl Bump for BumpStore {
+    uses E = (store: mut Store)
+    fn bump(self) uses E { store.n += 1 }
+}
+
+struct BumpLog {}
+impl Bump for BumpLog {
+    uses E = (log: mut Log)
+    fn bump(self) uses E { log.n += 10 }
+}
+
+fn bump_two<A: Bump, B: Bump>(_ a: own A, _ b: own B) uses (A::E, B::E) {
+    a.bump()
+    b.bump()
+}
+
+fn bump_through<A: Bump, B: Bump>(_ a: own A, _ b: own B) uses (A::E, B::E) {
+    bump_two(a, b)
+}
+
+// `A::E` is forwarded; `BumpLog::E` is expanded and given by the `with`.
+fn bump_local<A: Bump>(_ a: own A) -> u256 uses (A::E) {
+    var l = Log { n: 0 }
+    with (Log = mut l) {
+        bump_through(a, BumpLog {})
+    }
+    l.n
+}
+
+#[test]
+fn test_with_provided_component() {
+    var s = Store { n: 0 }
+    with (Store = mut s) {
+        assert(bump_local(BumpStore {}) == 10)
+    }
+    assert(s.n == 1)
+}

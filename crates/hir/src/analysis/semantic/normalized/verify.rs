@@ -423,7 +423,10 @@ fn verify_expr<'db>(
                 }
             }
             let requirements = callee.call_effect_requirements(db);
-            let mut effect_bindings = FxHashSet::default();
+            // The callee takes its effects in the order its body numbers them.
+            if !effect_args.is_sorted_by(|a, b| a.binding_idx < b.binding_idx) {
+                return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
             for arg in effect_args {
                 let Some(requirement) = requirements
                     .iter()
@@ -436,8 +439,7 @@ fn verify_expr<'db>(
                     (EffectPassMode::ByPlace, NEffectArgValue::Place(_))
                         | (EffectPassMode::ByValue, NEffectArgValue::Value(_))
                 );
-                if !effect_bindings.insert(arg.binding_idx)
-                    || requirement.is_mut != arg.required_mut
+                if requirement.is_mut != arg.required_mut
                     || !shape_matches
                     || arg.provider_target_ty.is_some_and(|ty| ty.has_invalid(db))
                 {
@@ -464,7 +466,7 @@ fn verify_expr<'db>(
                     verify_mutation(db, body, place, false)?;
                 }
             }
-            if effect_bindings.len() != requirements.len()
+            if effect_args.len() != requirements.len()
                 && typed_body.smir_lowering_issues(db).is_empty()
             {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
