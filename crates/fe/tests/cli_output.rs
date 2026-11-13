@@ -3846,6 +3846,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "enum_state_machine",
     "erc1167_clones",
     "erc20",
+    "erc20_token",
     "erc20_try_transfer",
     "erc4337",
     "erc721_erc1155_try_transfer",
