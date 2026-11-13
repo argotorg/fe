@@ -601,7 +601,7 @@ fn map_effect_provider_params_by_identity<'db>(
     let assumptions = collect_func_def_constraints(db, impl_m, true).instantiate_identity();
     // An impl method splices the impl's own rows into its effects: a trait
     // method's entry naming one pairs with the splice, not by identity. A row
-    // known to be empty needs no entry at all.
+    // known to be empty needs no entry in either method.
     let impl_func = match impl_m {
         CallableDef::Func(func) => Some(func),
         CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => None,
@@ -635,7 +635,13 @@ fn map_effect_provider_params_by_identity<'db>(
         assumptions,
     )
     .into_iter()
-    .filter(|entry| !impl_func.is_some_and(|func| func.effect_from_row(db, entry.effect_idx)))
+    .filter(|entry| {
+        !impl_func.is_some_and(|func| func.effect_from_row(db, entry.effect_idx))
+            && !entry
+                .identity
+                .key_row
+                .is_some_and(|row| row_is_empty(db, row, impl_m.scope(), assumptions))
+    })
     .collect();
     let mut used_impl_entries = vec![false; impl_entries.len()];
     let mut effect_pairs = Vec::new();
