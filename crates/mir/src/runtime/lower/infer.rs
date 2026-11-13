@@ -32,8 +32,7 @@ use super::{
     classify::{
         AssignmentId, BodyEnv, BodyStaticFacts, InferClassCache, RuntimeBodyCx,
         carrier_value_class, local_slot_uses_transport_class, provider_erases_runtime_root,
-        runtime_class_for_direct_value_provider_in_env,
-        runtime_class_for_effect_binding_provider_in_env,
+        runtime_class_for_provider,
     },
     conversion::RuntimeConversionPlanner,
     returns::declaration_runtime_return_class,
@@ -380,19 +379,14 @@ pub(crate) fn seed_root_provider_carriers<'a, 'db>(
         }) {
             continue;
         }
-        if let (SemanticLocalRole::DirectValue { .. }, Some(provider)) = (&local.role, &provider)
-            && let Some(class) = env
-                .actual_runtime_visible_root_provider_class(carriers, provider)
-                .map(|(_, class)| class)
-                .or_else(|| {
-                    runtime_class_for_direct_value_provider_in_env(
-                        env.db(),
-                        env.type_env(),
-                        provider,
-                    )
-                })
-        {
-            carriers[idx] = RuntimeCarrier::Value(class);
+        if let (SemanticLocalRole::DirectValue { .. }, Some(provider)) = (&local.role, &provider) {
+            carriers[idx] = RuntimeCarrier::Value(
+                env.actual_runtime_visible_root_provider_class(carriers, provider)
+                    .map_or_else(
+                        || runtime_class_for_provider(env.db(), env.type_env(), provider),
+                        |(_, class)| class,
+                    ),
+            );
         }
     }
 }
@@ -478,17 +472,10 @@ fn lower_semantic_locals<'db>(
             (SemanticLocalKind::DirectValue, Some(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
-                .actual_runtime_visible_root_provider_class(carriers, provider)
-                .or_else(|| {
-                    runtime_class_for_direct_value_provider_in_env(db, type_env, provider)
-                        .map(|class| (local_id, class))
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "missing runtime provider class for root-provider direct value local {:?}: {provider:?}",
-                        local.source
-                    )
-                });
+                    .actual_runtime_visible_root_provider_class(carriers, provider)
+                    .unwrap_or_else(|| {
+                        (local_id, runtime_class_for_provider(db, type_env, provider))
+                    });
                 Some((
                     provider.clone(),
                     provider_class,
@@ -504,19 +491,10 @@ fn lower_semantic_locals<'db>(
             (SemanticLocalKind::PlaceBoundValue, Some(provider)) => {
                 let (provider_local, provider_class) = cx
                     .env
-                .actual_runtime_visible_root_provider_class(carriers, provider)
-                .or_else(|| {
-                    runtime_class_for_effect_binding_provider_in_env(db, type_env, provider)
-                        .or_else(|| {
-                            runtime_class_for_direct_value_provider_in_env(db, type_env, provider)
-                        })
-                        .map(|class| (local_id, class))
-                })
-                .unwrap_or_else(|| {
-                    panic!(
-                        "missing runtime provider class for root-provider place-bound local {idx}: {provider:?}"
-                    )
-                });
+                    .actual_runtime_visible_root_provider_class(carriers, provider)
+                    .unwrap_or_else(|| {
+                        (local_id, runtime_class_for_provider(db, type_env, provider))
+                    });
                 Some((
                     provider.clone(),
                     provider_class,

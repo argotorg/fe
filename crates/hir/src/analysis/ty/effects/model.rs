@@ -9,8 +9,7 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty},
         },
     },
-    hir_def::{IdentId, PathId, Trait, TypeId as HirTypeId, scope_graph::ScopeId},
-    span::DynLazySpan,
+    hir_def::{IdentId, Trait, TypeId as HirTypeId, scope_graph::ScopeId},
 };
 use common::indexmap::IndexMap;
 use rustc_hash::FxHashSet;
@@ -160,38 +159,17 @@ pub struct EffectForwarder<'db, P> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct EffectBarrier<'db> {
-    pub pattern: EffectPatternKey<'db>,
-    pub reason: BarrierReason<'db>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum KeyedEffectEntry<'db, P> {
     Witness(EffectWitness<'db, P>),
     Forwarder(EffectForwarder<'db, P>),
-    Barrier(EffectBarrier<'db>),
+    /// Keys an invalid keyed `with` binding hides from the frames outside it.
+    Barrier(EffectPatternKey<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EffectFamily<'db> {
     Type(TyId<'db>),
     Trait(Trait<'db>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum BarrierReason<'db> {
-    InvalidExplicitTypeKey {
-        span: DynLazySpan<'db>,
-        key_path: PathId<'db>,
-    },
-    InvalidExplicitTraitKey {
-        span: DynLazySpan<'db>,
-        key_path: PathId<'db>,
-    },
-    UnstableExplicitKeyedProvider {
-        span: DynLazySpan<'db>,
-        key_path: PathId<'db>,
-    },
 }
 
 impl<'db> EffectRequirementDecl<'db> {

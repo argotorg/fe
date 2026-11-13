@@ -2388,7 +2388,7 @@ pub(crate) fn effect_param_provider_semantics<'db>(
     if semantics.kind == ProviderKind::RootObject
         && let EffectRequirementKey::Type(key_ty) = key
     {
-        semantics.address_space = Some(key_ty.default_space(db));
+        semantics.address_space = key_ty.default_space(db);
     }
     semantics
 }
@@ -2649,13 +2649,11 @@ fn contract_provider_bindings_canonical<'db>(
                 semantics: ProviderSemantics {
                     provider_ty,
                     kind: ProviderKind::Place,
-                    address_space: Some(field.address_space).map(|space| {
-                        if is_init_site && space == AddressSpace::Code {
-                            AddressSpace::Memory
-                        } else {
-                            space
-                        }
-                    }),
+                    address_space: if is_init_site && field.address_space == AddressSpace::Code {
+                        AddressSpace::Memory
+                    } else {
+                        field.address_space
+                    },
                     target_ty: Some(provider_ty),
                 },
             }

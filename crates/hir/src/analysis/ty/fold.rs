@@ -670,9 +670,8 @@ impl<'db> TyFoldable<'db> for EffectArg<'db> {
         F: TyFolder<'db>,
     {
         match self {
-            EffectArg::Place(place) => EffectArg::Place(place.fold_with(db, folder)),
+            EffectArg::With(_) => self,
             EffectArg::Binding(binding) => EffectArg::Binding(binding.fold_with(db, folder)),
-            EffectArg::Value(_) => self,
         }
     }
 }

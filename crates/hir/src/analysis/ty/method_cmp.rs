@@ -10,8 +10,8 @@ use super::{
     },
     diagnostics::{ImplDiag, TyDiagCollection},
     effects::{
-        CanonicalEffectIdentity, EffectKeyCanonMode, EffectKeyKind,
-        canonical_effect_identity_for_binding, place_effect_provider_param_index_map,
+        CanonicalEffectIdentity, EffectKeyKind, canonical_effect_identity_for_binding,
+        place_effect_provider_param_index_map,
         rows::{RowKey, row_is_empty},
     },
     fold::{TyFoldable, TyFolder},
@@ -729,7 +729,6 @@ fn collect_effect_provider_entries<'db>(
                 scope,
                 assumptions,
                 Some(trait_inst),
-                EffectKeyCanonMode::Compare,
             );
             identity.key_ty = identity.key_ty.map(|ty| {
                 normalize_compare_assoc_consts(

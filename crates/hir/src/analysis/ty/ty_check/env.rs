@@ -1259,13 +1259,9 @@ impl<'db> TyCheckEnv<'db> {
             ref key => key.binding_ty(db),
         }
         .map(|ty| ProvidedEffect {
-            origin: EffectOrigin::Param {
-                site: info.requirement.binding_site,
-                index: info.requirement.binding_idx as usize,
-            },
+            origin: EffectOrigin::Param(binding),
             ty,
             is_mut: true,
-            binding: Some(binding),
         });
         active.effects.push(info);
         if let Some(bound) = bound {
@@ -1829,12 +1825,11 @@ impl<'db> TyChecker<'db> {
                 .unwrap_or_else(|| panic!("missing provider binding for effect at index {idx}"));
             let local_binding = LocalBinding::effect_param(&resolved_binding);
             let provided = ProvidedEffect {
-                origin: EffectOrigin::Param { site, index: idx },
+                origin: EffectOrigin::Param(local_binding),
                 ty: EffectEnvView::new(site)
                     .visible_effect_binding_ty(self.db, idx)
                     .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
                 is_mut: local_binding.is_mut(),
-                binding: Some(local_binding),
             };
 
             if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, binding)
@@ -1851,18 +1846,14 @@ impl<'db> TyChecker<'db> {
         }
 
         for component in self.env.row_components().to_vec() {
-            let requirement = &component.requirement;
             let local_binding = LocalBinding::effect_param(&component);
             let provided = ProvidedEffect {
-                origin: EffectOrigin::Param {
-                    site,
-                    index: requirement.binding_idx as usize,
-                },
+                origin: EffectOrigin::Param(local_binding),
                 ty: self.env.lookup_binding_ty(&local_binding),
                 is_mut: local_binding.is_mut(),
-                binding: Some(local_binding),
             };
-            if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, requirement)
+            if let Some(req) =
+                EffectRequirementDecl::from_effect_requirement(self.db, &component.requirement)
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {
@@ -1904,22 +1895,16 @@ impl<'db> TyChecker<'db> {
         binding: &EffectRequirement<'db>,
     ) -> Option<ProvidedEffect<'db>> {
         let idx = binding.binding_idx as usize;
-        let origin = EffectOrigin::Param {
-            site: binding.binding_site,
-            index: idx,
-        };
-
         let resolved_binding = self
             .env
             .resolved_effect_binding(binding.binding_site, idx)?;
         let local_binding = LocalBinding::effect_param(&resolved_binding);
         Some(ProvidedEffect {
-            origin,
+            origin: EffectOrigin::Param(local_binding),
             ty: EffectEnvView::new(binding.binding_site)
                 .visible_effect_binding_ty(self.db, idx)
                 .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
             is_mut: binding.is_mut,
-            binding: Some(local_binding),
         })
     }
 
@@ -2273,17 +2258,26 @@ pub(crate) struct ProvidedEffect<'db> {
     pub origin: EffectOrigin<'db>,
     pub ty: TyId<'db>,
     pub is_mut: bool,
-    pub binding: Option<LocalBinding<'db>>,
+}
+
+impl<'db> ProvidedEffect<'db> {
+    /// The binding the provider is, if it is one.
+    pub(super) fn binding(self) -> Option<LocalBinding<'db>> {
+        match self.origin {
+            EffectOrigin::Param(binding) => Some(binding),
+            EffectOrigin::With { binding, .. } => binding,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EffectOrigin<'db> {
-    Param {
-        site: EffectParamSite<'db>,
-        index: usize,
-    },
+    /// An effect binding of the body.
+    Param(LocalBinding<'db>),
+    /// A `with` value, and the binding it names, if it names one.
     With {
         value_expr: ExprId,
+        binding: Option<LocalBinding<'db>>,
     },
 }
 
@@ -2291,8 +2285,8 @@ impl<'db> EffectOrigin<'db> {
     /// Where the effect is given: a `with` value or an effect parameter.
     pub(super) fn span(self, db: &'db dyn HirAnalysisDb, body: Body<'db>) -> DynLazySpan<'db> {
         match self {
-            Self::Param { site, index, .. } => effect_param_span(db, site, index),
-            Self::With { value_expr } => value_expr.span(body).into(),
+            Self::Param(binding) => binding.def_span_in_body(db, body),
+            Self::With { value_expr, .. } => value_expr.span(body).into(),
         }
     }
 }

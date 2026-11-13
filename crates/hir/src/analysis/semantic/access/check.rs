@@ -58,7 +58,7 @@ use crate::{
             provider::{AddressSpace, provider_semantics},
             shape::Shape,
             trait_resolution::PredicateListId,
-            ty_check::{BindingAccess, BodyOwner, LocalBinding, infer_body},
+            ty_check::{BindingAccess, BodyOwner, EffectArg, LocalBinding, infer_body},
             ty_def::{BorrowKind, CapabilityKind, ShapeMode, TyData, TyId},
             ty_is_copy, ty_is_snapshot,
         },
@@ -375,7 +375,7 @@ impl<'a, 'db> Analysis<'a, 'db> {
                             site: site.slot_site(self.db, idx as u32),
                             requirement_idx: idx as u32,
                         },
-                        provider_semantics(self.db, value.ty).address_space,
+                        Some(provider_semantics(self.db, value.ty).address_space),
                         idx as u32,
                     )),
                     _ => None,
@@ -2923,11 +2923,11 @@ impl<'a, 'db> Analysis<'a, 'db> {
             && let Some(Some(site)) = self.instance.call_sites(self.db).get(expr.index())
         {
             for ((effect, _), name) in effects.iter().zip([&lhs, &rhs]) {
-                if let Some(source) = site
+                if let Some(EffectArg::With(source)) = site
                     .effect_args
                     .iter()
                     .find(|arg| arg.binding_idx == effect.binding_idx)
-                    .and_then(|arg| arg.with_source)
+                    .map(|arg| arg.arg)
                 {
                     diag.push_secondary(
                         format!("{name} is provided here"),
