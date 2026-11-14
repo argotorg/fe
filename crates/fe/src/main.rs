@@ -652,14 +652,7 @@ pub enum DocAction {
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
     /// Start with TCP transport instead of stdio.
-    Tcp {
-        /// Port to listen on.
-        #[arg(short, long, default_value_t = 4242)]
-        port: u16,
-        /// Timeout in seconds to shut down if no clients are connected.
-        #[arg(short, long, default_value_t = 10)]
-        timeout: u64,
-    },
+    Tcp(language_server::cli::TcpArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -1138,10 +1131,11 @@ pub fn run(opts: &Options) {
                 }
                 language_server::setup_panic_hook();
                 match mode {
-                    Some(LspMode::Tcp { port, timeout }) => {
+                    Some(LspMode::Tcp(tcp)) => {
                         language_server::run_tcp_server(
-                            *port,
-                            std::time::Duration::from_secs(*timeout),
+                            tcp.host,
+                            tcp.port,
+                            std::time::Duration::from_secs(tcp.timeout),
                         )
                         .await;
                     }

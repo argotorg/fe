@@ -18,7 +18,7 @@ pub mod ws_lsp;
 #[cfg(test)]
 mod mock_client_tests;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -119,8 +119,10 @@ pub async fn run_stdio_server(combined: Option<CombinedServerConfig>) {
     drop(logging);
 }
 
-pub async fn run_tcp_server(port: u16, timeout: Duration) {
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+/// Serves LSP over TCP. The server has no authentication, so `host` should be a
+/// loopback address unless every machine that can reach the port is trusted.
+pub async fn run_tcp_server(host: IpAddr, port: u16, timeout: Duration) {
+    let addr = SocketAddr::new(host, port);
     let listener = TcpListener::bind(&addr)
         .await
         .expect("Failed to bind to address");
