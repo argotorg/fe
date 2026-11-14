@@ -268,8 +268,16 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     // Check for cycles after graph resolution (now that handler is dropped)
     let cyclic_subgraph = db.dependency_graph().cyclic_subgraph(db);
 
-    // Add cycle diagnostics - single comprehensive diagnostic if any cycles exist
-    if cyclic_subgraph.node_count() > 0 {
+    // The database can hold other ingots too, for example the other members of a
+    // workspace. The cyclic subgraph holds every cycle of the database and the
+    // ingots that reach it, so it contains the root exactly when the root is in
+    // a cycle or depends on one. Other cycles are reported for their own ingots.
+    let root_reaches_cycle = cyclic_subgraph
+        .node_indices()
+        .any(|idx| cyclic_subgraph[idx] == *ingot_url);
+
+    // Add cycle diagnostics - single comprehensive diagnostic if the root reaches a cycle
+    if root_reaches_cycle {
         // Get configs for all nodes in the cyclic subgraph
         let mut configs = HashMap::new();
         for node_idx in cyclic_subgraph.node_indices() {
@@ -279,16 +287,6 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
             {
                 configs.insert(url.clone(), config.clone());
             }
-        }
-
-        // The root ingot should be part of any detected cycles since we're analyzing its dependencies
-        if !cyclic_subgraph
-            .node_indices()
-            .any(|idx| cyclic_subgraph[idx] == *ingot_url)
-        {
-            panic!(
-                "Root ingot {ingot_url} not found in cyclic subgraph. This indicates a bug in cycle detection logic."
-            );
         }
 
         // Generate the tree display string
