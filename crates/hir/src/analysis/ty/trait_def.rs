@@ -468,6 +468,120 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     }
 }
 
+pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+) -> Selection<ResolvedImplInstance<'db>> {
+    let assumptions = solve_cx.assumptions();
+    let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
+    let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(db, inst);
+    let mut candidates =
+        impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, inst)).clone();
+    if let Some(callable) = super::closure::callable_implementor(db, inst) {
+        candidates.push(callable);
+    }
+    if let Some((clearable, _)) = super::clearable::clearable_implementor(db, inst) {
+        candidates.push(clearable);
+    }
+    if let Some(sol_codec) =
+        super::sol_codec::sol_codec_implementor(db, inst, norm_scope, assumptions)
+    {
+        candidates.push(sol_codec);
+    }
+    let goal_canonical = super::canonical::Canonicalized::new(db, inst).canonical();
+    let mut matched = IndexSet::new();
+    for implementor in candidates {
+        if inst.is_mut(db) && !implementor.gives_mut(db) {
+            continue;
+        }
+        let Some(candidate) =
+            inst.assoc_type_bindings(db)
+                .keys()
+                .try_fold(implementor, |imp, binding| {
+                    super::trait_lower::complete_candidate_impl_assoc_ty(db, imp, binding.name)
+                })
+        else {
+            continue;
+        };
+        let mut table = UnificationTable::new(db);
+        let instantiated = table.instantiate_with_fresh_vars(candidate);
+        let normalized_candidate = normalize_trait_inst_preserving_validity(
+            db,
+            instantiated.trait_inst(db),
+            norm_scope,
+            assumptions,
+        );
+        if normalized_candidate
+            .args(db)
+            .iter()
+            .zip(inst.args(db))
+            .any(|(&cand_arg, &goal_arg)| table.unify(cand_arg, goal_arg).is_err())
+        {
+            continue;
+        }
+        let assoc_ok = inst
+            .assoc_type_bindings(db)
+            .iter()
+            .all(|(&binding, &goal_assoc_ty)| {
+                let Some(cand_assoc_ty) = normalized_candidate.bound_assoc_ty(db, binding) else {
+                    return false;
+                };
+                let cand_assoc_ty = super::normalize::normalize_ty(
+                    db,
+                    cand_assoc_ty.fold_with(db, &mut table),
+                    norm_scope,
+                    assumptions,
+                );
+                let goal_assoc_ty = super::normalize::normalize_ty(
+                    db,
+                    goal_assoc_ty.fold_with(db, &mut table),
+                    norm_scope,
+                    assumptions,
+                );
+                table.unify(cand_assoc_ty, goal_assoc_ty).is_ok()
+            });
+        if !assoc_ok {
+            continue;
+        }
+        let matched_goal = inst.fold_with(db, &mut table);
+        if super::canonical::Canonicalized::new(db, matched_goal).canonical() != goal_canonical {
+            continue;
+        }
+        let Some(selected) = complete_selected_impl(db, implementor) else {
+            continue;
+        };
+        let Some(resolved) = instantiate_selected_impl(db, selected, inst) else {
+            continue;
+        };
+        if resolved
+            .instantiated()
+            .params(db)
+            .iter()
+            .any(|ty| ty.has_var(db))
+        {
+            continue;
+        }
+        matched.insert(resolved);
+    }
+    match matched.len() {
+        1 => Selection::Unique(*matched.iter().next().unwrap()),
+        0 => Selection::NotFound,
+        _ => match resolve_trait_impl_instance(db, solve_cx.with_choices(None), inst) {
+            Selection::Unique(resolved)
+                if !matches!(
+                    resolved.selected().origin(db),
+                    ImplementorOrigin::Assumption
+                ) =>
+            {
+                Selection::Unique(resolved)
+            }
+            _ => Selection::Ambiguous(matched),
+        },
+    }
+}
+
 /// An implementation selection, without candidates for an ambiguous one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
@@ -487,9 +601,42 @@ fn resolve_trait_impl_instance_query<'db>(
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
     match solve_cx.select_impl(db, inst) {
-        Selection::Unique(selected) => complete_selected_impl(db, selected)
-            .and_then(|selected| instantiate_selected_impl(db, selected, inst))
-            .map_or(ImplSelection::NotFound, ImplSelection::Unique),
+        Selection::Unique(selected) => {
+            let Some(selected) = complete_selected_impl(db, selected) else {
+                return ImplSelection::NotFound;
+            };
+            // A selected name can supply arguments absent from the trait head.
+            // Keep its application (and captured outer parameters) instead of
+            // attempting to reconstruct all implementation arguments from `inst`.
+            if let Some(choices) = solve_cx.choices() {
+                for &choice in choices.items(db).iter().rev() {
+                    if choice.template.origin(db) != selected.origin(db) {
+                        continue;
+                    }
+                    let mut table = UnificationTable::new(db);
+                    let instantiated = super::trait_resolution::ChosenImpl {
+                        template: selected,
+                        ..choice
+                    }
+                    .instantiate(&mut table);
+                    if instantiated
+                        .trait_inst(db)
+                        .args(db)
+                        .iter()
+                        .zip(inst.args(db))
+                        .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
+                    {
+                        return ImplSelection::Unique(ResolvedImplInstance {
+                            selected,
+                            instantiated: instantiated.fold_with(db, &mut table),
+                            trait_inst: inst.fold_with(db, &mut table),
+                        });
+                    }
+                }
+            }
+            instantiate_selected_impl(db, selected, inst)
+                .map_or(ImplSelection::NotFound, ImplSelection::Unique)
+        }
         // There is deliberately no resolved instance for a non-unique
         // selection. Re-unifying each candidate would both fabricate evidence
         // the caller must not consume and attempt to fold inference variables
@@ -634,10 +781,11 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     ingot: Ingot<'db>,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
+    choices: Option<super::trait_resolution::ChosenImpls<'db>>,
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, false)
+    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, choices, false)
 }
 
 /// Returns implementors of `inst`'s trait that can apply to `inst` and whose
@@ -651,9 +799,19 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     let mut table = UnificationTable::new(db);
     let inst = inst.extract_identity(&mut table);
     let ty = inst.self_ty(db);
-    impls_with_constraint_mode(db, ingot, &mut table, ty, Some(inst), assumptions, true)
+    impls_with_constraint_mode(
+        db,
+        ingot,
+        &mut table,
+        ty,
+        Some(inst),
+        assumptions,
+        None,
+        true,
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn impls_with_constraint_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
@@ -661,9 +819,12 @@ fn impls_with_constraint_mode<'db>(
     ty: TyId<'db>,
     trait_inst: Option<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
+    choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     allow_needs_confirmation: bool,
 ) -> Vec<ImplementorId<'db>> {
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope())
+        .with_assumptions(assumptions)
+        .with_choices(choices);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
@@ -828,6 +989,317 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     })
 }
 
+/// What a named implementation's declaration gives differently from another
+/// implementation of its slot.
+pub(crate) enum NamedOutputMismatch<'db> {
+    NoOrdinaryOutputs,
+    /// An associated type; `with` is the implementation compared with.
+    AssocType {
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    AssocConst {
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+    },
+    /// An associated effect row.
+    Row {
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+    },
+}
+
+/// A slot's associated types and effect rows do not depend on which implementation answers it. A named
+/// declaration is compared with every other implementation of the trait,
+/// ordinary or named, whose header overlaps its own, at their overlap and
+/// whatever their conditions: a condition that does not hold here can hold
+/// where a `with` adds a premise, and two named implementations that both
+/// answer a slot would otherwise give it outputs that depend on which is
+/// found first. This is definition admission, independent of any opening.
+pub(crate) fn named_output_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    candidate: ImplementorId<'db>,
+) -> Option<NamedOutputMismatch<'db>> {
+    let context = TraitSolveCx::new(db, implementation.scope())
+        .with_assumptions(crate::semantic::param_env(db, implementation.into()));
+    let header = candidate.trait_inst(db);
+    let goal = TraitInstId::new_simple(db, header.def(db), header.args(db).clone());
+    if goal.def(db).has_assoc_outputs(db) || goal.def(db).assoc_consts(db).next().is_some() {
+        // Types still normalize ordinarily. Equality at overlaps is insufficient
+        // when some named applications have no ordinary output representative.
+        let ordinary = context
+            .with_assumptions(candidate.constraints(db))
+            .select_impl(db, goal);
+        if !matches!(ordinary, Selection::Unique(implementation) if matches!(implementation.origin(db), ImplementorOrigin::Hir(source) if source.selection_name(db).is_none()))
+        {
+            return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        }
+    }
+    let (primary, secondary) = context.search_ingots_for_trait_inst(db, goal);
+    let ingots = [Some(primary), secondary]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let ordinary = ingots
+        .iter()
+        .flat_map(|ingot| impls_for_trait_def(db, *ingot, goal.def(db)).to_vec())
+        .filter(|other| matches!(other.origin(db), ImplementorOrigin::Hir(_)))
+        .map(|other| (other, true));
+    // Every admitted named header has an ordinary output representative.
+    // Agreement with all overlapping ordinary headers therefore also implies
+    // named-to-named agreement. Comparing named pairs again would blame a
+    // conforming declaration for another declaration's ordinary-output error.
+    for (other, ordinary) in ordinary {
+        let ImplementorOrigin::Hir(with) = other.origin(db) else {
+            continue;
+        };
+        let Some(other) = complete_selected_impl(db, other) else {
+            continue;
+        };
+        let Some((own, other)) = at_overlap(db, candidate, other) else {
+            continue;
+        };
+        for assoc in goal.def(db).assoc_types(db) {
+            let Some(name) = assoc.name(db) else {
+                continue;
+            };
+            let (Some(expected), Some(given)) = (
+                other.instantiated_assoc_ty(db, name),
+                own.instantiated_assoc_ty(db, name),
+            ) else {
+                continue;
+            };
+            let expected = consts_evaluated(
+                db,
+                super::normalize::normalize_ty(
+                    db,
+                    expected,
+                    implementation.scope(),
+                    context.assumptions(),
+                ),
+            );
+            let given = consts_evaluated(
+                db,
+                super::normalize::normalize_ty(
+                    db,
+                    given,
+                    implementation.scope(),
+                    context.assumptions(),
+                ),
+            );
+            if expected.has_invalid(db) || given.has_invalid(db) {
+                continue;
+            }
+            // Equal at the overlap, for every value of what the overlap
+            // leaves open: the two are compared as they are, not unified.
+            if !same_overlap_ty(db, expected, given) {
+                return Some(NamedOutputMismatch::AssocType {
+                    with,
+                    ordinary,
+                    name,
+                    expected,
+                    given,
+                });
+            }
+        }
+        for constant in goal.def(db).assoc_consts(db) {
+            let Some(name) = constant.name(db) else {
+                continue;
+            };
+            let value = |resolved| {
+                super::const_ty::const_ty_from_resolved_trait_const(db, resolved, name)
+                    .map(|value| consts_evaluated(db, TyId::const_ty(db, value)))
+            };
+            let differs = match (value(own), value(other)) {
+                (Some(lhs), Some(rhs)) => !same_overlap_ty(db, lhs, rhs),
+                (lhs, rhs) => lhs != rhs,
+            };
+            if differs {
+                return Some(NamedOutputMismatch::AssocConst { with, name });
+            }
+        }
+        for row in goal.def(db).rows(db) {
+            let Some(name) = row.name.to_opt() else {
+                continue;
+            };
+            let components = |resolved| {
+                super::effects::rows::implementation_row_components(db, resolved, name).map(
+                    |components| {
+                        components
+                            .into_iter()
+                            .map(|component| (component.name, component.key, component.is_mut))
+                            .collect::<Vec<_>>()
+                    },
+                )
+            };
+            if components(other) != components(own) {
+                return Some(NamedOutputMismatch::Row {
+                    with,
+                    ordinary,
+                    name,
+                });
+            }
+        }
+    }
+    None
+}
+
+/// `ty` with each constant in it evaluated, so two written forms of one type
+/// (`Arr<{ 100 }>` and `Arr<100>`, or one braced constant written twice)
+/// compare equal.
+fn consts_evaluated<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+    struct Evaluate;
+    impl<'db> TyFolder<'db> for Evaluate {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            let ty = ty.super_fold_with(db, self);
+            super::const_ty::normalize_const_tys_for_comparison(db, ty)
+        }
+    }
+    ty.fold_with(db, &mut Evaluate)
+}
+
+type CanonicalOverlapConstBody<'db> = (
+    TyId<'db>,
+    Vec<crate::analysis::semantic::SLocalId>,
+    Vec<crate::analysis::semantic::SLocal<'db>>,
+    Vec<crate::analysis::semantic::SBlock<'db>>,
+    Vec<Vec<crate::analysis::semantic::SValueId>>,
+);
+
+fn same_overlap_ty<'db>(db: &'db dyn HirAnalysisDb, lhs: TyId<'db>, rhs: TyId<'db>) -> bool {
+    if lhs == rhs {
+        return true;
+    }
+    match (lhs.data(db), rhs.data(db)) {
+        (TyData::TyApp(l_abs, l_arg), TyData::TyApp(r_abs, r_arg)) => {
+            same_overlap_ty(db, *l_abs, *r_abs) && same_overlap_ty(db, *l_arg, *r_arg)
+        }
+        (TyData::ConstTy(l_const), TyData::ConstTy(r_const)) => {
+            canonical_overlap_const_body(db, *l_const)
+                .zip(canonical_overlap_const_body(db, *r_const))
+                .is_some_and(|(l_body, r_body)| l_body == r_body)
+        }
+        _ => false,
+    }
+}
+
+fn canonical_overlap_const_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ty: super::const_ty::ConstTyId<'db>,
+) -> Option<CanonicalOverlapConstBody<'db>> {
+    let super::const_ty::ConstTyData::UnEvaluated {
+        body,
+        ty,
+        template_ty,
+        capture,
+        ..
+    } = const_ty.data(db)
+    else {
+        return None;
+    };
+    let expected = (*ty)?;
+    let owner = super::ty_check::BodyOwner::AnonConstBody {
+        body: *body,
+        expected: template_ty.unwrap_or(expected),
+    };
+    let key = crate::analysis::semantic::SemanticInstanceKey::of(
+        db,
+        owner,
+        capture.generic_subst(db),
+        crate::analysis::semantic::EffectProviderSubst::empty(db),
+        crate::analysis::semantic::ImplEnv::empty(db, owner.scope()),
+        super::evidence::EvidenceList::none(db),
+    );
+    let instance = crate::analysis::semantic::SemanticInstance::new(db, key);
+    let mut sem = crate::analysis::semantic::canonicalize_semantic_consts(db, instance)
+        .ok()?
+        .clone();
+    for local in &mut sem.locals {
+        local.ty = consts_evaluated(db, local.ty);
+        local.source = None;
+    }
+    for block in &mut sem.blocks {
+        block.terminator.origin = crate::analysis::semantic::SemOrigin::Synthetic;
+        for stmt in &mut block.stmts {
+            stmt.origin = crate::analysis::semantic::SemOrigin::Synthetic;
+            if let crate::analysis::semantic::SStmtKind::Assign {
+                expr: crate::analysis::semantic::SExpr::Const(constant),
+                ..
+            } = &mut stmt.kind
+            {
+                let term = match constant {
+                    crate::analysis::semantic::SConst::Value(v) => {
+                        Some(super::const_ty::const_ty_from_sem_const(db, v.value()))
+                    }
+                    crate::analysis::semantic::SConst::Description(v) => {
+                        Some(super::const_ty::const_ty_from_sem_const(db, *v))
+                    }
+                    crate::analysis::semantic::SConst::Evidence(v) => Some(
+                        crate::analysis::semantic::consts::instantiate_const_template(
+                            db,
+                            instance,
+                            super::const_ty::const_ty_from_sem_const(db, *v),
+                        ),
+                    ),
+                    _ => None,
+                };
+                if let Some(term) = term
+                    && let Some(canon) = crate::analysis::semantic::sem_const_from_ty(
+                        db,
+                        consts_evaluated(db, TyId::const_ty(db, term)),
+                    )
+                {
+                    *constant = crate::analysis::semantic::SConst::Description(canon);
+                }
+            }
+        }
+    }
+    Some((
+        consts_evaluated(db, expected),
+        sem.entry_locals,
+        sem.locals,
+        sem.blocks,
+        sem.unsafe_splits,
+    ))
+}
+
+/// Two implementations instantiated at their overlap: each header with fresh
+/// variables, unified with the other. `None` when the headers cannot both
+/// match one goal.
+fn at_overlap<'db>(
+    db: &'db dyn HirAnalysisDb,
+    own: ImplementorId<'db>,
+    other: ImplementorId<'db>,
+) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>)> {
+    let mut table = UnificationTable::new(db);
+    let own_fresh = table.instantiate_with_fresh_vars(own);
+    let other_fresh = table.instantiate_with_fresh_vars(other);
+    for (&a, &b) in own_fresh
+        .trait_inst(db)
+        .args(db)
+        .iter()
+        .zip(other_fresh.trait_inst(db).args(db))
+    {
+        table.unify(a, b).ok()?;
+    }
+    let resolved = |selected, fresh: ImplementorId<'db>, table: &mut UnificationTable<'db>| {
+        let instantiated = fresh.fold_with(db, table);
+        ResolvedImplInstance {
+            selected,
+            instantiated,
+            trait_inst: instantiated.trait_inst(db),
+        }
+    };
+    let own = resolved(own, own_fresh, &mut table);
+    let other = resolved(other, other_fresh, &mut table);
+    Some((own, other))
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, SalsaValue)]
@@ -933,7 +1405,7 @@ pub struct ImplementorId<'db> {
     pub(crate) types: IndexMap<IdentId<'db>, TyId<'db>>,
 
     #[returns(copy)]
-    pub(crate) origin: ImplementorOrigin<'db>,
+    pub origin: ImplementorOrigin<'db>,
 }
 
 impl<'db> ImplementorId<'db> {
@@ -989,7 +1461,7 @@ impl<'db> ImplementorId<'db> {
     }
 
     /// Trait instance realized by this impl, including its associated type definitions.
-    pub(crate) fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
+    pub fn trait_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         let trait_inst = self.trait_(db);
         if self.types(db).is_empty() {
             return trait_inst;

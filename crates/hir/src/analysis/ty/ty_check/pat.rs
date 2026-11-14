@@ -548,7 +548,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        let lowering_cx = LoweringContext::new();
+        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
         let res = self.resolve_path(
             *path,
             true,

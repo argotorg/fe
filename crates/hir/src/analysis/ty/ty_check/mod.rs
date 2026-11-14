@@ -96,7 +96,7 @@ use super::{
     instantiate_trait_self,
     trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
-        CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
+        GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
         check_trait_inst_wf_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
         is_goal_query_satisfiable, is_goal_satisfiable,
     },
@@ -1474,6 +1474,8 @@ fn typed_body_for_bodyless_func<'db>(
         matched_places: FxHashSet::default(),
         inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
+        named_impl_operands: FxHashSet::default(),
+        expr_choices: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
@@ -2387,8 +2389,10 @@ impl<'db> TyChecker<'db> {
             return TraitObligationOutcome::Discharged;
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
+        let solve_cx = TraitSolveCx::new(db, scope)
+            .with_assumptions(assumptions)
+            .with_choices(obligation.choices);
+        let query = solve_cx.query(db, goal);
         match is_goal_query_satisfiable(db, solve_cx, &query) {
             GoalSatisfiability::Satisfied(solution) => {
                 // A function item's shape determines its generic arguments:
@@ -2824,6 +2828,7 @@ impl<'db> TyChecker<'db> {
 
         if candidate.needs_confirmation {
             self.env.register_trait_obligation(env::TraitObligation {
+                choices: self.env.choices,
                 goal: inst,
                 origin: env::TraitObligationOrigin::GenericConfirmation,
                 span: call_span.clone().into(),
@@ -3295,7 +3300,7 @@ impl<'db> TyChecker<'db> {
             hir_ty,
             span.clone(),
             self.env.assumptions(),
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions()),
+            self.env.solve_cx(),
         ) {
             self.push_diag(diag);
         }
@@ -4427,6 +4432,7 @@ impl<'db> ConstRef<'db> {
                     body,
                     selection,
                     GenericSubst::complete(db, subst.clone()),
+                    use_.solve_cx(db).assumptions(),
                 )
             }
             _ => EvidenceList::none(db),
@@ -4436,15 +4442,20 @@ impl<'db> ConstRef<'db> {
 
     /// Proves, in the use's context, the bounds the trait's default value
     /// body declares, instantiated for the use, as `declared_bound_evidence`
-    /// records them.
-    pub(super) fn record_bound_evidence(&mut self, db: &'db dyn HirAnalysisDb) {
+    /// records them. Return missing dictionaries when lexical selection requires
+    /// complete evidence, using the same validation as callable signatures.
+    pub(super) fn record_bound_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
+    ) -> Vec<TraitInstId<'db>> {
         let ConstRef::TraitConst {
             use_,
             bound_evidence,
             ..
         } = self
         else {
-            return;
+            return Vec::new();
         };
         let trait_ = use_.inst().def(db);
         let (Some(body), Ok(subst)) = (
@@ -4453,16 +4464,23 @@ impl<'db> ConstRef<'db> {
                 .and_then(|constant| constant.default_body(db)),
             CompleteSubst::for_owner(db, trait_.into(), use_.inst().args(db).to_vec()),
         ) else {
-            return;
+            return Vec::new();
         };
         let declared = const_body_assumptions(db, body.scope());
-        *bound_evidence = Some(declared_bound_evidence(
+        let signature = declared.extend_all_bounds(db);
+        let recorded = declared_bound_evidence(
             db,
             declared,
-            declared.extend_all_bounds(db),
+            signature,
             &subst,
-            use_.solve_cx(db),
-        ));
+            use_.solve_cx(db).with_choices(choices),
+        );
+        *bound_evidence = Some(recorded);
+        if choices.is_some() {
+            recorded.missing_bound_goals(db, signature, &subst)
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -4624,6 +4642,9 @@ mod typed_body_tables {
         pub(super) inspected_places: FxHashSet<ExprId>,
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
+        pub(super) named_impl_operands: FxHashSet<ExprId>,
+        pub(super) expr_choices:
+            SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -5432,6 +5453,36 @@ impl<'db> TypedBody<'db> {
             }
             _ => true,
         }
+    }
+
+    pub(super) fn has_chosen_impls(&self) -> bool {
+        !self.tables.expr_choices.is_empty()
+    }
+
+    pub(super) fn expr_choices(
+        &self,
+        expr: ExprId,
+    ) -> Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>> {
+        self.tables.expr_choices[expr]
+    }
+
+    pub(super) fn choices_in_scope(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        mut scope: ScopeId<'db>,
+    ) -> Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>> {
+        loop {
+            if let ScopeId::Block(body, expr) = scope
+                && Some(body) == self.body()
+            {
+                return self.tables.expr_choices[expr];
+            }
+            scope = scope.parent(db)?;
+        }
+    }
+
+    pub fn is_named_impl_operand(&self, expr: ExprId) -> bool {
+        self.tables.named_impl_operands.contains(&expr)
     }
 
     pub fn assumptions(&self) -> PredicateListId<'db> {
@@ -7127,6 +7178,8 @@ impl<'db> TypedBody<'db> {
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
+            named_impl_operands: FxHashSet::default(),
+            expr_choices: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
@@ -7636,7 +7689,7 @@ impl<'db> TyCheckerFinalizer<'db> {
         for (_, _, diag) in std::mem::take(&mut checker.missing_effects) {
             checker.push_diag(diag);
         }
-        let mut body = checker.env.finish(&mut checker.table);
+        let mut body = checker.env.finish(&mut checker.table, &mut checker.diags);
         body.tables_mut().return_borrow_provider = checker.first_return_borrow_provider;
         let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {
             body_id

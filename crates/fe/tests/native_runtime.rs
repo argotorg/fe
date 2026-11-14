@@ -3860,3 +3860,18 @@ pub fn main() -> i32 uses (args: Args) {
         assert!(result.status.success(), "O{level}: {result:?}");
     }
 }
+
+#[test]
+fn native_named_implementations_transport_bound_evidence() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_implementations.fe");
+    let temp = tempdir().unwrap();
+    for level in ["0", "1"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("named_implementations"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+    }
+}

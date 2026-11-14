@@ -1927,11 +1927,195 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
+        use crate::analysis::name_resolution::path_resolver::{ImplNameRes, resolve_impl_name};
+
         self.env.effect_env_mut().push_frame();
         // The keys this `with` provides, each with its binding's span.
         let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
+        let outer_choices = self.env.choices;
 
         for binding in bindings {
+            let named = if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(path)) = binding.value.data(self.db, self.body())
+                && let Some(path) = path.to_opt()
+            {
+                match resolve_impl_name(self.db, path, self.env.scope()) {
+                    ImplNameRes::Found(implementation) => Some((path, implementation)),
+                    // An implementation whose name is not visible here is not
+                    // one of the operand's meanings: a value of the same name
+                    // that is visible here is checked as any other operand.
+                    ImplNameRes::NotVisible { .. }
+                        if self.with_operand_names_value(path, binding.value) =>
+                    {
+                        None
+                    }
+                    ImplNameRes::NotVisible { name, definition } => {
+                        self.push_diag(PathResDiag::Invisible(
+                            binding.value.span(self.body()).into(),
+                            name,
+                            definition,
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    ImplNameRes::Ambiguous | ImplNameRes::NotFound => None,
+                }
+            } else {
+                None
+            };
+            if let Some((path, implementation)) = named
+                && let Some(implementation) =
+                    super::super::trait_lower::lower_impl_trait(self.db, implementation)
+            {
+                let written_args = path.generic_args(self.db);
+                let choice = if written_args.is_empty(self.db) {
+                    super::super::trait_resolution::ChosenImpls::push(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                    )
+                } else {
+                    let args = super::super::ty_lower::lower_generic_arg_list(
+                        self.db,
+                        written_args,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        &LoweringContext::new(),
+                    );
+                    let owner = implementation.hir_impl_trait(self.db);
+                    let inherited = crate::hir_def::GenericParamOwner::from(owner)
+                        .parent(self.db)
+                        .map(|parent| {
+                            super::super::ty_lower::collect_generic_params(self.db, parent)
+                                .params(self.db)
+                                .to_vec()
+                        })
+                        .unwrap_or_default();
+                    let args =
+                        match super::super::ty_lower::collect_generic_params(self.db, owner.into())
+                            .complete_args(
+                            self.db,
+                            &inherited,
+                            &args,
+                            super::super::generic_defaults::DefaultApplication::StructuralMetadata(
+                                &LoweringContext::new(),
+                            ),
+                        ) {
+                            Ok(args) => args,
+                            Err(error) => {
+                                if let Some(diag) = super::super::ty_error::emit_invalid_ty_error(
+                                    self.db,
+                                    TyId::invalid(self.db, error.cause),
+                                    binding.value.span(self.body()).into(),
+                                ) {
+                                    self.push_diag(diag);
+                                }
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
+                        };
+                    let expected = implementation.params(self.db).len() - inherited.len();
+                    if args.len() != expected {
+                        self.push_diag(BodyDiag::TooManyCallGenericArgs {
+                            primary: binding.value.span(self.body()).into(),
+                            def_span: owner.span().into(),
+                            given: args.len(),
+                            expected,
+                        });
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    let args = inherited.into_iter().chain(args).collect::<Vec<_>>();
+                    let applied = super::super::binder::Binder::bind(owner.into(), implementation)
+                        .instantiate(self.db, &args);
+                    super::super::trait_resolution::ChosenImpls::push_applied(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                        applied,
+                    )
+                };
+                self.env.choices = Some(choice);
+                self.env.named_impl_operands.insert(binding.value);
+                // A named impl is a compile-time operand, with no runtime value.
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(Partial::Present(path))) =
+                    binding.value.data(self.db, self.body())
+                && path.len(self.db) == 1
+                && matches!(
+                    path.kind(self.db),
+                    crate::hir_def::PathKind::QualifiedType { .. }
+                )
+                && let Ok(crate::analysis::name_resolution::PathRes::Ty(ty)) =
+                    crate::analysis::name_resolution::resolve_path(
+                        self.db,
+                        *path,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        false,
+                    )
+                && let TyData::QualifiedTy(goal) = ty.data(self.db)
+            {
+                match super::super::trait_def::resolve_ordinary_trait_impl_instance(
+                    self.db,
+                    self.env.solve_cx(),
+                    *goal,
+                ) {
+                    super::super::trait_resolution::Selection::Unique(resolved) => {
+                        // The opened implementation's conditions are proved in
+                        // the surrounding context, without the opening itself,
+                        // so an opening whose conditions can never hold is
+                        // refused whether or not the block uses it.
+                        let mode = Some(if goal.is_mut(self.db) {
+                            BorrowKind::Mut
+                        } else {
+                            BorrowKind::Ref
+                        });
+                        for &condition in resolved.instantiated_constraints(self.db).list(self.db) {
+                            self.env.register_trait_obligation(TraitObligation {
+                                choices: self.env.choices,
+                                goal: condition.at_mode(self.db, mode),
+                                origin: TraitObligationOrigin::GenericConfirmation,
+                                span: binding.value.span(self.body()).into(),
+                            });
+                        }
+                        self.env.choices =
+                            Some(super::super::trait_resolution::ChosenImpls::push_applied(
+                                self.db,
+                                self.env.choices,
+                                resolved.selected(),
+                                resolved.instantiated(),
+                            ));
+                    }
+                    super::super::trait_resolution::Selection::Ambiguous(_)
+                    | super::super::trait_resolution::Selection::NotFound => {
+                        self.push_diag(TyDiagCollection::from(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: binding.value.span(self.body()).into(),
+                                primary_goal: *goal,
+                                unsat_subgoal: None,
+                                required_by: None,
+                            },
+                        ));
+                    }
+                }
+                self.env.named_impl_operands.insert(binding.value);
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
             let value_prop = self.check_expr_unknown(binding.value);
             // A provider confers authority over its place for the body; it
             // opens no access.
@@ -2013,7 +2197,61 @@ impl<'db> TyChecker<'db> {
             self.check_expr(body_expr, expected)
         };
         self.env.effect_env_mut().pop_frame();
+        self.env.choices = outer_choices;
         result
+    }
+
+    /// Whether `value`, what a path names, is a value that a `with` operand
+    /// can provide, rather than a type, trait, module or record variant.
+    fn is_with_operand_value(&self, value: &PathRes<'db>) -> bool {
+        match value {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
+                if ty.const_ty_ty(self.db).is_none()
+                    && (!matches!(value, PathRes::Ty(_))
+                        || ty.tuple_struct_ctor_ty(self.db).is_none()) =>
+            {
+                false
+            }
+            PathRes::Trait(_) | PathRes::Mod(_) => false,
+            PathRes::EnumVariant(variant)
+                if matches!(variant.kind(self.db), VariantKind::Record(_)) =>
+            {
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// Whether the `with` operand `operand`, written as `path`, names a value
+    /// visible here: a local binding or a value item.
+    fn with_operand_names_value(&self, path: PathId<'db>, operand: ExprId) -> bool {
+        if path.as_ident(self.db).is_some() {
+            match resolve_ident_expr(
+                self.db,
+                &self.env,
+                path,
+                operand.span(self.body()).into(),
+                &LoweringContext::new(),
+            ) {
+                ResolvedPathInBody::Binding(_) => true,
+                ResolvedPathInBody::Reso(value) => self.is_with_operand_value(&value),
+                ResolvedPathInBody::Diag(_)
+                | ResolvedPathInBody::NewBinding(_)
+                | ResolvedPathInBody::Invalid => false,
+            }
+        } else {
+            matches!(
+                crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    path,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    true,
+                ),
+                Ok(value) if self.is_with_operand_value(&value)
+                    && value.is_visible_from(self.db, self.env.scope())
+            )
+        }
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -2211,6 +2449,7 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 self.env.register_trait_obligation(TraitObligation {
+                    choices: self.env.choices,
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
                     span,
@@ -3809,7 +4048,7 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let lowering_cx = LoweringContext::new();
+        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
@@ -4068,6 +4307,7 @@ impl<'db> TyChecker<'db> {
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
                                 self.env.register_trait_obligation(TraitObligation {
+                                    choices: self.env.choices,
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
@@ -4169,6 +4409,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     self.env.register_trait_obligation(TraitObligation {
+                        choices: self.env.choices,
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
@@ -4210,12 +4451,8 @@ impl<'db> TyChecker<'db> {
                     );
 
                     if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                            self.db,
-                            TraitSolveCx::new(self.db, self.env.scope())
-                                .with_assumptions(self.env.assumptions()),
-                            inst,
-                        )
+                        && let GoalSatisfiability::UnSat(_) =
+                            is_goal_satisfiable(self.db, self.env.solve_cx(), inst)
                     {
                         self.push_diag(TyDiagCollection::from(
                             TraitConstraintDiag::TraitBoundNotSat {
@@ -5094,6 +5331,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5173,6 +5411,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                     if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),

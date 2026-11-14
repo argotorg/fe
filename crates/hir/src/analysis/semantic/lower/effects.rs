@@ -41,6 +41,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut saved = Vec::with_capacity(bindings.len());
         for binding in bindings {
             let value_expr = binding.value;
+            if self.typed_body.is_named_impl_operand(value_expr) {
+                continue;
+            }
             let value_ty = self.expr_ty(value_expr);
             let source = if let Some(place) = self.try_lower_place_expr(value_expr, true) {
                 WithBindingSource::Place(place)

@@ -347,6 +347,9 @@ impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     {
         self.goal.visit_with(visitor);
         self.assumptions.visit_with(visitor);
+        if let Some(choices) = self.choices {
+            choices.items(visitor.db()).visit_with(visitor);
+        }
     }
 }
 
