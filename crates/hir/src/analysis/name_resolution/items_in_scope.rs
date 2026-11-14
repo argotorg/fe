@@ -50,7 +50,12 @@ fn items_in_scope_impl<'db>(
 
     // Collect direct child items first (highest precedence: Def)
     for child in scope.child_items(db) {
-        let child_domain = NameDomain::from_scope(db, ScopeId::from_item(child));
+        // A named implementation's name is in its own domain.
+        let child_domain = if matches!(child, ItemKind::ImplTrait(_)) {
+            NameDomain::IMPL
+        } else {
+            NameDomain::from_scope(db, ScopeId::from_item(child))
+        };
         if child_domain & domain != NameDomain::Invalid
             && let Some(name) = child.name(db)
         {

@@ -898,6 +898,7 @@ impl<'db> TraitEnv<'db> {
             .into_iter()
             .flatten()
             .chain(&self.unindexed_self_impls)
+            .filter(|impl_trait| impl_trait.selection_name(db).is_none())
             .filter_map(|impl_trait| lower_impl_trait_header(db, *impl_trait))
             .collect()
     }
@@ -911,6 +912,7 @@ impl<'db> TraitEnv<'db> {
             .get(&trait_def)
             .into_iter()
             .flatten()
+            .filter(|impl_trait| impl_trait.selection_name(db).is_none())
             .filter_map(|impl_trait| lower_impl_trait_header(db, *impl_trait))
             .collect()
     }
