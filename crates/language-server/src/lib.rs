@@ -19,8 +19,6 @@ pub mod ws_lsp;
 mod mock_client_tests;
 
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_compat::CompatExt;
@@ -128,11 +126,59 @@ pub async fn run_tcp_server(host: IpAddr, port: u16, timeout: Duration) {
         .expect("Failed to bind to address");
     info!("LSP server is listening on {}", addr);
     serve_tcp(listener, timeout).await;
+    info!(
+        "No clients connected for {:?}. Shutting down server.",
+        timeout
+    );
+    std::process::exit(0);
 }
 
+/// Accepts clients until none has been connected for `timeout`.
 async fn serve_tcp(listener: TcpListener, timeout: Duration) {
+    let (clients, activity) = watch::channel(ClientActivity::default());
+    let accept = accept_clients(listener, clients);
+    let idle = wait_until_idle(activity, timeout);
+    futures::pin_mut!(accept, idle);
+    futures::future::select(accept, idle).await;
+}
+
+/// What the idle check needs to know about the clients.
+#[derive(Clone, Copy, Default)]
+struct ClientActivity {
+    /// The number of clients that are connected.
+    connected: usize,
+    /// The number of clients that have connected since the start. A client that
+    /// connects and leaves before the idle check runs again still changes it.
+    accepted: u64,
+}
+
+/// Counts a client as connected from the moment it is accepted until it is
+/// dropped, and tells `wait_until_idle` about every change.
+struct ConnectedClient(watch::Sender<ClientActivity>);
+
+impl ConnectedClient {
+    fn new(clients: &watch::Sender<ClientActivity>) -> Self {
+        clients.send_modify(|activity| {
+            activity.connected += 1;
+            activity.accepted += 1;
+        });
+        Self(clients.clone())
+    }
+
+    fn total(&self) -> usize {
+        self.0.borrow().connected
+    }
+}
+
+impl Drop for ConnectedClient {
+    fn drop(&mut self) {
+        self.0.send_modify(|activity| activity.connected -= 1);
+        info!("Client disconnected. Total clients: {}", self.total());
+    }
+}
+
+async fn accept_clients(listener: TcpListener, clients: watch::Sender<ClientActivity>) {
     let mut incoming = listener.incoming();
-    let connections_count = Arc::new(AtomicUsize::new(0));
 
     while let Some(accepted) = incoming.next().with_current_subscriber().await {
         // A connection can be reset while it waits to be accepted. Depending on
@@ -155,7 +201,9 @@ async fn serve_tcp(listener: TcpListener, timeout: Duration) {
                 continue;
             }
         };
-        let connections_count = Arc::clone(&connections_count);
+        // Counted before the session is set up, which takes a moment, so that the
+        // idle check sees a client that has just connected.
+        let connected_client = ConnectedClient::new(&clients);
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
                 let router = setup(client.clone(), format!("LSP actor for {client_address}"));
@@ -167,10 +215,9 @@ async fn serve_tcp(listener: TcpListener, timeout: Duration) {
                     .service(router)
             });
             let logging = logging::setup_default_subscriber(client);
-            let current_connections = connections_count.fetch_add(1, Ordering::SeqCst) + 1;
             info!(
                 "New client connected. Total clients: {}",
-                current_connections
+                connected_client.total()
             );
 
             let (read, write) = stream.split();
@@ -179,36 +226,35 @@ async fn serve_tcp(listener: TcpListener, timeout: Duration) {
             } else {
                 info!("Client {} disconnected", client_address);
             }
-            let current_connections = connections_count.fetch_sub(1, Ordering::SeqCst) - 1;
-            info!(
-                "Client disconnected. Total clients: {}",
-                current_connections
-            );
+            drop(connected_client);
             drop(logging);
         };
         tokio::spawn(task.with_current_subscriber());
     }
+}
 
-    let timeout_task = {
-        let connections_count = Arc::clone(&connections_count);
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                if connections_count.load(Ordering::Relaxed) == 0 {
-                    tokio::time::sleep(timeout).await;
-                    if connections_count.load(Ordering::Relaxed) == 0 {
-                        info!(
-                            "No clients connected for {:?}. Shutting down server.",
-                            timeout
-                        );
-                        std::process::exit(0);
-                    }
-                }
-            }
-        })
-    };
-
-    timeout_task.await.unwrap();
+/// Returns once no client has been connected for `timeout`. The time counts from
+/// the start, or from the moment the last client left, and a client that
+/// connects starts it again, also one that has left again before this runs.
+async fn wait_until_idle(mut activity: watch::Receiver<ClientActivity>, timeout: Duration) {
+    loop {
+        let Ok(idle) = activity
+            .wait_for(|activity| activity.connected == 0)
+            .await
+            .map(|activity| *activity)
+        else {
+            return;
+        };
+        if tokio::time::timeout(
+            timeout,
+            activity.wait_for(|now| now.accepted != idle.accepted),
+        )
+        .await
+        .is_err()
+        {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -272,5 +318,91 @@ mod tests {
             "the TCP server stopped after a connection was reset before it was accepted"
         );
         assert_eq!(answered.ok().flatten(), Some(()), "no answer to initialize");
+    }
+
+    /// `--timeout` shuts the server down when no client is connected.
+    #[tokio::test]
+    async fn tcp_server_stops_when_no_client_is_connected_for_the_timeout() {
+        let listener = async_std::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let stopped = tokio::time::timeout(
+            Duration::from_secs(10),
+            serve_tcp(listener, Duration::from_millis(100)),
+        )
+        .await;
+        assert!(
+            stopped.is_ok(),
+            "the TCP server kept running although no client was connected"
+        );
+    }
+
+    #[tokio::test]
+    async fn tcp_server_keeps_running_while_a_client_is_connected() {
+        let listener = async_std::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_tcp(listener, Duration::from_millis(100)));
+        let _client = tokio::net::TcpStream::connect(address).await.unwrap();
+        // Many times the timeout.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        let finished = server.is_finished();
+        server.abort();
+        assert!(
+            !finished,
+            "the TCP server stopped while a client was connected"
+        );
+    }
+
+    /// The timeout counts from the moment the last client left, not from the start.
+    #[tokio::test]
+    async fn tcp_server_waits_for_the_timeout_after_the_last_client_leaves() {
+        let timeout = Duration::from_millis(1500);
+        let listener = async_std::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(serve_tcp(listener, timeout));
+
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        let client = tokio::net::TcpStream::connect(address).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(client);
+        let left = std::time::Instant::now();
+
+        tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .expect("the TCP server kept running after the last client left")
+            .unwrap();
+        assert!(
+            left.elapsed() >= timeout,
+            "the TCP server stopped {:?} after the last client left",
+            left.elapsed()
+        );
+    }
+
+    /// A client that connects and leaves before the idle check runs again still
+    /// restarts the idle time.
+    #[tokio::test]
+    async fn tcp_server_counts_a_client_that_connects_and_leaves_between_checks() {
+        let timeout = Duration::from_millis(300);
+        let (clients, activity) = watch::channel(ClientActivity::default());
+        let idle = tokio::spawn(wait_until_idle(activity, timeout));
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // The idle check cannot run between the two updates on this runtime.
+        drop(ConnectedClient::new(&clients));
+        let left = std::time::Instant::now();
+
+        tokio::time::timeout(Duration::from_secs(10), idle)
+            .await
+            .expect("the idle check did not finish")
+            .unwrap();
+        assert!(
+            left.elapsed() >= timeout,
+            "the idle time did not start again after the client left: {:?}",
+            left.elapsed()
+        );
     }
 }
