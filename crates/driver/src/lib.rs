@@ -254,14 +254,13 @@ fn init_ingot_graph(db: &mut DriverDataBase, ingot_url: &Url) -> bool {
     let mut handler = IngotHandler::new(db);
     let mut ingot_graph_resolver = GraphResolverImpl::new(ingot_resolver(checkout_root));
 
-    // Root ingot resolution should never fail since directory existence is validated earlier.
-    // If it fails, it indicates a bug in the resolver or an unexpected system condition.
-    if let Err(err) =
-        ingot_graph_resolver.graph_resolve(&mut handler, &IngotDescriptor::Local(ingot_url.clone()))
+    // The root can fail to resolve, for example when its directory does not exist or was
+    // removed after the caller looked. The handler has reported the reason.
+    if ingot_graph_resolver
+        .graph_resolve(&mut handler, &IngotDescriptor::Local(ingot_url.clone()))
+        .is_err()
     {
-        panic!(
-            "Unexpected failure resolving root ingot at {ingot_url}: {err:?}. This indicates a bug in the resolver since directory existence is validated before calling init_ingot."
-        );
+        return true;
     }
 
     let mut had_diagnostics = handler.had_diagnostics();
