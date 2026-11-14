@@ -961,6 +961,108 @@ pub const fn read_step() -> u256 {
 }
 
 #[test]
+fn trait_const_pattern_uses_chosen_evidence_and_refuses_conflict() {
+    let source = r#"
+trait Price {
+    const fn value() -> u256
+}
+
+trait Priced {
+    const N: u256
+}
+
+struct Item {}
+struct Box<T> {
+    pub value: T
+}
+
+impl Price for Item as Discount {
+    const fn value() -> u256 { 7 }
+}
+
+impl<T: Price> Priced for Box<T> {
+    const N: u256 = 7
+}
+
+pub const fn matched_qualified() -> u256 {
+    let x: u256 = 7
+    with (Discount) {
+        match x {
+            <Box<Item> as Priced>::N => 1
+            _ => 0
+        }
+    }
+}
+
+pub const fn matched_unqualified() -> u256 {
+    let x: u256 = 7
+    with (Discount) {
+        match x {
+            Box<Item>::N => 1
+            _ => 0
+        }
+    }
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("trait_const_pattern_choice.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [
+        ("matched_qualified", 1usize),
+        ("matched_unqualified", 1usize),
+    ] {
+        let owner = BodyOwner::func(&db, func(&db, module, name));
+        let evaluated =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let value = evaluated.into_ready().expect("const evaluation succeeded");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar int");
+        };
+        assert_eq!(value.to_usize(), Some(expected), "{name}");
+    }
+
+    let conflict_source = r#"
+trait Base {
+    const N: u256
+}
+trait Left: Base {}
+trait Right: Base {}
+trait Join: Left + Right {
+    const M: u256 = Self::N
+}
+struct Item {}
+impl Base for Item {
+    const N: u256 = 1
+}
+impl Base for Item as LeftBase {
+    const N: u256 = 1
+}
+impl Base for Item as RightBase {
+    const N: u256 = 1
+}
+impl Left for Item as LeftImpl {}
+impl Right for Item as RightImpl {}
+impl Join for Item {}
+pub fn check(x: u256) -> u256 {
+    with (LeftBase, LeftImpl, RightBase, RightImpl) {
+        match x {
+            Item::M => 1
+            _ => 0
+        }
+    }
+}
+"#;
+    let codes = diagnostics(conflict_source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+#[test]
 fn named_impl_deferred_assoc_const_referencing_trait_const_is_accepted() {
     let source = r#"
 struct Box<T> { pub value: T }
