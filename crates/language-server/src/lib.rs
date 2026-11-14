@@ -124,13 +124,35 @@ pub async fn run_tcp_server(port: u16, timeout: Duration) {
     let listener = TcpListener::bind(&addr)
         .await
         .expect("Failed to bind to address");
+    info!("LSP server is listening on {}", addr);
+    serve_tcp(listener, timeout).await;
+}
+
+async fn serve_tcp(listener: TcpListener, timeout: Duration) {
     let mut incoming = listener.incoming();
     let connections_count = Arc::new(AtomicUsize::new(0));
 
-    info!("LSP server is listening on {}", addr);
-
-    while let Some(Ok(stream)) = incoming.next().with_current_subscriber().await {
-        let client_address = stream.peer_addr().unwrap();
+    while let Some(accepted) = incoming.next().with_current_subscriber().await {
+        // A connection can be reset while it waits to be accepted. Depending on
+        // the platform, that shows up as a failed accept or as a stream without
+        // a peer address. Neither may stop the server.
+        let stream = match accepted {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("Failed to accept a connection: {e}");
+                // Do not spin when accepting keeps failing, for example when no
+                // file descriptors are left.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+        let client_address = match stream.peer_addr() {
+            Ok(address) => address,
+            Err(e) => {
+                info!("Dropping a connection that closed before it was accepted: {e}");
+                continue;
+            }
+        };
         let connections_count = Arc::clone(&connections_count);
         let task = async move {
             let (server, client) = async_lsp::MainLoop::new_server(|client| {
@@ -185,4 +207,68 @@ pub async fn run_tcp_server(port: u16, timeout: Duration) {
     };
 
     timeout_task.await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_lsp::lsp_types::Url;
+
+    /// A connection can be reset while it waits to be accepted. It must not stop the
+    /// server from serving the clients that follow.
+    #[tokio::test]
+    async fn tcp_server_serves_clients_after_a_connection_reset_before_accept() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = async_std::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let reset = tokio::net::TcpStream::connect(address).await.unwrap();
+        // Closing a socket with a zero linger time sends a reset. The method is
+        // deprecated because lingering can block a thread, which a zero time does not.
+        #[allow(deprecated)]
+        reset.set_linger(Some(Duration::ZERO)).unwrap();
+        drop(reset);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let server = tokio::spawn(serve_tcp(listener, Duration::from_secs(3600)));
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = Url::from_directory_path(temp.path().canonicalize().unwrap()).unwrap();
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "processId": null,
+                "rootUri": null,
+                "workspaceFolders": [{ "uri": root, "name": "w" }],
+                "capabilities": {},
+            },
+        })
+        .to_string();
+        let answered = tokio::time::timeout(Duration::from_secs(30), async {
+            let mut stream = tokio::net::TcpStream::connect(address).await.ok()?;
+            let framed = format!("Content-Length: {}\r\n\r\n{request}", request.len());
+            stream.write_all(framed.as_bytes()).await.ok()?;
+            let mut received = Vec::new();
+            let mut buffer = [0u8; 4096];
+            while !String::from_utf8_lossy(&received).contains("\"capabilities\"") {
+                let read = stream.read(&mut buffer).await.ok()?;
+                if read == 0 {
+                    return None;
+                }
+                received.extend_from_slice(&buffer[..read]);
+            }
+            Some(())
+        })
+        .await;
+        let finished = server.is_finished();
+        server.abort();
+        assert!(
+            !finished,
+            "the TCP server stopped after a connection was reset before it was accepted"
+        );
+        assert_eq!(answered.ok().flatten(), Some(()), "no answer to initialize");
+    }
 }
