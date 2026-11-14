@@ -9,7 +9,8 @@ use either::Either;
 use num_bigint::BigUint;
 
 use super::{
-    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker,
+    BodyOwner, ConstRef, RecordLike, TyChecker, depends_on_type_inference, env::LocalBinding,
+    path::RecordInitChecker,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -98,18 +99,20 @@ impl<'db> TyChecker<'db> {
             Pat::PathTuple(..) => self.check_path_tuple_pat(pat, pat_data, expected),
             Pat::Record(..) => self.check_record_pat(pat, pat_data, expected),
 
+            // Each alternative binds its names afresh, so a name both bind is
+            // no duplicate: it is one binding, the left alternative's.
             Pat::Or(lhs_pat, rhs_pat) => {
+                let outer = self.env.pending_bindings().clone();
                 let lhs = self.check_pat(*lhs_pat, expected);
+                let lhs_bindings = self.env.replace_pending_bindings(outer);
                 let rhs = self.check_pat(*rhs_pat, expected);
-                let analysis =
-                    if self.pattern_binds_any(*lhs_pat) || self.pattern_binds_any(*rhs_pat) {
-                        self.push_diag(BodyDiag::BindingsInOrPat(pat.span(self.body()).into()));
-                        self.discard_local_bindings_in_pat(*lhs_pat);
-                        self.discard_local_bindings_in_pat(*rhs_pat);
-                        PatternAnalysisStatus::Invalid
-                    } else {
-                        self.ready_or(expected, [lhs.analysis, rhs.analysis])
-                    };
+                let joined = self.join_alternative_bindings(*lhs_pat, *rhs_pat);
+                self.env.extend_pending_bindings(lhs_bindings);
+                let analysis = if joined {
+                    self.ready_or(expected, [lhs.analysis, rhs.analysis])
+                } else {
+                    PatternAnalysisStatus::Invalid
+                };
                 self.finish_pat_check(pat, expected, rhs.ty, analysis)
             }
         }
@@ -326,29 +329,91 @@ impl<'db> TyChecker<'db> {
             .set_pattern_status(pat, PatternAnalysisStatus::Invalid);
     }
 
-    fn discard_local_bindings_in_pat(&mut self, pat: PatId) {
-        let Partial::Present(pat_data) = pat.data(self.db, self.body()) else {
-            return;
-        };
-
-        match pat_data {
-            Pat::Path(..) => self.env.discard_pat_binding(pat),
-            Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
-                for pat in pats {
-                    self.discard_local_bindings_in_pat(*pat);
+    /// Joins the bindings of the alternatives `lhs` and `rhs` of a `|`
+    /// pattern: each name must be bound in both, with one type, and is one
+    /// binding, `lhs`'s. Returns whether they join.
+    fn join_alternative_bindings(&mut self, lhs: PatId, rhs: PatId) -> bool {
+        let mut lhs_names = Vec::new();
+        self.bound_names(lhs, &mut lhs_names);
+        let mut rhs_names = Vec::new();
+        self.bound_names(rhs, &mut rhs_names);
+        let mut rhs_occurrences = Vec::new();
+        self.binding_occurrences(rhs, &mut rhs_occurrences);
+        let body = self.body();
+        let mut joined = true;
+        for &(first, name) in &lhs_names {
+            let Some(&(other, _)) = rhs_names.iter().find(|(_, other)| *other == name) else {
+                self.push_diag(BodyDiag::OrPatBindingMissing {
+                    primary: rhs.span(body).into(),
+                    binding: first.span(body).into(),
+                    name,
+                });
+                joined = false;
+                continue;
+            };
+            joined &= self.equate_alternative_binding_tys(name, first, other);
+            let binding = self
+                .env
+                .pat_binding(first)
+                .expect("a bound name has a binding");
+            for &(pat, occurrence) in &rhs_occurrences {
+                if matches!(occurrence, LocalBinding::Local { pat, .. } if pat == other) {
+                    self.env.join_pat_binding(pat, binding);
                 }
             }
-            Pat::Record(_, fields) => {
-                for field in fields {
-                    self.discard_local_bindings_in_pat(field.pat);
-                }
-            }
-            Pat::Or(lhs, rhs) => {
-                self.discard_local_bindings_in_pat(*lhs);
-                self.discard_local_bindings_in_pat(*rhs);
-            }
-            Pat::WildCard | Pat::Rest | Pat::Lit(..) => {}
         }
+        for &(other, name) in &rhs_names {
+            if !lhs_names.iter().any(|(_, first)| *first == name) {
+                self.push_diag(BodyDiag::OrPatBindingMissing {
+                    primary: lhs.span(body).into(),
+                    binding: other.span(body).into(),
+                    name,
+                });
+                joined = false;
+            }
+        }
+        joined
+    }
+
+    /// Equates the types of `first` and `other`, which bind `name` in two
+    /// alternatives of a `|` pattern. Returns whether they are one type.
+    fn equate_alternative_binding_tys(
+        &mut self,
+        name: IdentId<'db>,
+        first: PatId,
+        other: PatId,
+    ) -> bool {
+        let invalid = TyId::invalid(self.db, InvalidCause::Other);
+        let first_ty = self.env.pat_ty(first).unwrap_or(invalid);
+        let first_ty = first_ty.fold_with(self.db, &mut self.table);
+        let first_ty = self.normalize_ty(first_ty);
+        let other_ty = self.env.pat_ty(other).unwrap_or(invalid);
+        let other_ty = other_ty.fold_with(self.db, &mut self.table);
+        let other_ty = self.normalize_ty(other_ty);
+        if first_ty.has_invalid(self.db) || other_ty.has_invalid(self.db) {
+            return false;
+        }
+        if self.table.unify(first_ty, other_ty).is_ok() {
+            return true;
+        }
+        let span = other.span(self.body()).into();
+        // A type that inference may still change is decided with the other
+        // equalities that wait for it.
+        if depends_on_type_inference(self.db, first_ty)
+            || depends_on_type_inference(self.db, other_ty)
+        {
+            return !self
+                .equate_ty(other_ty, first_ty, span)
+                .has_invalid(self.db);
+        }
+        self.push_diag(BodyDiag::OrPatBindingTypeMismatch {
+            primary: span,
+            first: first.span(self.body()).into(),
+            name,
+            ty: other_ty,
+            first_ty,
+        });
+        false
     }
 
     fn check_lit_pat(

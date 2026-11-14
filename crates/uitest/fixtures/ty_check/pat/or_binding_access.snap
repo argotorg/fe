@@ -1,0 +1,59 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/pat/or_binding_access.fe
+---
+error[8-0162]: the access `x` reaches a different part in each alternative of the pattern
+   ┌─ or_binding_access.fe:27:34
+   │
+27 │     if let E::A(mut x, _) | E::B(mut x) = e {
+   │                 -----            ^^^^^ `x` reaches this part here
+   │                 │
+   │                 and another part here
+   │
+   = outside `match`, the alternatives of a `|` pattern meet before the code that follows, where an access reaches one place
+   = bind `x` in a `match` arm instead
+
+error[8-0162]: the access `x` reaches a different part in each alternative of the pattern
+   ┌─ or_binding_access.fe:33:37
+   │
+33 │     while let E::A(_, ref x) | E::B(ref x) = e {
+   │                       -----         ^^^^^ `x` reaches this part here
+   │                       │
+   │                       and another part here
+   │
+   = outside `match`, the alternatives of a `|` pattern meet before the code that follows, where an access reaches one place
+   = bind `x` in a `match` arm instead
+
+error[8-0162]: the access `x` reaches a different part in each alternative of the pattern
+   ┌─ or_binding_access.fe:39:31
+   │
+39 │     let E::A(mut x, _) | E::B(mut x) = e else {
+   │              -----            ^^^^^ `x` reaches this part here
+   │              │
+   │              and another part here
+   │
+   = outside `match`, the alternatives of a `|` pattern meet before the code that follows, where an access reaches one place
+   = bind `x` in a `match` arm instead
+
+error[8-0162]: the access `x` reaches a different part in each alternative of the pattern
+   ┌─ or_binding_access.fe:51:34
+   │
+51 │     let Side::L(mut x) | Side::R(mut x) = s
+   │                 -----            ^^^^^ `x` reaches this part here
+   │                 │
+   │                 and another part here
+   │
+   = outside `match`, the alternatives of a `|` pattern meet before the code that follows, where an access reaches one place
+   = bind `x` in a `match` arm instead
+
+error[8-0162]: the access `x` reaches a different part in each alternative of the pattern
+   ┌─ or_binding_access.fe:56:34
+   │
+56 │     for Side::L(mut x) | Side::R(mut x) in sides {
+   │                 -----            ^^^^^ `x` reaches this part here
+   │                 │
+   │                 and another part here
+   │
+   = outside `match`, the alternatives of a `|` pattern meet before the code that follows, where an access reaches one place
+   = bind `x` in a `match` arm instead

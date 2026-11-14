@@ -1,5 +1,5 @@
 // A recv arm field whose pattern destructures binds what the pattern names,
-// as a destructured parameter does.
+// as a destructured parameter does, `|` alternatives included.
 use std::abi::sol
 use std::evm::Evm
 
@@ -15,6 +15,10 @@ msg M {
     Mixed { a: u256, nested: (Pair, u256) } -> u256,
     #[selector = sol("flags((uint256,bool))")]
     Flags { pair: Pair } -> u256,
+    #[selector = sol("same(uint256)")]
+    Same { n: u256 } -> u256,
+    #[selector = sol("pick((bool,uint256,uint256))")]
+    Pick { t: (bool, u256, u256) } -> u256,
 }
 
 pub contract C {
@@ -30,6 +34,12 @@ pub contract C {
         }
         Flags { pair: Pair { n: value, flag: true | false } } -> u256 {
             value + 1
+        }
+        Same { n: x | x } -> u256 {
+            x + 1
+        }
+        Pick { t: (true, x, _) | (false, _, x) } -> u256 {
+            x
         }
     }
 }
@@ -77,4 +87,28 @@ fn test_recv_field_patterns() uses (evm: mut Evm) {
             message: M::Flags { pair: Pair { n: 8, flag: false } },
         )
     assert(flags == 9)
+    let same: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Same { n: 4 },
+        )
+    assert(same == 5)
+    let left: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Pick { t: (true, 1, 2) },
+        )
+    assert(left == 1)
+    let right: u256 = evm
+        .call(
+            addr: c,
+            gas: 1000000,
+            value: Wei::zero(),
+            message: M::Pick { t: (false, 1, 2) },
+        )
+    assert(right == 2)
 }

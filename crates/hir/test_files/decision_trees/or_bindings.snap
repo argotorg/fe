@@ -1,0 +1,97 @@
+---
+source: crates/hir/tests/frontend/decision_tree.rs
+expression: res
+input_file: test_files/decision_trees/or_bindings.fe
+---
+note:
+   ┌─ or_bindings.fe:13:5
+   │
+13 │ ╭     match e {
+14 │ │         E::A(x, _) | E::B(x) => x,
+15 │ │         E::C => 0,
+16 │ │     }
+   │ ╰─────^ Decision Tree for variants:
+ Switch on expr
+ ├─ A =>
+ │  └─ Execute arm #0
+ │       x ← expr.A[0]
+ ├─ B =>
+ │  └─ Execute arm #0
+ │       x ← expr.B[0]
+ └─ C =>
+    └─ Execute arm #1
+
+
+note:
+   ┌─ or_bindings.fe:21:5
+   │
+21 │ ╭     match t {
+22 │ │         (x, 0) | (0, x) => x,
+23 │ │         _ => 1,
+24 │ │     }
+   │ ╰─────^ Decision Tree for overlap:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.1
+       ├─ 0 =>
+       │  └─ Execute arm #0
+       │       x ← expr.0
+       └─ _ =>
+          └─ Switch on expr.0
+             ├─ 0 =>
+             │  └─ Execute arm #0
+             │       x ← expr.1
+             └─ _ =>
+                └─ Execute arm #1
+
+
+note:
+   ┌─ or_bindings.fe:28:5
+   │
+28 │ ╭     match t {
+29 │ │         (Side::L(x) | Side::R(x), Side::L(y) | Side::R(y)) => x + y,
+30 │ │     }
+   │ ╰─────^ Decision Tree for nested:
+ Switch on expr
+ └─ tuple() =>
+    └─ Switch on expr.1
+       ├─ L =>
+       │  └─ Switch on expr.0
+       │     ├─ L =>
+       │     │  └─ Execute arm #0
+       │     │       x ← expr.0.L[0]
+       │     │       y ← expr.1.L[0]
+       │     └─ R =>
+       │        └─ Execute arm #0
+       │             x ← expr.0.R[0]
+       │             y ← expr.1.L[0]
+       └─ R =>
+          └─ Switch on expr.0
+             ├─ L =>
+             │  └─ Execute arm #0
+             │       x ← expr.0.L[0]
+             │       y ← expr.1.R[0]
+             └─ R =>
+                └─ Execute arm #0
+                     x ← expr.0.R[0]
+                     y ← expr.1.R[0]
+
+
+note:
+   ┌─ or_bindings.fe:35:5
+   │
+35 │ ╭     match t {
+36 │ │         (a | a, b | b, c | c, d | d, e | e, f | f, g | g, h | h) => a + h,
+37 │ │     }
+   │ ╰─────^ Decision Tree for wide:
+ Switch on expr
+ └─ tuple() =>
+    └─ Execute arm #0
+         a ← expr.0
+         b ← expr.1
+         c ← expr.2
+         d ← expr.3
+         e ← expr.4
+         f ← expr.5
+         g ← expr.6
+         h ← expr.7

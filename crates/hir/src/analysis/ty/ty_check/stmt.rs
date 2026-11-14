@@ -211,6 +211,7 @@ impl<'db> TyChecker<'db> {
             };
             if prop.shape.is_some() {
                 self.bind_pattern_source(*pat, *expr, &prop, true);
+                self.joined_patterns.push(*pat);
             }
             if else_.is_none()
                 && let Some(root) = self.env.pattern_store().root(*pat)
@@ -372,34 +373,55 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// The names `pat` binds, with the patterns binding them.
-    fn bound_names(&self, pat: PatId, out: &mut Vec<(PatId, IdentId<'db>)>) {
+    /// The names `pat` binds, with the patterns binding them. A name the
+    /// alternatives of a `|` pattern bind is listed once, at the binding
+    /// they join.
+    pub(super) fn bound_names(&self, pat: PatId, out: &mut Vec<(PatId, IdentId<'db>)>) {
+        let mut occurrences = Vec::new();
+        self.binding_occurrences(pat, &mut occurrences);
+        for (pat, binding) in occurrences {
+            if let LocalBinding::Local { pat: bound, .. } = binding
+                && bound == pat
+                && let Partial::Present(Pat::Path(Partial::Present(path), _)) =
+                    pat.data(self.db, self.body())
+                && let Some(name) = path.as_ident(self.db)
+            {
+                out.push((pat, name));
+            }
+        }
+    }
+
+    /// The patterns in `pat` that bind a local, with the binding each is an
+    /// occurrence of.
+    pub(super) fn binding_occurrences(
+        &self,
+        pat: PatId,
+        out: &mut Vec<(PatId, LocalBinding<'db>)>,
+    ) {
         let Partial::Present(data) = pat.data(self.db, self.body()) else {
             return;
         };
         match data {
-            Pat::Path(Partial::Present(path), _) => {
-                if matches!(self.env.pat_binding(pat), Some(LocalBinding::Local { .. }))
-                    && let Some(name) = path.as_ident(self.db)
-                {
-                    out.push((pat, name));
+            Pat::Path(..) => {
+                if let Some(binding @ LocalBinding::Local { .. }) = self.env.pat_binding(pat) {
+                    out.push((pat, binding));
                 }
             }
             Pat::Tuple(pats) | Pat::PathTuple(_, pats) => {
                 for &pat in pats {
-                    self.bound_names(pat, out);
+                    self.binding_occurrences(pat, out);
                 }
             }
             Pat::Record(_, fields) => {
                 for field in fields {
-                    self.bound_names(field.pat, out);
+                    self.binding_occurrences(field.pat, out);
                 }
             }
             Pat::Or(lhs, rhs) => {
-                self.bound_names(*lhs, out);
-                self.bound_names(*rhs, out);
+                self.binding_occurrences(*lhs, out);
+                self.binding_occurrences(*rhs, out);
             }
-            Pat::Path(Partial::Absent, _) | Pat::WildCard | Pat::Rest | Pat::Lit(_) => {}
+            Pat::WildCard | Pat::Rest | Pat::Lit(_) => {}
         }
     }
 
@@ -485,6 +507,7 @@ impl<'db> TyChecker<'db> {
                 }
                 let authority = self.expr_has_authority(base.0);
                 self.bind_pattern_accesses(*pat, &plan.shape, authority, AccessBinding::Result);
+                self.joined_patterns.push(*pat);
                 let waits = plan
                     .calls
                     .iter()

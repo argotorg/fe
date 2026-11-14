@@ -1765,6 +1765,7 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.open_matched_place(scrutinee, scrutinee_prop, [pat]);
         self.check_pat(pat, scrutinee_prop.ty);
         self.bind_pattern_source(pat, scrutinee, &scrutinee_prop, false);
+        self.joined_patterns.push(pat);
 
         ExprProp::new(TyId::bool(self.db), true)
     }

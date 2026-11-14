@@ -1,7 +1,7 @@
 //! Decision tree generation for efficient pattern matching compilation
 //! Based on "Compiling pattern matching to good decision trees" (Maranget, 2008)
 
-use super::pattern_analysis::{FeConstructorOracle, to_matchcov_pattern};
+use super::pattern_analysis::{FeConstructorOracle, matches_anything, to_matchcov_pattern};
 use super::pattern_ir::{
     BindingRef, ConstructorKind, PatternStore, ValidatedPatId, ValidatedPatKind,
 };
@@ -69,7 +69,7 @@ pub fn build_decision_tree<'db>(
         .iter()
         .enumerate()
         .map(|(arm_index, &root)| pattern_row(db, store, root, arm_index));
-    build(db, DecisionMatrix::new(column_ty, rows))
+    build(db, store, DecisionMatrix::new(column_ty, rows))
 }
 
 /// Builds the decision tree of a refutable test of `root`: it reaches arm 0
@@ -83,12 +83,14 @@ pub(crate) fn build_pattern_branch_decision_tree<'db>(
         [Pattern::Wildcard],
         ArmData {
             arm_index: 1,
-            bindings: IndexMap::new(),
+            root: None,
+            choices: Vec::new(),
         },
     );
     let rows = [pattern_row(db, store, root, 0), fallback];
     build(
         db,
+        store,
         DecisionMatrix::new(Some(store.node(root).match_ty()), rows),
     )
 }
@@ -98,19 +100,22 @@ fn pattern_row<'db>(
     store: &PatternStore<'db>,
     root: ValidatedPatId,
     arm_index: usize,
-) -> PatternRow<ConstructorKind<'db>, ArmData<'db>> {
-    let mut bindings = IndexMap::new();
-    collect_pattern_bindings(db, store, root, &ProjectionPath::default(), &mut bindings);
+) -> PatternRow<ConstructorKind<'db>, ArmData> {
     PatternRow::new(
-        [simplify_pattern(to_matchcov_pattern(store, root))],
+        [to_matchcov_pattern(db, store, root)],
         ArmData {
             arm_index,
-            bindings,
+            root: Some(root),
+            choices: Vec::new(),
         },
     )
 }
 
-fn build<'db>(db: &'db dyn HirAnalysisDb, mut matrix: DecisionMatrix<'db>) -> DecisionTree<'db> {
+fn build<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    mut matrix: DecisionMatrix<'db>,
+) -> DecisionTree<'db> {
     let Some(first) = matrix.patterns.rows().first() else {
         return DecisionTree::Unreachable;
     };
@@ -119,14 +124,15 @@ fn build<'db>(db: &'db dyn HirAnalysisDb, mut matrix: DecisionMatrix<'db>) -> De
         .iter()
         .all(|pat| matches!(pat, Pattern::Wildcard))
     {
-        let arm = first.payload().clone();
+        let arm = first.payload();
         return DecisionTree::Leaf(LeafNode {
             arm_index: arm.arm_index,
-            bindings: arm.bindings,
+            bindings: arm.bindings(db, store),
         });
     }
 
     matrix.swap(select_column(db, &matrix));
+    let matrix = matrix.expand_alternatives(db, store);
     let signature = matrix.column_signature(db, 0);
     let needs_default = match signature.space {
         ConstructorSpace::Empty => return DecisionTree::Unreachable,
@@ -137,12 +143,12 @@ fn build<'db>(db: &'db dyn HirAnalysisDb, mut matrix: DecisionMatrix<'db>) -> De
         .observed
         .into_iter()
         .map(|ctor| {
-            let subtree = build(db, matrix.phi_specialize(db, ctor));
+            let subtree = build(db, store, matrix.phi_specialize(db, ctor));
             (Case::Constructor(ctor), subtree)
         })
         .collect();
     if needs_default {
-        arms.push((Case::Default, build(db, matrix.d_specialize())));
+        arms.push((Case::Default, build(db, store, matrix.d_specialize())));
     }
 
     DecisionTree::Switch(SwitchNode {
@@ -226,57 +232,161 @@ fn field_occurrences<'db>(
         .collect()
 }
 
-fn collect_pattern_bindings<'db>(
+/// The occurrence of each binding in `pat`, matched at `path`, in every
+/// alternative of its `|` patterns.
+pub(crate) fn binding_occurrences<'db>(
     db: &'db dyn HirAnalysisDb,
     store: &PatternStore<'db>,
     pat: ValidatedPatId,
     path: &ProjectionPath<'db>,
-    bindings: &mut IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+    out: &mut Vec<(BindingRef<'db>, ProjectionPath<'db>)>,
 ) {
     match store.node(pat).kind() {
-        ValidatedPatKind::Wildcard {
-            binding: Some(binding),
-        } => {
-            let previous = bindings.entry(*binding).or_insert_with(|| path.clone());
-            debug_assert_eq!(
-                previous, path,
-                "pattern binding has inconsistent projections"
-            );
+        ValidatedPatKind::Wildcard { binding } => {
+            out.extend(binding.map(|binding| (binding, path.clone())));
         }
-        ValidatedPatKind::Wildcard { binding: None } => {}
         ValidatedPatKind::Constructor { ctor, fields } => {
-            let field_paths = field_occurrences(db, path, *ctor);
-            debug_assert_eq!(field_paths.len(), fields.len());
-            for (&field, field_path) in fields.iter().zip(field_paths) {
-                collect_pattern_bindings(db, store, field, &field_path, bindings);
+            for (&field, field_path) in fields.iter().zip(field_occurrences(db, path, *ctor)) {
+                binding_occurrences(db, store, field, &field_path, out);
             }
         }
         ValidatedPatKind::Or(alternatives) => {
-            // Binding or-patterns are rejected while constructing PatternStore.
             for &alternative in alternatives {
-                collect_pattern_bindings(db, store, alternative, path, bindings);
+                binding_occurrences(db, store, alternative, path, out);
             }
         }
     }
 }
 
+/// A row's arm, and what tells what its pattern binds where the row
+/// matches.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ArmData<'db> {
+struct ArmData {
     arm_index: usize,
-    bindings: IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+    /// The arm's pattern; none for a test's fallback row.
+    root: Option<ValidatedPatId>,
+    /// The alternative the row takes of each `|` pattern that binds names,
+    /// once a switch tests it.
+    choices: Vec<(ValidatedPatId, ValidatedPatId)>,
+}
+
+impl ArmData {
+    /// The alternative the row takes of the `|` pattern `or`, once a switch
+    /// tests it.
+    fn choice(&self, or: ValidatedPatId) -> Option<ValidatedPatId> {
+        self.choices
+            .iter()
+            .find_map(|&(pat, alternative)| (pat == or).then_some(alternative))
+    }
+
+    /// The row's pattern at `path`, a column's occurrence, through the
+    /// alternatives the row takes; none where the pattern stops above it.
+    fn pattern_at<'db>(
+        &self,
+        store: &PatternStore<'db>,
+        path: &ProjectionPath<'db>,
+    ) -> Option<ValidatedPatId> {
+        path.iter().try_fold(self.root?, |pat, step| {
+            let ValidatedPatKind::Constructor { ctor, fields } =
+                store.node(self.choice(pat).unwrap_or(pat)).kind()
+            else {
+                return None;
+            };
+            let field_idx = match (ctor, step) {
+                (
+                    ConstructorKind::Variant(variant, _),
+                    Projection::VariantField {
+                        variant: step,
+                        field_idx,
+                        ..
+                    },
+                ) if variant == step => *field_idx,
+                (ConstructorKind::Type(_), Projection::Field(field_idx)) => *field_idx,
+                _ => return None,
+            };
+            fields.get(field_idx).copied()
+        })
+    }
+
+    /// What the row's pattern binds where it matches, in the pattern's
+    /// order. A `|` pattern binds as the alternative the row takes, or, if
+    /// no switch tested it, as its first, which matches anything.
+    fn bindings<'db>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        store: &PatternStore<'db>,
+    ) -> IndexMap<BindingRef<'db>, ProjectionPath<'db>> {
+        let mut bindings = IndexMap::new();
+        if let Some(root) = self.root {
+            self.collect_bindings(db, store, root, &ProjectionPath::default(), &mut bindings);
+        }
+        bindings
+    }
+
+    fn collect_bindings<'db>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        store: &PatternStore<'db>,
+        pat: ValidatedPatId,
+        path: &ProjectionPath<'db>,
+        bindings: &mut IndexMap<BindingRef<'db>, ProjectionPath<'db>>,
+    ) {
+        match store.node(pat).kind() {
+            ValidatedPatKind::Wildcard { binding } => {
+                bindings.extend(binding.map(|binding| (binding, path.clone())));
+            }
+            ValidatedPatKind::Constructor { ctor, fields } => {
+                for (&field, field_path) in fields.iter().zip(field_occurrences(db, path, *ctor)) {
+                    self.collect_bindings(db, store, field, &field_path, bindings);
+                }
+            }
+            ValidatedPatKind::Or(alternatives) => {
+                let alternative = self.choice(pat).unwrap_or(alternatives[0]);
+                self.collect_bindings(db, store, alternative, path, bindings);
+            }
+        }
+    }
+}
+
+/// The alternatives of the `|` pattern `or`, those of a nested `|` in its
+/// place, up to the first that matches anything.
+fn alternatives<'db>(
+    db: &'db dyn HirAnalysisDb,
+    store: &PatternStore<'db>,
+    or: ValidatedPatId,
+) -> Vec<ValidatedPatId> {
+    fn flatten<'db>(store: &PatternStore<'db>, pat: ValidatedPatId, out: &mut Vec<ValidatedPatId>) {
+        match store.node(pat).kind() {
+            ValidatedPatKind::Or(alternatives) => {
+                for &alternative in alternatives {
+                    flatten(store, alternative, out);
+                }
+            }
+            _ => out.push(pat),
+        }
+    }
+    let mut out = Vec::new();
+    flatten(store, or, &mut out);
+    if let Some(total) = out
+        .iter()
+        .position(|&alternative| matches_anything(db, &to_matchcov_pattern(db, store, alternative)))
+    {
+        out.truncate(total + 1);
+    }
+    out
 }
 
 /// matchcov's typed matrix paired with the runtime projection of each column.
 #[derive(Clone, Debug)]
 struct DecisionMatrix<'db> {
-    patterns: PatternMatrix<TyId<'db>, ConstructorKind<'db>, ArmData<'db>>,
+    patterns: PatternMatrix<TyId<'db>, ConstructorKind<'db>, ArmData>,
     occurrences: Vec<ProjectionPath<'db>>,
 }
 
 impl<'db> DecisionMatrix<'db> {
     fn new(
         column_tys: impl IntoIterator<Item = TyId<'db>>,
-        rows: impl IntoIterator<Item = PatternRow<ConstructorKind<'db>, ArmData<'db>>>,
+        rows: impl IntoIterator<Item = PatternRow<ConstructorKind<'db>, ArmData>>,
     ) -> Self {
         let patterns = PatternMatrix::new(column_tys, rows)
             .expect("validated pattern roots should form a well-typed matrix");
@@ -307,6 +417,51 @@ impl<'db> DecisionMatrix<'db> {
         self.occurrences.swap(0, col);
     }
 
+    /// Gives each row whose first column is a `|` pattern that binds names
+    /// a row for each alternative, in order, which takes that alternative,
+    /// as the switch on the column would. matchcov expands the others,
+    /// which bind nothing.
+    fn expand_alternatives(self, db: &'db dyn HirAnalysisDb, store: &PatternStore<'db>) -> Self {
+        let occurrence = &self.occurrences[0];
+        let binding_or = |row: &PatternRow<ConstructorKind<'db>, ArmData>| {
+            row.payload().pattern_at(store, occurrence).filter(|&pat| {
+                matches!(store.node(pat).kind(), ValidatedPatKind::Or(_))
+                    && store.binds(pat)
+                    && !matches!(row.patterns()[0], Pattern::Wildcard)
+            })
+        };
+        if !self
+            .patterns
+            .rows()
+            .iter()
+            .any(|row| binding_or(row).is_some())
+        {
+            return self;
+        }
+        let (tys, rows) = self.patterns.into_parts();
+        let rows = rows.into_iter().flat_map(|row| {
+            let Some(or) = binding_or(&row) else {
+                return vec![row];
+            };
+            let (patterns, data) = row.into_parts();
+            alternatives(db, store, or)
+                .into_iter()
+                .map(|alternative| {
+                    let mut patterns = patterns.clone();
+                    patterns[0] = to_matchcov_pattern(db, store, alternative);
+                    let mut data = data.clone();
+                    data.choices.push((or, alternative));
+                    PatternRow::new(patterns, data)
+                })
+                .collect()
+        });
+        Self {
+            patterns: PatternMatrix::new(tys, rows)
+                .expect("expanded rows should fit the decision matrix"),
+            occurrences: self.occurrences,
+        }
+    }
+
     fn phi_specialize(&self, db: &'db dyn HirAnalysisDb, ctor: ConstructorKind<'db>) -> Self {
         let patterns = self
             .patterns
@@ -328,33 +483,6 @@ impl<'db> DecisionMatrix<'db> {
         Self {
             patterns,
             occurrences: self.occurrences[1..].to_vec(),
-        }
-    }
-}
-
-/// Removes alternatives made redundant by a preceding wildcard.
-fn simplify_pattern<'db>(pat: Pattern<ConstructorKind<'db>>) -> Pattern<ConstructorKind<'db>> {
-    match pat {
-        Pattern::Wildcard => Pattern::Wildcard,
-        Pattern::Constructor { head, arguments } => {
-            Pattern::constructor(head, arguments.into_iter().map(simplify_pattern))
-        }
-        Pattern::Or(alternatives) => {
-            let mut simplified = Vec::new();
-            for alternative in alternatives {
-                let alternative = simplify_pattern(alternative);
-                let is_wildcard = matches!(alternative, Pattern::Wildcard);
-                simplified.push(alternative);
-                if is_wildcard {
-                    break;
-                }
-            }
-
-            if simplified.len() == 1 {
-                simplified.pop().unwrap()
-            } else {
-                Pattern::Or(simplified)
-            }
         }
     }
 }

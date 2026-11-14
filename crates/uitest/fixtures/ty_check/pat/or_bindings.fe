@@ -1,0 +1,78 @@
+// The alternatives of a `|` pattern bind the same names, with one type and
+// one binding mode.
+pub enum E {
+    A(u8, u16),
+    B(u8),
+    C,
+}
+
+fn joined(e: E) -> u8 {
+    match e {
+        E::A(x, _) | E::B(x) => x,
+        E::C => 0,
+    }
+}
+
+fn missing_right(e: E) -> u8 {
+    match e {
+        E::A(x, _) | E::B(_) => x,
+        E::C => 0,
+    }
+}
+
+fn missing_each(e: E) -> u8 {
+    match e {
+        E::A(x, _) | E::B(y) => x + y,
+        E::C => 0,
+    }
+}
+
+fn missing_middle(e: E) -> u8 {
+    match e {
+        E::A(x, _) | E::C | E::B(x) => x,
+    }
+}
+
+fn missing_nested(e: (E, u8)) -> u8 {
+    match e {
+        (E::A(x, _) | E::B(x), _) | (E::C, _) => x,
+    }
+}
+
+fn types(e: E) -> u16 {
+    match e {
+        E::A(_, x) | E::B(x) => x,
+        E::C => 0,
+    }
+}
+
+fn modes(e: mut E) {
+    match e {
+        E::A(mut x, _) | E::B(x) => {},
+        E::C => {},
+    }
+    match e {
+        E::A(ref x, _) | E::B(x) => {},
+        E::C => {},
+    }
+}
+
+fn var_mode(e: own E) {
+    match e {
+        E::A(var x, _) | E::B(x) => {},
+        E::C => {},
+    }
+}
+
+fn duplicate(t: (u8, E)) -> u8 {
+    match t {
+        (x, E::A(x, _) | E::B(x)) => x,
+        _ => 0,
+    }
+}
+
+fn duplicate_within(t: (u8, u8)) -> u8 {
+    match t {
+        (x, x) | (x, 0) => x,
+    }
+}

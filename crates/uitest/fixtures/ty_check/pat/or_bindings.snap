@@ -1,0 +1,118 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/pat/or_bindings.fe
+---
+error[8-0032]: duplicate binding `x` in pattern
+   ┌─ or_bindings.fe:69:18
+   │
+69 │         (x, E::A(x, _) | E::B(x)) => x,
+   │          -       ^ `x` is defined again here
+   │          │
+   │          first definition of `x` in this pattern
+
+error[8-0032]: duplicate binding `x` in pattern
+   ┌─ or_bindings.fe:69:31
+   │
+69 │         (x, E::A(x, _) | E::B(x)) => x,
+   │          -                    ^ `x` is defined again here
+   │          │
+   │          first definition of `x` in this pattern
+
+error[8-0032]: duplicate binding `x` in pattern
+   ┌─ or_bindings.fe:76:13
+   │
+76 │         (x, x) | (x, 0) => x,
+   │          -  ^ `x` is defined again here
+   │          │
+   │          first definition of `x` in this pattern
+
+error[8-0159]: `x` is not bound in every alternative of the pattern
+   ┌─ or_bindings.fe:18:22
+   │
+18 │         E::A(x, _) | E::B(_) => x,
+   │              -       ^^^^^^^ this alternative doesn't bind `x`
+   │              │
+   │              `x` is bound here
+   │
+   = each alternative of a `|` pattern must bind the same names
+
+error[8-0159]: `y` is not bound in every alternative of the pattern
+   ┌─ or_bindings.fe:25:9
+   │
+25 │         E::A(x, _) | E::B(y) => x + y,
+   │         ^^^^^^^^^^        - `y` is bound here
+   │         │
+   │         this alternative doesn't bind `y`
+   │
+   = each alternative of a `|` pattern must bind the same names
+
+error[8-0159]: `x` is not bound in every alternative of the pattern
+   ┌─ or_bindings.fe:25:22
+   │
+25 │         E::A(x, _) | E::B(y) => x + y,
+   │              -       ^^^^^^^ this alternative doesn't bind `x`
+   │              │
+   │              `x` is bound here
+   │
+   = each alternative of a `|` pattern must bind the same names
+
+error[8-0159]: `x` is not bound in every alternative of the pattern
+   ┌─ or_bindings.fe:32:22
+   │
+32 │         E::A(x, _) | E::C | E::B(x) => x,
+   │                      ^^^^        - `x` is bound here
+   │                      │
+   │                      this alternative doesn't bind `x`
+   │
+   = each alternative of a `|` pattern must bind the same names
+
+error[8-0159]: `x` is not bound in every alternative of the pattern
+   ┌─ or_bindings.fe:38:37
+   │
+38 │         (E::A(x, _) | E::B(x), _) | (E::C, _) => x,
+   │               -                     ^^^^^^^^^ this alternative doesn't bind `x`
+   │               │
+   │               `x` is bound here
+   │
+   = each alternative of a `|` pattern must bind the same names
+
+error[8-0160]: `x` has a different type in each alternative of the pattern
+   ┌─ or_bindings.fe:44:27
+   │
+44 │         E::A(_, x) | E::B(x) => x,
+   │                 -         ^ `x` is a `u8` here
+   │                 │
+   │                 `x` is a `u16` here
+   │
+   = a name bound in the alternatives of a `|` pattern has one type
+
+error[8-0161]: `x` is bound in different ways in the alternatives of the pattern
+   ┌─ or_bindings.fe:51:31
+   │
+51 │         E::A(mut x, _) | E::B(x) => {},
+   │              -----            ^ `x` is bound by value here
+   │              │
+   │              `x` is bound as a `mut` access here
+   │
+   = a name bound in the alternatives of a `|` pattern is bound one way
+
+error[8-0161]: `x` is bound in different ways in the alternatives of the pattern
+   ┌─ or_bindings.fe:55:31
+   │
+55 │         E::A(ref x, _) | E::B(x) => {},
+   │              -----            ^ `x` is bound by value here
+   │              │
+   │              `x` is bound as a `ref` access here
+   │
+   = a name bound in the alternatives of a `|` pattern is bound one way
+
+error[8-0161]: `x` is bound in different ways in the alternatives of the pattern
+   ┌─ or_bindings.fe:62:31
+   │
+62 │         E::A(var x, _) | E::B(x) => {},
+   │              -----            ^ `x` is bound by value here
+   │              │
+   │              `x` is bound as a `var` here
+   │
+   = a name bound in the alternatives of a `|` pattern is bound one way

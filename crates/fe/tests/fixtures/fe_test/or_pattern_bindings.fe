@@ -1,0 +1,412 @@
+// The alternatives of a `|` pattern may bind names, each bound in every
+// alternative; the arm sees what the alternative that matched binds.
+use core::ops::Drop
+use core::option::Option
+use core::ptr
+
+enum E {
+    A(u256, u256),
+    B(u256),
+    C,
+}
+
+enum Side {
+    L(u256),
+    R(u256),
+}
+
+fn first(_ e: E) -> u256 {
+    match e {
+        E::A(x, _) | E::B(x) => x,
+        E::C => 0,
+    }
+}
+
+fn second(_ e: E) -> u256 {
+    if let E::A(_, x) | E::B(x) = e {
+        return x
+    }
+    7
+}
+
+fn plus_one(_ e: E) -> u256 {
+    let E::A(x, _) | E::B(x) = e else {
+        return 9
+    }
+    x + 1
+}
+
+fn double(_ s: Side) -> u256 {
+    let Side::L(x) | Side::R(x) = s
+    x * 2
+}
+
+fn digits(_ o: Option<(Side, Side)>) -> u256 {
+    match o {
+        Option::Some((Side::L(x) | Side::R(x), Side::L(y) | Side::R(y))) => x * 10 + y,
+        Option::None => 0,
+    }
+}
+
+fn nested(_ o: Option<Side>) -> u256 {
+    match o {
+        Option::Some(Side::L(x) | Side::R(x)) | Option::Some(Side::L(x)) => x,
+        Option::None => 0,
+    }
+}
+
+// The first alternative that matches binds.
+fn nonzero(_ t: (u256, u256)) -> u256 {
+    match t {
+        (x, 0) | (0, x) => x,
+        _ => 100,
+    }
+}
+
+fn sum(_ sides: [Side; 3]) -> u256 {
+    var total = 0
+    for Side::L(x) | Side::R(x) in sides {
+        total += x
+    }
+    total
+}
+
+fn param(_ (Side::L(x) | Side::R(x), y): (Side, u256)) -> u256 {
+    x + y
+}
+
+fn closure(_ s: own Side) -> u256 {
+    let f = |(Side::L(x) | Side::R(x), y): (Side, u256)| x * y
+    f((s, 3))
+}
+
+fn declared() -> u256 {
+    let Side::L(var x) | Side::R(var x)
+    x = 5
+    x
+}
+
+// An alternative after one that matches anything matches nothing more, and
+// adds nothing to check: twenty such columns check as one would.
+fn wide(
+    _ cols: (
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+        (u8, u8), (u8, u8), (u8, u8), (u8, u8), (u8, u8),
+    ),
+) -> u8 {
+    match cols {
+        (
+            (a, _) | (_, a), (b, _) | (_, b), (c, _) | (_, c), (d, _) | (_, d),
+            (e, _) | (_, e), (f, _) | (_, f), (g, _) | (_, g), (h, _) | (_, h),
+            (i, _) | (_, i), (j, _) | (_, j), (k, _) | (_, k), (l, _) | (_, l),
+            (m, _) | (_, m), (n, _) | (_, n), (o, _) | (_, o), (p, _) | (_, p),
+            (q, _) | (_, q), (r, _) | (_, r), (s, _) | (_, s), (t, _) | (_, t),
+        ) => a + b + c + d + t,
+    }
+}
+
+#[test]
+fn test_wide() {
+    let cols = (
+        (0, 9), (1, 9), (2, 9), (3, 9), (4, 9), (5, 9), (6, 9), (7, 9), (8, 9), (9, 9),
+        (10, 9), (11, 9), (12, 9), (13, 9), (14, 9), (15, 9), (16, 9), (17, 9), (18, 9), (19, 9),
+    )
+    assert(wide(cols) == 25)
+}
+
+#[test]
+fn test_values() {
+    assert(first(E::A(3, 4)) == 3)
+    assert(first(E::B(5)) == 5)
+    assert(first(E::C) == 0)
+    assert(second(E::A(3, 4)) == 4)
+    assert(second(E::B(5)) == 5)
+    assert(second(E::C) == 7)
+    assert(plus_one(E::A(3, 4)) == 4)
+    assert(plus_one(E::B(5)) == 6)
+    assert(plus_one(E::C) == 9)
+    assert(double(Side::L(3)) == 6)
+    assert(double(Side::R(4)) == 8)
+    assert(digits(Option::Some((Side::L(1), Side::R(2)))) == 12)
+    assert(digits(Option::Some((Side::R(3), Side::L(4)))) == 34)
+    assert(nested(Option::Some(Side::R(6))) == 6)
+    assert(nonzero((5, 0)) == 5)
+    assert(nonzero((0, 6)) == 6)
+    assert(nonzero((0, 0)) == 0)
+    assert(nonzero((1, 1)) == 100)
+    assert(sum([Side::L(1), Side::R(2), Side::L(3)]) == 6)
+    assert(param((Side::L(1), 2)) == 3)
+    assert(param((Side::R(5), 2)) == 7)
+    assert(closure(Side::R(4)) == 12)
+    assert(declared() == 5)
+}
+
+struct Token { v: u256 }
+
+enum K {
+    A(Token),
+    B(u8, Token),
+    C,
+}
+
+fn token(_ k: own K) -> u256 {
+    match k {
+        K::A(t) | K::B(_, t) => t.v,
+        K::C => 0,
+    }
+}
+
+fn token_if_let(_ k: own K) -> u256 {
+    if let K::A(t) | K::B(_, t) = k {
+        return t.v
+    }
+    0
+}
+
+#[test]
+fn test_moves() {
+    assert(token(K::A(Token { v: 1 })) == 1)
+    assert(token(K::B(0, Token { v: 2 })) == 2)
+    assert(token(K::C) == 0)
+    assert(token_if_let(K::A(Token { v: 1 })) == 1)
+    assert(token_if_let(K::B(0, Token { v: 2 })) == 2)
+    assert(token_if_let(K::C) == 0)
+}
+
+// Each drop counts itself through a raw pointer, which no scope owns.
+struct Counted { counter: *u256, v: u256 }
+
+impl Drop for Counted {
+    fn drop(own self) {
+        unsafe {
+            *self.counter += 1
+        }
+    }
+}
+
+enum D {
+    A(Counted),
+    B(Counted, Counted),
+    C,
+}
+
+fn counter() -> *u256 {
+    let counter = ptr::alloc<u256>()
+    unsafe {
+        *counter = 0
+    }
+    counter
+}
+
+fn count(_ counter: *u256) -> u256 {
+    unsafe {
+        *counter
+    }
+}
+
+fn drop_match(_ d: own D) -> u256 {
+    match d {
+        D::A(c) | D::B(_, c) => c.v,
+        D::C => 0,
+    }
+}
+
+fn drop_if_let(_ d: own D) -> u256 {
+    if let D::A(c) | D::B(c, _) = d {
+        return c.v
+    }
+    0
+}
+
+fn drop_let_else(_ d: own D) -> u256 {
+    let D::A(c) | D::B(_, c) = d else {
+        return 0
+    }
+    c.v
+}
+
+fn keep(_ d: own D, _ counter: *u256) -> Counted {
+    let D::A(c) | D::B(_, c) = d else {
+        return Counted { counter, v: 0 }
+    }
+    c
+}
+
+#[test]
+fn test_drops() {
+    let c = counter()
+    assert(drop_match(D::A(Counted { counter: c, v: 1 })) == 1)
+    assert(count(c) == 1)
+    assert(
+        drop_match(
+                D::B(
+                    Counted { counter: c, v: 2 },
+                    Counted { counter: c, v: 3 },
+                ),
+            ) == 3,
+    )
+    assert(count(c) == 3)
+    assert(drop_if_let(D::A(Counted { counter: c, v: 1 })) == 1)
+    assert(count(c) == 4)
+    assert(
+        drop_if_let(
+                D::B(
+                    Counted { counter: c, v: 2 },
+                    Counted { counter: c, v: 3 },
+                ),
+            ) == 2,
+    )
+    assert(count(c) == 6)
+    assert(
+        drop_let_else(
+                D::B(
+                    Counted { counter: c, v: 2 },
+                    Counted { counter: c, v: 3 },
+                ),
+            ) == 3,
+    )
+    assert(count(c) == 8)
+    assert(drop_let_else(D::A(Counted { counter: c, v: 5 })) == 5)
+    assert(count(c) == 9)
+    let kept = keep(
+        D::B(
+            Counted { counter: c, v: 2 },
+            Counted { counter: c, v: 3 },
+        ),
+        c,
+    )
+    assert(kept.v == 3)
+    assert(count(c) == 10)
+}
+
+fn bump(_ e: mut E) {
+    match e {
+        E::A(mut x, _) | E::B(mut x) => {
+            x += 1
+        },
+        E::C => {},
+    }
+}
+
+fn read(_ e: mut E) -> u256 {
+    match e {
+        E::A(_, ref x) | E::B(ref x) => x,
+        E::C => 0,
+    }
+}
+
+fn place_value(_ e: mut E) -> u256 {
+    if let E::A(_, x) | E::B(x) = e {
+        return x
+    }
+    0
+}
+
+fn value(_ e: E) -> u256 {
+    match e {
+        E::A(a, b) => a * 100 + b,
+        E::B(b) => b,
+        E::C => 0,
+    }
+}
+
+// The arm runs one body for both alternatives: `n`, at one part in each,
+// binds once there, and `x` binds in each.
+fn add_tagged(_ t: mut (E, u256)) {
+    match t {
+        (E::A(x, _) | E::B(x), mut n) => {
+            n += x
+        },
+        (E::C, _) => {},
+    }
+}
+
+#[test]
+fn test_accesses_in_match() {
+    var a = E::A(1, 2)
+    bump(mut a)
+    assert(value(a) == 202)
+    assert(read(mut a) == 2)
+    assert(place_value(mut a) == 2)
+    var b = E::B(5)
+    bump(mut b)
+    assert(value(b) == 6)
+    assert(read(mut b) == 6)
+    assert(place_value(mut b) == 6)
+    var ta = (E::A(3, 4), 10)
+    add_tagged(mut ta)
+    assert(ta.1 == 13)
+    var tb = (E::B(7), 10)
+    add_tagged(mut tb)
+    assert(tb.1 == 17)
+    var tc = (E::C, 10)
+    add_tagged(mut tc)
+    assert(tc.1 == 10)
+}
+
+struct Holder { left: bool, v: u256, n: u256 }
+
+impl Holder {
+    fn parts(mut self) -> Option<(Side, mut u256)> {
+        let side = if self.left {
+            Side::L(self.v)
+        } else {
+            Side::R(self.v)
+        }
+        Option::Some((side, mut self.n))
+    }
+
+    fn both(mut self) -> Option<(mut u256, mut u256)> {
+        Option::Some((mut self.v, mut self.n))
+    }
+}
+
+// The access `x` lies at one place, whichever alternative binds `v`.
+fn add_side(_ h: mut Holder) -> u256 {
+    if let Option::Some((Side::L(v) | Side::R(v), mut x)) = h.parts() {
+        x += v
+        return x
+    }
+    0
+}
+
+fn add_until(_ h: mut Holder) -> u256 {
+    var rounds = 0
+    while let Option::Some((Side::L(v) | Side::R(v), mut x)) = h.parts() {
+        if x > 10 { return rounds }
+        x += v
+        rounds += 1
+    }
+    rounds
+}
+
+// Both alternatives bind the access `x` at one place.
+fn bump_same(_ h: mut Holder) {
+    if let Option::Some((0, mut x)) | Option::Some((1, mut x)) = h.both() {
+        x += 100
+    }
+}
+
+// A value read through an access may lie anywhere.
+fn nonzero_part(_ h: mut Holder) -> u256 {
+    if let Option::Some((x, 0)) | Option::Some((0, x)) = h.both() {
+        return x
+    }
+    100
+}
+
+#[test]
+fn test_accesses_where_alternatives_meet() {
+    var h = Holder { left: false, v: 3, n: 4 }
+    assert(add_side(mut h) == 7)
+    assert(h.n == 7)
+    var w = Holder { left: true, v: 5, n: 0 }
+    assert(add_until(mut w) == 3)
+    var s = Holder { left: true, v: 1, n: 2 }
+    bump_same(mut s)
+    assert(s.n == 102)
+    var z = Holder { left: true, v: 0, n: 8 }
+    assert(nonzero_part(mut z) == 8)
+}

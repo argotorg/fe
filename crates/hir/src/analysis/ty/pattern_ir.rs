@@ -110,12 +110,7 @@ impl<'db> PatternStore<'db> {
         match self.node(id).kind() {
             ValidatedPatKind::Wildcard { .. } => true,
             ValidatedPatKind::Constructor { ctor, fields } => {
-                let only_ctor = match ctor {
-                    ConstructorKind::Type(_) => true,
-                    ConstructorKind::Variant(variant, _) => variant.enum_.len_variants(db) == 1,
-                    ConstructorKind::Literal(..) => false,
-                };
-                only_ctor && fields.iter().all(|&field| self.is_irrefutable(db, field))
+                ctor.is_only(db) && fields.iter().all(|&field| self.is_irrefutable(db, field))
             }
             ValidatedPatKind::Or(pats) => {
                 pats.iter().any(|&pat| self.is_irrefutable(db, pat))
@@ -134,6 +129,18 @@ impl<'db> PatternStore<'db> {
             ValidatedPatKind::Or(pats) => pats.iter().any(|&pat| self.binds(pat)),
         }
     }
+
+    /// Whether `id` has a `|` pattern that binds names, whose bindings
+    /// depend on which alternative matches.
+    pub fn binds_in_alternatives(&self, id: ValidatedPatId) -> bool {
+        match self.node(id).kind() {
+            ValidatedPatKind::Wildcard { .. } => false,
+            ValidatedPatKind::Constructor { fields, .. } => fields
+                .iter()
+                .any(|&field| self.binds_in_alternatives(field)),
+            ValidatedPatKind::Or(_) => self.binds(id),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
@@ -144,6 +151,16 @@ pub enum ConstructorKind<'db> {
 }
 
 impl<'db> ConstructorKind<'db> {
+    /// Whether this is its type's only constructor: a struct's or tuple's,
+    /// or the variant of a one-variant enum.
+    pub fn is_only(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        match self {
+            Self::Type(_) => true,
+            Self::Variant(variant, _) => variant.enum_.len_variants(db) == 1,
+            Self::Literal(..) => false,
+        }
+    }
+
     pub fn field_types(&self, db: &'db dyn HirAnalysisDb) -> Vec<TyId<'db>> {
         match self {
             Self::Variant(variant, ty) => {

@@ -1,0 +1,38 @@
+enum E {
+    A(u8, u16),
+    B(u8),
+    C,
+}
+
+enum Side {
+    L(u8),
+    R(u8),
+}
+
+fn variants(e: E) -> u8 {
+    match e {
+        E::A(x, _) | E::B(x) => x,
+        E::C => 0,
+    }
+}
+
+// The first alternative that matches binds.
+fn overlap(t: (u8, u8)) -> u8 {
+    match t {
+        (x, 0) | (0, x) => x,
+        _ => 1,
+    }
+}
+
+fn nested(t: (Side, Side)) -> u8 {
+    match t {
+        (Side::L(x) | Side::R(x), Side::L(y) | Side::R(y)) => x + y,
+    }
+}
+
+// Alternatives that match anything are never tested.
+fn wide(t: (u8, u8, u8, u8, u8, u8, u8, u8)) -> u8 {
+    match t {
+        (a | a, b | b, c | c, d | d, e | e, f | f, g | g, h | h) => a + h,
+    }
+}
