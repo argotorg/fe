@@ -6,7 +6,7 @@ use async_lsp::{
     lsp_types::{
         DocumentFormattingParams, Hover, HoverParams, InitializeParams, InitializeResult,
         InitializedParams, LogMessageParams, MessageType, Position, Range, ShowMessageParams,
-        TextEdit,
+        TextEdit, WorkspaceFolder,
     },
 };
 
@@ -172,6 +172,29 @@ fn read_file_text_optional(path: &std::path::Path) -> Option<String> {
     resolver.resolve(&mut handler, &file_url).ok().flatten()
 }
 
+/// The folder to analyze: the first workspace folder, or the current directory if
+/// there is no workspace folder or the first one is not a local path.
+fn workspace_root(
+    workspace_folders: Option<Vec<WorkspaceFolder>>,
+    current_dir: impl FnOnce() -> std::io::Result<std::path::PathBuf>,
+) -> Result<std::path::PathBuf, ResponseError> {
+    let folder = workspace_folders
+        .and_then(|folders| folders.into_iter().next())
+        .and_then(|folder| folder.uri.to_file_path().ok());
+    match folder {
+        Some(root) => Ok(root),
+        None => current_dir().map_err(|e| {
+            ResponseError::new(
+                ErrorCode::INVALID_PARAMS,
+                format!(
+                    "The client sent no usable workspace folder and the current directory is \
+                     not available: {e}"
+                ),
+            )
+        }),
+    }
+}
+
 pub async fn initialize(
     backend: &mut Backend,
     message: InitializeParams,
@@ -221,11 +244,7 @@ pub async fn initialize(
         "initialize params received"
     );
 
-    let root = message
-        .workspace_folders
-        .and_then(|folders| folders.first().cloned())
-        .and_then(|folder| folder.uri.to_file_path().ok())
-        .unwrap_or_else(|| std::env::current_dir().unwrap());
+    let root = workspace_root(message.workspace_folders, std::env::current_dir)?;
 
     info!(
         target: "fe::lsp::workspace",
@@ -893,5 +912,60 @@ pub async fn handle_formatting(
             Ok(None)
         }
         Err(fmt::FormatError::Io(_)) => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn folder(path: &std::path::Path) -> WorkspaceFolder {
+        WorkspaceFolder {
+            uri: Url::from_directory_path(path).unwrap(),
+            name: "workspace".to_string(),
+        }
+    }
+
+    fn missing_current_dir() -> std::io::Result<PathBuf> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the directory was removed",
+        ))
+    }
+
+    #[test]
+    fn the_first_workspace_folder_is_the_root() {
+        let first = std::env::temp_dir().join("first");
+        let second = std::env::temp_dir().join("second");
+        let root = workspace_root(
+            Some(vec![folder(&first), folder(&second)]),
+            missing_current_dir,
+        )
+        .unwrap();
+        assert_eq!(root, first);
+    }
+
+    #[test]
+    fn the_current_directory_is_the_root_without_a_usable_workspace_folder() {
+        let current = std::env::temp_dir().join("current");
+        let current_dir = || Ok(current.clone());
+        assert_eq!(workspace_root(None, current_dir).unwrap(), current);
+        // A folder that is not a local path cannot be analyzed.
+        let remote = WorkspaceFolder {
+            uri: Url::parse("https://example.com/workspace").unwrap(),
+            name: "workspace".to_string(),
+        };
+        assert_eq!(
+            workspace_root(Some(vec![remote]), current_dir).unwrap(),
+            current
+        );
+    }
+
+    #[test]
+    fn a_missing_current_directory_is_an_error() {
+        let error = workspace_root(None, missing_current_dir).unwrap_err();
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+        assert!(error.message.contains("the directory was removed"));
     }
 }
