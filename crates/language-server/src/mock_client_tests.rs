@@ -2051,3 +2051,50 @@ async fn mock_lsp_answers_symbols_and_inlay_hints_right_after_did_open() {
         "inlayHint did not see the opened text: {hints:?}"
     );
 }
+
+const STANDALONE_MESSAGE: &str = "This file is not part of an ingot";
+
+/// A file outside every ingot is a valid way to work, so the note about it must
+/// not be listed among the problems of the workspace. A file in an ingot gets no
+/// such note.
+#[tokio::test]
+async fn mock_lsp_reports_files_outside_an_ingot_as_hints() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("lib/src")).unwrap();
+    std::fs::create_dir_all(root.join("loose")).unwrap();
+    std::fs::write(root.join("fe.toml"), "[workspace]\nmembers = [\"lib\"]\n").unwrap();
+    std::fs::write(
+        root.join("lib/fe.toml"),
+        "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let member = Url::from_file_path(root.join("lib/src/lib.fe")).unwrap();
+    let loose = Url::from_file_path(root.join("loose/a.fe")).unwrap();
+    std::fs::write(member.to_file_path().unwrap(), "pub fn f() -> u256 { 1 }\n").unwrap();
+
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    client.did_open(&member, "pub fn f() -> u256 { 1 }\n");
+    client.did_open(&loose, "fn g() -> u256 { 2 }\n");
+    assert!(client.wait_for_diagnostics(|d| d.uri == member).await);
+    assert!(client.wait_for_diagnostics(|d| d.uri == loose).await);
+
+    let notes = |uri: &Url| {
+        client
+            .diagnostics_for_uri(uri)
+            .into_iter()
+            .filter(|d| d.message.contains(STANDALONE_MESSAGE))
+            .collect::<Vec<_>>()
+    };
+    let notes_on_loose_file = notes(&loose);
+    assert_eq!(notes_on_loose_file.len(), 1, "{notes_on_loose_file:?}");
+    assert_eq!(
+        notes_on_loose_file[0].severity,
+        Some(DiagnosticSeverity::HINT)
+    );
+    assert!(notes(&member).is_empty());
+    client.shutdown().await;
+}
