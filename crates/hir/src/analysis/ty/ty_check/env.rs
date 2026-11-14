@@ -42,14 +42,15 @@ use crate::analysis::{
             model::EffectRequirementDecl,
             rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
-        evidence::prove,
+        evidence::{BoundOwner, BoundSchemaId, prove_outcome},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId, TraitSolveCx, constraint::collect_func_effect_provider_constraints,
+            ChosenImpls, PredicateListId, TraitSolveCx,
+            constraint::collect_func_effect_provider_constraints,
         },
         ty_def::{
             BorrowKind, ClosureDef, ClosureTy, InvalidCause, StringFallback, TyData, TyId,
@@ -1359,6 +1360,7 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn call_site(&self) -> CallSite<'db> {
         CallSite {
             frames: self.effect_env.with_frames(),
+            choices: self.choices,
             closure: self.closure_stack.last().map(|active| active.def),
         }
     }
@@ -1367,7 +1369,8 @@ impl<'db> TyCheckEnv<'db> {
     /// `leave_call_site`: under its `with` blocks, in its closure's body. A
     /// closure already checked gives its finished environment, whose row is
     /// fixed.
-    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) {
+    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) -> Option<ChosenImpls<'db>> {
+        let enclosing_choices = std::mem::replace(&mut self.choices, site.choices);
         debug_assert!(
             site.closure.is_some() || self.closure_stack.is_empty(),
             "a call outside closures resolves after them"
@@ -1386,9 +1389,11 @@ impl<'db> TyCheckEnv<'db> {
             self.late_closure = Some((def, enclosing));
         }
         self.effect_env.reopen_with_frames(site.frames.clone());
+        enclosing_choices
     }
 
-    pub(super) fn leave_call_site(&mut self) {
+    pub(super) fn leave_call_site(&mut self, enclosing_choices: Option<ChosenImpls<'db>>) {
+        self.choices = enclosing_choices;
         self.effect_env.close_with_frames();
         if let Some((def, enclosing)) = self.late_closure.take() {
             let env = std::mem::replace(&mut self.effect_env, enclosing);
@@ -1584,8 +1589,7 @@ impl<'db> TyCheckEnv<'db> {
         self.pending_vars.clear();
     }
 
-    pub(super) fn register_trait_obligation(&mut self, mut obligation: TraitObligation<'db>) {
-        obligation.choices = self.choices;
+    pub(super) fn register_trait_obligation(&mut self, obligation: TraitObligation<'db>) {
         self.deferred.push(DeferredTask::Obligation(obligation))
     }
 
@@ -1761,7 +1765,9 @@ impl<'db> TyCheckEnv<'db> {
                 codec_choice_failed |= index > 0
                     && solve_cx.choices().is_some()
                     && matches!(outcome, super::super::evidence::ProofOutcome::Unavailable);
-                callable.record_bound_evidence(self.db, solve_cx);
+                // A storage entry's calls pass no effect arguments.
+                callable.record_bound_evidence(self.db, solve_cx, &[]);
+                callable.qualify_evidence(self.db, self.owner);
             }
             calls.codec_choice_failed = codec_choice_failed;
             if let Some(goal) = calls.locate.trait_inst()
@@ -1779,9 +1785,21 @@ impl<'db> TyCheckEnv<'db> {
                 continue;
             };
             let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
+            // A call's effect arguments give the providers of its callee's
+            // row components.
+            let effect_args: Vec<_> = match lowering {
+                SemanticExprLowering::Call { .. } => self.call_effect_args[expr]
+                    .iter()
+                    .flatten()
+                    .map(|arg| arg.clone().fold_with(self.db, &mut prober))
+                    .collect(),
+                _ => Vec::new(),
+            };
             for callable in lowering.callables_mut() {
                 callable.record_evidence(self.db, solve_cx);
-                callable.record_bound_evidence(self.db, solve_cx);
+                callable.record_bound_evidence(self.db, solve_cx, &effect_args);
+                callable.qualify_evidence(self.db, self.owner);
+
                 if solve_cx.choices().is_some() {
                     for goal in callable.missing_bound_evidence(self.db) {
                         diags.push(failed_proof(goal, expr.span(self.body).into()));
@@ -1806,7 +1824,15 @@ impl<'db> TyCheckEnv<'db> {
             let solve_cx = solve_cx.with_choices(self.stmt_choices[stmt]);
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
-                call.callable.record_bound_evidence(self.db, solve_cx);
+                let effect_args: Vec<_> = call
+                    .effect_args
+                    .iter()
+                    .map(|arg| arg.clone().fold_with(self.db, &mut prober))
+                    .collect();
+                call.callable
+                    .record_bound_evidence(self.db, solve_cx, &effect_args);
+                call.callable.qualify_evidence(self.db, self.owner);
+
                 if solve_cx.choices().is_some() {
                     for goal in call.callable.missing_bound_evidence(self.db) {
                         diags.push(failed_proof(goal, stmt.span(self.body).into()));
@@ -1826,18 +1852,20 @@ impl<'db> TyCheckEnv<'db> {
             };
             let choices = self.expr_choices[expr];
             if let ConstRef::TraitConst { use_, evidence, .. } = const_ref {
-                *evidence = prove(
+                let outcome = prove_outcome(
                     self.db,
                     use_.solve_cx(self.db).with_choices(choices),
                     use_.inst(),
                 );
-                if choices.is_some() && evidence.is_none() {
+                evidence.record_dispatch(use_.inst(), outcome.evidence());
+                if choices.is_some() && evidence.dispatch_proof().is_none() {
                     diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
                 }
             }
             for goal in const_ref.record_bound_evidence(self.db, choices) {
                 diags.push(failed_proof(goal, expr.span(self.body).into()));
             }
+            const_ref.qualify_evidence(self.db, self.owner);
         }
         self.closure_infos
             .values_mut()
@@ -1875,6 +1903,7 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             result_ty,
             signature,
+            bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
@@ -2816,6 +2845,7 @@ pub(super) enum PendingEffectsTarget {
 #[derive(Debug, Clone)]
 pub(super) struct CallSite<'db> {
     frames: Vec<keyed_effect_env::EffectFrame<'db>>,
+    pub choices: Option<ChosenImpls<'db>>,
     pub closure: Option<ClosureDef<'db>>,
 }
 

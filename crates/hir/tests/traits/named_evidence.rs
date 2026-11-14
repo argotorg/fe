@@ -820,3 +820,62 @@ const fn chosen() -> u256 { with (ChosenA, ChosenB) { infer(Item {}) } }
         &[("chosen", 2)],
     );
 }
+
+#[test]
+fn deferred_named_only_bound_uses_the_authored_choice_scope() {
+    let source = r#"
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item as Only { fn value() -> u256 { 71 } }
+struct Deferred<T> { value: T }
+trait Read { fn read<T: Pick>(self, _ value: T) -> u256 }
+impl Read for Deferred<u256> { fn read<T: Pick>(self, _ value: T) -> u256 { T::value() } }
+impl Read for Deferred<u8> { fn read<T: Pick>(self, _ value: T) -> u256 { T::value() } }
+fn run() -> u256 {
+    let x = 5
+    let result: u256 = with (Only) { Deferred { value: x }.read(Item {}) }
+    let settled: u256 = x
+    result
+}
+"#;
+    assert!(diagnostics(source).is_empty());
+    let outside = source.replace(
+        "with (Only) { Deferred { value: x }.read(Item {}) }",
+        "Deferred { value: x }.read(Item {})",
+    );
+    assert_eq!(diagnostics(&outside), ["6-0003"]);
+}
+
+#[test]
+fn ordinary_argument_inference_does_not_discharge_a_failed_choice() {
+    let source = r#"
+struct Item {}
+struct Arg {}
+trait Ready {}
+trait Pick<A> { fn value() -> u256 }
+impl Pick<Arg> for Item { fn value() -> u256 { 100 } }
+impl<T: Ready> Pick<Arg> for T as Broken { fn value() -> u256 { 70 } }
+fn infer<T: Pick<A>, A>(_ item: T) -> u256 { T::value() }
+fn chosen() -> u256 { with (Broken) { infer(Item {}) } }
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0031".to_string()), "{codes:?}");
+}
+
+#[test]
+fn a_choice_does_not_resolve_ambiguous_ordinary_arguments() {
+    let source = r#"
+struct Item {}
+struct One {}
+struct Two {}
+trait Pick<A> { fn value() -> u256 }
+impl Pick<One> for Item { fn value() -> u256 { 1 } }
+impl Pick<Two> for Item { fn value() -> u256 { 2 } }
+impl Pick<One> for Item as Chosen { fn value() -> u256 { 7 } }
+fn infer<T: Pick<A>, A>(_ item: T) -> u256 { T::value() }
+fn chosen() -> u256 { with (Chosen) { infer(Item {}) } }
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"8-0031".to_string()), "{codes:?}");
+}

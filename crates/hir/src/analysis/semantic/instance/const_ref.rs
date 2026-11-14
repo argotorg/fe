@@ -464,7 +464,8 @@ pub fn generated_callee_key<'db>(
     // the checker proves a written call's.
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     callable.record_evidence(db, solve_cx);
-    callable.record_bound_evidence(db, solve_cx);
+    // A generated call carries no effect arguments.
+    callable.record_bound_evidence(db, solve_cx, &[]);
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
@@ -557,7 +558,9 @@ fn semantic_callee_key_with_assumptions<'db>(
                 subst,
                 EffectProviderSubst::empty(db),
                 ImplEnv::empty(db, owner.scope()),
-                EvidenceList::none(db),
+                closure
+                    .bound_evidence(db)
+                    .map_or_else(|| EvidenceList::none(db), |bound| bound.entries),
             ),
         );
         let effect_pairs: Vec<_> = rows
@@ -600,6 +603,25 @@ fn semantic_callee_key_with_assumptions<'db>(
             })
         })
         .collect::<Vec<_>>();
+        let rows = callable
+            .bound_evidence()
+            .into_iter()
+            .flat_map(|bound| bound.rows(db))
+            .filter_map(|row| {
+                let (&entry, steps) = row.path.steps.split_first()?;
+                Some(crate::analysis::ty::evidence::RowEvidence {
+                    path: RowPath {
+                        entry,
+                        steps: steps.to_vec(),
+                    },
+                    ..row.clone()
+                })
+            })
+            .collect();
+        let captured = closure
+            .bound_evidence(db)
+            .map_or_else(|| EvidenceList::none(db), |bound| bound.entries)
+            .with_rows(db, rows);
         return Ok(Some(SemanticCallCallee {
             key: SemanticInstanceKey::of(
                 db,
@@ -607,7 +629,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                 subst,
                 EffectProviderSubst::new(db, providers, Vec::new()),
                 ImplEnv::empty(db, owner.scope()),
-                EvidenceList::none(db),
+                captured,
             ),
             concrete_dispatch: true,
             effect_pairs,
@@ -1145,6 +1167,44 @@ fn semantic_callee_key_with_assumptions<'db>(
             )
         }
         _ => EvidenceList::none(db),
+    };
+    let evidence = if body_func == nominal_func {
+        evidence
+    } else {
+        let (_, nominal_rows) = instantiated_effects(
+            db,
+            (nominal_func, callable.mode()),
+            callable.generic_args(),
+            impl_env.normalization_scope(db),
+            assumptions,
+        );
+        let (_, body_rows) = instantiated_effects(
+            db,
+            (body_func, owner.mode()),
+            subst.generic_args(db),
+            impl_env.normalization_scope(db),
+            assumptions,
+        );
+        let rows = callable
+            .bound_evidence()
+            .into_iter()
+            .flat_map(|bounds| bounds.rows(db))
+            .filter_map(|row| {
+                let nominal = nominal_rows.component(&row.path)?.requirement.binding_idx;
+                let body = provider_pairs.iter().find(|(from, _)| *from == nominal)?.1;
+                let path = body_rows
+                    .components
+                    .iter()
+                    .find(|component| component.requirement.binding_idx == body)?
+                    .path
+                    .clone();
+                Some(crate::analysis::ty::evidence::RowEvidence {
+                    path,
+                    ..row.clone()
+                })
+            })
+            .collect();
+        evidence.with_rows(db, rows)
     };
     let evidence = if collect_flags(db, evidence).contains(TyFlags::HAS_PROJECTION) {
         normalize_ty(db, evidence, impl_env.normalization_scope(db), assumptions)

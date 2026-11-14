@@ -843,7 +843,10 @@ impl<'db> TyChecker<'db> {
         let closure = ClosureTy::new(
             self.db,
             def,
-            parent_args,
+            super::super::ty_def::ClosureContext {
+                args: parent_args,
+                evidence: None,
+            },
             info.captures
                 .iter()
                 .map(|capture| capture.ty)
@@ -2749,7 +2752,7 @@ impl<'db> TyChecker<'db> {
             let settled = arg.fold_with(self.db, &mut Prober::new(&mut self.table, scope));
             self.table.unify(arg, settled).ok();
         }
-        self.env.enter_call_site(&pending.site);
+        let enclosing_choices = self.env.enter_call_site(&pending.site);
         match pending.target {
             PendingEffectsTarget::Call(expr) => {
                 for mut callable in callables {
@@ -2776,7 +2779,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
-        self.env.leave_call_site();
+        self.env.leave_call_site(enclosing_choices);
         true
     }
 
@@ -4511,8 +4514,7 @@ impl<'db> TyChecker<'db> {
                                 inst,
                                 name,
                             ),
-                            evidence: None,
-                            bound_evidence: None,
+                            evidence: Default::default(),
                         },
                     );
                     // Look up the associated const's declared type in the trait and

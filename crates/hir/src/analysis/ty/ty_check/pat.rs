@@ -629,8 +629,7 @@ impl<'db> TyChecker<'db> {
                             inst,
                             name,
                         ),
-                        evidence: None,
-                        bound_evidence: None,
+                        evidence: Default::default(),
                     };
                     (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {

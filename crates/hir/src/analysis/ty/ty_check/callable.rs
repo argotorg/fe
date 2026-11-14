@@ -24,8 +24,9 @@ use crate::analysis::{
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         evidence::{
-            EvidenceId, EvidenceList, ProofOutcome, declared_bound_evidence,
-            instantiated_selection, prove_outcome,
+            BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
+            RowEvidence, UseEvidence, declared_bound_evidence, instantiated_selection,
+            prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
@@ -376,14 +377,7 @@ pub struct Callable<'db> {
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
     pub trait_inst: Option<TraitInstId<'db>>,
-    /// The checker's proof of `trait_inst` in the checked body. A goal
-    /// proved by an assumption, a bound of that body, is selected again where
-    /// the body is instantiated.
-    evidence: Option<EvidenceId<'db>>,
-    /// Proofs, in the checked body, of the assumptions the callee's body is
-    /// checked under (`func_signature`): the evidence the callee's instance
-    /// receives.
-    bound_evidence: Option<EvidenceList<'db>>,
+    use_evidence: UseEvidence<'db>,
     /// The mode a `mut?` callee is called at: `ref` unless a use of the
     /// call's result asks for `mut`.
     mode: Option<BorrowKind>,
@@ -402,12 +396,7 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         if let Some(inst) = self.trait_inst {
             inst.visit_with(visitor);
         }
-        if let Some(evidence) = &self.evidence {
-            evidence.visit_with(visitor);
-        }
-        if let Some(bound_evidence) = &self.bound_evidence {
-            bound_evidence.visit_with(visitor);
-        }
+        self.use_evidence.visit_with(visitor);
     }
 }
 
@@ -425,10 +414,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
                 .checked_input_tys
                 .map(|inputs| inputs.fold_with(db, folder)),
             trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
-            evidence: self.evidence.map(|evidence| evidence.fold_with(db, folder)),
-            bound_evidence: self
-                .bound_evidence
-                .map(|bound_evidence| bound_evidence.fold_with(db, folder)),
+            use_evidence: self.use_evidence.fold_with(db, folder),
             mode: self.mode,
         }
     }
@@ -480,8 +466,7 @@ impl<'db> Callable<'db> {
             effect_providers: Vec::new(),
             checked_input_tys: None,
             trait_inst,
-            evidence: None,
-            bound_evidence: None,
+            use_evidence: UseEvidence::default(),
             mode: callable_def.modes(db)[0],
         })
     }
@@ -500,8 +485,7 @@ impl<'db> Callable<'db> {
             effect_providers: Vec::new(),
             checked_input_tys: None,
             trait_inst,
-            evidence: None,
-            bound_evidence: None,
+            use_evidence: UseEvidence::default(),
             mode: callable_def.modes(db)[0],
         }
     }
@@ -543,22 +527,27 @@ impl<'db> Callable<'db> {
         let outcome = self.trait_inst.map_or(ProofOutcome::Unavailable, |inst| {
             prove_outcome(db, solve_cx, inst)
         });
-        self.evidence = outcome.evidence();
+        if let Some(goal) = self.trait_inst {
+            self.use_evidence.record_dispatch(goal, outcome.evidence());
+        }
         outcome
     }
 
     /// The checker's proof of the call's trait goal.
     pub fn evidence(&self) -> Option<EvidenceId<'db>> {
-        self.evidence
+        self.use_evidence.dispatch_proof()
     }
 
     /// Proves, in the checked body's context `solve_cx`, the bounds the
     /// callee's body declares, instantiated for this call, as
-    /// `declared_bound_evidence` records them.
+    /// `declared_bound_evidence` records them, and the trait key of each
+    /// component of the callee's rows for the provider that the call's
+    /// `effect_args` give that component.
     pub(crate) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         solve_cx: TraitSolveCx<'db>,
+        effect_args: &[super::ResolvedEffectArg<'db>],
     ) {
         let CallableDef::Func(func) = self.callable_def else {
             return;
@@ -567,13 +556,59 @@ impl<'db> Callable<'db> {
         let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
             return;
         };
-        self.bound_evidence = Some(declared_bound_evidence(
+        let evidence = declared_bound_evidence(
             db,
             func_declared_bounds(db, func, mode),
             func_signature(db, func, mode),
             &subst,
             solve_cx,
-        ));
+        );
+        let requirements = func
+            .effect_requirements(db, mode)
+            .iter()
+            .map(|requirement| crate::core::semantic::EffectRequirement {
+                key: super::super::binder::Binder::bind(func.into(), requirement.key.clone())
+                    .instantiate(db, &self.generic_args),
+                ..requirement.clone()
+            })
+            .collect::<Vec<_>>();
+        let expansion = super::super::effects::rows::expand_rows(
+            db,
+            &requirements,
+            func.scope(),
+            solve_cx.assumptions(),
+        );
+        let rows = expansion
+            .components
+            .iter()
+            .filter_map(|component| {
+                let goal = component.requirement.key.key_trait()?;
+                let provider_ty = effect_args.iter().find_map(|arg| match &arg.target {
+                    super::EffectArgTarget::Component { path, provider }
+                        if *path == component.path =>
+                    {
+                        Some(provider.provider_ty)
+                    }
+                    _ => None,
+                })?;
+                let goal = super::super::instantiate_trait_self(db, goal, provider_ty);
+                let outcome = prove_outcome(db, solve_cx, goal);
+                Some(RowEvidence {
+                    path: component.path.clone(),
+                    goal,
+                    proof: outcome.evidence(),
+                })
+            })
+            .collect();
+        let evidence = evidence.with_rows(db, rows);
+        self.use_evidence.bounds = Some(BoundEvidence {
+            schema: BoundSchemaId::new(
+                db,
+                BoundOwner::Body(BodyOwner::func_at(db, func, mode)),
+                func_signature(db, func, mode),
+            ),
+            entries: evidence,
+        });
     }
 
     /// Missing dictionaries cannot be reconstructed ordinarily after a lexical
@@ -585,7 +620,7 @@ impl<'db> Callable<'db> {
         let CallableDef::Func(func) = self.callable_def else {
             return Vec::new();
         };
-        let Some(evidence) = self.bound_evidence else {
+        let Some(evidence) = self.use_evidence.bound_proofs() else {
             return Vec::new();
         };
         let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
@@ -598,50 +633,47 @@ impl<'db> Callable<'db> {
     /// Proofs of the assumptions the callee's body is checked under, as the
     /// caller's checked body gives them.
     pub fn bound_evidence(&self) -> Option<EvidenceList<'db>> {
-        self.bound_evidence
+        self.use_evidence.bound_proofs()
     }
 
     /// Replaces the assumptions this call's evidence names, its caller's,
     /// with `bound`'s proofs of them.
-    pub(super) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: EvidenceList<'db>) {
-        self.evidence = self.evidence.map(|evidence| evidence.bind(db, bound));
-        self.bound_evidence = self
-            .bound_evidence
-            .map(|bound_evidence| bound_evidence.bind(db, bound));
+    pub(super) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) {
+        self.use_evidence.bind(db, bound);
+    }
+
+    pub(super) fn qualify_evidence(&mut self, db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) {
+        self.use_evidence.qualify(db, owner);
+    }
+
+    pub fn use_evidence(&self) -> UseEvidence<'db> {
+        self.use_evidence
+    }
+
+    /// Transport an already-selected row component through the existing row
+    /// argument mapping. This does not prove or select the component again.
+    pub(crate) fn supply_row_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        row: RowEvidence<'db>,
+    ) {
+        if let Some(bounds) = &mut self.use_evidence.bounds {
+            let mut rows = bounds.entries.rows(db).clone();
+            if let Some(existing) = rows.iter_mut().find(|existing| existing.path == row.path) {
+                *existing = row;
+            } else {
+                rows.push(row);
+            }
+            bounds.entries = bounds.entries.with_rows(db, rows);
+        }
     }
 
     pub(crate) fn has_deferred_evidence(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.evidence.is_some_and(|proof| proof.has_deferred(db))
-            || self.bound_evidence.is_some_and(|bound| {
-                bound
-                    .entries(db)
-                    .iter()
-                    .flatten()
-                    .any(|proof| proof.has_deferred(db))
-            })
+        self.use_evidence.has_deferred(db)
     }
 
-    /// Close producer-owned ordinary codec leaves without selecting a parent
-    /// again. Generic substitution itself only transports these obligations.
     pub(crate) fn complete_deferred_evidence(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
-        use super::super::evidence::complete_deferred_evidence;
-        if let Some(proof) = self.evidence {
-            self.evidence = Some(complete_deferred_evidence(db, proof)?);
-        }
-        if let Some(bound) = self.bound_evidence {
-            self.bound_evidence = Some(EvidenceList::of(
-                db,
-                bound
-                    .entries(db)
-                    .iter()
-                    .map(|proof| match proof {
-                        Some(proof) => complete_deferred_evidence(db, *proof).map(Some),
-                        None => Some(None),
-                    })
-                    .collect::<Option<Vec<_>>>()?,
-            ));
-        }
-        Some(())
+        self.use_evidence.complete_deferred(db)
     }
 
     /// The trait method the call runs, with its body: from the
@@ -658,7 +690,7 @@ impl<'db> Callable<'db> {
             return None;
         };
         let name = func.name(db).to_opt()?;
-        instantiated_selection(db, self.evidence, solve_cx, inst)?.method(db, name, self.mode)
+        instantiated_selection(db, self.evidence(), solve_cx, inst)?.method(db, name, self.mode)
     }
 
     /// The mode a `mut?` callee is called at; `None` for any other.
@@ -1496,6 +1528,10 @@ impl<'db> Callable<'db> {
                 TraitObligationOutcome::Requeue(obligation) => {
                     pending_obligations.push(obligation);
                 }
+                TraitObligationOutcome::RequeueProgressed(obligation) => {
+                    progressed = true;
+                    pending_obligations.push(obligation);
+                }
             };
         }
 
@@ -1510,6 +1546,11 @@ impl<'db> Callable<'db> {
                         round_progressed = true;
                     }
                     TraitObligationOutcome::Requeue(obligation) => {
+                        pending_obligations.push(obligation);
+                    }
+                    TraitObligationOutcome::RequeueProgressed(obligation) => {
+                        progressed = true;
+                        round_progressed = true;
                         pending_obligations.push(obligation);
                     }
                 };

@@ -2406,7 +2406,11 @@ fn type_choice_read<'db>(
                     if let Some(goal) = callable.trait_inst() {
                         self.goal_in(cx, goal);
                     }
-                    callable.record_bound_evidence(self.db, cx);
+                    let effect_args = capture.specialize(
+                        self.db,
+                        typed.call_effect_args(expr).unwrap_or(&[]).to_vec(),
+                    );
+                    callable.record_bound_evidence(self.db, cx, &effect_args);
                     if let (CallableDef::Func(func), Some(proofs)) =
                         (callable.callable_def(), callable.bound_evidence())
                         && let Ok(subst) = CompleteSubst::for_owner(
