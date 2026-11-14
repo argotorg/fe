@@ -1,7 +1,7 @@
 use crate::backend::Backend;
 use crate::fallback::WithFallbackService;
 use crate::functionality::handlers::{
-    DocReloadExecute, DocReloadRequest, FileChange, FilesNeedDiagnostics, NeedsDiagnostics,
+    DocReloadExecute, DocReloadRequest, FilesNeedDiagnostics, NeedsDiagnostics,
 };
 use crate::logging;
 use crate::lsp_actor::LspActor;
@@ -105,10 +105,17 @@ fn register_shared_handlers(service: &mut LspActorService<Backend>) {
         .handle_request::<FoldingRangeRequest>(folding_range::handle_folding_range)
         // go to declaration
         .handle_request::<GotoDeclaration>(declaration::handle_goto_declaration)
-        .handle_notification::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
-        .handle_notification::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
-        .handle_notification::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
-        .handle_notification::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
+        // The notifications that change a file are mutating handlers that apply
+        // the change themselves, so that a request sent after `didOpen` or
+        // `didChange` sees the new text. A notification is queued at the actor when
+        // it is dispatched, the actor starts one task per message in that order,
+        // and the state lock admits no new reader while a writer waits. A change
+        // handed over as an event from inside a handler would be queued behind the
+        // requests that arrived meanwhile, and one of them could run first.
+        .handle_notification_mut::<DidOpenTextDocument>(handlers::handle_did_open_text_document)
+        .handle_notification_mut::<DidChangeTextDocument>(handlers::handle_did_change_text_document)
+        .handle_notification_mut::<DidChangeWatchedFiles>(handlers::handle_did_change_watched_files)
+        .handle_notification_mut::<DidSaveTextDocument>(handlers::handle_did_save_text_document)
         .handle_notification::<notification::Exit>(handlers::handle_exit)
         .handle_request::<Shutdown>(handlers::handle_shutdown);
 }
@@ -133,9 +140,7 @@ pub(crate) fn setup_service(
 ) -> WithFallbackService<LspActorService<Backend>, Router<()>> {
     let mut lsp_actor_service = LspActorService::with(actor_ref);
 
-    lsp_actor_service
-        .handle_request_mut::<Initialize>(handlers::initialize)
-        .handle_event_mut::<FileChange>(handlers::handle_file_change);
+    lsp_actor_service.handle_request_mut::<Initialize>(handlers::initialize);
     register_shared_handlers(&mut lsp_actor_service);
 
     with_streaming_fallback(lsp_actor_service, client)

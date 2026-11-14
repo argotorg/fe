@@ -45,12 +45,6 @@ impl std::fmt::Display for NeedsDiagnostics {
 }
 
 #[derive(Debug)]
-pub struct FileChange {
-    pub uri: url::Url,
-    pub kind: ChangeKind,
-}
-
-#[derive(Debug)]
 pub enum ChangeKind {
     Open(String),
     Create,
@@ -372,7 +366,7 @@ pub async fn handle_exit(_backend: &Backend, _message: ()) -> Result<(), Respons
 }
 
 pub async fn handle_did_change_watched_files(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidChangeWatchedFilesParams,
 ) -> Result<(), ResponseError> {
     for event in message.changes {
@@ -385,28 +379,27 @@ pub async fn handle_did_change_watched_files(
                 continue;
             }
         };
-        let _ = backend.client.clone().emit(FileChange {
-            uri: event.uri,
-            kind,
-        });
+        if let Err(error) = apply_file_change(backend, event.uri, kind) {
+            warn!("could not apply a watched file change: {}", error.message);
+        }
     }
     Ok(())
 }
 
 pub async fn handle_did_open_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidOpenTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file opened: {:?}", message.text_document.uri);
-    let _ = backend.client.clone().emit(FileChange {
-        uri: message.text_document.uri,
-        kind: ChangeKind::Open(message.text_document.text),
-    });
-    Ok(())
+    apply_file_change(
+        backend,
+        message.text_document.uri,
+        ChangeKind::Open(message.text_document.text),
+    )
 }
 
 pub async fn handle_did_change_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidChangeTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file changed: {:?}", message.text_document.uri);
@@ -424,38 +417,36 @@ pub async fn handle_did_change_text_document(
             message.text_document.uri
         );
     }
-    let _ = backend.client.clone().emit(FileChange {
-        uri: message.text_document.uri,
-        kind: ChangeKind::Edit(Some(last.text.clone())),
-    });
-    Ok(())
+    apply_file_change(
+        backend,
+        message.text_document.uri,
+        ChangeKind::Edit(Some(last.text.clone())),
+    )
 }
 
 pub async fn handle_did_save_text_document(
-    backend: &Backend,
+    backend: &mut Backend,
     message: async_lsp::lsp_types::DidSaveTextDocumentParams,
 ) -> Result<(), ResponseError> {
     debug!("file saved: {:?}", message.text_document.uri);
-    if message.text_document.uri.path().ends_with("/fe.toml") {
-        let _ = backend.client.clone().emit(FileChange {
-            uri: message.text_document.uri,
-            kind: ChangeKind::Edit(None),
-        });
-    }
+    let applied = if message.text_document.uri.path().ends_with("/fe.toml") {
+        apply_file_change(backend, message.text_document.uri, ChangeKind::Edit(None))
+    } else {
+        Ok(())
+    };
     if backend.doc_reload_tx.is_some() {
         let _ = backend.client.clone().emit(DocReloadRequest);
     }
-    Ok(())
+    applied
 }
 
-pub async fn handle_file_change(
+fn apply_file_change(
     backend: &mut Backend,
-    message: FileChange,
+    uri: Url,
+    kind: ChangeKind,
 ) -> Result<(), ResponseError> {
-    if backend.is_virtual_uri(&message.uri) {
-        if matches!(message.kind, ChangeKind::Edit(_))
-            && backend.readonly_warnings.insert(message.uri.clone())
-        {
+    if backend.is_virtual_uri(&uri) {
+        if matches!(kind, ChangeKind::Edit(_)) && backend.readonly_warnings.insert(uri.clone()) {
             let _ = backend.client.clone().show_message(ShowMessageParams {
                 typ: MessageType::ERROR,
                 message: "Built-in library files are read-only in the editor; edits are ignored."
@@ -465,11 +456,11 @@ pub async fn handle_file_change(
         return Ok(());
     }
 
-    let Ok(path) = message.uri.to_file_path() else {
-        error!("Failed to convert URI to path: {:?}", message.uri);
+    let Ok(path) = uri.to_file_path() else {
+        error!("Failed to convert URI to path: {:?}", uri);
         return Err(ResponseError::new(
             ErrorCode::INVALID_PARAMS,
-            format!("Invalid file URI: {}", message.uri),
+            format!("Invalid file URI: {}", uri),
         ));
     };
 
@@ -487,7 +478,7 @@ pub async fn handle_file_change(
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "fe.toml");
 
-    match message.kind {
+    match kind {
         ChangeKind::Open(contents) => {
             debug!("file opened: {:?}", &path_str);
             if let Ok(url) = url::Url::from_file_path(&path) {
@@ -576,7 +567,7 @@ pub async fn handle_file_change(
         }
     }
 
-    let _ = backend.client.emit(NeedsDiagnostics(message.uri));
+    let _ = backend.client.emit(NeedsDiagnostics(uri));
 
     if backend.doc_reload_tx.is_some() {
         let _ = backend.client.emit(DocReloadRequest);
