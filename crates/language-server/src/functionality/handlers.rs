@@ -472,6 +472,15 @@ fn apply_file_change(
         ));
     };
 
+    // Every file of the database has a name, which becomes the name of its module.
+    if path.file_name().is_none() {
+        error!("URI has no file name: {:?}", uri);
+        return Err(ResponseError::new(
+            ErrorCode::INVALID_PARAMS,
+            format!("Not a file: {}", uri),
+        ));
+    }
+
     // Check if this is a fe.toml file
     let is_fe_toml = path
         .file_name()

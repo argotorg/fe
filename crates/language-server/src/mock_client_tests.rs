@@ -2098,3 +2098,34 @@ async fn mock_lsp_reports_files_outside_an_ingot_as_hints() {
     assert!(notes(&member).is_empty());
     client.shutdown().await;
 }
+
+// ---------------------------------------------------------------------------
+// Documents that are not files
+// ---------------------------------------------------------------------------
+
+/// A document whose location has no file name, such as the root directory, is not
+/// a file of the project. It used to be stored, and the next request that mapped
+/// it to a module panicked, because a module takes its name from the file name.
+/// Requests about it are answered like requests about any unknown document.
+#[tokio::test]
+async fn mock_lsp_answers_requests_about_a_document_without_a_file_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    write_workspace_with_outside_files(&root);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+
+    let uri = Url::parse("file:///").unwrap();
+    client.did_open(&uri, "fn f() {}\n");
+    let answer = client.document_symbols(&uri).await;
+    client.shutdown().await;
+    assert!(
+        matches!(
+            &answer,
+            Err(async_lsp::Error::Response(error)) if error.message.contains("File not found")
+        ),
+        "{answer:?}"
+    );
+}
