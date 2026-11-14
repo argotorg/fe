@@ -25,8 +25,9 @@ use smallvec::SmallVec;
 /// - `Ty`: The type representation (e.g., `TyId<'db>`)
 /// - `Var`: The variant representation (e.g., `EnumVariant<'db>`)
 /// - `Idx`: The dynamic index ID type (e.g., `ExprId` in HIR, `ValueId` in MIR)
+/// - `Entry`: The checked indexing dispatch retained by this phase.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum Projection<Ty, Var, Idx> {
+pub enum Projection<Ty, Var, Idx, Entry = ()> {
     /// Struct/tuple field by index.
     Field(usize),
 
@@ -54,8 +55,9 @@ pub enum Projection<Ty, Var, Idx> {
 
     /// The element at a key of a collection whose elements are places
     /// (`core::ops::StateIndex`): a storage map's entry or a storage array's
-    /// element, at a slot the collection computes.
-    Entry(Idx),
+    /// element, at a slot the collection computes. The payload retains the
+    /// checked locate call so consumers do not select its implementation again.
+    Entry(Idx, Entry),
 
     /// Pointer dereference.
     Deref,
@@ -90,26 +92,26 @@ pub enum IndexSource<Idx> {
 /// [Field(0), VariantField { ... }, Field(1)]
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct ProjectionPath<Ty, Var, Idx>(
+pub struct ProjectionPath<Ty, Var, Idx, Entry = ()>(
     // SAFETY: A `SmallVec` owns its elements.
-    #[salsa_value(unsafe(prove(Projection<Ty, Var, Idx>: salsa::SalsaValue)))]
-    SmallVec<Projection<Ty, Var, Idx>, 4>,
+    #[salsa_value(unsafe(prove(Projection<Ty, Var, Idx, Entry>: salsa::SalsaValue)))]
+    SmallVec<Projection<Ty, Var, Idx, Entry>, 4>,
 );
 
-impl<Ty, Var, Idx> Default for ProjectionPath<Ty, Var, Idx> {
+impl<Ty, Var, Idx, Entry> Default for ProjectionPath<Ty, Var, Idx, Entry> {
     fn default() -> Self {
         Self(SmallVec::new())
     }
 }
 
-impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
+impl<Ty, Var, Idx, Entry> ProjectionPath<Ty, Var, Idx, Entry> {
     /// Create an empty projection path.
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a path from a single projection.
-    pub fn from_projection(proj: Projection<Ty, Var, Idx>) -> Self {
+    pub fn from_projection(proj: Projection<Ty, Var, Idx, Entry>) -> Self {
         let mut path = Self::new();
         path.push(proj);
         path
@@ -126,12 +128,12 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
     }
 
     /// Iterate over the projection steps.
-    pub fn iter(&self) -> impl Iterator<Item = &Projection<Ty, Var, Idx>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Projection<Ty, Var, Idx, Entry>> {
         self.0.iter()
     }
 
     /// Push a projection step onto the path.
-    pub fn push(&mut self, proj: Projection<Ty, Var, Idx>) {
+    pub fn push(&mut self, proj: Projection<Ty, Var, Idx, Entry>) {
         self.0.push(proj);
     }
 
@@ -141,6 +143,7 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
         Ty: Clone,
         Var: Clone,
         Idx: Clone,
+        Entry: Clone,
     {
         if self.0.is_empty() {
             None
@@ -160,7 +163,7 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
             Projection::Field(idx) => Some(*idx),
             Projection::VariantField { field_idx, .. } => Some(*field_idx),
             Projection::Index(_)
-            | Projection::Entry(_)
+            | Projection::Entry(..)
             | Projection::Deref
             | Projection::Discriminant => None,
         })
@@ -177,7 +180,7 @@ impl<Ty, Var, Idx> ProjectionPath<Ty, Var, Idx> {
     }
 }
 
-impl<Ty: Clone, Var: Clone, Idx: Clone> ProjectionPath<Ty, Var, Idx> {
+impl<Ty: Clone, Var: Clone, Idx: Clone, Entry: Clone> ProjectionPath<Ty, Var, Idx, Entry> {
     /// Concatenate two paths.
     pub fn concat(&self, other: &Self) -> Self {
         let mut result = self.0.clone();
@@ -197,7 +200,9 @@ impl<Ty: Clone, Var: Clone, Idx: Clone> ProjectionPath<Ty, Var, Idx> {
     }
 }
 
-impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx> {
+impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq, Entry: PartialEq>
+    ProjectionPath<Ty, Var, Idx, Entry>
+{
     /// Check if `self` is a prefix of `other`.
     ///
     /// Returns true if `other` starts with all the steps in `self`.
@@ -220,6 +225,7 @@ impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx>
         Ty: Clone,
         Var: Clone,
         Idx: Clone,
+        Entry: Clone,
     {
         if !prefix.is_prefix_of(self) {
             return None;
@@ -239,6 +245,7 @@ impl<Ty: PartialEq, Var: PartialEq, Idx: PartialEq> ProjectionPath<Ty, Var, Idx>
         Ty: Clone,
         Var: Clone,
         Idx: Clone,
+        Entry: Clone,
     {
         matches!(self.0.first(), Some(Projection::Deref)).then(|| {
             self.without_first()
