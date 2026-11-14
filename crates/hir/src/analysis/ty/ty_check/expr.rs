@@ -1980,7 +1980,60 @@ impl<'db> TyChecker<'db> {
                 && let Some(path) = path.to_opt()
             {
                 match resolve_impl_name(self.db, path, self.env.scope()) {
-                    ImplNameRes::Found(implementation) => Some((path, implementation)),
+                    ImplNameRes::Found(implementation) => {
+                        // A bare value and a named implementation are separate
+                        // meanings, not a priority between namespaces. Resolve
+                        // the ordinary expression name without checking or
+                        // evaluating the value before selecting either one.
+                        if let Some(name) = path.as_ident(self.db) {
+                            let span = binding.value.span(self.body()).into();
+                            let resolved = resolve_ident_expr(
+                                self.db,
+                                &self.env,
+                                path,
+                                span,
+                                &LoweringContext::new(),
+                            );
+                            let value_span = match resolved {
+                                ResolvedPathInBody::Binding(value) => {
+                                    Some(value.def_span(&self.env))
+                                }
+                                ResolvedPathInBody::Reso(value) => self
+                                    .is_with_operand_value(&value)
+                                    .then(|| value.name_span(self.db))
+                                    .flatten(),
+                                ResolvedPathInBody::Diag(diagnostic) => {
+                                    self.push_diag(diagnostic);
+                                    self.env.named_impl_operands.insert(binding.value);
+                                    self.env.type_expr(
+                                        binding.value,
+                                        ExprProp::new(TyId::unit(self.db), false),
+                                    );
+                                    continue;
+                                }
+                                ResolvedPathInBody::NewBinding(_) | ResolvedPathInBody::Invalid => {
+                                    None
+                                }
+                            };
+                            if let Some(value_span) = value_span {
+                                self.push_diag(PathResDiag::Ambiguous(
+                                    binding.value.span(self.body()).into(),
+                                    name,
+                                    vec![
+                                        (implementation.span().into(), false),
+                                        (value_span, false),
+                                    ],
+                                ));
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
+                        }
+                        Some((path, implementation))
+                    }
                     // An implementation whose name is not visible here is not
                     // one of the operand's meanings: a value of the same name
                     // that is visible here is checked as any other operand.
@@ -2000,7 +2053,22 @@ impl<'db> TyChecker<'db> {
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                         continue;
                     }
-                    ImplNameRes::Ambiguous | ImplNameRes::NotFound => None,
+                    ImplNameRes::Ambiguous => {
+                        // An ambiguous implementation name cannot become an
+                        // effect operand merely because selection failed.
+                        self.push_diag(PathResDiag::Ambiguous(
+                            binding.value.span(self.body()).into(),
+                            path.ident(self.db)
+                                .to_opt()
+                                .expect("implementation path identifier"),
+                            Vec::new(),
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    ImplNameRes::NotFound => None,
                 }
             } else {
                 None
