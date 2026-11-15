@@ -1129,3 +1129,19 @@ version = "0.1.0"
         "counter_test should now depend on counter after workspace re-init"
     );
 }
+
+/// A root whose directory does not exist, for example a manifest that an editor
+/// opened before its directory was created, cannot be loaded. It is reported as
+/// a failure and does not panic.
+#[test]
+fn init_ingot_reports_a_root_that_does_not_exist() {
+    let temp = TempDir::new().unwrap();
+    let missing = temp.path().canonicalize().unwrap().join("missing");
+    let url = Url::from_directory_path(&missing).unwrap();
+
+    let mut db = DriverDataBase::default();
+    assert!(
+        init_ingot(&mut db, &url),
+        "loading a root that does not exist was not reported"
+    );
+}
