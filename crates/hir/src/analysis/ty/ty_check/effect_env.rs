@@ -5,7 +5,7 @@ use std::iter;
 
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::effects::{
-    BarrierReason, EffectFamily, EffectForwarder, EffectQuery, EffectQueryMode, EffectWitness,
+    EffectFamily, EffectForwarder, EffectPatternKey, EffectQuery, EffectQueryMode, EffectWitness,
     ForwardedEffectKey, ForwardedTraitKey, KeyedEffectEntry, StoredEffectKey, StoredTraitKey,
     effect_family_for_trait,
     elaborate::{contains_projection_or_invalid_query_state, query_contains_unresolved_inference},
@@ -26,7 +26,6 @@ pub enum FrameLookupResult<'db> {
     KeyedMatched {
         entries: Box<SmallVec<[MatchedKeyedEntry<'db>; 2]>>,
         blocked_by_barrier: bool,
-        barrier_reason: Option<BarrierReason<'db>>,
     },
     KeyedFamily {
         entries: Box<SmallVec<[MatchedKeyedEntry<'db>; 2]>>,
@@ -66,20 +65,17 @@ pub struct EffectFrame<'db> {
 }
 
 impl<'db> EffectFrame<'db> {
-    /// The frame's keyed entries that match `query`, and the reason of a
-    /// barrier among them that blocks it. The frame's own entries shadow the
+    /// The frame's keyed entries that match `query`, and whether a barrier
+    /// among them blocks it. The frame's own entries shadow the
     /// supertraits it implies: those match only when none of its own does.
     fn match_keyed(
         &self,
         query: &EffectQuery<'db>,
         tc: &mut TyChecker<'db>,
-    ) -> (
-        SmallVec<[MatchedKeyedEntry<'db>; 2]>,
-        Option<BarrierReason<'db>>,
-    ) {
+    ) -> (SmallVec<[MatchedKeyedEntry<'db>; 2]>, bool) {
         let family = query.key.clone().family();
         let mut entries = SmallVec::new();
-        let mut barrier_reason = None;
+        let mut blocked = false;
         for family_entries in [&self.keyed_by_family, &self.implied_by_family] {
             for entry in family_entries.get(&family).into_iter().flatten().cloned() {
                 match entry {
@@ -103,18 +99,16 @@ impl<'db> EffectFrame<'db> {
                             }));
                         }
                     }
-                    KeyedEffectEntry::Barrier(barrier) => {
-                        if patterns_overlap(tc.db, &query.key, &barrier.pattern) {
-                            barrier_reason = Some(barrier.reason);
-                        }
+                    KeyedEffectEntry::Barrier(pattern) => {
+                        blocked |= patterns_overlap(tc.db, &query.key, &pattern);
                     }
                 }
             }
-            if !entries.is_empty() || barrier_reason.is_some() {
+            if !entries.is_empty() || blocked {
                 break;
             }
         }
-        (entries, barrier_reason)
+        (entries, blocked)
     }
 
     /// Adds `entry` and, for a trait key, the supertraits the trait implies
@@ -154,7 +148,7 @@ impl<'db> EffectFrame<'db> {
                     ForwardedEffectKey::Type(_) => None,
                 },
             ),
-            KeyedEffectEntry::Barrier(barrier) => (barrier.pattern.clone().family(), None),
+            KeyedEffectEntry::Barrier(pattern) => (pattern.clone().family(), None),
         };
         if let Some((def, args_no_self, assoc_bindings, provider)) = trait_key {
             let args: Vec<_> = iter::once(provider.ty)
@@ -313,16 +307,12 @@ impl<'db> EffectEnv<'db> {
         );
     }
 
-    pub fn insert_barrier(
-        &mut self,
-        family: EffectFamily<'db>,
-        barrier: crate::analysis::ty::effects::EffectBarrier<'db>,
-    ) {
+    pub fn insert_barrier(&mut self, pattern: EffectPatternKey<'db>) {
         self.current_frame_mut()
             .keyed_by_family
-            .entry(family)
+            .entry(pattern.clone().family())
             .or_default()
-            .push(KeyedEffectEntry::Barrier(barrier));
+            .push(KeyedEffectEntry::Barrier(pattern));
     }
 
     pub fn insert_unkeyed(&mut self, binding: ProvidedEffect<'db>) {
@@ -352,12 +342,11 @@ impl<'db> EffectEnv<'db> {
         );
         let mut out = Vec::new();
         for frame in self.frames.iter().rev() {
-            let (entries, barrier_reason) = frame.match_keyed(query, tc);
-            if !entries.is_empty() || barrier_reason.is_some() {
+            let (entries, blocked_by_barrier) = frame.match_keyed(query, tc);
+            if !entries.is_empty() || blocked_by_barrier {
                 out.push(FrameLookupResult::KeyedMatched {
                     entries: Box::new(entries),
-                    blocked_by_barrier: barrier_reason.is_some(),
-                    barrier_reason,
+                    blocked_by_barrier,
                 });
                 break;
             }

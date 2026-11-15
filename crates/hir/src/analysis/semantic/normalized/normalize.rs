@@ -31,7 +31,7 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
-            provider::{AddressSpace, ProviderKind},
+            provider::AddressSpace,
             trait_resolution::PredicateListId,
             ty_check::{BindingAccess, BodyOwner, LocalBinding},
             ty_def::{BorrowKind, CapabilityKind, TyData, TyId},
@@ -46,7 +46,6 @@ use crate::{
 pub enum NormalizeError<'db> {
     MissingValue(SLocalId),
     MissingRoot(SLocalId),
-    MissingProviderAddressSpace(ProviderBinding<'db>),
     InvalidProjection,
     UnresolvedCapabilityConst(TyId<'db>),
     UnsupportedPlaceProjection,
@@ -325,20 +324,13 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         if let Some(root) = self.provider_roots.get(&(binding.clone(), value_ty)) {
             return Ok(*root);
         }
-        let address_space = binding.semantics.address_space.or_else(|| {
-            matches!(binding.semantics.kind, ProviderKind::RootObject)
-                .then_some(AddressSpace::Memory)
-        });
-        let Some(address_space) = address_space else {
-            return Err(NormalizeError::MissingProviderAddressSpace(binding));
-        };
         let root = NRootId::new(self.roots.len());
         self.roots.push(NRoot {
             kind: NRootKind::Provider {
                 binding: binding.clone(),
             },
             ty: value_ty,
-            address_space,
+            address_space: binding.semantics.address_space,
             mutability: crate::analysis::semantic::Mutability::Mutable,
             origin: crate::analysis::semantic::SemOrigin::Body(self.raw.template_owner),
         });

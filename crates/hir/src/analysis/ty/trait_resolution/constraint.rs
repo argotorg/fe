@@ -15,7 +15,7 @@ use crate::analysis::{
         const_ty::{ConstBodyLowering, LoweringContext, RebaseConstUseEnv},
         corelib::resolve_core_trait,
         effects::{
-            EffectKeyCanonMode, EffectKeyKind, canonical_effect_identity_for_binding,
+            EffectKeyKind, canonical_effect_identity_for_binding,
             place_effect_provider_param_index_map,
         },
         fold::TyFoldable,
@@ -68,14 +68,7 @@ pub(crate) fn collect_func_effect_provider_constraints<'db>(
             continue;
         };
 
-        let identity = canonical_effect_identity_for_binding(
-            db,
-            binding,
-            scope,
-            assumptions,
-            None,
-            EffectKeyCanonMode::Solver,
-        );
+        let identity = canonical_effect_identity_for_binding(db, binding, scope, assumptions, None);
 
         match (identity.key_ty, identity.key_trait) {
             (_, Some(inst)) => {

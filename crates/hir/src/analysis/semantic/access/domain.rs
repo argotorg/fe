@@ -121,7 +121,7 @@ impl<'db> Domains<'db> {
     pub fn provider(&mut self, binding: &ProviderBinding<'db>) -> u32 {
         self.intern(
             Some(binding.source.clone()),
-            binding.semantics.address_space,
+            Some(binding.semantics.address_space),
             Some(binding.provider_idx),
         )
     }

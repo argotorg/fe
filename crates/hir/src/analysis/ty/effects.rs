@@ -27,11 +27,11 @@ pub mod model;
 pub mod rows;
 
 pub use model::{
-    BarrierReason, EffectBarrier, EffectFamily, EffectForwarder, EffectPatternKey, EffectQuery,
-    EffectQueryMode, EffectRequirementDecl, EffectRequirementKey, EffectWitness,
-    ForwardedEffectKey, ForwardedTraitKey, ForwardedTypeKey, KeyedEffectEntry, PatternSlot,
-    PatternSlotId, PatternSlotKind, PatternSlots, StoredEffectKey, StoredTraitKey, StoredTypeKey,
-    TraitKeySchema, TraitPatternKey, TypeKeySchema, TypePatternKey, effect_family_for_trait,
+    EffectFamily, EffectForwarder, EffectPatternKey, EffectQuery, EffectQueryMode,
+    EffectRequirementDecl, EffectRequirementKey, EffectWitness, ForwardedEffectKey,
+    ForwardedTraitKey, ForwardedTypeKey, KeyedEffectEntry, PatternSlot, PatternSlotId,
+    PatternSlotKind, PatternSlots, StoredEffectKey, StoredTraitKey, StoredTypeKey, TraitKeySchema,
+    TraitPatternKey, TypeKeySchema, TypePatternKey, effect_family_for_trait,
     effect_family_for_type, forwarded_trait_key_is_well_formed, forwarded_type_key_is_well_formed,
     stored_trait_key_is_rigid, stored_type_key_is_rigid,
     stored_value_contains_implicit_layout_params, stored_value_contains_out_of_scope_params,
@@ -53,13 +53,6 @@ pub(crate) enum ResolvedEffectKey<'db> {
     Row(rows::RowKey<'db>),
     Invalid,
     Other,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EffectKeyCanonMode {
-    Stored,
-    Solver,
-    Compare,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -99,81 +92,24 @@ impl<'db> ResolvedEffectKey<'db> {
     }
 }
 
-pub(crate) fn canonicalize_effect_type_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    ty: TyId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    assoc_evidence: Option<TraitInstId<'db>>,
-    mode: EffectKeyCanonMode,
-) -> TyId<'db> {
-    match mode {
-        EffectKeyCanonMode::Stored => canonicalize_ty_for_mode(
-            db,
-            ty,
-            ConstCanonEnv::new(scope, assumptions, assoc_evidence),
-            ConstCanonMode::Stored,
-        ),
-        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => canonicalize_ty_for_mode(
-            db,
-            ty,
-            ConstCanonEnv::new(scope, assumptions, assoc_evidence),
-            ConstCanonMode::Identity,
-        ),
-    }
-}
-
-pub(crate) fn canonicalize_effect_trait_key<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_key: TraitInstId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    assoc_evidence: Option<TraitInstId<'db>>,
-    mode: EffectKeyCanonMode,
-) -> TraitInstId<'db> {
-    match mode {
-        EffectKeyCanonMode::Stored => canonicalize_trait_inst_for_mode(
-            db,
-            trait_key,
-            ConstCanonEnv::new(scope, assumptions, assoc_evidence),
-            ConstCanonMode::Stored,
-        ),
-        EffectKeyCanonMode::Solver | EffectKeyCanonMode::Compare => {
-            canonicalize_trait_inst_for_mode(
-                db,
-                trait_key,
-                ConstCanonEnv::new(scope, assumptions, assoc_evidence),
-                ConstCanonMode::Identity,
-            )
-        }
-    }
-}
-
 pub(crate) fn canonical_effect_identity_for_binding<'db>(
     db: &'db dyn HirAnalysisDb,
     binding: &crate::core::semantic::EffectRequirement<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     assoc_evidence: Option<TraitInstId<'db>>,
-    mode: EffectKeyCanonMode,
 ) -> CanonicalEffectIdentity<'db> {
+    let normalize_trait =
+        |inst| normalize_effect_identity_trait(db, inst, scope, assumptions, assoc_evidence);
     CanonicalEffectIdentity {
         key_kind: binding.key.kind(),
-        key_ty: binding.key.key_ty().map(|ty| {
-            canonicalize_effect_type_key(db, ty, scope, assumptions, assoc_evidence, mode)
-        }),
-        key_trait: binding.key.key_trait().map(|trait_key| {
-            canonicalize_effect_trait_key(db, trait_key, scope, assumptions, assoc_evidence, mode)
-        }),
+        key_ty: binding
+            .key
+            .key_ty()
+            .map(|ty| normalize_effect_identity_ty(db, ty, scope, assumptions, assoc_evidence)),
+        key_trait: binding.key.key_trait().map(normalize_trait),
         key_row: binding.key.key_row().map(|row| rows::RowKey {
-            inst: canonicalize_effect_trait_key(
-                db,
-                row.inst,
-                scope,
-                assumptions,
-                assoc_evidence,
-                mode,
-            ),
+            inst: normalize_trait(row.inst),
             row: row.row,
         }),
         key_syntax: binding.binding_ty,

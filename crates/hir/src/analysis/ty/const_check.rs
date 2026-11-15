@@ -1,7 +1,7 @@
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
-use crate::analysis::ty::ty_check::{Callable, EffectParamSite, EffectPassMode, TypedBody};
+use crate::analysis::ty::ty_check::{Callable, EffectParamSite, TypedBody};
 use crate::analysis::ty::ty_def::{BorrowKind, InvalidCause};
 use crate::hir_def::{
     Body, CallableDef, Cond, CondId, Expr, ExprId, Func, Partial, Pat, Stmt, StmtId,
@@ -159,7 +159,6 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
             args.iter().any(|arg| {
                 arg.required_mut
                     || arg.key_kind != super::effects::EffectKeyKind::Trait
-                    || arg.pass_mode != EffectPassMode::ByValue
                     || arg.provider.is_some_and(|space| {
                         space != crate::analysis::ty::provider::AddressSpace::Memory
                     })

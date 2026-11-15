@@ -82,7 +82,7 @@ pub contract C {
     ));
     assert_eq!(
         resolved.provider.semantics.address_space,
-        Some(AddressSpace::Storage)
+        AddressSpace::Storage
     );
 }
 

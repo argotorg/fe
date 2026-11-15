@@ -57,7 +57,7 @@ pub enum ProviderKind {
 pub struct ProviderSemantics<'db> {
     pub provider_ty: TyId<'db>,
     pub kind: ProviderKind,
-    pub address_space: Option<AddressSpace>,
+    pub address_space: AddressSpace,
     pub target_ty: Option<TyId<'db>>,
 }
 
@@ -186,7 +186,7 @@ pub fn provider_semantics<'db>(
     ProviderSemantics {
         provider_ty,
         kind,
-        address_space: Some(AddressSpace::Memory),
+        address_space: AddressSpace::Memory,
         target_ty,
     }
 }
@@ -207,7 +207,7 @@ pub fn provider_semantics_for_specialized_call<'db>(
         semantics.target_ty = Some(target_ty);
     }
     // Any provider a call passes is a place, which lies in a space.
-    if address_space.is_some() {
+    if let Some(address_space) = address_space {
         semantics.address_space = address_space;
     }
     semantics
