@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/state_index_pins.fe
 ---
@@ -94,11 +93,16 @@ error[3-0061]: `Split<InStorage>` is state-only
     = `Split<InStorage>` is pinned to storage by its `Pinned` implementation
     = a state-only type lives at its place in storage or transient storage; name it with an access, such as `let m = mut store.balances`, or pass it as a `mut` or view parameter
 
-error[6-0009]: method has stricter bounds than trait
-   ┌─ state_index_pins.fe:51:8
-   │
-51 │     fn locate(self, _ root: u256, _ key: u256) -> Location uses (ctx: Ctx) {
-   │        ^^^^^^ method has stricter bounds than the declared method in the trait: `ctx: Ctx`
+error[6-0024]: method `locate` has incompatible effects
+    ┌─ state_index_pins.fe:51:8
+    │
+ 51 │     fn locate(self, _ root: u256, _ key: u256) -> Location uses (ctx: Ctx) {
+    │        ^^^^^^ expected 0 effects, found 1
+    │
+    ┌─ src/ops.fe:250:8
+    │
+250 │     fn locate(self, _ root: u256, _ key: Self::Key) -> Location
+    │        ------ trait requires these effects
 
 error[6-0029]: a type is pinned to a state space
    ┌─ state_index_pins.fe:30:18

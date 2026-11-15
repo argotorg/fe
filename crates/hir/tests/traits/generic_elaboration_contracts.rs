@@ -213,7 +213,7 @@ fn source_and_full_method_schemas_keep_inherited_keys_in_both_query_orders() {
         let file = db.new_stand_alone(
             Utf8PathBuf::from("method_schema_basis.fe"),
             r#"
-struct K {}
+trait K {}
 trait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }
 fn foreign<Z>() {}
 "#,

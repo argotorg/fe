@@ -41,7 +41,7 @@ pub(crate) fn is_owned_by_schema<'db>(
     schema: ParamSchemaId<'db>,
 ) -> bool {
     ty.as_generic_param(db)
-        .is_some_and(|param| param.owner == schema.owner(db).scope() && !param.is_effect())
+        .is_some_and(|param| param.owner == schema.owner(db).scope())
 }
 
 struct SubstFolder<'a, 'db> {
@@ -171,7 +171,6 @@ impl<'db> TyFolder<'db> for ScopedSubstFolder<'_, 'db> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         if let Some(param) = ty.as_generic_param(db)
             && param.owner == self.owner
-            && !param.is_effect()
             && let Some(arg) = self.args.get(param.idx)
         {
             return *arg;
@@ -314,7 +313,7 @@ mod tests {
         let mut db = HirAnalysisTestDb::default();
         let file = db.new_stand_alone(
             Utf8PathBuf::from("subst_basis.fe"),
-            "struct K {}\ntrait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }",
+            "trait K {}\ntrait T<X> { fn f<Y>(_ extra: Y) uses (k: K) {} }",
         );
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);

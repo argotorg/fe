@@ -1,0 +1,43 @@
+trait Cap {}
+trait Extra {}
+
+struct S {}
+
+trait T {
+    fn f() uses (cap: Cap)
+}
+
+impl T for S {
+    fn f() uses (cap: Cap, extra: Extra) {}
+}
+
+pub struct Store {
+    total: u256,
+}
+
+trait Anything {}
+
+impl<T> Anything for T {}
+
+trait Counter {
+    fn bump(mut self)
+}
+
+struct ExtraType {}
+
+impl Counter for ExtraType {
+    fn bump(mut self) uses (store: mut Store) {
+        store.total += 1
+    }
+}
+
+struct ExtraBlanket {}
+
+// Every type implements `Anything`, so the effect's bound always holds.
+impl Counter for ExtraBlanket {
+    fn bump(mut self) uses (any: Anything) {}
+}
+
+fn call_through<C: Counter>(_ c: mut C) {
+    c.bump()
+}

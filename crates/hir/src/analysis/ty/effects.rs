@@ -117,7 +117,8 @@ pub(crate) fn canonical_effect_identity_for_binding<'db>(
     }
 }
 
-/// Returns a per-effect mapping from effect index → hidden provider generic-arg index.
+/// The index of each effect's provider parameter among the function's
+/// generic arguments: one for each effect whose key is a trait.
 #[salsa::tracked]
 pub fn place_effect_provider_param_index_map<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -252,7 +253,7 @@ where
             .expect("effect key slot has a formal");
         if formal
             .as_generic_param(db)
-            .is_some_and(|param| param.is_effect() || param.is_implicit())
+            .is_some_and(|param| param.is_implicit())
         {
             *arg = formal;
         }

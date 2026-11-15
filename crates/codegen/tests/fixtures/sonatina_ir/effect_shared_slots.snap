@@ -179,8 +179,8 @@ func private %both(nocapture v0.objref<@layout_1>, nocapture v1.objref<@layout_1
         jump block1;
 
     block1:
-        v4.i256 = call %count__g4ad7 v0;
-        v7.i256 = call %count__g9281 v1 v2;
+        v4.i256 = call %impl_trait_Ones__count v0;
+        v7.i256 = call %impl_trait_Tallied__count v1 v2;
         (v8.i256, v9.i1) = uaddo v4 v7;
         br v9 block2 block3;
 
@@ -274,7 +274,7 @@ func private %contract_runtime_root_C() {
         unreachable;
 }
 
-func private %count__g4ad7(noalias nocapture v0.objref<@layout_1>) -> i256 {
+func private %impl_trait_Ones__count(noalias nocapture v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -297,7 +297,7 @@ func private %count__g4ad7(noalias nocapture v0.objref<@layout_1>) -> i256 {
         return v15;
 }
 
-func private %count__g9281(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_1>) -> i256 {
+func private %impl_trait_Tallied__count(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 

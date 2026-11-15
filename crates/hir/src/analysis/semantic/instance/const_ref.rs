@@ -1,8 +1,7 @@
 use super::{
     CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
     SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
-    provisional_provider_idx_for_requirement, resolved_provider_binding_for_instance_effect,
-    row_expansion_for_key,
+    resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
 use crate::{
     analysis::{
@@ -39,7 +38,10 @@ use crate::{
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    core::semantic::{EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding},
+    core::semantic::{
+        EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding,
+        effect_resolutions_for_site,
+    },
     hir_def::{
         CallableDef, Const, Func, GenericParamOwner, HirIngot, IdentId, scope_graph::ScopeId,
     },
@@ -994,7 +996,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         // caller's assumptions, and its ground bounds hold without them. A
         // bound on a caller's parameter is one of the callee instance's own
         // assumptions, so equal calls written in different bodies share one
-        // instance.
+        // instance. A row of a caller's parameter expands as far as the
+        // caller's assumptions select implementations, so it keeps them.
         let empty = PredicateListId::empty_list(db);
         let scope = nominal_func.scope();
         let caller_scope = impl_env.normalization_scope(db);
@@ -1019,7 +1022,15 @@ fn semantic_callee_key_with_assumptions<'db>(
             && effect_args
                 .iter()
                 .filter_map(|arg| arg.instantiated_key_ty.or(arg.provider_target_ty))
-                .all(same_without_caller);
+                .all(same_without_caller)
+            && !nominal_func
+                .effect_requirements(db, callable.mode())
+                .iter()
+                .filter_map(|requirement| requirement.key.key_row())
+                .any(|row| {
+                    let row = Binder::bind(nominal_func.into(), row).instantiate(db, &subst_args);
+                    collect_flags(db, row).contains(TyFlags::HAS_PARAM)
+                });
         (independent, true)
     } else {
         (false, true)
@@ -1170,23 +1181,10 @@ fn resolve_callable_effect_providers<'db>(
 ) -> Vec<EffectProviderSpecialization<'db>> {
     let providers =
         resolve_provider_specializations(db, caller, effect_providers, provider_resolution_mode);
-    let site = EffectParamSite::Func(func, mode);
-    let effect_env = EffectEnvView::new(site);
-    let resolution_by_req = match provider_resolution_mode {
-        ProviderResolutionMode::Final => effect_env
-            .resolutions(db)
-            .into_iter()
-            .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
-            .collect::<FxHashMap<_, _>>(),
-        ProviderResolutionMode::Provisional => effect_env
-            .requirements(db)
-            .into_iter()
-            .filter_map(|requirement| {
-                provisional_provider_idx_for_requirement(db, site, requirement.binding_idx)
-                    .map(|provider_idx| (requirement.binding_idx as usize, provider_idx))
-            })
-            .collect::<FxHashMap<_, _>>(),
-    };
+    let resolution_by_req = effect_resolutions_for_site(db, EffectParamSite::Func(func, mode))
+        .iter()
+        .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
+        .collect::<FxHashMap<_, _>>();
     let provider_by_idx = providers
         .iter()
         .map(|provider| (provider.provider.provider_idx, provider))

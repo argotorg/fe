@@ -2072,19 +2072,6 @@ impl<'db> TyParam<'db> {
             return "_effect".to_string();
         }
 
-        // For effect parameters, show `name: Trait` if possible
-        if self.is_effect() {
-            let name_str = self.name.data(db).to_string();
-            // Attempt to get owning function and retrieve effect key path at this index
-            if let ItemKind::Func(func) = self.owner.item()
-                && let Some(view) = func.effect_params(db).nth(self.idx)
-                && let Some(path) = view.key_path(db)
-                && let Some(trait_ident) = path.ident(db).to_opt()
-            {
-                return format!("{}: {}", name_str, trait_ident.data(db));
-            }
-            return name_str;
-        }
         self.name.data(db).to_string()
     }
 
@@ -2094,10 +2081,6 @@ impl<'db> TyParam<'db> {
 
     pub fn is_normal(&self) -> bool {
         matches!(self.variant, Variant::Normal)
-    }
-
-    pub fn is_effect(&self) -> bool {
-        matches!(self.variant, Variant::Effect)
     }
 
     pub fn is_effect_provider(&self) -> bool {
@@ -2135,18 +2118,6 @@ impl<'db> TyParam<'db> {
             declared_index: None,
             kind,
             variant: Variant::TraitSelf,
-            owner: scope,
-        }
-    }
-
-    /// Create an effect parameter TyParam local to a function body.
-    pub fn effect_param(name: IdentId<'db>, idx: usize, scope: ScopeId<'db>) -> Self {
-        Self {
-            name,
-            idx,
-            declared_index: None,
-            kind: Kind::Star,
-            variant: Variant::Effect,
             owner: scope,
         }
     }
@@ -2216,10 +2187,7 @@ impl<'db> TyParam<'db> {
                 // TyParam.idx includes implicit params, subtract offset to get original idx
                 self.idx - offset
             }
-            Variant::Effect
-            | Variant::EffectProvider
-            | Variant::RowEffectProvider(_)
-            | Variant::Implicit => self.idx,
+            Variant::EffectProvider | Variant::RowEffectProvider(_) | Variant::Implicit => self.idx,
         }
     }
 
@@ -2229,7 +2197,6 @@ impl<'db> TyParam<'db> {
             Variant::Normal => {
                 ScopeId::GenericParam(self.owner.item(), self.original_idx(db) as u16)
             }
-            Variant::Effect => ScopeId::FuncParam(self.owner.item(), self.idx as u16),
             Variant::EffectProvider | Variant::RowEffectProvider(_) | Variant::Implicit => {
                 self.owner
             }
@@ -2241,8 +2208,6 @@ impl<'db> TyParam<'db> {
 enum Variant {
     Normal,
     TraitSelf,
-    /// Effect parameter local to a function `uses` list
-    Effect,
     /// Synthetic generic parameter used to encode type-effect provider domains.
     ///
     /// These are inserted by type lowering for functions that have type effects so that

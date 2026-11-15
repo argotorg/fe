@@ -415,11 +415,11 @@ impl<T: HasRoot> Holder<T> {
         .expect("missing associated function");
     assert_eq!(
         place_effect_provider_param_index_map(&db, needs),
-        &[Some(1), Some(2), Some(3)]
+        &[None, None, Some(1)]
     );
     let params = CallableDef::Func(needs).params(&db);
-    assert_eq!(params.len(), 5);
-    assert!(matches!(params[4].data(&db), TyData::TyParam(param) if param.idx == 4));
+    assert_eq!(params.len(), 3);
+    assert!(matches!(params[2].data(&db), TyData::TyParam(param) if param.idx == 2));
     db.assert_no_diags(top_mod);
 }
 

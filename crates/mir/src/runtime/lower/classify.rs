@@ -2202,7 +2202,7 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     if runtime_abstract_param_ty(db, binding_ty, scope, assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
-            TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
+            TyData::TyParam(param) if param.is_effect_provider()
         )
     {
         RuntimeParamPlan::PassActual
@@ -2690,7 +2690,7 @@ pub(crate) fn runtime_param_class<'db>(
         env.assumptions,
     ) || matches!(
         ty.base_ty(db).data(db),
-        TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
+        TyData::TyParam(param) if param.is_effect_provider()
     ) {
         return actual;
     }
@@ -2783,7 +2783,7 @@ pub(crate) fn desired_runtime_return_plan<'db>(
     if runtime_abstract_param_ty(db, ty, env.scope, env.assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
-            TyData::TyParam(param) if param.is_effect() || param.is_effect_provider()
+            TyData::TyParam(param) if param.is_effect_provider()
         )
     {
         return RuntimeVisibleReturnPlan::PassActual;

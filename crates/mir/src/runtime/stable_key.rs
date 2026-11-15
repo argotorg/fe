@@ -306,36 +306,13 @@ fn trait_list_identity<'db>(
             .join("$"),
         IdentityMode::Symbol => {
             let mut identities = insts
-                .filter(|inst| !trait_inst_is_internal_effect_provider_constraint(db, *inst))
+                .filter(|inst| !trait_inst_mentions_effect_provider_param(db, *inst))
                 .map(|inst| trait_identity(db, inst))
                 .collect::<Vec<_>>();
             identities.sort();
             identities.join("$")
         }
     }
-}
-
-fn trait_inst_is_internal_effect_provider_constraint<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_inst: TraitInstId<'db>,
-) -> bool {
-    trait_inst_mentions_effect_provider_param(db, trait_inst)
-        || trait_inst_is_effect_ref_marker(db, trait_inst)
-}
-
-fn trait_inst_is_effect_ref_marker<'db>(
-    db: &'db dyn HirAnalysisDb,
-    trait_inst: TraitInstId<'db>,
-) -> bool {
-    let trait_def = trait_inst.def(db);
-    let Some(name) = trait_def.name(db).to_opt() else {
-        return false;
-    };
-    trait_def.top_mod(db).ingot(db).kind(db) == IngotKind::Core
-        && name.data(db) == "EffectRef"
-        && module_path_components_for_scope(db, trait_def.scope())
-            .iter()
-            .any(|component| component == "effect_ref")
 }
 
 fn trait_inst_mentions_effect_provider_param<'db>(
