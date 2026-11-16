@@ -364,6 +364,97 @@ const fn chosen() -> u256 {{ with (Discount) {{ via<Box<Item>>() }} }}
 }
 
 #[test]
+fn associated_type_bounds_follow_the_implementation_proof() {
+    values(
+        &format!(
+            r#"{PICKS}
+struct Other {{}}
+impl Pick for Other {{ const fn value() -> u256 {{ 5 }} }}
+struct Wrap<T> {{ t: T }}
+trait Cur {{
+    type Cursor: Pick
+    const fn cvalue() -> u256 {{ Self::Cursor::value() }}
+}}
+impl Cur for Other {{ type Cursor = Item }}
+impl<T: Pick> Cur for Wrap<T> {{ type Cursor = T }}
+const fn via<C: Cur>() -> u256 {{ C::cvalue() }}
+const fn relay<T: Pick>() -> u256 {{ via<Wrap<T>>() }}
+const fn concrete() -> u256 {{ Other::cvalue() }}
+const fn concrete_chosen() -> u256 {{ with (Discount) {{ Other::cvalue() }} }}
+const fn generic() -> u256 {{ via<Wrap<Item>>() }}
+const fn generic_chosen() -> u256 {{ with (Discount) {{ via<Wrap<Item>>() }} }}
+const fn relayed() -> u256 {{ with (Discount) {{ relay<Item>() }} }}
+const fn relayed_tiny() -> u256 {{ with (Tiny) {{ relay<Item>() }} }}
+"#
+        ),
+        &[
+            ("concrete", 100),
+            ("concrete_chosen", 100),
+            ("generic", 100),
+            ("generic_chosen", 70),
+            ("relayed", 70),
+            ("relayed_tiny", 3),
+        ],
+    );
+}
+
+#[test]
+fn named_conditions_on_bounded_associated_types_are_selected() {
+    values(
+        &format!(
+            r#"{PICKS}
+struct Other {{}}
+trait Cur {{ type Cursor: Pick }}
+impl Cur for Other {{ type Cursor = Item }}
+struct Box<T> {{ v: T }}
+trait Total {{ const fn total() -> u256 }}
+impl<T: Cur> Total for Box<T> {{ const fn total() -> u256 {{ 1 }} }}
+impl<T: Cur> Total for Box<T> as Named {{ const fn total() -> u256 {{ 2 }} }}
+const fn ordinary() -> u256 {{ Box<Other>::total() }}
+const fn chosen() -> u256 {{ with (Named) {{ Box<Other>::total() }} }}
+"#
+        ),
+        &[("ordinary", 1), ("chosen", 2)],
+    );
+}
+
+#[test]
+fn implied_bounds_normalized_by_an_equality_still_project() {
+    values(
+        &format!(
+            r#"{PICKS}
+trait Tag {{ const fn tag() -> u256 }}
+impl Tag for u8 {{ const fn tag() -> u256 {{ 1 }} }}
+struct Wrap<T> {{ t: T }}
+trait Cur {{ type Cursor: Tag }}
+impl<T: Tag> Cur for Wrap<T> {{ type Cursor = T }}
+const fn h<C: Cur<Cursor = U>, U>() -> u256 {{ U::tag() }}
+const fn ordinary() -> u256 {{ h<Wrap<u8>, u8>() }}
+const fn chosen() -> u256 {{ with (Discount) {{ h<Wrap<u8>, u8>() }} }}
+"#
+        ),
+        &[("ordinary", 1), ("chosen", 1)],
+    );
+}
+
+#[test]
+fn failed_conditions_on_bounded_associated_types_do_not_fall_back() {
+    let codes = diagnostics(&format!(
+        r#"{PICKS}
+trait Missing {{}}
+trait Cur {{ type Cursor: Pick }}
+impl Cur for Item {{ type Cursor = Item }}
+struct Box<T> {{ v: T }}
+trait Total {{ const fn total() -> u256 }}
+impl<T: Cur> Total for Box<T> {{ const fn total() -> u256 {{ 1 }} }}
+impl<T: Cur + Missing> Total for Box<T> as Named {{ const fn total() -> u256 {{ 2 }} }}
+const fn chosen() -> u256 {{ with (Named) {{ Box<Item>::total() }} }}
+"#
+    ));
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+#[test]
 fn inferred_receiver_keeps_the_lexical_choice() {
     values(
         r#"
