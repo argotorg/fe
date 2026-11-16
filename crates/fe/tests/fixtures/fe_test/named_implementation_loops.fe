@@ -37,7 +37,14 @@ fn total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E {
     sum
 }
 
+// A helper that names the concrete `Item` and declares no `Price` bound keeps
+// the ordinary implementation: only declared bounds receive a choice.
 fn total_price<C: Collection<Item = Item>>(_ xs: C) -> u256 uses C::E {
+    xs.fold(0, |acc, x| acc + x.price())
+}
+
+// A helper that declares the bound receives the choice.
+fn total_bounded<C: Collection<Item = T>, T: Price>(_ xs: C) -> u256 uses C::E {
     xs.fold(0, |acc, x| acc + x.price())
 }
 
@@ -125,7 +132,9 @@ fn adapters() {
 fn generic_helper_with_concrete_collection() {
     let xs: [Item; 3] = [Item {}, Item {}, Item {}]
     assert!(total_price(xs) == 300)
-    assert!(with (Wholesale) { total_price(xs) } == 210)
+    assert!(with (Wholesale) { total_price(xs) } == 300)
+    assert!(total_bounded(xs) == 300)
+    assert!(with (Wholesale) { total_bounded(xs) } == 210)
 }
 
 #[test]
