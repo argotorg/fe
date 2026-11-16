@@ -1077,6 +1077,24 @@ impl Price for Item as V { fn amount(self) -> u256 { 50 } }
 }
 
 #[test]
+fn named_implementations_of_traits_decided_by_presence_are_refused() {
+    for source in [
+        "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item as Copying {}",
+        "use core::ops::Drop\nstruct Token {}\nimpl Drop for Token as Heavy { fn drop(own self) {} }",
+    ] {
+        let codes = diagnostics(source);
+        assert!(codes.contains(&"5-0005".to_string()), "{source}: {codes:?}");
+    }
+    for source in [
+        "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item {}",
+        "use core::ops::Drop\nstruct Token {}\nimpl Drop for Token { fn drop(own self) {} }",
+    ] {
+        let codes = diagnostics(source);
+        assert!(codes.is_empty(), "{source}: {codes:?}");
+    }
+}
+
+#[test]
 fn with_operand_keeps_unambiguous_and_explicit_value_meanings() {
     values(
         r#"

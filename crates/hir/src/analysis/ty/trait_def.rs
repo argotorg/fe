@@ -1013,6 +1013,27 @@ pub(crate) enum NamedOutputMismatch<'db> {
     },
 }
 
+/// The name of the trait of a named implementation when the compiler decides
+/// what the trait means for a type by whether the type implements it, and
+/// never reads which implementation answers: `Copy` decides moves and `Drop`
+/// decides drop glue. No use can choose such an implementation, so it is
+/// refused where it is declared. Traits whose chosen dictionaries the
+/// compiler does carry (`LaneCodec`, `StateIndex`, `StorageKey`) are not listed.
+pub(crate) fn named_presence_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    candidate: ImplementorId<'db>,
+) -> Option<IdentId<'db>> {
+    let def = candidate.trait_(db).def(db);
+    ["core::marker::Copy", "core::ops::Drop"]
+        .into_iter()
+        .any(|path| {
+            super::corelib::resolve_lib_trait_path(db, implementation.scope(), path) == Some(def)
+        })
+        .then(|| def.name(db).to_opt())
+        .flatten()
+}
+
 /// A slot's associated types and effect rows do not depend on which implementation answers it. A named
 /// declaration is compared with every other implementation of the trait,
 /// ordinary or named, whose header overlaps its own, at their overlap and

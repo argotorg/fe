@@ -5106,6 +5106,18 @@ impl<'db> ImplTrait<'db> {
             Ok(implementor) => {
                 let mut diags = Vec::new();
                 if self.selection_name(db).is_some()
+                    && let Some(name) =
+                        crate::analysis::ty::trait_def::named_presence_trait(db, self, implementor)
+                {
+                    diags.push(
+                        TraitLowerDiag::NamedImplementationOfPresenceTrait {
+                            primary: self,
+                            name,
+                        }
+                        .into(),
+                    );
+                }
+                if self.selection_name(db).is_some()
                     && let Some(mismatch) =
                         crate::analysis::ty::trait_def::named_output_mismatch(db, self, implementor)
                 {

@@ -6046,6 +6046,13 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::NamedImplementationOfPresenceTrait { primary, name } => primary_diag(
+                Severity::Error,
+                format!("`{}` cannot have a named implementation", name.data(db)),
+                "the compiler uses whether a type implements it, not a choice made with `with`",
+                primary.span().resolve(db),
+                error_code,
+            ),
             Self::NamedOutputsNeedOrdinary { primary } => primary_diag(
                 Severity::Error,
                 "named associated outputs require an ordinary implementation",
