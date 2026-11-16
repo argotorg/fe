@@ -668,6 +668,37 @@ pub trait Call: EvmCapabilitySeal {
         finish_raw_call(success, mut ret)
     }
 
+    /// Forward the current call to `addr` with `DELEGATECALL` and end it with
+    /// the callee's outcome: return its returndata on success, revert with it
+    /// on failure. This is the fallback of a delegating proxy (OpenZeppelin's
+    /// `Proxy._delegate`).
+    ///
+    /// Unlike copying through `MemBuffer`, `raw_delegatecall` and
+    /// `copy_returndata`, this needs no buffer bookkeeping, and the backend
+    /// can place both copies at the same address.
+    fn forward_delegatecall(mut self, addr: Address, gas: u256) -> ! {
+        let args_len = ops::calldatasize()
+        let args = ptr::alloc_bytes(args_len.downcast_unchecked())
+        unsafe {
+            ops::calldatacopy(dest: args, offset: 0, len: args_len)
+            let success = ops::delegatecall(
+                gas: gas,
+                addr: addr.inner,
+                args_offset: args,
+                args_len: args_len,
+                ret_offset: args,
+                ret_len: 0,
+            )
+            let ret_len = ops::returndatasize()
+            let ret = ptr::alloc_bytes(ret_len.downcast_unchecked())
+            ops::returndatacopy(dest: ret, offset: 0, len: ret_len)
+            if success == 0 {
+                ops::revert(offset: ret, len: ret_len)
+            }
+            ops::return_data(offset: ret, len: ret_len)
+        }
+    }
+
     /// `CALL` with pre-encoded calldata without bubbling failure.
     ///
     /// The returned owner contains the complete success or revert payload.
