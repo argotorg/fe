@@ -2031,6 +2031,35 @@ impl<'db> TyChecker<'db> {
                                 );
                                 continue;
                             }
+                        } else if let Ok(value) = crate::analysis::name_resolution::resolve_path(
+                            self.db,
+                            path,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                            true,
+                        ) && self.is_with_operand_value(&value)
+                            && value.is_visible_from(self.db, self.env.scope())
+                        {
+                            // A qualified path is classified like a bare name:
+                            // a value of the same path is a second meaning,
+                            // and neither is chosen silently.
+                            let name = path
+                                .ident(self.db)
+                                .to_opt()
+                                .expect("implementation path identifier");
+                            let mut candidates = vec![(implementation.span().into(), false)];
+                            candidates.extend(value.name_span(self.db).map(|span| (span, false)));
+                            self.push_diag(PathResDiag::Ambiguous(
+                                binding.value.span(self.body()).into(),
+                                name,
+                                candidates,
+                            ));
+                            self.env.named_impl_operands.insert(binding.value);
+                            self.env.type_expr(
+                                binding.value,
+                                ExprProp::new(TyId::unit(self.db), false),
+                            );
+                            continue;
                         }
                         Some((path, implementation))
                     }

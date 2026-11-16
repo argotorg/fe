@@ -1028,6 +1028,25 @@ fn with_operand_rejects_a_value_and_named_impl_with_the_same_bare_name() {
 }
 
 #[test]
+fn with_operand_rejects_a_value_and_named_impl_with_the_same_qualified_path() {
+    let codes = diagnostics(
+        r#"
+mod m {
+    pub struct Store { pub n: u256 }
+    pub trait Price { fn amount(self) -> u256 }
+    impl Price for Store { fn amount(self) -> u256 { 100 } }
+    pub impl Price for Store as Cheap { fn amount(self) -> u256 { 70 } }
+    pub const Cheap: Store = Store { n: 5 }
+}
+use m::{Store, Price}
+fn read() -> u256 uses (s: Store) { s.n }
+fn outer() -> u256 uses (s: Store) { with (m::Cheap) { read() } }
+"#,
+    );
+    assert!(codes.contains(&"2-0004".to_string()), "{codes:?}");
+}
+
+#[test]
 fn with_operand_keeps_unambiguous_and_explicit_value_meanings() {
     values(
         r#"

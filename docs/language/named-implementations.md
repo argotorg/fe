@@ -17,10 +17,10 @@ const fn chosen() -> u256 { with (Wholesale) { price<Item>() } }
 implicit selection. Its name is private unless declared with `pub impl`;
 normal lexical scopes, imports and module visibility apply to the name.
 Implementation names have their own namespace, so a name can also denote a
-value. A bare `with (Name)` whose name is both an implementation and a value
-in scope, such as a constant or a local binding, is rejected as ambiguous. An
-implementation whose name is not visible where the operand is written does
-not hide a visible value of the same name.
+value. A `with (Name)` or `with (m::Name)` whose path is both an implementation
+and a value in scope, such as a constant or a local binding, is rejected as
+ambiguous. An implementation whose name is not visible where the operand is
+written does not hide a visible value of the same name.
 A local named implementation inherits its enclosing generic parameters; its
 explicit parameters follow them and can be supplied as `Name<Args>`.
 
