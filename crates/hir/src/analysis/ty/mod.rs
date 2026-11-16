@@ -335,6 +335,8 @@ fn walk<'db>(
     enum Domain {
         Type,
         Val,
+        /// The names of named trait implementations.
+        Impl,
     }
 
     let mut defs = FxHashMap::<(Domain, IdentId<'db>), SmallVec<[ItemKind<'db>; 2]>>::default();
@@ -352,11 +354,13 @@ fn walk<'db>(
                 | ItemKind::TypeAlias(_)
                 | ItemKind::Trait(_) => Domain::Type,
 
+                // Only a named implementation has a name here.
+                ItemKind::ImplTrait(_) => Domain::Impl,
+
                 ItemKind::TopMod(_)
                 | ItemKind::StaticAssert(_)
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
-                | ItemKind::ImplTrait(_)
                 | ItemKind::Body(_) => continue,
             };
             defs.entry((domain, item.name(db).unwrap()))

@@ -946,6 +946,17 @@ pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }
 
+/// The span of the name that two definitions share. A named trait
+/// implementation is named by its selection name.
+fn conflict_name_span<'db>(item: &crate::hir_def::ItemKind<'db>) -> DynLazySpan<'db> {
+    match item {
+        crate::hir_def::ItemKind::ImplTrait(implementation) => {
+            implementation.span().selection_name().into()
+        }
+        item => item.name_span().unwrap(),
+    }
+}
+
 impl DiagnosticVoucher for DefConflictError<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let mut items = self.0.iter();
@@ -958,13 +969,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
                 let mut subs = vec![SubDiagnostic::new(
                     LabelStyle::Primary,
                     format!("`{name}` is defined here"),
-                    first.name_span().unwrap().resolve(db),
+                    conflict_name_span(first).resolve(db),
                 )];
                 subs.extend(items.map(|item| {
                     SubDiagnostic::new(
                         LabelStyle::Secondary,
                         format!("`{name}` is redefined here"),
-                        item.name_span().unwrap().resolve(db),
+                        conflict_name_span(item).resolve(db),
                     )
                 }));
                 subs

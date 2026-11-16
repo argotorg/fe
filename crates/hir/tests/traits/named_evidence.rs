@@ -1047,6 +1047,36 @@ fn outer() -> u256 uses (s: Store) { with (m::Cheap) { read() } }
 }
 
 #[test]
+fn duplicate_implementation_names_are_refused_at_declaration() {
+    let codes = diagnostics(
+        r#"
+struct Item {}
+trait Price { fn amount(self) -> u256 }
+impl Price for Item { fn amount(self) -> u256 { 100 } }
+impl Price for Item as W { fn amount(self) -> u256 { 70 } }
+impl Price for Item as W { fn amount(self) -> u256 { 60 } }
+"#,
+    );
+    assert!(codes.contains(&"3-0100".to_string()), "{codes:?}");
+    // One name in two modules, and an implementation name equal to a value
+    // name, are separate meanings.
+    let codes = diagnostics(
+        r#"
+struct Item {}
+trait Price { fn amount(self) -> u256 }
+impl Price for Item as W { fn amount(self) -> u256 { 70 } }
+mod other {
+    use ingot::{Item, Price}
+    impl Price for Item as W { fn amount(self) -> u256 { 60 } }
+}
+const V: u256 = 1
+impl Price for Item as V { fn amount(self) -> u256 { 50 } }
+"#,
+    );
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+#[test]
 fn with_operand_keeps_unambiguous_and_explicit_value_meanings() {
     values(
         r#"
