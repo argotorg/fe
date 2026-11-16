@@ -81,6 +81,11 @@ no supertraits. Calls, implementation methods and associated-constant bodies
 receive projections of those actual prerequisite dictionaries. A constant
 default cannot bypass a disagreement that would reject the equivalent call.
 
+A bound that a trait declares on an associated type, such as `type Cursor: Copy`,
+is implied in the same way: its dictionary comes from the proof of the
+implementation that defines the type, made where that implementation is
+declared, with the actual dictionaries of its conditions.
+
 ## Opening the ordinary implementation
 
 A named implementation's methods see their own implementation. A wrapper can

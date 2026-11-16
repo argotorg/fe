@@ -965,10 +965,32 @@ pub(crate) fn implied_bound_evidence<'db>(
     let subst =
         CompleteSubst::for_owner(db, implementation.into(), instantiated.params(db).clone())
             .ok()?;
-    let roots = PredicateListId::new(db, vec![selected.trait_inst(db)]).extend_all_bounds(db);
-    let declaration_goal = roots.list(db).iter().copied().find(|&candidate| {
-        substitute_complete(db, candidate, &subst).is_ok_and(|candidate| candidate == goal)
-    })?;
+    // `goal` is in the coordinates of the callee's signature, whose implied
+    // bounds come from a trait bound without associated-type definitions: a
+    // bound that a trait declares on an associated type names the
+    // projection, `<[u256; 3] as Collection>::Cursor: Copy`. The trait
+    // instance carrying this implementation's definitions rewrites that
+    // bound to the defined type (`usize: Copy`), and `extend_all_bounds`
+    // drops it when the type is concrete. So the bounds implied by the
+    // header alone are searched as well, and when no candidate is equal,
+    // candidates are compared after normalization. Associated types agree
+    // across implementations, so normalization reads no choice. The first
+    // search is the previous one, so a goal found before is found the same.
+    let instantiate = |candidate| substitute_complete(db, candidate, &subst).ok();
+    let defined = PredicateListId::new(db, vec![selected.trait_inst(db)]).extend_all_bounds(db);
+    let header = PredicateListId::new(db, vec![selected.trait_(db)]).extend_all_bounds(db);
+    let candidates = || defined.list(db).iter().chain(header.list(db)).copied();
+    let declaration_goal = candidates()
+        .find(|&candidate| instantiate(candidate) == Some(goal))
+        .or_else(|| {
+            let scope = implementation.scope();
+            let normalized =
+                |inst| normalize_trait_inst_preserving_validity(db, inst, scope, assumptions);
+            let target = normalized(goal);
+            candidates().find(|&candidate| {
+                instantiate(candidate).is_some_and(|candidate| normalized(candidate) == target)
+            })
+        })?;
     let declared = PredicateListId::new(db, vec![declaration_goal]);
     let proofs = basis_proofs(
         db,

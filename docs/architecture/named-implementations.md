@@ -98,3 +98,6 @@ premise can change when the element becomes packed.
   representatives and are not compared.
 - There are no evidence values, `prove` expressions or constraint kinds in
   the language.
+- Inside a block, a generic function whose own bound fixes a bounded associated
+  type to a concrete type (`C: Collection<Cursor = usize>`) is refused, because
+  that bound's implied slot is not kept in the function's assumptions.
