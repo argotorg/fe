@@ -3989,6 +3989,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "tstorptr_struct_field",
     "tuple_return_abi_params",
     "tuple_struct",
+    "typed_call_returns",
     "typed_calls",
     "unchecked_signed_negation",
     "unchecked_storage_compound_assignment",
