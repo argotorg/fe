@@ -769,6 +769,12 @@ pub enum BodyDiag<'db> {
         goal: TraitInstId<'db>,
     },
 
+    /// A bare `with` operand that names no implementation and no value.
+    UnknownWithOperand {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
+    },
+
     ReturnedTypeMismatch {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
@@ -1535,7 +1541,7 @@ impl<'db> BodyDiag<'db> {
             Self::RecordFieldNotFound { .. } => 9,
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
-            Self::UndefinedVariable(..) => 12,
+            Self::UndefinedVariable(..) | Self::UnknownWithOperand { .. } => 12,
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,

@@ -1974,6 +1974,7 @@ impl<'db> TyChecker<'db> {
         // The keys this `with` provides, each with its binding's span.
         let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
         let outer_choices = self.env.choices;
+        let mut ambiguous_opening = false;
         // The implementations this `with` lists, each with its operand's span.
         let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
         // The conditions of each opening of this list, with the opening's
@@ -2010,6 +2011,7 @@ impl<'db> TyChecker<'db> {
                                     .then(|| value.name_span(self.db))
                                     .flatten(),
                                 ResolvedPathInBody::Diag(diagnostic) => {
+                                    ambiguous_opening = true;
                                     self.push_diag(diagnostic);
                                     self.env.named_impl_operands.insert(binding.value);
                                     self.env.type_expr(
@@ -2023,6 +2025,7 @@ impl<'db> TyChecker<'db> {
                                 }
                             };
                             if let Some(value_span) = value_span {
+                                ambiguous_opening = true;
                                 self.push_diag(PathResDiag::Ambiguous(
                                     binding.value.span(self.body()).into(),
                                     name,
@@ -2047,6 +2050,7 @@ impl<'db> TyChecker<'db> {
                         ) && self.is_with_operand_value(&value)
                             && value.is_visible_from(self.db, self.env.scope())
                         {
+                            ambiguous_opening = true;
                             // A qualified path is classified like a bare name:
                             // a value of the same path is a second meaning,
                             // and neither is chosen silently.
@@ -2090,6 +2094,7 @@ impl<'db> TyChecker<'db> {
                         continue;
                     }
                     ImplNameRes::Ambiguous => {
+                        ambiguous_opening = true;
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
@@ -2099,6 +2104,30 @@ impl<'db> TyChecker<'db> {
                                 .expect("implementation path identifier"),
                             Vec::new(),
                         ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    // A bare name that is neither an implementation nor a
+                    // value is reported once, as a `with` operand.
+                    ImplNameRes::NotFound
+                        if path.as_ident(self.db).is_some()
+                            && matches!(
+                                resolve_ident_expr(
+                                    self.db,
+                                    &self.env,
+                                    path,
+                                    binding.value.span(self.body()).into(),
+                                    &LoweringContext::new(),
+                                ),
+                                ResolvedPathInBody::NewBinding(_)
+                            ) =>
+                    {
+                        self.push_diag(BodyDiag::UnknownWithOperand {
+                            primary: binding.value.span(self.body()).into(),
+                            name: path.as_ident(self.db).expect("an identifier path"),
+                        });
                         self.env.named_impl_operands.insert(binding.value);
                         self.env
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
@@ -2387,6 +2416,15 @@ impl<'db> TyChecker<'db> {
                     });
                 }
             }
+        }
+
+        if ambiguous_opening {
+            // An operand with two meanings leaves the block's meaning open:
+            // its body is not checked, so that it reports nothing the operand
+            // would have provided.
+            self.env.effect_env_mut().pop_frame();
+            self.env.choices = outer_choices;
+            return ExprProp::invalid(self.db);
         }
 
         let result = if result_discarded {

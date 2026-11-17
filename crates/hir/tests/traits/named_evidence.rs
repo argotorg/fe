@@ -1263,6 +1263,43 @@ pub fn f() -> u256 {
 }
 
 #[test]
+fn with_operands_that_name_nothing_or_two_meanings_are_reported_once() {
+    let unknown =
+        format!("{PICKS}\nconst fn run() -> u256 {{ with (Nope) {{ Item::value() }} }}\n");
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("unknown_with_operand.fe".into(), &unknown);
+    let (module, _) = db.top_mod(file);
+    let complete = fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diagnostic| diagnostic.to_complete(&db))
+        .collect::<Vec<_>>();
+    assert_eq!(complete.len(), 1, "{complete:?}");
+    assert_eq!(complete[0].error_code.to_string(), "8-0012");
+    assert_eq!(
+        complete[0].message,
+        "no implementation or value named `Nope` is in scope"
+    );
+    // The body of a `with` whose operand has two meanings is not checked, so
+    // it reports no missing effect that the value would have provided.
+    let codes = diagnostics(
+        r#"
+mod m {
+    pub struct Store { pub n: u256 }
+    pub trait Price { fn amount(self) -> u256 }
+    impl Price for Store { fn amount(self) -> u256 { 100 } }
+    pub impl Price for Store as Cheap { fn amount(self) -> u256 { 70 } }
+    pub const Cheap: Store = Store { n: 5 }
+}
+use m::{Store, Price}
+fn read() -> u256 uses (s: Store) { s.n }
+fn qualified() -> u256 { with (m::Cheap) { read() } }
+"#,
+    );
+    assert_eq!(codes, vec!["2-0004".to_string()]);
+}
+
+#[test]
 fn named_implementations_of_traits_decided_by_presence_are_refused() {
     for source in [
         "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item as Copying {}",

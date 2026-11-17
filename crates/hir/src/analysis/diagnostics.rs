@@ -3765,6 +3765,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::UnknownWithOperand { primary, name } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "no implementation or value named `{}` is in scope",
+                    name.data(db)
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "a `with` operand names an implementation, such as `Name`, `Name<Args>` or `<Type as Trait>`, or a value that provides an effect".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::WithEffectTypeUnsatisfied {
                 primary,
                 key,
