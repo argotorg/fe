@@ -9,7 +9,7 @@ use hir::{
     core::semantic::reference::typed_body_for_body,
     hir_def::{CallableDef, Expr, Func, ItemKind, Partial, TopLevelMod},
     lower::map_file_to_mod,
-    span::LazySpan,
+    span::{HirOrigin, LazySpan, body_source_map},
 };
 
 pub async fn handle_signature_help(
@@ -63,11 +63,17 @@ fn find_signature_at_cursor<'db>(
             _ => None,
         })?;
     let typed_body = typed_body_for_body(db, body)?;
+    let source_map = body_source_map(db, body);
 
     // Find the call whose argument list holds the cursor and whose callee the
     // type checker resolved to a function. A call is lowered after its
     // arguments, so the first one found is the innermost.
     for (expr_id, expr_data) in body.exprs(db).iter() {
+        // A call a macro such as `format!` expands to isn't written in the
+        // source, and its spans are the macro's.
+        let HirOrigin::Raw(_) = source_map.expr_map.node_to_source[expr_id] else {
+            continue;
+        };
         let span = expr_id.span(body);
         // A method call's receiver is its first parameter, `self`, so its
         // arguments start at the second.
@@ -365,6 +371,32 @@ fn f() {
                 "fn plain(_ a: i32, _ b: i32) -> i32 {{\n    a\n}}\n\nfn f() {{\n    let _ {unclosed}\n}}\n"
             );
             check(&code, unclosed, Some((plain, Some(active))));
+        }
+    }
+
+    /// A call written in a macro's arguments has signature help, but the
+    /// calls the macro expands to don't, and neither has the macro's own
+    /// argument list.
+    #[test]
+    fn signature_help_in_macros() {
+        let plain = "fn plain(a: i32, b: i32) -> i32";
+        let code = "fn plain(_ a: i32, _ b: i32) -> i32 {
+    a
+}
+
+fn f() {
+    let _ = format!(plain(1, 2))
+    println!(plain(3, 4))
+}
+";
+        for (needle, expected) in [
+            ("format!(plain(1, ", Some((plain, Some(1)))),
+            ("println!(plain(3, ", Some((plain, Some(1)))),
+            ("format!(", None),
+            ("println!(", None),
+            ("format!(plain(1, 2)", None),
+        ] {
+            check(code, needle, expected);
         }
     }
 }
