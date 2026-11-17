@@ -550,20 +550,14 @@ fn mul_add(_ limbs: MemArray<u256>, used: usize, base: u256, factor: u256, adden
     k
 }
 
+// `value` is a remainder modulo 58 at the only call site.
 fn base58_digit(_ value: u8) -> u8 {
-    if value < 9 {
-        value + 49
-    } else if value < 17 {
-        value + 56
-    } else if value < 22 {
-        value + 57
-    } else if value < 33 {
-        value + 58
-    } else if value < 44 {
-        value + 64
-    } else {
-        value + 65
-    }
+    // Pack each half of the alphabet with its first digit in the low byte.
+    // value >> 5 is 0 or 1, selecting the second half without a branch.
+    let first: u256 = 0x595857565554535251504e4d4c4b4a4847464544434241393837363534333231
+    let difference: u256 = 0x595857565554292b292738383838383937292b29282828515f5153515751536b
+    let alphabet = first ^ difference.wrapping_mul(value as u256 >> 5)
+    (alphabet >> ((value as u256 & 31) * 8)).downcast_truncate()
 }
 
 // Inverse of `base58_digit`, 58 for a byte outside the alphabet (`0`, `I`,
