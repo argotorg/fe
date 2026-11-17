@@ -1,0 +1,78 @@
+// Exercise every integer width and canonical encoding boundary.
+use core::hint::black_box
+use std::evm::rlp
+use core::ptr::MemBuffer
+use std::abi::Bytes
+
+#[test]
+fn round_trip_every_integer_byte_length() {
+    for n in 0 .. 33 {
+        let top = if n == 32 {
+            u256::max()
+        } else {
+            (1 << (n as u256 * 8)) - 1
+        }
+        let value = black_box(top)
+        let encoded = rlp::encode_uint(value)
+        let result = rlp::decode(encoded.span()).unwrap().as_uint(encoded.span()).unwrap()
+        assert!(result == value)
+        if n == 0 {
+            assert!(encoded.len() == 1 && encoded.byte_at(0) == 0x80)
+        } else {
+            assert!(encoded.len() == n + 1)
+            assert!(encoded.byte_at(0) as usize == 0x80 + n)
+            for i in 1 .. n + 1 {
+                assert!(encoded.byte_at(i) == 0xff)
+            }
+        }
+        if n > 0 {
+            let value = black_box(1 << ((n - 1) as u256 * 8))
+            let encoded = rlp::encode_uint(value)
+            assert!(
+                rlp::decode(encoded.span()).unwrap().as_uint(encoded.span()).unwrap() == value,
+            )
+        }
+    }
+}
+#[test]
+fn noncanonical_values_still_rejected() {
+    let leading_zero = Bytes::from_word_prefix(word: 0x820001 << 232, len: 3)
+    assert!(
+        rlp::decode(leading_zero.span()).unwrap().as_uint(leading_zero.span()).is_none(),
+    )
+    let short_long_form = Bytes::from_word_prefix(word: 0x8101 << 240, len: 2)
+    assert!(rlp::decode(short_long_form.span()).is_none())
+    let list = Bytes::from_word_prefix(word: 0xc0 << 248, len: 1)
+    assert!(
+        rlp::decode(list.span()).unwrap().as_uint(list.span()).is_none(),
+    )
+    let oversized = rlp::encode_bytes(MemBuffer::new(33).span())
+    assert!(
+        rlp::decode(oversized.span()).unwrap().as_uint(oversized.span()).is_none(),
+    )
+}
+
+#[test]
+fn integer_reads_ignore_bytes_outside_the_payload() {
+    for n in 1 .. 33 {
+        // Use a nonzero suffix to catch an unmasked word load, and an
+        // unaligned input to exercise the native and WASM implementations.
+        var buffer = MemBuffer::new(n + 35)
+        buffer[3] = (0x80 + n).downcast_unchecked()
+        for i in 4 .. n + 4 {
+            buffer[i] = 0xff
+        }
+        for i in n + 4 .. n + 35 {
+            buffer[i] = 0xa5
+        }
+        let input = buffer.span().slice(offset: 3, len: n + 1)
+        let expected = if n == 32 {
+            u256::max()
+        } else {
+            (1 << (n as u256 * 8)) - 1
+        }
+        assert!(
+            rlp::decode(input).unwrap().as_uint(input).unwrap() == expected,
+        )
+    }
+}
