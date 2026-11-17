@@ -1,0 +1,65 @@
+use core::abi::DynString
+use core::ptr::{MemBuffer, MemSpan}
+use core::text::Text
+use core::hint::black_box
+fn check(_ needle: MemBuffer, _ span: MemSpan, _ offset: usize, _ expected: bool) {
+    let offset = black_box(offset)
+    let dyn = DynString::from_payload(source: needle.span())
+    assert!(needle.text_matches_at(span, offset) == expected)
+    assert!(needle.span().text_matches_at(span, offset) == expected)
+    assert!(dyn.text_matches_at(span, offset) == expected)
+}
+#[test]
+fn all_lengths_alignments_and_mismatch_positions() {
+    for len in 0 .. 98 {
+        var backing = MemBuffer::new(len + 20)
+        var needle = MemBuffer::new(len)
+        for i in 0 .. len {
+            needle[i] = black_box(0x80 as u8)
+        }
+        for i in 0 .. len + 20 {
+            backing[i] = 0xff
+        }
+        for offset in [0, 1, 3, 9] {
+            for i in 0 .. len {
+                backing[offset + i] = 0x80
+            }
+            check(needle, backing.span(), offset, true)
+            for at in 0 .. len {
+                backing[offset + at] = 0x7f
+                check(needle, backing.span(), offset, false)
+                backing[offset + at] = 0x80
+            }
+            backing[offset + len] = 0x81
+            check(needle, backing.span(), offset, true)
+        }
+    }
+}
+#[test]
+fn searches_and_prefix_suffix() {
+    for len in [1, 2, 15, 16, 31, 32, 33, 63, 64, 65] {
+        var needle = MemBuffer::new(len)
+        var hay = MemBuffer::new(len + 5)
+        for i in 0 .. len {
+            needle[i] = b'a'
+        }
+        for i in 0 .. len + 5 {
+            hay[i] = b'a'
+        }
+        needle[len - 1] = b'z'
+        hay[len + 4] = b'z'
+        let dyn = DynString::from_payload(source: needle.span())
+        assert!(hay.span().index_of(needle).unwrap() == 5)
+        assert!(hay.span().index_of(needle.span()).unwrap() == 5)
+        assert!(hay.span().index_of(dyn).unwrap() == 5)
+        assert!(!hay.span().starts_with(dyn))
+        assert!(hay.span().ends_with(dyn))
+        hay[len + 4] = b'x'
+        assert!(hay.span().index_of(dyn).is_none())
+    }
+}
+#[test]
+fn empty_pattern_preserves_matches_at_arbitrary_offsets() {
+    let empty = MemBuffer::new(0)
+    check(empty, empty.span(), usize::max(), true)
+}

@@ -69,16 +69,35 @@ impl<const N: usize> Text for String<N> {
 impl Text for DynString {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self.span(), span, offset)
+    }
 }
 
 impl Text for MemSpan {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self, span, offset)
+    }
 }
 
 impl Text for MemBuffer {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self[index] }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self.span(), span, offset)
+    }
+}
+
+fn span_matches_at(_ pattern: MemSpan, _ span: MemSpan, _ offset: usize) -> bool {
+    let len = pattern.len()
+    if len == 0 { return true }
+    // Most unsuccessful search positions differ immediately; keep that
+    // early exit before comparing whole words and the exact partial tail.
+    if pattern.byte_at(0) != span.byte_at(offset) { return false }
+    if len == 1 { return true }
+    ptr::bytes_equal(pattern, span.slice(offset, len))
 }
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
