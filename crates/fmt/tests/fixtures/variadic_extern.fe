@@ -1,0 +1,6 @@
+extern {
+    fn printf( _ format:*u8 , ... )->i32
+    fn open(_ path: *u8, _ flags: i32, ...,) -> i32
+    fn snprintf(_ buffer_that_receives_the_text: *u8, _ size_of_that_buffer: usize, _ format: *u8, ...) -> i32
+    fn misplaced(..., _ x: i32)
+}

@@ -62,6 +62,9 @@ pub enum SyntaxKind {
     /// `..`
     #[token("..")]
     Dot2,
+    /// `...`
+    #[token("...")]
+    Dot3,
     /// `,`
     #[token(",")]
     Comma,
@@ -657,6 +660,7 @@ impl SyntaxKind {
             SyntaxKind::SemiColon => "`;`",
             SyntaxKind::Dot => "`.`",
             SyntaxKind::Dot2 => "`..`",
+            SyntaxKind::Dot3 => "`...`",
             SyntaxKind::Comma => "`,`",
             SyntaxKind::Arrow => "`->`",
             SyntaxKind::FatArrow => "`=>`",
@@ -898,6 +902,7 @@ impl SyntaxKind {
                 | SyntaxKind::SemiColon
                 | SyntaxKind::Dot
                 | SyntaxKind::Dot2
+                | SyntaxKind::Dot3
                 | SyntaxKind::Comma
                 | SyntaxKind::Arrow
                 | SyntaxKind::FatArrow

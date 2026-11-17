@@ -124,6 +124,10 @@ impl super::Parse for FnParamScope {
             parse_type(parser, None)?;
             return Ok(());
         }
+        // `...`: the arguments a C variadic function takes after the others.
+        if parser.bump_if(SyntaxKind::Dot3) {
+            return Ok(());
+        }
         let has_mut = parser.bump_if(SyntaxKind::MutKw);
         let has_maybe_mut = !has_mut && parser.bump_if(SyntaxKind::MaybeMutKw);
         let has_var = !has_mut && !has_maybe_mut && parser.bump_if(SyntaxKind::VarKw);

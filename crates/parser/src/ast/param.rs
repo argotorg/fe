@@ -70,6 +70,12 @@ impl FuncParam {
         support::token(self.syntax(), SK::Dot2)
     }
 
+    /// Returns the `...` that stands for a C variadic function's extra
+    /// arguments, a parameter of its own.
+    pub fn variadic_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Dot3)
+    }
+
     /// Returns the pattern a parameter destructures with instead of a name.
     /// `(a, b)` in `_ (a, b): (u256, u256)`.
     pub fn pat(&self) -> Option<super::Pat> {

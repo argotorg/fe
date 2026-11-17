@@ -205,6 +205,8 @@ module.exports = grammar({
     parameter: $ => choice(
       // spread parameter: `..A`, the parameters a shape lists
       seq('..', field('type', $._type)),
+      // variadic parameter: `...`, the extra arguments of a C variadic function
+      '...',
       // self parameter: [mut|mut?|var] [ref|own] self [: Type]
       // e.g., `self`, `mut self`, `mut? self`, `own self`, `var own self`, `ref self`
       seq(optional(choice('mut', 'mut?', 'var')), optional(choice('ref', 'own')), 'self', optional(seq(':', $._type))),
