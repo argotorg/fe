@@ -1676,11 +1676,12 @@ pub enum TraitLowerDiag<'db> {
     NamedOutputsNeedOrdinary {
         primary: ImplTrait<'db>,
     },
-    /// A named implementation of a trait that the compiler decides by
-    /// whether a type implements it, such as `Copy` or `Drop`.
-    NamedImplementationOfPresenceTrait {
+    /// A named implementation that no use can choose (see
+    /// `trait_def::unchoosable_named_trait`).
+    UnchoosableNamedImplementation {
         primary: ImplTrait<'db>,
         name: IdentId<'db>,
+        reason: crate::analysis::ty::trait_def::UnchoosableReason,
     },
     NamedAssociatedConstMismatch {
         primary: ImplTrait<'db>,
@@ -1746,7 +1747,7 @@ impl TraitLowerDiag<'_> {
             | Self::NamedAssociatedTypeDisagreement { .. }
             | Self::NamedAssociatedRowMismatch { .. }
             | Self::NamedAssociatedConstMismatch { .. }
-            | Self::NamedImplementationOfPresenceTrait { .. }
+            | Self::UnchoosableNamedImplementation { .. }
             | Self::NamedOutputsNeedOrdinary { .. } => 5,
             Self::ImplHeaderAssocTypeBinding { .. } => 6,
         }

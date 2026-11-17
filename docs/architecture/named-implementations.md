@@ -22,6 +22,9 @@ definition-conflict pass (`DefConflictAnalysisPass`, `ty`) gives these names
 their own domain, so two named implementations with one name in one module
 are reported where they are declared.
 
+`unchoosable_named_trait` (`trait_def`) refuses a named implementation that no
+use can choose. The compiler reads these traits only by presence.
+
 ## Choices
 
 `ChosenImpls` (`trait_resolution`) lists the implementations opened by the

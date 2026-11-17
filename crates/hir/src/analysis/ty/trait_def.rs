@@ -1013,25 +1013,41 @@ pub(crate) enum NamedOutputMismatch<'db> {
     },
 }
 
-/// The name of the trait of a named implementation when the compiler decides
-/// what the trait means for a type by whether the type implements it, and
-/// never reads which implementation answers: `Copy` decides moves and `Drop`
-/// decides drop glue. No use can choose such an implementation, so it is
-/// refused where it is declared. Traits whose chosen dictionaries the
-/// compiler does carry (`LaneCodec`, `StateIndex`, `StorageKey`) are not listed.
-pub(crate) fn named_presence_trait<'db>(
+/// Why no use can choose a named implementation of a trait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnchoosableReason {
+    /// The compiler decides what the trait means for a type by whether the
+    /// type implements it and never reads which implementation answers:
+    /// `Copy` decides moves, `Drop` drop glue, `Snapshot` how a view takes a
+    /// value, `Pinned` where a value may be kept and `ErrorVariant` what a
+    /// revert carries. `Pinned` and `ErrorVariant` have no methods and their
+    /// outputs must agree, so a named implementation of them could not differ.
+    Presence,
+}
+
+/// The name of the trait of a named implementation that no use can choose,
+/// and why; such an implementation is refused where it is declared. The
+/// traits whose chosen dictionaries the compiler carries into what it decides
+/// (the storage codecs and indexes, the callable and loop traits, the
+/// wrapping operator traits, `Encode`) are not listed.
+pub(crate) fn unchoosable_named_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     implementation: ImplTrait<'db>,
     candidate: ImplementorId<'db>,
-) -> Option<IdentId<'db>> {
+) -> Option<(IdentId<'db>, UnchoosableReason)> {
     let def = candidate.trait_(db).def(db);
-    ["core::marker::Copy", "core::ops::Drop"]
-        .into_iter()
-        .any(|path| {
-            super::corelib::resolve_lib_trait_path(db, implementation.scope(), path) == Some(def)
-        })
-        .then(|| def.name(db).to_opt())
-        .flatten()
+    let scope = implementation.scope();
+    let by_presence = [
+        super::corelib::resolve_core_trait(db, scope, &["marker", "Copy"]),
+        super::corelib::resolve_core_trait(db, scope, &["ops", "Drop"]),
+        super::corelib::resolve_core_trait(db, scope, &["marker", "Snapshot"]),
+        super::corelib::resolve_core_trait(db, scope, &["marker", "Pinned"]),
+        super::corelib::resolve_core_trait(db, scope, &["error", "ErrorVariant"]),
+    ]
+    .into_iter()
+    .any(|trait_| trait_ == Some(def));
+    let reason = by_presence.then_some(UnchoosableReason::Presence)?;
+    Some((def.name(db).to_opt()?, reason))
 }
 
 /// A slot's associated types and effect rows do not depend on which implementation answers it. A named

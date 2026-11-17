@@ -1242,6 +1242,9 @@ fn named_implementations_of_traits_decided_by_presence_are_refused() {
     for source in [
         "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item as Copying {}",
         "use core::ops::Drop\nstruct Token {}\nimpl Drop for Token as Heavy { fn drop(own self) {} }",
+        "use core::marker::{Copy, Snapshot}\nstruct H { v: u256 }\nimpl Copy for H {}\nimpl Snapshot for H as Snap {}",
+        "use core::marker::{Pinned, Storage}\nstruct P { v: u256 }\nimpl Pinned for P { type Space = Storage }\nimpl Pinned for P as Pin { type Space = Storage }",
+        "use core::abi::{AbiFrame, AbiSize, Encode}\nuse core::error::ErrorVariant\nuse std::abi::Sol\nstruct Oops {}\nimpl AbiSize for Oops {\n    const HEAD_SIZE: u256 = 0\n    const IS_DYNAMIC: bool = false\n}\nimpl Encode<Sol> for Oops { fn encode(self, _ out: AbiFrame) {} }\nimpl ErrorVariant<Sol> for Oops { const SELECTOR: u32 = 1 }\nimpl ErrorVariant<Sol> for Oops as Again { const SELECTOR: u32 = 1 }",
     ] {
         let codes = diagnostics(source);
         assert!(codes.contains(&"5-0005".to_string()), "{source}: {codes:?}");
@@ -1249,10 +1252,19 @@ fn named_implementations_of_traits_decided_by_presence_are_refused() {
     for source in [
         "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item {}",
         "use core::ops::Drop\nstruct Token {}\nimpl Drop for Token { fn drop(own self) {} }",
+        "use core::marker::{Copy, Snapshot}\nstruct H { v: u256 }\nimpl Copy for H {}\nimpl Snapshot for H {}",
     ] {
         let codes = diagnostics(source);
         assert!(codes.is_empty(), "{source}: {codes:?}");
     }
+    // Refused once: a named `Pinned` without an ordinary one is not also
+    // reported for its outputs.
+    assert_eq!(
+        diagnostics(
+            "use core::marker::{Pinned, Storage}\nstruct P { v: u256 }\nimpl Pinned for P as Pin { type Space = Storage }"
+        ),
+        vec!["5-0005".to_string()]
+    );
 }
 
 #[test]

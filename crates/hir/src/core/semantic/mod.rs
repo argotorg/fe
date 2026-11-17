@@ -5105,19 +5105,25 @@ impl<'db> ImplTrait<'db> {
         match self.lowered_implementor(db) {
             Ok(implementor) => {
                 let mut diags = Vec::new();
+                // A named implementation that no use can choose is refused for
+                // that reason alone; its outputs are not compared.
                 if self.selection_name(db).is_some()
-                    && let Some(name) =
-                        crate::analysis::ty::trait_def::named_presence_trait(db, self, implementor)
+                    && let Some((name, reason)) =
+                        crate::analysis::ty::trait_def::unchoosable_named_trait(
+                            db,
+                            self,
+                            implementor,
+                        )
                 {
                     diags.push(
-                        TraitLowerDiag::NamedImplementationOfPresenceTrait {
+                        TraitLowerDiag::UnchoosableNamedImplementation {
                             primary: self,
                             name,
+                            reason,
                         }
                         .into(),
                     );
-                }
-                if self.selection_name(db).is_some()
+                } else if self.selection_name(db).is_some()
                     && let Some(mismatch) =
                         crate::analysis::ty::trait_def::named_output_mismatch(db, self, implementor)
                 {

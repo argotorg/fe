@@ -24,7 +24,7 @@ implementation whose name is not visible where the operand is written does not
 hide a visible value of the same name.
 A local named implementation inherits its enclosing generic parameters; its
 explicit parameters follow them and can be supplied as `Name<Args>`.
-`Copy` and `Drop` cannot have a named implementation: the compiler uses whether
+`Copy`, `Drop`, `Snapshot`, `Pinned` and `ErrorVariant` cannot have a named implementation: the compiler uses whether
 a type implements them, never a choice made with `with`, so the declaration is
 rejected.
 
