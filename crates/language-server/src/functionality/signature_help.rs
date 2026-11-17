@@ -74,15 +74,17 @@ fn find_signature_at_cursor<'db>(
     // resolved to a function. A call is lowered after its arguments, so the
     // first one found is the innermost.
     for (expr_id, expr_data) in body.exprs(db).iter() {
-        let args = match expr_data {
+        // A method call's receiver is its first parameter, `self`, so its
+        // arguments start at the second.
+        let (args, first_param) = match expr_data {
             // A call of a callable value, such as a closure, runs the method
             // of its `Fn` trait, whose signature isn't the value's.
             Partial::Present(Expr::Call(_, args))
                 if typed_body.call_receiver(db, expr_id).is_none() =>
             {
-                args
+                (args, 0)
             }
-            Partial::Present(Expr::MethodCall(.., args)) => args,
+            Partial::Present(Expr::MethodCall(.., args)) => (args, 1),
             _ => continue,
         };
         if let Some(resolved) = expr_id.span(body).resolve(db)
@@ -92,7 +94,8 @@ fn find_signature_at_cursor<'db>(
                 .map(|callable| callable.callable_def)
         {
             let active_param =
-                compute_active_parameter(cursor, resolved.range, file_text, args.len());
+                compute_active_parameter(cursor, resolved.range, file_text, args.len())
+                    .map(|arg| first_param + arg);
             return Some(build_signature_help(db, called_func, active_param));
         }
     }
@@ -270,53 +273,63 @@ fn f() {
     let _ = plain(helper(3, true), 4)
     let _ = inner::helper(5, false)
     let _ = p.dot(p)
+    let _ = Point::dot(p, p)
     let _ = p.area(6)
     let g = |x: i32| x
     let _ = g(7)
 }
 "#;
 
-    #[test]
-    fn signature_help_at_calls() {
+    /// The label and active parameter of the signature help at the end of
+    /// the first `needle` in `code`.
+    fn signature_after(code: &str, needle: &str) -> Option<(String, Option<u32>)> {
         let mut db = DriverDataBase::default();
         let file = db.workspace().touch(
             &mut db,
             Url::parse("file:///signature_help.fe").unwrap(),
-            Some(CALLS.to_string()),
+            Some(code.to_string()),
         );
         let top_mod = map_file_to_mod(&db, file);
-        let help_after = |needle: &str| {
-            let cursor = CALLS.find(needle).unwrap() + needle.len();
-            find_signature_at_cursor(&db, top_mod, (cursor as u32).into(), CALLS)
-        };
+        let cursor = code.find(needle).unwrap() + needle.len();
+        let help = find_signature_at_cursor(&db, top_mod, (cursor as u32).into(), code)?;
+        Some((help.signatures[0].label.clone(), help.active_parameter))
+    }
 
-        for (needle, label, active) in [
-            ("plain(1, ", "fn plain(a: i32, b: i32) -> i32", 1),
-            ("helper(3, ", "fn helper(x: i32, flag: bool) -> i32", 1),
-            ("true), ", "fn plain(a: i32, b: i32) -> i32", 1),
+    #[track_caller]
+    fn check(code: &str, needle: &str, expected: Option<(&str, Option<u32>)>) {
+        assert_eq!(
+            signature_after(code, needle),
+            expected.map(|(label, active)| (label.to_string(), active)),
+            "after `{needle}`"
+        );
+    }
+
+    #[test]
+    fn signature_help_at_calls() {
+        let plain = "fn plain(a: i32, b: i32) -> i32";
+        let helper = "fn helper(x: i32, flag: bool) -> i32";
+        let dot = "fn dot(self, other: Point) -> i32";
+        for (needle, expected) in [
+            ("plain(1, ", Some((plain, Some(1)))),
+            ("helper(3, ", Some((helper, Some(1)))),
+            ("true), ", Some((plain, Some(1)))),
+            ("inner::helper(5, ", Some((helper, Some(1)))),
             (
-                "inner::helper(5, ",
-                "fn helper(x: i32, flag: bool) -> i32",
-                1,
+                "Point::new(1, ",
+                Some(("fn new(x: i32, y: i32) -> Point", Some(1))),
             ),
-            ("Point::new(1, ", "fn new(x: i32, y: i32) -> Point", 1),
+            // A method call's receiver is `self`; a path call passes it.
+            ("p.dot(", Some((dot, Some(1)))),
+            ("Point::dot(", Some((dot, Some(0)))),
+            ("Point::dot(p, ", Some((dot, Some(1)))),
+            (
+                "p.area(",
+                Some(("fn area(self, scale: i32) -> i32", Some(1))),
+            ),
+            // A call of a closure runs its `Fn` method, not a written signature.
+            ("= g(", None),
         ] {
-            let help =
-                help_after(needle).unwrap_or_else(|| panic!("no signature help after `{needle}`"));
-            assert_eq!(help.signatures[0].label, label, "after `{needle}`");
-            assert_eq!(help.active_parameter, Some(active), "after `{needle}`");
+            check(CALLS, needle, expected);
         }
-
-        for (needle, label) in [
-            ("p.dot(", "fn dot(self, other: Point) -> i32"),
-            ("p.area(", "fn area(self, scale: i32) -> i32"),
-        ] {
-            let help =
-                help_after(needle).unwrap_or_else(|| panic!("no signature help after `{needle}`"));
-            assert_eq!(help.signatures[0].label, label, "after `{needle}`");
-        }
-
-        // A call of a closure runs its `Fn` method, not a written signature.
-        assert!(help_after("= g(").is_none());
     }
 }
