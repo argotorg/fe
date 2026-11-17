@@ -1026,7 +1026,9 @@ impl DynString {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
-            ptr::zero_bytes(data, word_to_usize(size))
+            // The length and payload overwrite everything except final padding.
+            // size >= 32, including the empty tail whose length word follows.
+            store_word(ptr: ptr_offset(data, size - 32), value: 0)
             store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
@@ -1141,7 +1143,9 @@ impl Bytes {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
-            ptr::zero_bytes(data, word_to_usize(size))
+            // The length and payload overwrite everything except final padding.
+            // size >= 32, including the empty tail whose length word follows.
+            store_word(ptr: ptr_offset(data, size - 32), value: 0)
             store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
