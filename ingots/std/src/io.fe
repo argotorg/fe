@@ -74,6 +74,7 @@ impl Error {
 
 /// The host's description of an error it reported, such as `No such file or
 /// directory`, and otherwise the kind's.
+#[cfg(target = "native")]
 impl Display for Error {
     fn fmt(self, _ out: mut MemBuffer) {
         match self.code {
@@ -83,6 +84,22 @@ impl Display for Error {
             }
             Option::None => self.kind.fmt(mut out),
         }
+    }
+}
+
+/// The kind's description: no host reports errors on the EVM.
+#[cfg(target = "evm")]
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        self.kind.fmt(mut out)
+    }
+}
+
+/// The kind's description: a WebAssembly host reports no error numbers.
+#[cfg(target = "wasm")]
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        self.kind.fmt(mut out)
     }
 }
 

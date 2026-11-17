@@ -88,6 +88,8 @@ fn errors_without_host_numbers_have_kinds() {
     let error = Error::new(ErrorKind::TimedOut)
     assert!(error.code().is_none())
     assert!(format!(error.kind()).span() == "timed out")
+    // An error's text is its kind's on every target.
+    assert!(format!(error).span() == "timed out")
     assert!(format!(ErrorKind::ConnectionRefused).span() == "connection refused")
 }
 
