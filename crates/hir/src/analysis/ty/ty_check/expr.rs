@@ -2192,11 +2192,11 @@ impl<'db> TyChecker<'db> {
                     .last()
                     .expect("a pushed choice is the last item");
                 let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                if let Some(first) = earlier_answer(self.db, &listed, entry) {
+                if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
                     self.push_diag(BodyDiag::DuplicateWithChoice {
                         primary: span,
                         first,
-                        goal: entry.implementation().trait_inst(self.db),
+                        goal: common,
                     });
                     self.env.named_impl_operands.insert(binding.value);
                     self.env
@@ -2246,11 +2246,11 @@ impl<'db> TyChecker<'db> {
                             .last()
                             .expect("a pushed choice is the last item");
                         let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                        if let Some(first) = earlier_answer(self.db, &listed, entry) {
+                        if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
                             self.push_diag(BodyDiag::DuplicateWithChoice {
                                 primary: span,
                                 first,
-                                goal: entry.implementation().trait_inst(self.db),
+                                goal: common,
                             });
                         } else {
                             // The opened implementation's conditions are proved
@@ -5940,19 +5940,17 @@ impl<'db> TyChecker<'db> {
     }
 }
 
-/// The span of an earlier operand of the same `with` list whose
-/// implementation answers a goal that `entry` also answers.
+/// An earlier operand of the same `with` list whose implementation answers a
+/// goal that `entry` also answers: that operand's span and the goal.
 fn earlier_answer<'db>(
     db: &'db dyn HirAnalysisDb,
     listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
     entry: ChosenImpl<'db>,
-) -> Option<DynLazySpan<'db>> {
-    listed
-        .iter()
-        .find(|(earlier, _)| {
-            crate::analysis::ty::trait_resolution::choices_answer_a_common_goal(db, *earlier, entry)
-        })
-        .map(|(_, span)| span.clone())
+) -> Option<(DynLazySpan<'db>, TraitInstId<'db>)> {
+    listed.iter().find_map(|(earlier, span)| {
+        crate::analysis::ty::trait_resolution::common_choice_goal(db, *earlier, entry)
+            .map(|common| (span.clone(), common))
+    })
 }
 
 fn reify_unresolved_pattern_slots<'db, T>(

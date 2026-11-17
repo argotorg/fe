@@ -1067,29 +1067,40 @@ impl Size for Box<Item> as ItemBox { const fn size() -> u256 { 50 } }
         "with (Discount, <Item as Pick>) { Item::value() }",
         "with (<Item as Pick>, Discount) { Item::value() }",
         "with (AnyBox, ItemBox) { <Box<Item> as Size>::size() }",
+        "with (ItemBox, AnyBox) { <Box<Item> as Size>::size() }",
     ] {
         let source = format!("{prelude}const fn run() -> u256 {{ {body} }}\n");
         assert_eq!(diagnostics(&source), vec!["8-0160"], "{body}");
     }
-    let source = format!(
-        "{prelude}const fn run() -> u256 {{ with (Discount, Tiny) {{ Item::value() }} }}\n"
-    );
-    let mut db = HirAnalysisTestDb::default();
-    let file = db.new_stand_alone("duplicate_with_choice.fe".into(), &source);
-    let (module, _) = db.top_mod(file);
-    let complete = fe_hir::analysis::initialize_analysis_pass()
-        .run_on_module(&db, module)
-        .into_iter()
-        .map(|diagnostic| diagnostic.to_complete(&db))
-        .collect::<Vec<_>>();
-    let [duplicate] = complete.as_slice() else {
-        panic!("expected one diagnostic: {complete:?}");
-    };
-    assert_eq!(
-        duplicate.message,
-        "`Item: Pick` is chosen twice in one `with`"
-    );
-    assert_eq!(duplicate.sub_diagnostics.len(), 2, "{duplicate:?}");
+    for (body, message) in [
+        (
+            "with (Discount, Tiny) { Item::value() }",
+            "`Item: Pick` is chosen twice in one `with`",
+        ),
+        (
+            "with (ItemBox, AnyBox) { <Box<Item> as Size>::size() }",
+            "`Box<Item>: Size` is chosen twice in one `with`",
+        ),
+        (
+            "with (AnyBox, ItemBox) { <Box<Item> as Size>::size() }",
+            "`Box<Item>: Size` is chosen twice in one `with`",
+        ),
+    ] {
+        let source = format!("{prelude}const fn run() -> u256 {{ {body} }}\n");
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("duplicate_with_choice.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let complete = fe_hir::analysis::initialize_analysis_pass()
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diagnostic| diagnostic.to_complete(&db))
+            .collect::<Vec<_>>();
+        let [duplicate] = complete.as_slice() else {
+            panic!("expected one diagnostic for {body}: {complete:?}");
+        };
+        assert_eq!(duplicate.message, message, "{body}");
+        assert_eq!(duplicate.sub_diagnostics.len(), 2, "{duplicate:?}");
+    }
 }
 
 #[test]

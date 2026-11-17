@@ -30,7 +30,7 @@ conditions of the implementations it selects, and a choice whose
 conditions fail is an error, not a reason to try the ordinary
 implementation. An operand whose implementation could answer a goal that
 an earlier operand of the same list answers
-(`choices_answer_a_common_goal`, the header test of `matching_choice`) is
+(`common_choice_goal`, the header test of `matching_choice`) is
 reported (`DuplicateWithChoice`) and not added, so the order inside one
 list never decides a selection.
 

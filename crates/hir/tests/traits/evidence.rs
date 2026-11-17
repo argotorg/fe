@@ -1060,6 +1060,7 @@ pub fn check(x: u256) -> u256 {
 "#;
     let codes = diagnostics(conflict_source);
     assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(codes.contains(&"8-0160".to_string()), "{codes:?}");
 
     // One list may not hold two implementations for the same goal, so the
     // same conflict is written with one list for each side.
