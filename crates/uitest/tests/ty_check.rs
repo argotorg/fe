@@ -92,6 +92,28 @@ fn native_signatures() {
     assert!(!evm.contains("native `main`"), "{evm}");
 }
 
+// A variadic `extern` function takes C integers and raw pointers after its
+// parameters, natively. On the EVM it is an error.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_variadic() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/native/variadic.fe");
+    let content = include_str!("../fixtures/native/variadic.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let native = diagnostics(&mut db, path, content);
+    assert!(
+        !native.contains("only supported on the native target"),
+        "{native}"
+    );
+    snap_test!(native, path);
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(evm.contains("only supported on the native target"), "{evm}");
+}
+
 // A WebAssembly export takes the effects of the root effect, `std::wasm::Host`,
 // where a C caller provides none. The other rules for exports hold on both.
 #[cfg(not(target_arch = "wasm32"))]

@@ -687,6 +687,9 @@ pub struct FuncModifiers {
     pub is_unsafe: bool,
     pub is_const: bool,
     pub is_extern: bool,
+    /// Whether the function is an `extern` C variadic function, whose
+    /// parameters end in `...`.
+    pub is_variadic: bool,
 }
 
 #[salsa::tracked]
@@ -848,6 +851,13 @@ impl<'db> Func<'db> {
 
     pub fn is_extern(self, db: &dyn HirDb) -> bool {
         self.modifiers(db).is_extern
+    }
+
+    /// Whether the function is an `extern` C variadic function: a call
+    /// passes its parameters, then any number of extra arguments, which no
+    /// parameter stands for.
+    pub fn is_variadic(self, db: &dyn HirDb) -> bool {
+        self.modifiers(db).is_variadic
     }
 
     pub fn is_method(self, db: &dyn HirDb) -> bool {
@@ -1696,6 +1706,7 @@ impl FuncModifiers {
             is_unsafe,
             is_const,
             is_extern,
+            is_variadic: false,
         }
     }
 }

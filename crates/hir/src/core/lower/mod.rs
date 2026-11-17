@@ -27,6 +27,7 @@ pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
 pub use item::{FieldModifierError, FieldModifierErrorKind, MsgDiagnostic, MsgDiagnosticKind};
+pub use params::{VariadicParamError, VariadicParamErrorKind};
 pub use parse::{ParsedFile, parse_file_impl};
 
 pub(crate) mod parse;
@@ -230,6 +231,7 @@ pub enum LowerDiagnostic {
     AbiStruct(AbiStructDiagnostic),
     AbiField(AbiFieldDiagnostic),
     AttrMisuse(AttrMisuseError),
+    VariadicParam(VariadicParamError),
 }
 
 pub(super) struct FileLowerCtxt<'db> {

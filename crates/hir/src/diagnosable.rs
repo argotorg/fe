@@ -14,7 +14,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{
-    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag, VariadicIssue,
 };
 use crate::analysis::ty::effects::EffectKeyKind;
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
@@ -411,6 +411,33 @@ impl<'db> Func<'db> {
         .into_iter()
         .flatten()
         .map(|(span, issue)| TyLowerDiag::InvalidExport { span, issue }.into())
+        .collect()
+    }
+
+    /// A variadic `extern` function is a C function that native code calls
+    /// as it is declared: without generic arguments or effects, and not at
+    /// compile time.
+    pub fn diags_variadic(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if !self.is_variadic(db) {
+            return Vec::new();
+        }
+        [
+            (db.compilation_settings().target(db) != Target::Native).then(|| {
+                (
+                    self.span().params().variadic().into(),
+                    VariadicIssue::NotNative,
+                )
+            }),
+            (GenericParamOwner::Func(self).params(db).next().is_some())
+                .then(|| (self.span().generic_params().into(), VariadicIssue::Generic)),
+            (!self.declared_effects(db).data(db).is_empty())
+                .then(|| (self.span().effects().into(), VariadicIssue::Effects)),
+            self.is_const(db)
+                .then(|| (self.span().const_kw().into(), VariadicIssue::Const)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(span, issue)| TyLowerDiag::InvalidVariadic { span, issue }.into())
         .collect()
     }
 
@@ -2452,10 +2479,13 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
 /// Whether C can pass a `ty`. An invalid type reports elsewhere, and a generic
 /// one is checked when codegen lowers its instance.
 fn has_c_form<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    ty.has_invalid(db)
-        || ty.has_param(db)
-        || ty == TyId::unit(db)
-        || ty.as_ptr(db).is_some()
+    ty.has_invalid(db) || ty.has_param(db) || ty == TyId::unit(db) || is_c_scalar(db, ty)
+}
+
+/// Whether C passes `ty` as one integer register or stack slot: a 32- or
+/// 64-bit integer or a raw pointer.
+pub(crate) fn is_c_scalar<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty.as_ptr(db).is_some()
         || matches!(
             ty.as_prim(db),
             Some(
@@ -2481,6 +2511,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_effects(db));
         out.extend(self.diags_export(db));
         out.extend(self.diags_native_signature(db));
+        out.extend(self.diags_variadic(db));
         out.extend(self.diags_view_types(db));
         out.extend(self.diags_state_only_types(db));
 

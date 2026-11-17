@@ -163,6 +163,16 @@ fn build_signature_help<'db>(
             documentation: Some(async_lsp::lsp_types::Documentation::String(doc)),
         });
     }
+    // A variadic function's `...` stands for each extra argument.
+    if func.is_variadic(db) {
+        param_strings.push("...".to_string());
+        params.push(ParameterInformation {
+            label: ParameterLabel::Simple("...".to_string()),
+            documentation: Some(async_lsp::lsp_types::Documentation::String(
+                "extra C arguments".to_string(),
+            )),
+        });
+    }
     let active_parameter = params
         .len()
         .checked_sub(1)
@@ -442,6 +452,27 @@ fn f() {
             ("format!(plain(1, 2)", None),
         ] {
             check(code, needle, expected);
+        }
+    }
+
+    #[test]
+    fn variadic_signature_ends_in_dots() {
+        let code = r#"extern {
+    fn printf(_ format: *u8, ...) -> i32
+}
+
+fn f(_ format: *u8, _ n: i32) {
+    let _ = unsafe { printf(format, n, n) }
+}
+"#;
+        let printf = "fn printf(format: *u8, ...) -> i32";
+        // Each extra argument is shown at the `...`.
+        for (needle, active) in [
+            ("{ printf(", 0),
+            ("{ printf(format, ", 1),
+            ("{ printf(format, n, ", 1),
+        ] {
+            check(code, needle, Some((printf, Some(active))));
         }
     }
 }
