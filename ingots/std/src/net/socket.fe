@@ -1,15 +1,15 @@
 #![cfg(target_family = "unix")]
 /// TCP and UDP sockets, and the `Net` capability that makes them.
-use core::{MemBuffer, MemSpan, Option, Result}
-use ingot::io::{Error, ErrorKind, Read, Write}
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
+use ingot::io::{Display, Error, ErrorKind, Read, Write}
 use ingot::native::{Host, HostCapabilitySeal}
 use ingot::sys::{
     self, EINTR, EINVAL, Fd, IPPROTO_TCP, POLLOUT, PollSet, SHUT_RD, SHUT_RDWR, SHUT_WR, SOCK_DGRAM,
-    SOCK_STREAM, TCP_NODELAY, accept_socket, bind, check_call, connect, getpeername, getsockname,
-    listen, recv, recvfrom, send, sendto, setsockopt, shutdown,
+    SOCK_STREAM, TCP_NODELAY, accept_socket, bind, c_string, check_call, connect, freeaddrinfo,
+    getaddrinfo, getpeername, getsockname, listen, recv, recvfrom, send, sendto, setsockopt, shutdown,
 }
 use ingot::time::Duration
-use super::SocketAddr
+use super::{IpAddr, SocketAddr}
 
 // The connections a listener queues before it accepts them.
 const BACKLOG: i32 = 128
@@ -32,6 +32,10 @@ pub trait Net: HostCapabilitySeal {
     fn listen(mut self, _ addr: SocketAddr) -> Result<Error, TcpListener>
     /// A UDP socket at `addr`. Port 0 takes a free port.
     fn bind_udp(mut self, _ addr: SocketAddr) -> Result<Error, UdpSocket>
+    /// The addresses of `host`, the text of a `Display` value such as a name
+    /// or an address, each with `port`, in the order the host's resolver
+    /// gives them: at least one, or else a `HostNotFound` error.
+    fn lookup<H: Display>(self, _ host: H, _ port: u16) -> Result<Error, MemVec<SocketAddr>>
 }
 
 impl Net for Host {
@@ -76,6 +80,43 @@ impl Net for Host {
         var socket = Socket::new(addr, kind: SOCK_DGRAM)?
         socket.bind(addr)?
         Result::Ok(UdpSocket { socket })
+    }
+
+    fn lookup<H: Display>(self, _ host: H, _ port: u16) -> Result<Error, MemVec<SocketAddr>> {
+        let name = c_string(host)?
+        // Stream sockets only, so that each address comes once.
+        var hints = MemBuffer::new(sys::ADDRINFO_SIZE)
+        hints.write_le<i32>(offset: sys::ADDRINFO_SOCKTYPE, value: SOCK_STREAM)
+        let head = MemBuffer::new(8)
+        let code = unsafe { getaddrinfo(name.ptr(), ptr::null(), hints.ptr(), ptr::cast(head.ptr())) }
+        if code != 0 {
+            return Result::Err(Error::from_lookup_code(code))
+        }
+        // The results are live until `freeaddrinfo`.
+        let first = unsafe { *ptr::cast<u8, *u8>(head.ptr()) }
+        var found = MemVec::new()
+        var result = first
+        while !ptr::is_null(result) {
+            let raw = unsafe { *ptr::cast<u8, *u8>(ptr::offset_bytes(result, sys::ADDRINFO_ADDR)) }
+            let len = unsafe { *ptr::cast<u8, u32>(ptr::offset_bytes(result, sys::ADDRINFO_ADDRLEN)) }
+            // An address of another family is skipped.
+            match sys::decode_sockaddr(unsafe { MemSlice::from_raw_parts(ptr: raw, len: len as usize) }) {
+                Result::Ok(addr) => found.push(
+                    match addr.ip() {
+                        IpAddr::V4(_) => SocketAddr::new(addr.ip(), port),
+                        IpAddr::V6(ip) => SocketAddr::new_v6(ip, port, scope_id: addr.scope_id()),
+                    },
+                ),
+                Result::Err(_) => {}
+            }
+            result = unsafe { *ptr::cast<u8, *u8>(ptr::offset_bytes(result, sys::ADDRINFO_NEXT)) }
+        }
+        unsafe { freeaddrinfo(first) }
+        if found.is_empty() {
+            // Each address was of another family.
+            return Result::Err(Error::new(ErrorKind::HostNotFound))
+        }
+        Result::Ok(found)
     }
 }
 

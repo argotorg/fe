@@ -1,6 +1,6 @@
 use core::MemBuffer
 use std::io::{BufReader, Display, Error, ErrorKind, Read, Stdout, Write}
-use std::net::{IpAddr, Ipv4Addr, Net, Shutdown, SocketAddr, TcpListener, TcpStream}
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Net, Shutdown, SocketAddr, TcpListener, TcpStream}
 use std::time::Duration
 
 extern {
@@ -26,6 +26,7 @@ pub fn main() -> i32 uses (out: mut Stdout, net: mut Net) {
     report("nonblocking accept", nonblocking_accept())
     report("nonblocking connect", nonblocking_connect())
     report("connect_timeout", connect_timeout())
+    report("lookup", lookup())
     println!("still running")
     0
 }
@@ -217,6 +218,30 @@ fn connect_timeout() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
     Result::Ok(())
 }
 
+// Names the host resolves without a network: `localhost`, whose first
+// address takes a connection, an address, and no name at all.
+fn lookup() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    let found = net.lookup("localhost", 0)?
+    let first = found[0]
+    let loopback = match first.ip() {
+        IpAddr::V4(ip) => ip == Ipv4Addr::LOCALHOST,
+        IpAddr::V6(ip) => ip == Ipv6Addr::LOCALHOST,
+    }
+    println!("lookup: localhost first is a loopback address: ", loopback)
+    var listener = net.listen(first)?
+    let again = net.lookup("localhost", listener.local_addr()?.port())?
+    let client = net.connect(again[0])?
+    let (_, peer) = listener.accept()?
+    println!("lookup: connected to the first: ", client.peer_addr()? == again[0], " ", peer == client.local_addr()?)
+    let numeric = net.lookup("127.0.0.1", 9)?
+    println!("lookup: 127.0.0.1: ", numeric.len(), " ", numeric[0])
+    match net.lookup("", 80) {
+        Result::Ok(_) => println!("lookup: no name: ok"),
+        Result::Err(error) => println!("lookup: no name: ", kind_name(error.kind()), ", error number: ", error.code().is_some()),
+    }
+    Result::Ok(())
+}
+
 fn loopback() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
 }
@@ -257,6 +282,7 @@ fn kind_name(_ kind: ErrorKind) -> String<20> {
         ErrorKind::BrokenPipe => "BrokenPipe",
         ErrorKind::UnexpectedEof => "UnexpectedEof",
         ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
         ErrorKind::Other => "Other",
     }
 }

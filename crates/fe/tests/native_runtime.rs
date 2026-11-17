@@ -3583,6 +3583,10 @@ nonblocking connect: read hi
 connect_timeout: stream blocks: true
 connect_timeout: zero: InvalidInput
 connect_timeout: server reads 0 bytes after the shutdown
+lookup: localhost first is a loopback address: true
+lookup: connected to the first: true true
+lookup: 127.0.0.1: 1 127.0.0.1:9
+lookup: no name: HostNotFound, error number: false
 still running
 ",
             "O{level}"
@@ -3593,7 +3597,7 @@ still running
 // Each host error number has the kind Rust gives it, among the kinds Fe has.
 #[test]
 fn native_errors_take_the_kinds_of_host_error_numbers() {
-    const KINDS: [&str; 20] = [
+    const KINDS: [&str; 21] = [
         "NotFound",
         "PermissionDenied",
         "AlreadyExists",
@@ -3613,6 +3617,7 @@ fn native_errors_take_the_kinds_of_host_error_numbers() {
         "BrokenPipe",
         "UnexpectedEof",
         "InvalidData",
+        "HostNotFound",
         "Other",
     ];
     let mut expected = String::new();

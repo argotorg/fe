@@ -250,3 +250,13 @@ pub fn event_kinds(_ events: MemSpan, _ index: usize) -> u8 {
     }
     kinds
 }
+
+// `getaddrinfo` results: the host name is unknown, it has no address, and
+// a call failed with `errno`.
+pub const EAI_NONAME: i32 = 8
+pub const EAI_NODATA: i32 = 7
+pub const EAI_SYSTEM: i32 = 11
+
+// The offset of a `struct addrinfo`'s address, after its canonical name on
+// macOS and before it on Linux.
+pub const ADDRINFO_ADDR: usize = 32

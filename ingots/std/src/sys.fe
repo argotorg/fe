@@ -34,6 +34,9 @@ extern {
     pub(ingot) fn recvfrom(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32, _ addr: *u8, _ addr_len: *u32) -> isize
     pub(ingot) fn sendto(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32, _ addr: *u8, _ addr_len: u32) -> isize
     pub(ingot) fn shutdown(_ fd: i32, _ how: i32) -> i32
+    // Host name lookup. `hints` and each result are a `struct addrinfo`.
+    pub(ingot) fn getaddrinfo(_ host: *u8, _ service: *u8, _ hints: *u8, _ results: **u8) -> i32
+    pub(ingot) fn freeaddrinfo(_ results: *u8)
 }
 
 // The `errno` values every supported host shares.
@@ -74,6 +77,14 @@ pub const SHUT_RDWR: i32 = 2
 pub const SOCKADDR_STORAGE_SIZE: usize = 128
 const SOCKADDR_IN_SIZE: u32 = 16
 const SOCKADDR_IN6_SIZE: u32 = 28
+
+// A `struct addrinfo`: its bytes, and the offsets of the socket type, the
+// address length and the next result, the same on every supported host.
+// The address is at `ADDRINFO_ADDR`, which isn't.
+pub const ADDRINFO_SIZE: usize = 48
+pub const ADDRINFO_SOCKTYPE: usize = 8
+pub const ADDRINFO_ADDRLEN: usize = 16
+pub const ADDRINFO_NEXT: usize = 40
 
 // The most bytes to ask `read` or `write` for: macOS refuses more than
 // `INT_MAX`, and a shorter transfer is no error.

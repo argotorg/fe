@@ -418,6 +418,7 @@ fn kind_name(_ kind: ErrorKind) -> String<20> {
         ErrorKind::BrokenPipe => "BrokenPipe",
         ErrorKind::UnexpectedEof => "UnexpectedEof",
         ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
         ErrorKind::Other => "Other",
     }
 }
