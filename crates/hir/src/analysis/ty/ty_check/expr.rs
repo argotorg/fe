@@ -74,7 +74,8 @@ use crate::analysis::ty::{
     trait_def::TraitInstId,
     trait_lower::{complete_impl_trait, lower_impl_trait},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
+        ChosenImpl, GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx,
+        is_goal_satisfiable,
     },
     ty_check::callable::{
         Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
@@ -1973,6 +1974,8 @@ impl<'db> TyChecker<'db> {
         // The keys this `with` provides, each with its binding's span.
         let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
         let outer_choices = self.env.choices;
+        // The implementations this `with` lists, each with its operand's span.
+        let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
 
         for binding in bindings {
             let named = if binding.key_path.is_none()
@@ -2180,6 +2183,23 @@ impl<'db> TyChecker<'db> {
                         applied,
                     )
                 };
+                let entry = *choice
+                    .items(self.db)
+                    .last()
+                    .expect("a pushed choice is the last item");
+                let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+                if let Some(first) = earlier_answer(self.db, &listed, entry) {
+                    self.push_diag(BodyDiag::DuplicateWithChoice {
+                        primary: span,
+                        first,
+                        goal: entry.implementation().trait_inst(self.db),
+                    });
+                    self.env.named_impl_operands.insert(binding.value);
+                    self.env
+                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    continue;
+                }
+                listed.push((entry, span));
                 self.env.choices = Some(choice);
                 self.env.named_impl_operands.insert(binding.value);
                 // A named impl is a compile-time operand, with no runtime value.
@@ -2211,30 +2231,46 @@ impl<'db> TyChecker<'db> {
                     *goal,
                 ) {
                     super::super::trait_resolution::Selection::Unique(resolved) => {
-                        // The opened implementation's conditions are proved in
-                        // the surrounding context, without the opening itself,
-                        // so an opening whose conditions can never hold is
-                        // refused whether or not the block uses it.
-                        let mode = Some(if goal.is_mut(self.db) {
-                            BorrowKind::Mut
-                        } else {
-                            BorrowKind::Ref
-                        });
-                        for &condition in resolved.instantiated_constraints(self.db).list(self.db) {
-                            self.env.register_trait_obligation(TraitObligation {
-                                choices: self.env.choices,
-                                goal: condition.at_mode(self.db, mode),
-                                origin: TraitObligationOrigin::GenericConfirmation,
-                                span: binding.value.span(self.body()).into(),
+                        let choice = super::super::trait_resolution::ChosenImpls::push_applied(
+                            self.db,
+                            self.env.choices,
+                            resolved.selected(),
+                            resolved.instantiated(),
+                        );
+                        let entry = *choice
+                            .items(self.db)
+                            .last()
+                            .expect("a pushed choice is the last item");
+                        let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+                        if let Some(first) = earlier_answer(self.db, &listed, entry) {
+                            self.push_diag(BodyDiag::DuplicateWithChoice {
+                                primary: span,
+                                first,
+                                goal: entry.implementation().trait_inst(self.db),
                             });
+                        } else {
+                            // The opened implementation's conditions are proved in
+                            // the surrounding context, without the opening itself,
+                            // so an opening whose conditions can never hold is
+                            // refused whether or not the block uses it.
+                            let mode = Some(if goal.is_mut(self.db) {
+                                BorrowKind::Mut
+                            } else {
+                                BorrowKind::Ref
+                            });
+                            for &condition in
+                                resolved.instantiated_constraints(self.db).list(self.db)
+                            {
+                                self.env.register_trait_obligation(TraitObligation {
+                                    choices: self.env.choices,
+                                    goal: condition.at_mode(self.db, mode),
+                                    origin: TraitObligationOrigin::GenericConfirmation,
+                                    span: span.clone(),
+                                });
+                            }
+                            listed.push((entry, span));
+                            self.env.choices = Some(choice);
                         }
-                        self.env.choices =
-                            Some(super::super::trait_resolution::ChosenImpls::push_applied(
-                                self.db,
-                                self.env.choices,
-                                resolved.selected(),
-                                resolved.instantiated(),
-                            ));
                     }
                     super::super::trait_resolution::Selection::Ambiguous(_)
                     | super::super::trait_resolution::Selection::NotFound => {
@@ -5877,6 +5913,21 @@ impl<'db> TyChecker<'db> {
             self.calldata_pointer_of_place(base)
         }
     }
+}
+
+/// The span of an earlier operand of the same `with` list whose
+/// implementation answers a goal that `entry` also answers.
+fn earlier_answer<'db>(
+    db: &'db dyn HirAnalysisDb,
+    listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
+    entry: ChosenImpl<'db>,
+) -> Option<DynLazySpan<'db>> {
+    listed
+        .iter()
+        .find(|(earlier, _)| {
+            crate::analysis::ty::trait_resolution::choices_answer_a_common_goal(db, *earlier, entry)
+        })
+        .map(|(_, span)| span.clone())
 }
 
 fn reify_unresolved_pattern_slots<'db, T>(

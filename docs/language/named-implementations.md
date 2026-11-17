@@ -28,9 +28,12 @@ a type implements them, never a choice made with `with`, so the declaration is
 rejected.
 
 A `with` operand adds a candidate for every matching trait goal, including
-conditions of other implementations. The nearest matching operand wins.
-Its conditions must hold: failure does not fall back to an ordinary
-implementation. Leaving the block restores the enclosing choices.
+conditions of other implementations. The nearest matching operand wins: an
+inner `with` overrides an outer one. One `with` gives each trait goal at most
+one implementation, so two operands that could answer the same goal, in
+either order and even if they name the same implementation, are rejected.
+The chosen implementation's conditions must hold: failure does not fall back
+to an ordinary implementation. Leaving the block restores the enclosing choices.
 An unapplied generic name can match any application of its header;
 `with (Name<T>)` restricts it to the written arguments.
 

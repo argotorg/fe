@@ -3735,6 +3735,36 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::DuplicateWithChoice {
+                primary,
+                first,
+                goal,
+            } => {
+                let goal_str = goal.pretty_print(db, true);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{goal_str}` is chosen twice in one `with`"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("this operand also answers `{goal_str}`"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "an earlier operand of the same `with` answers it here"
+                                .to_string(),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "one `with` gives each trait goal one implementation; to override an outer choice, write a nested `with`"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::WithEffectTypeUnsatisfied {
                 primary,
                 key,

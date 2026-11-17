@@ -762,6 +762,13 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
     },
 
+    /// Two implementation operands of one `with` answer one trait goal.
+    DuplicateWithChoice {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+    },
+
     ReturnedTypeMismatch {
         primary: DynLazySpan<'db>,
         actual: TyId<'db>,
@@ -1541,6 +1548,7 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::DuplicateWithKey { .. } => 159,
+            Self::DuplicateWithChoice { .. } => 160,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,

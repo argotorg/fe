@@ -122,6 +122,29 @@ pub(super) fn matching_choice<'db>(
         .map(|choice| choice.template)
 }
 
+/// Whether some trait goal could be answered by either choice: both
+/// implement one trait and their headers unify. This is the test that
+/// `matching_choice` applies to one goal, applied to the two headers.
+pub(crate) fn choices_answer_a_common_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    left: super::ChosenImpl<'db>,
+    right: super::ChosenImpl<'db>,
+) -> bool {
+    if left.implementation().trait_inst(db).def(db) != right.implementation().trait_inst(db).def(db)
+    {
+        return false;
+    }
+    let mut table = PersistentUnificationTable::new(db);
+    let left = left.instantiate(&mut table);
+    let right = right.instantiate(&mut table);
+    table
+        .unify(
+            trait_inst_head(db, left.trait_inst(db)),
+            trait_inst_head(db, right.trait_inst(db)),
+        )
+        .is_ok()
+}
+
 fn normalize_assoc_binding<'db>(
     db: &'db dyn HirAnalysisDb,
     table: &mut PersistentUnificationTable<'db>,

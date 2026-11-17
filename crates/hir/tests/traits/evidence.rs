@@ -1060,6 +1060,20 @@ pub fn check(x: u256) -> u256 {
 "#;
     let codes = diagnostics(conflict_source);
     assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+
+    // One list may not hold two implementations for the same goal, so the
+    // same conflict is written with one list for each side.
+    let nested_source = conflict_source.replace(
+        "    with (LeftBase, LeftImpl, RightBase, RightImpl) {\n        match x {\n            Item::M => 1\n            _ => 0\n        }\n    }",
+        "    with (LeftBase, LeftImpl) {\n        with (RightBase, RightImpl) {\n            match x {\n                Item::M => 1\n                _ => 0\n            }\n        }\n    }",
+    );
+    assert_ne!(
+        nested_source, conflict_source,
+        "the nested form must replace the list"
+    );
+    let codes = diagnostics(&nested_source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0160".to_string()), "{codes:?}");
 }
 
 #[test]

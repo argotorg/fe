@@ -1047,6 +1047,92 @@ fn outer() -> u256 uses (s: Store) { with (m::Cheap) { read() } }
 }
 
 #[test]
+fn two_operands_of_one_with_answering_one_goal_are_refused() {
+    let prelude = r#"
+struct Item {}
+struct Box<T> { pub value: T }
+trait Pick { const fn value() -> u256 }
+impl Pick for Item { const fn value() -> u256 { 100 } }
+impl Pick for Item as Discount { const fn value() -> u256 { 70 } }
+impl Pick for Item as Tiny { const fn value() -> u256 { 3 } }
+trait Size { const fn size() -> u256 }
+impl<T> Size for Box<T> { const fn size() -> u256 { 100 } }
+impl<T> Size for Box<T> as AnyBox { const fn size() -> u256 { 70 } }
+impl Size for Box<Item> as ItemBox { const fn size() -> u256 { 50 } }
+"#;
+    for body in [
+        "with (Discount, Tiny) { Item::value() }",
+        "with (Tiny, Discount) { Item::value() }",
+        "with (Discount, Discount) { Item::value() }",
+        "with (Discount, <Item as Pick>) { Item::value() }",
+        "with (<Item as Pick>, Discount) { Item::value() }",
+        "with (AnyBox, ItemBox) { <Box<Item> as Size>::size() }",
+    ] {
+        let source = format!("{prelude}const fn run() -> u256 {{ {body} }}\n");
+        assert_eq!(diagnostics(&source), vec!["8-0160"], "{body}");
+    }
+    let source = format!(
+        "{prelude}const fn run() -> u256 {{ with (Discount, Tiny) {{ Item::value() }} }}\n"
+    );
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("duplicate_with_choice.fe".into(), &source);
+    let (module, _) = db.top_mod(file);
+    let complete = fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diagnostic| diagnostic.to_complete(&db))
+        .collect::<Vec<_>>();
+    let [duplicate] = complete.as_slice() else {
+        panic!("expected one diagnostic: {complete:?}");
+    };
+    assert_eq!(
+        duplicate.message,
+        "`Item: Pick` is chosen twice in one `with`"
+    );
+    assert_eq!(duplicate.sub_diagnostics.len(), 2, "{duplicate:?}");
+}
+
+#[test]
+fn operands_answering_distinct_goals_stay_accepted() {
+    values(
+        r#"
+struct Item {}
+struct Other {}
+struct Box<T> { v: T }
+trait Price { const fn price() -> u256 }
+impl Price for Item { const fn price() -> u256 { 100 } }
+impl Price for Item as W { const fn price() -> u256 { 70 } }
+impl Price for Item as V { const fn price() -> u256 { 50 } }
+trait Gate { const fn g() -> u256 }
+impl Gate for Item { const fn g() -> u256 { 1 } }
+impl Gate for Item as G { const fn g() -> u256 { 5 } }
+trait Conv<T> { const fn c() -> u256 }
+impl Conv<u8> for Item as C8 { const fn c() -> u256 { 8 } }
+impl Conv<u16> for Item as C16 { const fn c() -> u256 { 16 } }
+trait Sub: Price { const fn s() -> u256 }
+impl Sub for Item { const fn s() -> u256 { 2 } }
+impl Sub for Item as S { const fn s() -> u256 { 3 } }
+trait Size { const fn size() -> u256 }
+impl<T> Size for Box<T> { const fn size() -> u256 { 100 } }
+impl<T> Size for Box<T> as BW { const fn size() -> u256 { 70 } }
+impl Size for Box<Item> as BX { const fn size() -> u256 { 50 } }
+const fn two_traits() -> u256 { with (W, G) { Item::price() + Item::g() } }
+const fn trait_args() -> u256 { with (C8, C16) { <Item as Conv<u8>>::c() + <Item as Conv<u16>>::c() } }
+const fn sub_and_super() -> u256 { with (S, W) { Item::s() + Item::price() } }
+const fn nested() -> u256 { with (W) { with (V) { Item::price() } } }
+const fn disjoint_applications() -> u256 { with (BW<Other>, BX) { <Box<Item> as Size>::size() + <Box<Other> as Size>::size() } }
+"#,
+        &[
+            ("two_traits", 75),
+            ("trait_args", 24),
+            ("sub_and_super", 73),
+            ("nested", 50),
+            ("disjoint_applications", 120),
+        ],
+    );
+}
+
+#[test]
 fn duplicate_implementation_names_are_refused_at_declaration() {
     let codes = diagnostics(
         r#"
