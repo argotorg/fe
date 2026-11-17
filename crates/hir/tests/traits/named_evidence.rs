@@ -1238,6 +1238,31 @@ impl Price for Item as V { fn amount(self) -> u256 { 50 } }
 }
 
 #[test]
+fn local_duplicate_implementation_names_are_refused_at_declaration() {
+    let codes = diagnostics(
+        r#"
+struct Item {}
+trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub fn f() -> u256 {
+    impl Price for Item as W { fn price(self) -> u256 { 70 } }
+    impl Price for Item as W { fn price(self) -> u256 { 60 } }
+    with (W) { Item {}.price() }
+}
+"#,
+    );
+    assert!(codes.contains(&"3-0100".to_string()), "{codes:?}");
+    // A nested block and the module are other scopes: the nearer name is meant.
+    for source in [
+        "struct Item {}\ntrait Price { fn price(self) -> u256 }\nimpl Price for Item { fn price(self) -> u256 { 100 } }\npub fn f() -> u256 {\n    impl Price for Item as W { fn price(self) -> u256 { 70 } }\n    let a = with (W) { Item {}.price() }\n    let b = {\n        impl Price for Item as W { fn price(self) -> u256 { 60 } }\n        with (W) { Item {}.price() }\n    }\n    a * 1000 + b\n}",
+        "struct Item {}\ntrait Price { fn price(self) -> u256 }\nimpl Price for Item { fn price(self) -> u256 { 100 } }\nimpl Price for Item as W { fn price(self) -> u256 { 70 } }\npub fn f() -> u256 {\n    impl Price for Item as W { fn price(self) -> u256 { 60 } }\n    with (W) { Item {}.price() }\n}",
+    ] {
+        let codes = diagnostics(source);
+        assert!(codes.is_empty(), "{source}: {codes:?}");
+    }
+}
+
+#[test]
 fn named_implementations_of_traits_decided_by_presence_are_refused() {
     for source in [
         "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item as Copying {}",

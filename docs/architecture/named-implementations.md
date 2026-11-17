@@ -19,8 +19,8 @@ implementations out of ordinary lookup. `resolve_impl_name`
 name's visibility. An operand, bare or qualified, that also resolves to a
 visible value is reported as ambiguous rather than ranked. The
 definition-conflict pass (`DefConflictAnalysisPass`, `ty`) gives these names
-their own domain, so two named implementations with one name in one module
-are reported where they are declared.
+their own domain, so two named implementations with one name in one module,
+or in one block of a body, are reported where they are declared.
 
 `unchoosable_named_trait` (`trait_def`) refuses a named implementation that no
 use can choose. The compiler reads these traits only by presence.
