@@ -36,9 +36,10 @@ list never decides a selection.
 
 A qualified operand `<Type as Trait>` opens the ordinary implementation
 that its header alone selects (`resolve_ordinary_trait_impl_instance`).
-Its conditions are registered as obligations at the operand, with the
-choices active before it. A call or obligation that is decided after the
-surrounding expression keeps the choices in scope where it was written.
+Its conditions are registered as obligations once the whole list is read,
+with the list's choices except the opening itself. A call or obligation that
+is decided after the surrounding expression keeps the choices in scope where
+it was written.
 
 ## Evidence
 

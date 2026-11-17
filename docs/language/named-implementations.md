@@ -109,9 +109,10 @@ impl Price for Item as Markup {
 implementation. `with (Markup) { Item::price() }` therefore returns 101 without
 recursing into `Markup`. The header `Type: Trait` alone selects the
 implementation, and exactly one ordinary implementation must match it. Its
-conditions are proved where the operand is written, with the bounds in scope
-and the choices active before the opening, so an opening whose conditions
-cannot hold is rejected even when the block does not use it. Once opened, the
+conditions are proved where the operand is written, with the bounds in scope,
+the enclosing choices and the other operands of the same `with`, so the order
+of the operands does not matter, and an opening whose conditions cannot hold
+is rejected even when the block does not use it. Once opened, the
 implementation is a candidate like a named one. This operand does not clear
 the whole choice scope or change which dictionaries cross a call boundary.
 

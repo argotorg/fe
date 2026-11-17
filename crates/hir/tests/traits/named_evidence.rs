@@ -1133,6 +1133,70 @@ const fn disjoint_applications() -> u256 { with (BW<Other>, BX) { <Box<Item> as 
 }
 
 #[test]
+fn an_openings_conditions_do_not_depend_on_operand_order() {
+    values(
+        r#"
+struct Item {}
+struct Box<T> { v: T }
+trait Gate { const fn g() -> u256 }
+impl Gate for Item as G { const fn g() -> u256 { 5 } }
+trait Total { const fn total() -> u256 }
+impl<T: Gate> Total for Box<T> { const fn total() -> u256 { T::g() + 1 } }
+trait Named { const fn n() -> u256 }
+impl<T> Named for Box<T> { const fn n() -> u256 { 0 } }
+impl<T: Gate> Named for Box<T> as BN { const fn n() -> u256 { T::g() + 1 } }
+trait Mark { const fn m() -> u256 }
+impl Mark for Item { const fn m() -> u256 { 5 } }
+impl Mark for Item as M2 { const fn m() -> u256 { 9 } }
+trait Tally { const fn t() -> u256 }
+impl<T: Mark> Tally for Box<T> { const fn t() -> u256 { T::m() + 1 } }
+const fn gate_first() -> u256 { with (G, <Box<Item> as Total>) { <Box<Item> as Total>::total() } }
+const fn opening_first() -> u256 { with (<Box<Item> as Total>, G) { <Box<Item> as Total>::total() } }
+const fn named_gate_first() -> u256 { with (G, BN) { <Box<Item> as Named>::n() } }
+const fn named_named_first() -> u256 { with (BN, G) { <Box<Item> as Named>::n() } }
+const fn ordinary_opening_first() -> u256 { with (<Box<Item> as Tally>, M2) { <Box<Item> as Tally>::t() } }
+const fn ordinary_mark_first() -> u256 { with (M2, <Box<Item> as Tally>) { <Box<Item> as Tally>::t() } }
+"#,
+        &[
+            ("gate_first", 6),
+            ("opening_first", 6),
+            ("named_gate_first", 6),
+            ("named_named_first", 6),
+            ("ordinary_opening_first", 10),
+            ("ordinary_mark_first", 10),
+        ],
+    );
+}
+
+#[test]
+fn openings_whose_conditions_lead_to_each_other_are_refused() {
+    for source in [
+        r#"
+struct Item {}
+struct Box<T> { v: T }
+trait Ga { const fn a() -> u256 }
+trait Gb { const fn b() -> u256 }
+impl<T> Ga for Box<T> where Box<T>: Gb { const fn a() -> u256 { 1 } }
+impl<T> Gb for Box<T> where Box<T>: Ga { const fn b() -> u256 { 2 } }
+const fn cyc() -> u256 { with (<Box<Item> as Ga>, <Box<Item> as Gb>) { <Box<Item> as Ga>::a() } }
+"#,
+        r#"
+struct Item {}
+struct Box<T> { v: T }
+trait Ga { const fn a() -> u256 }
+trait Gb { const fn b() -> u256 }
+impl<T: Gb> Ga for Box<T> { const fn a() -> u256 { 1 } }
+impl<T: Ga> Gb for Box<T> { const fn b() -> u256 { 2 } }
+const fn both() -> u256 { with (<Box<Box<Item>> as Ga>, <Box<Item> as Gb>) { 0 } }
+"#,
+    ] {
+        let codes = diagnostics(source);
+        assert!(!codes.is_empty(), "the cycle must be refused");
+        assert!(codes.iter().all(|code| code == "6-0003"), "{codes:?}");
+    }
+}
+
+#[test]
 fn duplicate_implementation_names_are_refused_at_declaration() {
     let codes = diagnostics(
         r#"

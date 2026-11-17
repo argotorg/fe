@@ -1976,6 +1976,10 @@ impl<'db> TyChecker<'db> {
         let outer_choices = self.env.choices;
         // The implementations this `with` lists, each with its operand's span.
         let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
+        // The conditions of each opening of this list, with the opening's
+        // position in the list's choices and its operand's span.
+        let mut opening_conditions: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> =
+            Vec::new();
 
         for binding in bindings {
             let named = if binding.key_path.is_none()
@@ -2249,25 +2253,24 @@ impl<'db> TyChecker<'db> {
                                 goal: entry.implementation().trait_inst(self.db),
                             });
                         } else {
-                            // The opened implementation's conditions are proved in
-                            // the surrounding context, without the opening itself,
-                            // so an opening whose conditions can never hold is
-                            // refused whether or not the block uses it.
+                            // The opened implementation's conditions are proved
+                            // once the whole list is read (below the loop).
                             let mode = Some(if goal.is_mut(self.db) {
                                 BorrowKind::Mut
                             } else {
                                 BorrowKind::Ref
                             });
-                            for &condition in
-                                resolved.instantiated_constraints(self.db).list(self.db)
-                            {
-                                self.env.register_trait_obligation(TraitObligation {
-                                    choices: self.env.choices,
-                                    goal: condition.at_mode(self.db, mode),
-                                    origin: TraitObligationOrigin::GenericConfirmation,
-                                    span: span.clone(),
-                                });
-                            }
+                            let conditions = resolved
+                                .instantiated_constraints(self.db)
+                                .list(self.db)
+                                .iter()
+                                .map(|&condition| condition.at_mode(self.db, mode))
+                                .collect::<Vec<_>>();
+                            opening_conditions.push((
+                                choice.items(self.db).len() - 1,
+                                conditions,
+                                span.clone(),
+                            ));
                             listed.push((entry, span));
                             self.env.choices = Some(choice);
                         }
@@ -2360,6 +2363,28 @@ impl<'db> TyChecker<'db> {
                 }
                 None => {
                     self.env.effect_env_mut().insert_unkeyed(provided);
+                }
+            }
+        }
+
+        // An opened implementation's conditions are proved in the frame this
+        // `with` builds, without the opening itself: the enclosing choices and
+        // every other operand of the list, whatever their order. An opening
+        // whose conditions can never hold is refused whether or not the block
+        // uses it.
+        if let Some(list_choices) = self.env.choices {
+            for (index, conditions, span) in opening_conditions {
+                let mut items = list_choices.items(self.db).clone();
+                items.remove(index);
+                let context = (!items.is_empty())
+                    .then(|| super::super::trait_resolution::ChosenImpls::new(self.db, items));
+                for goal in conditions {
+                    self.env.register_trait_obligation(TraitObligation {
+                        choices: context,
+                        goal,
+                        origin: TraitObligationOrigin::GenericConfirmation,
+                        span: span.clone(),
+                    });
                 }
             }
         }
