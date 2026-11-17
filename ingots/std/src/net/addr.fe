@@ -1,5 +1,6 @@
 /// IP addresses and socket addresses, and their text.
 use core::{MemBuffer, Option}
+use core::hash::{Hash, Hasher}
 use core::ops::Eq
 use core::text::Text
 use ingot::io::Display
@@ -41,6 +42,12 @@ impl Ipv4Addr {
 impl Eq for Ipv4Addr {
     fn eq(self, _ other: Self) -> bool {
         self.bits == other.bits
+    }
+}
+
+impl Hash for Ipv4Addr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.bits.hash(mut state)
     }
 }
 
@@ -98,6 +105,12 @@ impl Ipv6Addr {
 impl Eq for Ipv6Addr {
     fn eq(self, _ other: Self) -> bool {
         self.bits == other.bits
+    }
+}
+
+impl Hash for Ipv6Addr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.bits.hash(mut state)
     }
 }
 
@@ -166,6 +179,23 @@ impl Eq for IpAddr {
             (IpAddr::V4(a), IpAddr::V4(b)) => a == b,
             (IpAddr::V6(a), IpAddr::V6(b)) => a == b,
             _ => false,
+        }
+    }
+}
+
+/// The family, then the address, so that an IPv4 address and an IPv6 one
+/// with the same bits hash apart, as they compare.
+impl Hash for IpAddr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        match self {
+            IpAddr::V4(ip) => {
+                state.write_u64(4)
+                ip.hash(mut state)
+            }
+            IpAddr::V6(ip) => {
+                state.write_u64(6)
+                ip.hash(mut state)
+            }
         }
     }
 }
@@ -252,6 +282,15 @@ impl SocketAddr {
 impl Eq for SocketAddr {
     fn eq(self, _ other: Self) -> bool {
         self.ip == other.ip && self.port == other.port && self.scope_id == other.scope_id
+    }
+}
+
+/// The address, the port and the scope id, all of which `==` compares.
+impl Hash for SocketAddr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.ip.hash(mut state)
+        self.port.hash(mut state)
+        self.scope_id.hash(mut state)
     }
 }
 

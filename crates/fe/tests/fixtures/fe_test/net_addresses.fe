@@ -1,3 +1,5 @@
+use core::hash::fold_hash
+use core::map::HashMap
 use std::io::Display
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}
 
@@ -110,4 +112,26 @@ fn socket_addresses() {
     assert!(SocketAddr::parse("[fe80::1%]:80").is_none())
     assert!(SocketAddr::parse("[fe80::1%eth0]:80").is_none())
     assert!(SocketAddr::parse("[fe80::1%4294967296]:80").is_none())
+}
+
+#[test]
+fn socket_addresses_are_map_keys() {
+    let v4 = SocketAddr::parse("127.0.0.1:80").unwrap()
+    let v6 = SocketAddr::parse("[::1]:80").unwrap()
+    let scoped = SocketAddr::parse("[::1%2]:80").unwrap()
+    var peers: HashMap<SocketAddr, u32> = HashMap::new()
+    assert!(peers.insert(v4, 1).is_none())
+    assert!(peers.insert(v6, 2).is_none())
+    assert!(peers.insert(scoped, 3).is_none())
+    assert!(peers.insert(SocketAddr::parse("127.0.0.1:80").unwrap(), 4).unwrap() == 1)
+    assert!(peers.len() == 3)
+    assert!(peers.get(v4).unwrap() == 4)
+    assert!(peers.get(scoped).unwrap() == 3)
+    assert!(!peers.contains_key(SocketAddr::parse("127.0.0.1:81").unwrap()))
+    // Equal addresses hash alike, and the bits of an IPv4 address in IPv6
+    // make a different address.
+    assert!(fold_hash(v6) == fold_hash(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 80)))
+    let v4_bits = IpAddr::V4(Ipv4Addr::from_bits(1))
+    let v6_bits = IpAddr::V6(Ipv6Addr::from_bits(1))
+    assert!(v4_bits != v6_bits && fold_hash(v4_bits) != fold_hash(v6_bits))
 }
