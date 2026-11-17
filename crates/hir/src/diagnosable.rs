@@ -416,11 +416,38 @@ impl<'db> Func<'db> {
 
     /// A variadic `extern` function is a C function that native code calls
     /// as it is declared: without generic arguments or effects, and not at
-    /// compile time.
+    /// compile time. Each fixed parameter takes one C integer register, and
+    /// the result is a C scalar or nothing. Unlike another `extern`
+    /// function's, its signature is checked in `core` and `std` too.
     pub fn diags_variadic(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         if !self.is_variadic(db) {
             return Vec::new();
         }
+        // A generic parameter is reported as such.
+        let no_c_form =
+            |ty: TyId<'db>| !(ty.has_invalid(db) || ty.has_param(db) || is_c_scalar(db, ty));
+        let c_abi = |span: DynLazySpan<'db>, ty, mutable| {
+            TyDiagCollection::from(TyLowerDiag::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported: false,
+            })
+        };
+        let ret = self.return_ty(db);
+        let types = self
+            .params(db)
+            .enumerate()
+            .filter_map(|(idx, param)| {
+                let ty = param.ty(db);
+                let mutable = param.mode_at(db, None) == FuncParamMode::Mut;
+                (mutable || no_c_form(ty))
+                    .then(|| c_abi(self.span().params().param(idx).ty().into(), ty, mutable))
+            })
+            .chain(
+                (no_c_form(ret) && ret != TyId::unit(db) && !ret.is_never(db))
+                    .then(|| c_abi(self.span().ret_ty().into(), ret, false)),
+            );
         [
             (db.compilation_settings().target(db) != Target::Native).then(|| {
                 (
@@ -438,6 +465,7 @@ impl<'db> Func<'db> {
         .into_iter()
         .flatten()
         .map(|(span, issue)| TyLowerDiag::InvalidVariadic { span, issue }.into())
+        .chain(types)
         .collect()
     }
 
@@ -464,7 +492,9 @@ impl<'db> Func<'db> {
             );
         }
         let exported = self.is_exported(db);
+        // `diags_variadic` checks a variadic function's signature.
         let foreign = self.is_extern(db)
+            && !self.is_variadic(db)
             && !matches!(
                 self.top_mod(db).ingot(db).kind(db),
                 IngotKind::Core | IngotKind::Std
