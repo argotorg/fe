@@ -1,0 +1,97 @@
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode, store_word}
+use core::ptr
+use std::abi::{Bytes1, Bytes32, DynArray, Sol, canonical_dyn_array, dyn_array_from}
+
+fn word_tail<T: AbiSize, const N: usize>(_ words: [u256; N]) -> DynArray<T> {
+    let size = 32 + N as u256 * 32
+    let data = ptr::alloc_bytes(size.downcast().unwrap())
+    unsafe {
+        store_word(ptr: data, value: N as u256)
+        for i in 0 .. N {
+            store_word(ptr: ptr::offset_bytes(data, 32 + i * 32), value: words[i])
+        }
+        DynArray::from_abi_tail(data, len: N, size)
+    }
+}
+
+#[test]
+fn canonical_unsigned_words_preserve_all_bits() {
+    let input = word_tail<u256, 4>([0, 1, 1 << 255, u256::max()])
+    let copy = canonical_dyn_array(input)
+    assert!(copy.len() == 4)
+    assert!(copy.encoded_span().ptr() != input.encoded_span().ptr())
+    for i in 0 .. 4 {
+        assert!(copy.get(i) == input.get(i))
+    }
+    assert!(copy.encoded_size() == input.encoded_size())
+}
+
+#[test]
+fn canonical_signed_words_preserve_sign_bits() {
+    let input = dyn_array_from([i256::min(), -1, 0, i256::max()])
+    let copy = canonical_dyn_array(input)
+    for i in 0 .. 4 {
+        assert!(copy.get(i) == input.get(i))
+    }
+}
+
+#[test]
+fn canonical_bytes32_preserve_all_bits() {
+    let input = word_tail<Bytes32, 3>([0, 1, u256::max()])
+    let copy = canonical_dyn_array(input)
+    for i in 0 .. 3 {
+        assert!(copy.get(i).val == input.get(i).val)
+    }
+}
+
+#[test]
+fn canonical_empty_word_arrays() {
+    assert!(canonical_dyn_array(DynArray<u256>::empty()).len() == 0)
+    assert!(canonical_dyn_array(DynArray<i256>::empty()).len() == 0)
+    assert!(canonical_dyn_array(DynArray<Bytes32>::empty()).len() == 0)
+}
+
+struct Doubled { value: u256 }
+impl AbiSize for Doubled {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Decode<Sol> for Doubled {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Self { value: d.read_word(input) * 2 }
+    }
+}
+impl Encode<Sol> for Doubled {
+    fn encode(self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.value)
+    }
+}
+
+#[test]
+fn custom_word_codec_still_runs() {
+    let input = word_tail<Doubled, 2>([7, 9])
+    let copy = canonical_dyn_array(input)
+    assert!(copy.encoded_span().read_word(32) == 14)
+    assert!(copy.encoded_span().read_word(64) == 18)
+    assert!(input.encoded_span().read_word(32) == 7)
+}
+
+#[test(should_revert)]
+fn dirty_bool_still_reverts() {
+    let _ = canonical_dyn_array(word_tail<bool, 1>([2]))
+}
+
+#[test(should_revert)]
+fn dirty_unsigned_word_still_reverts() {
+    let _ = canonical_dyn_array(word_tail<u8, 1>([256]))
+}
+
+#[test(should_revert)]
+fn dirty_signed_word_still_reverts() {
+    let _ = canonical_dyn_array(word_tail<i8, 1>([255]))
+}
+
+#[test(should_revert)]
+fn dirty_fixed_bytes_still_reverts() {
+    let _ = canonical_dyn_array(word_tail<Bytes1, 1>([1]))
+}
