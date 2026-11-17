@@ -8,9 +8,10 @@ use driver::DriverDataBase;
 use hir::{
     core::semantic::reference::typed_body_for_body,
     hir_def::{CallableDef, Expr, Func, ItemKind, Partial, TopLevelMod},
-    lower::map_file_to_mod,
-    span::{HirOrigin, LazySpan, body_source_map},
+    lower::{map_file_to_mod, parse_file_impl},
+    span::{HirOrigin, body_source_map},
 };
+use parser::{NodeOrToken, SyntaxKind, SyntaxNode, TextSize};
 
 pub async fn handle_signature_help(
     backend: &Backend,
@@ -40,7 +41,7 @@ pub async fn handle_signature_help(
     let top_mod = map_file_to_mod(&backend.db, file);
 
     // Find the enclosing function call and get signature info
-    if let Some(sig_info) = find_signature_at_cursor(&backend.db, top_mod, cursor, file_text) {
+    if let Some(sig_info) = find_signature_at_cursor(&backend.db, top_mod, cursor) {
         Ok(Some(sig_info))
     } else {
         Ok(None)
@@ -51,8 +52,7 @@ pub async fn handle_signature_help(
 fn find_signature_at_cursor<'db>(
     db: &'db DriverDataBase,
     top_mod: TopLevelMod<'db>,
-    cursor: parser::TextSize,
-    file_text: &str,
+    cursor: TextSize,
 ) -> Option<SignatureHelp> {
     // The body of the function, contract `init` or recv arm at the cursor.
     let body = top_mod
@@ -64,34 +64,31 @@ fn find_signature_at_cursor<'db>(
         })?;
     let typed_body = typed_body_for_body(db, body)?;
     let source_map = body_source_map(db, body);
+    let root = SyntaxNode::new_root(parse_file_impl(db, top_mod).root.clone());
 
     // Find the call whose argument list holds the cursor and whose callee the
     // type checker resolved to a function. A call is lowered after its
     // arguments, so the first one found is the innermost.
     for (expr_id, expr_data) in body.exprs(db).iter() {
-        // A call a macro such as `format!` expands to isn't written in the
-        // source, and its spans are the macro's.
-        let HirOrigin::Raw(_) = source_map.expr_map.node_to_source[expr_id] else {
-            continue;
-        };
-        let span = expr_id.span(body);
         // A method call's receiver is its first parameter, `self`, so its
         // arguments start at the second.
-        let (args, first_param) = match expr_data {
+        let first_param = match expr_data {
             // A call of a callable value, such as a closure, runs the method
             // of its `Fn` trait, whose signature isn't the value's.
             Partial::Present(Expr::Call(..)) if typed_body.call_receiver(db, expr_id).is_none() => {
-                (span.into_call_expr().args(), 0)
+                0
             }
-            Partial::Present(Expr::MethodCall(..)) => (span.into_method_call_expr().args(), 1),
+            Partial::Present(Expr::MethodCall(..)) => 1,
             _ => continue,
         };
-        // The end of a list that isn't closed yet, as while typing, holds
-        // the cursor too.
-        if let Some(args) = args.resolve(db)
-            && args.range.start() < cursor
-            && cursor <= args.range.end()
-            && let Some(arg) = argument_index(cursor, args.range.start(), file_text)
+        // A call a macro such as `format!` expands to isn't written in the
+        // source, so it has no argument list there.
+        if let HirOrigin::Raw(ptr) = &source_map.expr_map.node_to_source[expr_id]
+            && let Some(args) = ptr.syntax_node_ptr().try_to_node(&root).and_then(|call| {
+                call.children()
+                    .find(|child| child.kind() == SyntaxKind::CallArgList)
+            })
+            && let Some(arg) = argument_index(&args, cursor)
             && let Some(CallableDef::Func(called_func)) = typed_body
                 .callable_expr(expr_id)
                 .map(|callable| callable.callable_def)
@@ -103,36 +100,28 @@ fn find_signature_at_cursor<'db>(
     None
 }
 
-/// The index of the argument at `cursor` in the argument list whose `(` is
-/// at `list_start`: the number of commas between them outside brackets, or
-/// `None` if the list closes before the cursor.
-fn argument_index(
-    cursor: parser::TextSize,
-    list_start: parser::TextSize,
-    file_text: &str,
-) -> Option<usize> {
-    let mut comma_count = 0;
-    let mut paren_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
-    let mut bracket_depth: i32 = 0;
-
-    for c in file_text[usize::from(list_start) + 1..usize::from(cursor)].chars() {
-        match c {
-            '(' => paren_depth += 1,
-            ')' if paren_depth == 0 => return None,
-            ')' => paren_depth -= 1,
-            '{' => brace_depth += 1,
-            '}' => brace_depth = brace_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            ',' if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 => {
-                comma_count += 1;
-            }
-            _ => {}
-        }
-    }
-
-    Some(comma_count)
+/// The index of the argument at `cursor` in the argument list `args`: the
+/// number of the list's own commas before it, or `None` if the cursor is
+/// outside the list. The end of a list that isn't closed yet, as while
+/// typing, holds the cursor too.
+fn argument_index(args: &SyntaxNode, cursor: TextSize) -> Option<usize> {
+    let tokens: Vec<_> = args
+        .children_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .collect();
+    let open = tokens
+        .iter()
+        .find(|token| token.kind() == SyntaxKind::LParen)?;
+    let end = tokens
+        .iter()
+        .find(|token| token.kind() == SyntaxKind::RParen)
+        .map_or(args.text_range().end(), |token| token.text_range().start());
+    (open.text_range().end() <= cursor && cursor <= end).then(|| {
+        tokens
+            .iter()
+            .filter(|token| token.kind() == SyntaxKind::Comma && token.text_range().end() <= cursor)
+            .count()
+    })
 }
 
 /// Build a SignatureHelp response for a function, with the parameter at
@@ -291,7 +280,7 @@ pub contract Wallet {
         );
         let top_mod = map_file_to_mod(&db, file);
         let cursor = code.find(needle).unwrap() + needle.len();
-        let help = find_signature_at_cursor(&db, top_mod, (cursor as u32).into(), code)?;
+        let help = find_signature_at_cursor(&db, top_mod, (cursor as u32).into())?;
         Some((help.signatures[0].label.clone(), help.active_parameter))
     }
 
@@ -366,11 +355,67 @@ fn f() {
         check(code, "plain(1, ", Some((plain, Some(1))));
         check(code, "plain(1, 2, ", Some((plain, Some(1))));
         // An argument list being typed isn't closed yet.
-        for (unclosed, active) in [("= plain(", 0), ("= plain(1, ", 1)] {
+        for (unclosed, active) in [
+            ("= plain(", 0),
+            ("= plain(1, ", 1),
+            ("= plain(plain(1, 2), ", 1),
+        ] {
             let code = format!(
                 "fn plain(_ a: i32, _ b: i32) -> i32 {{\n    a\n}}\n\nfn f() {{\n    let _ {unclosed}\n}}\n"
             );
             check(&code, unclosed, Some((plain, Some(active))));
+        }
+    }
+
+    /// Only the argument list's own commas separate its arguments, and only
+    /// its own `)` closes it: not those in a closure's parameters, a string,
+    /// a nested call, a tuple or array, generic arguments or a comment.
+    #[test]
+    fn signature_help_nested_syntax() {
+        let plain = "fn plain(a: i32, b: i32) -> i32";
+        let apply = "fn apply(f: F, x: i32) -> i32";
+        let code = r#"fn plain(_ a: i32, _ b: i32) -> i32 {
+    a
+}
+
+fn apply<F>(_ f: F, _ x: i32) -> i32 {
+    x
+}
+
+fn pick<T, U>(_ t: T, _ u: U) -> T {
+    t
+}
+
+fn f() {
+    let _ = apply(|a: i32, b: i32| a + b, 1)
+    let _ = apply("a, b", 2)
+    let _ = apply(plain(1, 2), 3)
+    let _ = apply((1, 2), 4)
+    let _ = apply([1, 2], 5)
+    let _ = apply(pick<i32, bool>(1, true), 6)
+    let _ = apply("a)", 7)
+    let _ = apply( // )
+        8,
+        9
+    )
+}
+"#;
+        for (needle, expected) in [
+            ("apply(|a: i32, ", (apply, 0)),
+            ("| a + b", (apply, 0)),
+            ("apply(\"a, b\"", (apply, 0)),
+            ("apply(plain(1, ", (plain, 1)),
+            ("apply(plain(1, 2)", (apply, 0)),
+            ("apply((1, 2)", (apply, 0)),
+            ("apply([1, 2]", (apply, 0)),
+            ("apply(pick<i32, ", (apply, 0)),
+            ("true), ", (apply, 1)),
+            ("apply(\"a)\"", (apply, 0)),
+            ("\"a)\", ", (apply, 1)),
+            ("// )\n        ", (apply, 0)),
+            ("8,\n        ", (apply, 1)),
+        ] {
+            check(code, needle, Some((expected.0, Some(expected.1))));
         }
     }
 
