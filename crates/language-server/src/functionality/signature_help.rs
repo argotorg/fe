@@ -6,8 +6,8 @@ use async_lsp::lsp_types::{
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    analysis::{name_resolution::resolve_path, ty::trait_resolution::PredicateListId},
-    hir_def::{Body, Expr, ExprId, Func, ItemKind, Partial, TopLevelMod},
+    analysis::ty::ty_check::check_func_body,
+    hir_def::{CallableDef, Expr, Func, ItemKind, Partial, TopLevelMod},
     lower::map_file_to_mod,
     span::LazySpan,
 };
@@ -68,106 +68,32 @@ fn find_signature_at_cursor<'db>(
 
     let func = enclosing_func?;
     let body = func.body(db)?;
+    let (_, typed_body) = check_func_body(db, func);
 
-    // Find Call or MethodCall expressions that contain the cursor
+    // Find the call containing the cursor whose callee the type checker
+    // resolved to a function. A call is lowered after its arguments, so the
+    // first one found is the innermost.
     for (expr_id, expr_data) in body.exprs(db).iter() {
-        match expr_data {
-            Partial::Present(Expr::Call(callee, args)) => {
-                let expr_span = expr_id.span(body);
-                if let Some(resolved) = expr_span.resolve(db)
-                    && resolved.range.contains(cursor)
-                {
-                    // Try to resolve what function is being called
-                    if let Some(called_func) = resolve_callee_func(db, body, *callee) {
-                        let active_param =
-                            compute_active_parameter(cursor, resolved.range, file_text, args.len());
-
-                        return Some(build_signature_help(db, called_func, active_param));
-                    }
-                }
+        let args = match expr_data {
+            // A call of a callable value, such as a closure, runs the method
+            // of its `Fn` trait, whose signature isn't the value's.
+            Partial::Present(Expr::Call(_, args))
+                if typed_body.call_receiver(db, expr_id).is_none() =>
+            {
+                args
             }
-            Partial::Present(Expr::MethodCall(receiver, method_name, _generics, args)) => {
-                let expr_span = expr_id.span(body);
-                if let Some(resolved) = expr_span.resolve(db)
-                    && resolved.range.contains(cursor)
-                {
-                    // Try to resolve the method being called
-                    if let Partial::Present(method_ident) = method_name
-                        && let Some(called_func) =
-                            resolve_method_func(db, top_mod, body, *receiver, *method_ident)
-                    {
-                        let active_param =
-                            compute_active_parameter(cursor, resolved.range, file_text, args.len());
-
-                        return Some(build_signature_help(db, called_func, active_param));
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    None
-}
-
-/// Try to resolve a callee expression to a function.
-fn resolve_callee_func<'db>(
-    db: &'db DriverDataBase,
-    body: Body<'db>,
-    callee: ExprId,
-) -> Option<Func<'db>> {
-    // Check if callee is a path expression
-    let callee_data = body.exprs(db).get(callee)?;
-    let Partial::Present(Expr::Path(Partial::Present(path))) = callee_data else {
-        return None;
-    };
-
-    // Resolve the path
-    let scope = body.scope();
-    let resolved = resolve_path(db, *path, scope, PredicateListId::empty_list(db), false).ok()?;
-
-    // Check if it resolves to a function
-    if let Some(scope_id) = resolved.as_scope(db)
-        && let Some(ItemKind::Func(func)) = scope_id.to_item()
-    {
-        return Some(func);
-    }
-
-    None
-}
-
-/// Try to resolve a method call to a function.
-fn resolve_method_func<'db>(
-    db: &'db DriverDataBase,
-    top_mod: TopLevelMod<'db>,
-    body: Body<'db>,
-    receiver: ExprId,
-    method_name: hir::hir_def::IdentId<'db>,
-) -> Option<Func<'db>> {
-    use hir::analysis::ty::ty_check::check_func_body;
-
-    // Get the type of the receiver
-    let containing_func = body.containing_func(db)?;
-    let (_, typed_body) = check_func_body(db, containing_func);
-    let receiver_ty = typed_body.expr_ty(db, receiver);
-
-    let method_name_str = method_name.data(db);
-
-    // Look for impl blocks that match this type
-    let ty_name = receiver_ty.pretty_print(db);
-
-    for &item in top_mod.all_items(db) {
-        if let ItemKind::Impl(impl_) = item {
-            let impl_ty_name = impl_.ty(db).pretty_print(db);
-            if impl_ty_name == ty_name {
-                for func in impl_.funcs(db) {
-                    if let Some(name) = func.name(db).to_opt()
-                        && name.data(db) == method_name_str
-                    {
-                        return Some(func);
-                    }
-                }
-            }
+            Partial::Present(Expr::MethodCall(.., args)) => args,
+            _ => continue,
+        };
+        if let Some(resolved) = expr_id.span(body).resolve(db)
+            && resolved.range.contains(cursor)
+            && let Some(CallableDef::Func(called_func)) = typed_body
+                .callable_expr(expr_id)
+                .map(|callable| callable.callable_def)
+        {
+            let active_param =
+                compute_active_parameter(cursor, resolved.range, file_text, args.len());
+            return Some(build_signature_help(db, called_func, active_param));
         }
     }
 
@@ -299,29 +225,98 @@ fn build_signature_help<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::load_ingot_from_directory;
-    use std::path::PathBuf;
+    use url::Url;
+
+    const CALLS: &str = r#"use inner::helper
+
+mod inner {
+    pub fn helper(_ x: i32, _ flag: bool) -> i32 {
+        x
+    }
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+impl Point {
+    pub fn new(_ x: i32, _ y: i32) -> Point {
+        Point { x, y }
+    }
+
+    pub fn dot(self, _ other: Point) -> i32 {
+        self.x * other.x + self.y * other.y
+    }
+}
+
+trait Shape {
+    fn area(self, _ scale: i32) -> i32
+}
+
+impl Shape for Point {
+    fn area(self, _ scale: i32) -> i32 {
+        self.x * self.y * scale
+    }
+}
+
+fn plain(_ a: i32, _ b: i32) -> i32 {
+    a
+}
+
+fn f() {
+    let p = Point::new(1, 2)
+    let _ = plain(1, 2)
+    let _ = plain(helper(3, true), 4)
+    let _ = inner::helper(5, false)
+    let _ = p.dot(p)
+    let _ = p.area(6)
+    let g = |x: i32| x
+    let _ = g(7)
+}
+"#;
 
     #[test]
-    fn test_signature_help_basic() {
+    fn signature_help_at_calls() {
         let mut db = DriverDataBase::default();
-
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("test_files")
-            .join("incomplete_completion");
-
-        load_ingot_from_directory(&mut db, &fixture_path);
-
-        let lib_url = url::Url::from_file_path(fixture_path.join("src").join("lib.fe")).unwrap();
-        let file = db.workspace().get(&db, &lib_url).expect("file not found");
-        let file_text = file.text(&db);
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///signature_help.fe").unwrap(),
+            Some(CALLS.to_string()),
+        );
         let top_mod = map_file_to_mod(&db, file);
+        let help_after = |needle: &str| {
+            let cursor = CALLS.find(needle).unwrap() + needle.len();
+            find_signature_at_cursor(&db, top_mod, (cursor as u32).into(), CALLS)
+        };
 
-        // Find "self.distance()" and test signature help inside the parens
-        if let Some(pos) = file_text.find("self.distance()") {
-            let cursor = parser::TextSize::from((pos + "self.distance(".len()) as u32);
-            // Signature help may or may not be found depending on method resolution
-            let _sig = find_signature_at_cursor(&db, top_mod, cursor, file_text);
+        for (needle, label, active) in [
+            ("plain(1, ", "fn plain(a: i32, b: i32) -> i32", 1),
+            ("helper(3, ", "fn helper(x: i32, flag: bool) -> i32", 1),
+            ("true), ", "fn plain(a: i32, b: i32) -> i32", 1),
+            (
+                "inner::helper(5, ",
+                "fn helper(x: i32, flag: bool) -> i32",
+                1,
+            ),
+            ("Point::new(1, ", "fn new(x: i32, y: i32) -> Point", 1),
+        ] {
+            let help =
+                help_after(needle).unwrap_or_else(|| panic!("no signature help after `{needle}`"));
+            assert_eq!(help.signatures[0].label, label, "after `{needle}`");
+            assert_eq!(help.active_parameter, Some(active), "after `{needle}`");
         }
+
+        for (needle, label) in [
+            ("p.dot(", "fn dot(self, other: Point) -> i32"),
+            ("p.area(", "fn area(self, scale: i32) -> i32"),
+        ] {
+            let help =
+                help_after(needle).unwrap_or_else(|| panic!("no signature help after `{needle}`"));
+            assert_eq!(help.signatures[0].label, label, "after `{needle}`");
+        }
+
+        // A call of a closure runs its `Fn` method, not a written signature.
+        assert!(help_after("= g(").is_none());
     }
 }
