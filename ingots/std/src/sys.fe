@@ -3,12 +3,17 @@
 /// share: `errno`, C strings, and the layouts and values that differ between
 /// hosts, which `linux` and `macos` give under the same names.
 use core::{MemBuffer, Result}
+use core::ops::Drop
 use super::io::{Display, Error, ErrorKind}
 
 #[cfg(target_os = "linux")]
 pub use linux::*
 #[cfg(target_os = "macos")]
 pub use macos::*
+
+extern {
+    fn close(_ fd: i32) -> i32
+}
 
 // The `errno` values every supported host shares.
 pub const EPERM: i32 = 1
@@ -67,4 +72,33 @@ pub fn c_string<T: Display>(_ value: T) -> Result<Error, MemBuffer> {
     }
     text.push(0)
     Result::Ok(text)
+}
+
+/// Calls `call` until it does other than fail with `EINTR`: its result, or
+/// `errno` if it fails. For calls that a signal interrupts before they do
+/// anything, such as `read`, `write`, `accept`, `recv`, `send` and `poll`;
+/// not `connect`, which goes on without the caller, nor `close`.
+pub fn retry<F: Fn() -> isize>(_ call: F) -> Result<Error, usize> uses F::E {
+    while true {
+        let result = call()
+        if result >= 0 {
+            return Result::Ok(result.downcast_unchecked())
+        }
+        if errno() != EINTR {
+            return Result::Err(last_error())
+        }
+    }
+    Result::Ok(0)
+}
+
+/// An open file descriptor, which it closes when destroyed. Making one
+/// vouches that `fd` is open and that nothing else closes it.
+pub(ingot) struct Fd { pub(ingot) unsafe fd: i32 }
+
+/// A `close` that a signal interrupts isn't made again: the descriptor may
+/// be closed already, and its number another's by then.
+impl Drop for Fd {
+    fn drop(own self) {
+        unsafe { close(self.fd) }
+    }
 }
