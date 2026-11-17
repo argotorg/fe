@@ -335,6 +335,9 @@ fn base64_digit(_ digits: MemSpan, _ bits: u256, _ n: u256) -> u8 {
 /// accepted encoding (RFC 4648).
 pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
     let len = input.text_len()
+    if len == 0 {
+        return Option::Some(Bytes::zeroed(0))
+    }
     if len % 4 != 0 {
         return Option::None
     }
@@ -347,26 +350,41 @@ pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
     let out = decoded.span().ptr()
     var i: usize = 0
     var j: usize = 0
-    while i < len {
+    // Only the final quartet can have padding. Full quartets always
+    // consume four digits and produce three bytes.
+    let body_len = len - if padding == 0 { 0 } else { 4 }
+    while i < body_len {
         let a = base64_value(input.text_byte(i))
         let b = base64_value(input.text_byte(i + 1))
-        let c = if i + 2 < len - padding { base64_value(input.text_byte(i + 2)) } else { 0 }
-        let d = if i + 3 < len - padding { base64_value(input.text_byte(i + 3)) } else { 0 }
+        let c = base64_value(input.text_byte(i + 2))
+        let d = base64_value(input.text_byte(i + 3))
         if a > 63 || b > 63 || c > 63 || d > 63 {
             return Option::None
         }
         let group = (a << 18) | (b << 12) | (c << 6) | d
-        unsafe { *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate() }
-        if j + 1 < out_len {
-            unsafe { *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate() }
-        }
-        if j + 2 < out_len {
-            unsafe { *ptr::offset_bytes(out, j + 2) = group.downcast_truncate() }
-        } else if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
-            return Option::None
+        unsafe {
+            *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate()
+            *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate()
+            *ptr::offset_bytes(out, j + 2) = group.downcast_truncate()
         }
         i += 4
         j += 3
+    }
+    if padding != 0 {
+        let a = base64_value(input.text_byte(i))
+        let b = base64_value(input.text_byte(i + 1))
+        let c = if padding == 1 { base64_value(input.text_byte(i + 2)) } else { 0 }
+        if a > 63 || b > 63 || c > 63 {
+            return Option::None
+        }
+        let group = (a << 18) | (b << 12) | (c << 6)
+        if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
+            return Option::None
+        }
+        unsafe { *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate() }
+        if padding == 1 {
+            unsafe { *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate() }
+        }
     }
     Option::Some(decoded)
 }
