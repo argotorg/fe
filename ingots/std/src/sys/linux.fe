@@ -1,6 +1,8 @@
 #![cfg(target_os = "linux")]
 /// glibc's Linux layouts and values, on x86-64 and AArch64.
-use core::MemSpan
+use core::{MemSpan, Result}
+use ingot::io::Error
+use super::{Fd, check_call, retry, socket}
 
 extern {
     fn __errno_location() -> *i32
@@ -71,6 +73,7 @@ pub const O_EXCL: i32 = 0x80
 pub const O_TRUNC: i32 = 0x200
 pub const O_APPEND: i32 = 0x400
 pub const O_CLOEXEC: i32 = 0x80000
+pub const O_NONBLOCK: i32 = 0x800
 
 // `fcntl`'s command to copy a descriptor to the lowest free number from its
 // argument on, close-on-exec.
@@ -81,3 +84,46 @@ pub const PIPE_BUF: usize = 4096
 
 // The bytes in a unit of `struct rusage`'s `ru_maxrss`.
 pub const MAXRSS_UNIT: u64 = 1024
+
+extern {
+    fn accept4(_ fd: i32, _ addr: *u8, _ len: *u32, _ flags: i32) -> i32
+}
+
+// Socket values, the same on x86-64 and AArch64.
+pub const AF_INET6: i32 = 10
+pub const SOL_SOCKET: i32 = 1
+pub const SO_REUSEADDR: i32 = 2
+pub const SO_ERROR: i32 = 4
+pub const SO_BROADCAST: i32 = 6
+pub const SO_RCVTIMEO: i32 = 20
+pub const SO_SNDTIMEO: i32 = 21
+const SOCK_CLOEXEC: i32 = 0x80000
+
+// The flags of each `send`: `MSG_NOSIGNAL`, so that a write to a closed
+// connection raises no `SIGPIPE`.
+pub const SEND_FLAGS: i32 = 0x4000
+
+/// The first 16 bits of a socket address of `domain`: its family.
+pub fn sockaddr_header(_ domain: i32) -> u16 {
+    domain.downcast_truncate()
+}
+
+/// The domain of a socket address whose first 16 bits are `header`.
+pub fn sockaddr_domain(_ header: u16) -> i32 {
+    header as i32
+}
+
+/// A new socket of `domain` and `kind`, close-on-exec.
+pub fn new_socket(_ domain: i32, _ kind: i32) -> Result<Error, Fd> {
+    let fd = unsafe { socket(domain, kind | SOCK_CLOEXEC, 0) }
+    check_call(fd)?
+    Result::Ok(unsafe { Fd { fd } })
+}
+
+/// A connection that the listening socket `fd` accepts, blocking and
+/// close-on-exec. The peer's address goes to `addr`, whose length is at
+/// `len`.
+pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
+    let accepted = retry(|| unsafe { accept4(fd, addr, len, SOCK_CLOEXEC) } as isize)?
+    Result::Ok(unsafe { Fd { fd: accepted.downcast_unchecked() } })
+}

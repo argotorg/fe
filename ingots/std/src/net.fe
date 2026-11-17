@@ -1,3 +1,7 @@
 /// Networking. IP and socket addresses, with their text, work on every
-/// target.
+/// target. TCP and UDP sockets are native: `Net`, a capability of the native
+/// root effect, `std::native::Host`, makes them, and a function that does
+/// declares `uses (net: mut Net)`.
 pub use addr::*
+#[cfg(target_family = "unix")]
+pub use socket::{Net, Shutdown, TcpListener, TcpStream, UdpSocket}

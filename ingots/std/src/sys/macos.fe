@@ -1,6 +1,8 @@
 #![cfg(target_os = "macos")]
 /// AArch64 macOS's layouts and values, with 64-bit inodes.
-use core::MemSpan
+use core::{MemSpan, Result}
+use ingot::io::Error
+use super::{F_SETFD, FD_CLOEXEC, Fd, check_call, fcntl, retry, set_nonblocking, set_socket_option, socket}
 
 extern {
     fn __error() -> *i32
@@ -67,6 +69,7 @@ pub const O_EXCL: i32 = 0x800
 pub const O_TRUNC: i32 = 0x400
 pub const O_APPEND: i32 = 0x8
 pub const O_CLOEXEC: i32 = 0x1000000
+pub const O_NONBLOCK: i32 = 0x4
 
 // `fcntl`'s command to copy a descriptor to the lowest free number from its
 // argument on, close-on-exec.
@@ -77,3 +80,61 @@ pub const PIPE_BUF: usize = 512
 
 // The bytes in a unit of `struct rusage`'s `ru_maxrss`.
 pub const MAXRSS_UNIT: u64 = 1
+
+extern {
+    fn accept(_ fd: i32, _ addr: *u8, _ len: *u32) -> i32
+}
+
+// Socket values.
+pub const AF_INET6: i32 = 30
+pub const SOL_SOCKET: i32 = 0xffff
+pub const SO_REUSEADDR: i32 = 0x4
+pub const SO_ERROR: i32 = 0x1007
+pub const SO_BROADCAST: i32 = 0x20
+pub const SO_RCVTIMEO: i32 = 0x1006
+pub const SO_SNDTIMEO: i32 = 0x1005
+const SO_NOSIGPIPE: i32 = 0x1022
+
+// The flags of each `send`: none, since every socket has `SO_NOSIGPIPE`.
+pub const SEND_FLAGS: i32 = 0
+
+/// The first 16 bits of a socket address of `domain`: its length, then its
+/// family.
+pub fn sockaddr_header(_ domain: i32) -> u16 {
+    let len: u16 = if domain == AF_INET6 { 28 } else { 16 }
+    let family: u16 = domain.downcast_truncate()
+    family << 8 | len
+}
+
+/// The domain of a socket address whose first 16 bits are `header`.
+pub fn sockaddr_domain(_ header: u16) -> i32 {
+    (header >> 8) as i32
+}
+
+/// A new socket of `domain` and `kind`, close-on-exec.
+pub fn new_socket(_ domain: i32, _ kind: i32) -> Result<Error, Fd> {
+    let fd = unsafe { socket(domain, kind, 0) }
+    check_call(fd)?
+    let socket = unsafe { Fd { fd } }
+    set_up(fd)?
+    Result::Ok(socket)
+}
+
+/// A connection that the listening socket `fd` accepts, blocking and
+/// close-on-exec. The peer's address goes to `addr`, whose length is at
+/// `len`.
+pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
+    let accepted = retry(|| unsafe { accept(fd, addr, len) } as isize)?
+    let socket = unsafe { Fd { fd: accepted.downcast_unchecked() } }
+    set_up(socket.fd)?
+    // It takes `O_NONBLOCK` from a non-blocking listener.
+    set_nonblocking(socket.fd, false)?
+    Result::Ok(socket)
+}
+
+// Makes the socket `fd` close-on-exec, and keeps a write to a closed
+// connection from raising `SIGPIPE`.
+fn set_up(_ fd: i32) -> Result<Error, ()> {
+    check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
+    set_socket_option(fd, level: SOL_SOCKET, name: SO_NOSIGPIPE, value: 1)
+}
