@@ -1,0 +1,67 @@
+use core::ptr::MemBuffer
+
+#[test]
+fn every_tail_and_mismatch() {
+    // Cover every tail length, empty buffers, and multiple full words.
+    for n in 0 .. 66 {
+        var a = MemBuffer::new(n + 32)
+        var b = MemBuffer::new(n + 32)
+        for i in 0 .. n {
+            a[i] = (i % 251).downcast_unchecked()
+            b[i] = (i % 251).downcast_unchecked()
+        }
+        // Bytes after the logical end must not affect equality.
+        for i in n .. n + 32 {
+            a[i] = 0xa5
+            b[i] = 0x5a
+        }
+        // Shrinking keeps the initialized prefix inside each allocation.
+        unsafe {
+            a.set_len(n)
+            b.set_len(n)
+        }
+        assert!(a == b)
+        assert!(a == b.span())
+        for i in 0 .. n {
+            b[i] = 255
+            assert!(a != b)
+            assert!(a != b.span())
+            b[i] = (i % 251).downcast_unchecked()
+        }
+    }
+}
+#[test]
+fn unaligned_spans_and_unequal_lengths() {
+    for n in 0 .. 66 {
+        var a = MemBuffer::new(n)
+        var backing = MemBuffer::new(n + 17)
+        for i in 0 .. n {
+            a[i] = (i % 251).downcast_unchecked()
+            backing[i + 3] = (i % 251).downcast_unchecked()
+        }
+        assert!(a == backing.span().slice(offset: 3, len: n))
+        assert!(a != backing)
+        assert!(backing != a)
+        assert!(a != backing.span())
+        assert!(backing != a.span())
+    }
+}
+
+#[test]
+fn large_buffers_and_early_exit() {
+    var a = MemBuffer::new(1024)
+    var b = MemBuffer::new(1024)
+    for i in 0 .. 1024 {
+        a[i] = 0x5a
+        b[i] = 0x5a
+    }
+    assert!(a == a)
+    assert!(a == b)
+    assert!(a == b.span())
+    for i in [0, 511, 1023] {
+        b[i] = 0x59
+        assert!(a != b)
+        assert!(a != b.span())
+        b[i] = 0x5a
+    }
+}
