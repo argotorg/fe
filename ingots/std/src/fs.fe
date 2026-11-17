@@ -6,7 +6,7 @@
 /// them `uses (fs: mut Fs)`. A path is the text of a `Display` value, such as
 /// a string literal, an `Arg` or a `MemBuffer`. An operation that fails
 /// returns the host's reason as a `std::io::Error`.
-use core::{MemBuffer, MemSlice, MemSpan, MemVec, Result, ptr}
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
 use super::env::c_string_len
 use super::io::{Display, Error, ErrorKind}
 use super::native::{Host, HostCapabilitySeal}
@@ -173,14 +173,17 @@ impl Fs for Host {
             return Result::Err(last_error())
         }
         var entries = MemVec::new()
-        var code: i32 = 0
-        while code == 0 {
+        var failure: Option<Error> = Option::None
+        while failure.is_none() {
             // `readdir` returns null at the end and on a failure, which
             // alone sets `errno`.
             unsafe { *sys::errno_location() = 0 }
             let entry = unsafe { readdir(dir) }
             if ptr::is_null(entry) {
-                code = sys::errno()
+                let code = sys::errno()
+                if code != 0 {
+                    failure = Option::Some(Error::from_code(code))
+                }
                 break
             }
             let name_ptr = ptr::offset_bytes(entry, sys::DIRENT_NAME)
@@ -190,11 +193,14 @@ impl Fs for Host {
             }
             match dir_entry(path, name, unsafe { *ptr::offset_bytes(entry, sys::DIRENT_TYPE) }) {
                 Result::Ok(entry) => entries.push(entry),
-                Result::Err(error) => code = error.code(),
+                Result::Err(error) => failure = Option::Some(error),
             }
         }
         unsafe { closedir(dir) }
-        if code != 0 { Result::Err(Error::from_code(code)) } else { Result::Ok(entries) }
+        match failure {
+            Option::Some(error) => Result::Err(error),
+            Option::None => Result::Ok(entries),
+        }
     }
 
     fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {

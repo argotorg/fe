@@ -3,9 +3,9 @@
 use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
 use core::ops::Drop
 use ingot::env::c_string_len
-use ingot::io::{Display, EINVAL, Error, read, write}
+use ingot::io::{Display, Error, read, write}
 use ingot::native::{Host, HostCapabilitySeal}
-use ingot::sys::{self, c_string, last_error}
+use ingot::sys::{self, EBADF, EINTR, EINVAL, EPIPE, c_string, last_error}
 use ingot::time::{Clock, Duration, Instant}
 
 extern {
@@ -32,9 +32,6 @@ extern {
 }
 
 // The values every supported host shares.
-const EINTR: i32 = 4
-const EBADF: i32 = 9
-const EPIPE: i32 = 32
 const O_RDONLY: i32 = 0
 const O_WRONLY: i32 = 1
 const POLLIN: u16 = 0x1

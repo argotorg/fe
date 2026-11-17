@@ -4,7 +4,7 @@ use std::{
     array,
     ffi::OsString,
     fs,
-    io::Write,
+    io::{self, Write},
     os::unix::{
         ffi::OsStringExt,
         fs::symlink,
@@ -3492,6 +3492,56 @@ read a\0: InvalidInput (Invalid argument)"#,
         );
         assert_eq!(lines.join("\n"), expected, "O{level}");
         assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
+}
+
+// Each host error number has the kind Rust gives it, among the kinds Fe has.
+#[test]
+fn native_errors_take_the_kinds_of_host_error_numbers() {
+    const KINDS: [&str; 19] = [
+        "NotFound",
+        "PermissionDenied",
+        "AlreadyExists",
+        "NotADirectory",
+        "IsADirectory",
+        "InvalidInput",
+        "WouldBlock",
+        "TimedOut",
+        "ConnectionRefused",
+        "ConnectionReset",
+        "ConnectionAborted",
+        "NotConnected",
+        "AddrInUse",
+        "AddrNotAvailable",
+        "NetworkUnreachable",
+        "HostUnreachable",
+        "BrokenPipe",
+        "UnexpectedEof",
+        "Other",
+    ];
+    let mut expected = String::new();
+    for code in 1..=150 {
+        let kind = format!("{:?}", io::Error::from_raw_os_error(code).kind());
+        let kind = if KINDS.contains(&kind.as_str()) {
+            kind.as_str()
+        } else {
+            "Other"
+        };
+        expected.push_str(&format!("{code} {kind}\n"));
+    }
+    expected.push_str("new: UnexpectedEof, code: false, text: unexpected end of input\n");
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/error_kinds.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("error_kinds")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            expected,
+            "O{level}"
+        );
     }
 }
 

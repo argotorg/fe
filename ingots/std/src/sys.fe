@@ -3,12 +3,24 @@
 /// share: `errno`, C strings, and the layouts and values that differ between
 /// hosts, which `linux` and `macos` give under the same names.
 use core::{MemBuffer, Result}
-use super::io::{Display, EINVAL, Error}
+use super::io::{Display, Error, ErrorKind}
 
 #[cfg(target_os = "linux")]
 pub use linux::*
 #[cfg(target_os = "macos")]
 pub use macos::*
+
+// The `errno` values every supported host shares.
+pub const EPERM: i32 = 1
+pub const ENOENT: i32 = 2
+pub const EINTR: i32 = 4
+pub const EBADF: i32 = 9
+pub const EACCES: i32 = 13
+pub const EEXIST: i32 = 17
+pub const ENOTDIR: i32 = 20
+pub const EISDIR: i32 = 21
+pub const EINVAL: i32 = 22
+pub const EPIPE: i32 = 32
 
 /// The calling thread's `errno`.
 pub fn errno() -> i32 {
@@ -18,6 +30,30 @@ pub fn errno() -> i32 {
 /// The calling thread's `errno` as an `Error`.
 pub fn last_error() -> Error {
     Error::from_code(errno())
+}
+
+/// The kind of the host's error number `code`.
+pub fn errno_kind(_ code: i32) -> ErrorKind {
+    match code {
+        EPERM | EACCES => ErrorKind::PermissionDenied,
+        ENOENT => ErrorKind::NotFound,
+        EEXIST => ErrorKind::AlreadyExists,
+        ENOTDIR => ErrorKind::NotADirectory,
+        EISDIR => ErrorKind::IsADirectory,
+        EINVAL => ErrorKind::InvalidInput,
+        EAGAIN => ErrorKind::WouldBlock,
+        ETIMEDOUT => ErrorKind::TimedOut,
+        ECONNREFUSED => ErrorKind::ConnectionRefused,
+        ECONNRESET => ErrorKind::ConnectionReset,
+        ECONNABORTED => ErrorKind::ConnectionAborted,
+        ENOTCONN => ErrorKind::NotConnected,
+        EADDRINUSE => ErrorKind::AddrInUse,
+        EADDRNOTAVAIL => ErrorKind::AddrNotAvailable,
+        ENETUNREACH => ErrorKind::NetworkUnreachable,
+        EHOSTUNREACH => ErrorKind::HostUnreachable,
+        EPIPE => ErrorKind::BrokenPipe,
+        _ => ErrorKind::Other,
+    }
 }
 
 /// `value`'s text and a NUL, or an `EINVAL` error if the text holds a NUL.

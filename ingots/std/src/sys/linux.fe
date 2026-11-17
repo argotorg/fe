@@ -10,6 +10,19 @@ pub fn errno_location() -> *i32 {
     unsafe { __errno_location() }
 }
 
+// `errno` values, the same on x86-64 and AArch64.
+pub const EAGAIN: i32 = 11
+pub const EINPROGRESS: i32 = 115
+pub const ECONNREFUSED: i32 = 111
+pub const ECONNRESET: i32 = 104
+pub const ECONNABORTED: i32 = 103
+pub const ENOTCONN: i32 = 107
+pub const EADDRINUSE: i32 = 98
+pub const EADDRNOTAVAIL: i32 = 99
+pub const ETIMEDOUT: i32 = 110
+pub const ENETUNREACH: i32 = 101
+pub const EHOSTUNREACH: i32 = 113
+
 // `struct stat` and `struct dirent`.
 #[cfg(target_arch = "x86_64")]
 pub fn stat_mode(_ stat: MemSpan) -> u32 {

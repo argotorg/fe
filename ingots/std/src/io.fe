@@ -25,6 +25,7 @@ use core::fixed::{Fixed, UFixed}
 use core::num::{IntWord, UnsignedAbs}
 use super::env::c_string_len
 use super::native::{Host, HostCapabilitySeal}
+use super::sys
 
 extern {
     // POSIX descriptor I/O.
@@ -33,61 +34,55 @@ extern {
     fn strerror(_ code: i32) -> *u8
 }
 
-// The `errno` values every supported host shares.
-const EPERM: i32 = 1
-const ENOENT: i32 = 2
-const EACCES: i32 = 13
-const EEXIST: i32 = 17
-const ENOTDIR: i32 = 20
-const EISDIR: i32 = 21
-pub(ingot) const EINVAL: i32 = 22
-
-/// Why a host operation failed: the host's `errno`.
-pub struct Error { code: i32 }
+/// Why an operation failed: its kind, and the host's error number if the
+/// host reported it.
+pub struct Error { kind: ErrorKind, code: Option<i32> }
 
 impl Copy for Error {}
 
 impl Error {
-    /// The error with the host's error number `code`.
-    pub fn from_code(_ code: i32) -> Self {
-        Error { code }
+    /// An error of `kind` that no host error number gives, such as one a
+    /// `Read` implementation returns.
+    pub fn new(_ kind: ErrorKind) -> Self {
+        Error { kind, code: Option::None }
     }
 
-    /// The host's error number.
-    pub fn code(self) -> i32 {
+    /// The host's error number, if the host reported the error.
+    pub fn code(self) -> Option<i32> {
         self.code
     }
 
     /// What went wrong, in terms every host shares.
     pub fn kind(self) -> ErrorKind {
-        let code = self.code
-        if code == EPERM || code == EACCES {
-            ErrorKind::PermissionDenied
-        } else if code == ENOENT {
-            ErrorKind::NotFound
-        } else if code == EEXIST {
-            ErrorKind::AlreadyExists
-        } else if code == ENOTDIR {
-            ErrorKind::NotADirectory
-        } else if code == EISDIR {
-            ErrorKind::IsADirectory
-        } else if code == EINVAL {
-            ErrorKind::InvalidInput
-        } else {
-            ErrorKind::Other
+        self.kind
+    }
+}
+
+// The error numbers differ between hosts, which `sys` knows.
+#[cfg(target_family = "unix")]
+impl Error {
+    /// The error with the host's error number `code`.
+    pub fn from_code(_ code: i32) -> Self {
+        Error { kind: sys::errno_kind(code), code: Option::Some(code) }
+    }
+}
+
+/// The host's description of an error it reported, such as `No such file or
+/// directory`, and otherwise the kind's.
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        match self.code {
+            Option::Some(code) => {
+                let text = unsafe { strerror(code) }
+                out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
+            }
+            Option::None => self.kind.fmt(mut out),
         }
     }
 }
 
-/// The host's description of the error, such as `No such file or directory`.
-impl Display for Error {
-    fn fmt(self, _ out: mut MemBuffer) {
-        let text = unsafe { strerror(self.code) }
-        out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
-    }
-}
-
-/// The kinds of `Error`.
+/// The kinds of `Error`. A signal that interrupts a host call is none:
+/// `std` makes the call again.
 pub enum ErrorKind {
     NotFound,
     PermissionDenied,
@@ -96,10 +91,53 @@ pub enum ErrorKind {
     IsADirectory,
     /// A path or other text holds a NUL byte, or an argument is invalid.
     InvalidInput,
+    /// A non-blocking operation would have to wait.
+    WouldBlock,
+    TimedOut,
+    ConnectionRefused,
+    ConnectionReset,
+    ConnectionAborted,
+    NotConnected,
+    AddrInUse,
+    AddrNotAvailable,
+    NetworkUnreachable,
+    HostUnreachable,
+    /// A write to a pipe or socket whose reading end is closed.
+    BrokenPipe,
+    /// The input ended before a read that needs more of it.
+    UnexpectedEof,
     Other,
 }
 
 impl Copy for ErrorKind {}
+
+/// A short description, such as `connection refused`.
+impl Display for ErrorKind {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let text: String<24> = match self {
+            ErrorKind::NotFound => "not found",
+            ErrorKind::PermissionDenied => "permission denied",
+            ErrorKind::AlreadyExists => "already exists",
+            ErrorKind::NotADirectory => "not a directory",
+            ErrorKind::IsADirectory => "is a directory",
+            ErrorKind::InvalidInput => "invalid input",
+            ErrorKind::WouldBlock => "operation would block",
+            ErrorKind::TimedOut => "timed out",
+            ErrorKind::ConnectionRefused => "connection refused",
+            ErrorKind::ConnectionReset => "connection reset",
+            ErrorKind::ConnectionAborted => "connection aborted",
+            ErrorKind::NotConnected => "not connected",
+            ErrorKind::AddrInUse => "address in use",
+            ErrorKind::AddrNotAvailable => "address not available",
+            ErrorKind::NetworkUnreachable => "network unreachable",
+            ErrorKind::HostUnreachable => "host unreachable",
+            ErrorKind::BrokenPipe => "broken pipe",
+            ErrorKind::UnexpectedEof => "unexpected end of input",
+            ErrorKind::Other => "other error",
+        }
+        text.fmt(mut out)
+    }
+}
 
 /// The standard output of the process, or of a WebAssembly module's host.
 pub trait Stdout: HostCapabilitySeal {
