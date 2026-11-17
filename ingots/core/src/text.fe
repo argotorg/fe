@@ -10,7 +10,7 @@ use super::abi::{ByteSource, Bytes, DynString}
 use super::fixed::{Fixed, UFixed}
 use super::iter::Driver
 use super::marker::Copy
-use super::num::{Bounded, IntDowncast}
+use super::num::{Bounded, IntDowncast, leading_zeros}
 use super::option::Option
 use super::panic_code
 use super::panics::PANIC_ASSERT
@@ -104,11 +104,19 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
 
 /// Returns the decimal representation of `value` (Solidity `Strings.toString`).
 pub fn decimal(_ value: u256) -> DynString {
-    var digits: usize = 1
-    var rest = value / 10
-    while rest != 0 {
-        digits += 1
-        rest /= 10
+    let digits: usize = if value < 10 {
+        1
+    } else if value < 100 {
+        2
+    } else {
+        // Approximate log10(value) from its bit length using 1233 / 4096.
+        // For u256 this is floor(log10(value)) or one greater; a comparison
+        // with the corresponding power of ten corrects the latter case.
+        // bits <= 256 gives estimate <= 77, so 10^estimate fits in u256.
+        let bits = 256 - leading_zeros(value)
+        let estimate = (bits * 1233) >> 12
+        let threshold = (10 as u256).wrapping_pow(estimate)
+        (estimate + ((value >= threshold) as u256)).downcast_unchecked()
     }
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
