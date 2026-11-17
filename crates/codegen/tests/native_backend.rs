@@ -225,6 +225,38 @@ pub fn main() -> i32 {
 }
 
 #[test]
+fn native_variadic_calls_share_one_declaration() {
+    let ir = with_top_mod_for_source(
+        "native_variadic.fe",
+        r#"
+extern {
+    fn printf(_ format: *u8, ...) -> i32
+}
+pub fn main() -> i32 {
+    let format = core::ptr::alloc_bytes(1)
+    let _ = unsafe { printf(format) }
+    let _ = unsafe { printf(format, 7 as i32, 8 as i64, format) }
+    0
+}
+"#,
+        |db, top_mod| fe_codegen::emit_module_native_ir(db, top_mod, fe_codegen::OptLevel::O0),
+    )
+    .expect("a variadic import should lower");
+    assert_eq!(
+        ir.matches("declare external %printf(*i8, ...) -> i32;")
+            .count(),
+        1,
+        "every call should share one variadic import:\n{ir}"
+    );
+    let calls: Vec<_> = ir
+        .lines()
+        .filter(|line| line.contains("call %printf"))
+        .collect();
+    assert_eq!(calls.len(), 2, "{ir}");
+    assert!(calls[1].contains("7.i32 8.i64"), "{ir}");
+}
+
+#[test]
 fn native_effect_place_is_one_object_across_calls() {
     let ir = with_top_mod_for_source(
         "native_effect_place.fe",

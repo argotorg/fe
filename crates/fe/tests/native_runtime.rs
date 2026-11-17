@@ -3419,6 +3419,27 @@ fn keep_beta() {
 }
 
 #[test]
+fn native_variadic_calls_pass_extra_arguments() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/variadic.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("variadic")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "-7 4000000000 1099511627779 18446744073709551615 abc 42 5 -1234567890123 xyz 2147483647\n\
+             length 87\n\
+             nonblocking before: false\n\
+             set: 0\n\
+             nonblocking after: true\n",
+            "O{level}"
+        );
+    }
+}
+
+#[test]
 fn native_fs_reads_writes_and_lists_files() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/fs.fe");

@@ -2075,7 +2075,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             })
             .collect();
         let mut values = Vec::with_capacity(params.len());
-        for (&arg, param) in args.iter().zip(&params[usize::from(receiver.is_some())..]) {
+        let params = &params[usize::from(receiver.is_some())..];
+        for (&arg, param) in args.iter().zip(params) {
             let value = match param.shape.param_mode() {
                 Some(mode) => self.lower_callable_argument(arg, callable, mode, false),
                 // An opaque shape is transported whole, as its carrier: a
@@ -2089,6 +2090,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     continue;
                 }
             };
+            values.push(SOperand::expr(value, arg));
+        }
+        // A variadic call's extra arguments are C scalars, passed as a view
+        // parameter of their type takes them: by copy.
+        for &arg in args.get(params.len()..).unwrap_or_default() {
+            let value = self.lower_callable_argument(arg, callable, FuncParamMode::View, false);
             values.push(SOperand::expr(value, arg));
         }
         if let Some((receiver, prepared)) = receiver {

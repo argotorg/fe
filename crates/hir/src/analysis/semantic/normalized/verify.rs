@@ -17,6 +17,7 @@ use crate::analysis::{
 };
 
 use super::normalize::{structural_repack_mapping, structural_types_are_boundary_compatible};
+use crate::diagnosable::is_c_scalar;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NormalizedBodyVerifyError {
@@ -412,12 +413,21 @@ fn verify_expr<'db>(
                 .iter()
                 .map(|&binding| callee.normalized_binding_ty(db, binding))
                 .collect();
-            if args.len() != param_tys.len() {
+            // A variadic call passes C scalars after its parameters.
+            let Some(extras) = args
+                .get(param_tys.len()..)
+                .filter(|extras| extras.is_empty() || callee.key(db).owner(db).is_variadic(db))
+            else {
                 return Err(NormalizedBodyVerifyError::ExpressionType);
-            }
+            };
             for (arg, expected) in args.iter().zip(param_tys) {
                 let actual = operand_ty(body, *arg)?;
                 if !expected.has_invalid(db) && !call_arg_type_is_compatible(db, actual, expected) {
+                    return Err(NormalizedBodyVerifyError::ExpressionType);
+                }
+            }
+            for arg in extras {
+                if !is_c_scalar(db, operand_ty(body, *arg)?) {
                     return Err(NormalizedBodyVerifyError::ExpressionType);
                 }
             }

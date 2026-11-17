@@ -757,6 +757,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
             None => Signature::new_unit(&symbol, linkage, &args),
         };
+        signature.set_variadic(instance.key(self.db).is_variadic(self.db));
         // No access outlives the call it is passed to: Fe stores, returns
         // and captures none. Nothing writes through a read-only access.
         let accesses = if self.argument_packs.contains_key(&instance) {
@@ -1940,14 +1941,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     ) -> Result<SmallVec<[ValueId; 8]>, LowerError> {
         let Some(&pack_ty) = self.module.argument_packs.get(&callee) else {
             let (params, _) = self.module.signature_tys(callee)?;
-            return args
+            let mut values = args
                 .iter()
-                .zip(params)
+                .zip(&params)
                 .map(|(arg, ty)| {
                     let value = self.local_value(*arg)?;
-                    self.coerce_value_to_ty(value, ty)
+                    self.coerce_value_to_ty(value, *ty)
                 })
-                .collect();
+                .collect::<Result<SmallVec<_>, _>>()?;
+            // A variadic call passes its extra arguments as they are, each a
+            // value C takes.
+            for arg in args.get(params.len()..).unwrap_or_default() {
+                let value = self.local_value(*arg)?;
+                let ty = self.fb.type_of(value);
+                if !is_c_abi_value(&ty, &self.fb.module_builder.ctx) {
+                    return Err(LowerError::Internal(format!(
+                        "a variadic call passes an extra argument of type {ty:?}, which C does not take"
+                    )));
+                }
+                values.push(value);
+            }
+            return Ok(values);
         };
         let ref_ty = self.fb.module_builder.objref_type(pack_ty);
         let pack = self
