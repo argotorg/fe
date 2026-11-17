@@ -510,28 +510,27 @@ pub fn decode_base58<T: Text>(_ input: T) -> Option<Bytes> {
     // Every limb but the most significant one has all 24 bytes.
     var bytes: usize = 0
     if used > 0 {
-        var top = limbs[used - 1]
-        while top != 0 {
-            bytes += 1
-            top >>= 8
-        }
+        // The top limb is nonzero. Count its significant bytes directly.
+        let top = limbs[used - 1]
+        bytes = (32 - super::num::leading_zeros(top) / 8).downcast_unchecked()
         bytes += (used - 1) * 24
     }
     // The leading `zeros` bytes stay zero.
     let decoded = Bytes::zeroed(zeros + bytes)
     let out = decoded.span().ptr()
-    var pos = zeros + bytes
-    var k: usize = 0
-    while pos > zeros {
-        var limb = limbs[k]
-        var n: u256 = 0
-        while n < 24 && pos > zeros {
-            pos -= 1
-            unsafe { *ptr::offset_bytes(out, pos) = limb.downcast_truncate() }
-            limb >>= 8
-            n += 1
+    if bytes != 0 {
+        // Reuse one word as a big-endian view of each limb, then copy only
+        // its significant bytes. The final limb can be shorter than 24.
+        var scratch = MemBuffer::new(32)
+        var pos = zeros + bytes
+        var k: usize = 0
+        while pos > zeros {
+            let count = if pos - zeros > 24 { 24 } else { pos - zeros }
+            pos -= count
+            scratch.write_word(offset: 0, value: limbs[k])
+            unsafe { ptr::copy(dest: ptr::offset_bytes(out, pos), source: scratch.slice(offset: 32 - count, len: count)) }
+            k += 1
         }
-        k += 1
     }
     Option::Some(decoded)
 }
