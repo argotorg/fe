@@ -1659,14 +1659,14 @@ impl Ord for MemBuffer {
 /// Buffers are equal when they hold the same bytes.
 impl Eq for MemBuffer {
     fn eq(self, _ other: MemBuffer) -> bool {
-        self.span() == other.span()
+        bytes_equal(self.span(), other.span())
     }
 }
 
 /// Whether the buffer holds the span's bytes.
 impl Eq<MemSpan> for MemBuffer {
     fn eq(self, _ other: MemSpan) -> bool {
-        self.span() == other
+        bytes_equal(self.span(), other)
     }
 }
 
@@ -1685,4 +1685,37 @@ impl Index<usize> for MemBuffer {
 // Out-of-range indices and ranges fail like Solidity index errors.
 pub(ingot) fn index_out_of_bounds() -> ! {
     panic_code(PANIC_INDEX_OUT_OF_BOUNDS)
+}
+
+// Compare only initialized bytes, including a possibly partial final word.
+#[arithmetic(unchecked)]
+fn bytes_equal(_ a: MemSpan, _ b: MemSpan) -> bool {
+    let len = a.len()
+    if len != b.len() {
+        return false
+    }
+    if len == 0 { return true }
+    if len == 1 {
+        return a.byte_at(0) == b.byte_at(0)
+    }
+    // end <= len and is a multiple of 32, so offset + 32 cannot overflow
+    // while offset < end. Each full-word read stays within both spans.
+    let end = len - len % 32
+    var offset: usize = 0
+    while offset < end {
+        if unsafe {
+            a.read_be_unchecked<u256>(offset) != b.read_be_unchecked<u256>(offset)
+        } {
+            return false
+        }
+        offset += 32
+    }
+    let tail = len - end
+    if tail == 0 { return true }
+    // Read exactly the remaining bytes; spare capacity and adjacent memory
+    // need not be initialized or equal.
+    unsafe {
+        read_padded_word(offset_bytes(a.ptr(), end), tail)
+            == read_padded_word(offset_bytes(b.ptr(), end), tail)
+    }
 }
