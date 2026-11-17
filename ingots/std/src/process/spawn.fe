@@ -43,7 +43,6 @@ const WNOHANG: i32 = 1
 const SIGKILL: i32 = 9
 const SIGPIPE: i32 = 13
 const SIG_IGN: usize = 1
-const NULL: usize = 0
 // The bytes of a `struct pollfd` and a `struct rusage`.
 const POLLFD_SIZE: usize = 8
 const RUSAGE_SIZE: usize = 144
@@ -514,7 +513,7 @@ fn c_array(_ strings: MemSlice<MemBuffer>) -> MemVec<*u8> {
     for ref string in strings {
         pointers.push(string.ptr())
     }
-    pointers.push(NULL as *u8)
+    pointers.push(ptr::null())
     pointers
 }
 
@@ -544,7 +543,7 @@ fn environment(_ changes: MemSlice<EnvChange>, _ vars: mut MemVec<MemBuffer>) ->
     var pointers = MemVec::new()
     let parent = unsafe { __fe_native_environ() }
     var index: usize = 0
-    while unsafe { *ptr::offset(parent, index) } as usize != NULL {
+    while !ptr::is_null(unsafe { *ptr::offset(parent, index) }) {
         let entry = unsafe { *ptr::offset(parent, index) }
         // A variable is a live C string while the environment is unchanged.
         let text = unsafe { MemSlice::from_raw_parts(ptr: entry, len: c_string_len(entry)) }
@@ -556,7 +555,7 @@ fn environment(_ changes: MemSlice<EnvChange>, _ vars: mut MemVec<MemBuffer>) ->
     for ref var_text in vars.as_slice() {
         pointers.push(var_text.ptr())
     }
-    pointers.push(NULL as *u8)
+    pointers.push(ptr::null())
     Result::Ok(pointers)
 }
 

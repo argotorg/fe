@@ -169,7 +169,7 @@ impl Fs for Host {
     fn read_dir<P: Display>(self, _ path: P) -> Result<Error, MemVec<DirEntry>> {
         let path = c_string(path)?
         let dir = unsafe { opendir(path.ptr()) }
-        if dir as usize == 0 {
+        if ptr::is_null(dir) {
             return Result::Err(last_error())
         }
         var entries = MemVec::new()
@@ -179,7 +179,7 @@ impl Fs for Host {
             // alone sets `errno`.
             unsafe { *sys::errno_location() = 0 }
             let entry = unsafe { readdir(dir) }
-            if entry as usize == 0 {
+            if ptr::is_null(entry) {
                 code = sys::errno()
                 break
             }
@@ -201,7 +201,7 @@ impl Fs for Host {
         let path = c_string(path)?
         // At least `PATH_MAX`: 4096 on Linux, 1024 on macOS.
         var resolved = MemBuffer::new(4096)
-        if unsafe { realpath(path.ptr(), resolved.ptr()) } as usize == 0 {
+        if ptr::is_null(unsafe { realpath(path.ptr(), resolved.ptr()) }) {
             return Result::Err(last_error())
         }
         resolved.truncate(c_string_len(resolved.ptr()))
@@ -215,7 +215,7 @@ fn open(_ path: MemBuffer, mode: String<1>) -> Result<Error, *u8> {
     mode.fmt(mut mode_text)
     mode_text.push(0)
     let file = unsafe { fopen(path.ptr(), mode_text.ptr()) }
-    if file as usize == 0 { Result::Err(last_error()) } else { Result::Ok(file) }
+    if ptr::is_null(file) { Result::Err(last_error()) } else { Result::Ok(file) }
 }
 
 // Writes `bytes` to `file`, then closes it.
