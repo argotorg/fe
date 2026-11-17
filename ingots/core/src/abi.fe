@@ -1264,19 +1264,19 @@ impl Eq for DynString {
 /// Strings order by their bytes, as spans do.
 impl Ord for DynString {
     fn lt(self, _ other: DynString) -> bool {
-        self.span() < other.span()
+        ptr::bytes_order_before(self.span(), other.span())
     }
 
     fn le(self, _ other: DynString) -> bool {
-        self.span() <= other.span()
+        !ptr::bytes_order_before(other.span(), self.span())
     }
 
     fn gt(self, _ other: DynString) -> bool {
-        self.span() > other.span()
+        ptr::bytes_order_before(other.span(), self.span())
     }
 
     fn ge(self, _ other: DynString) -> bool {
-        self.span() >= other.span()
+        !ptr::bytes_order_before(self.span(), other.span())
     }
 }
 

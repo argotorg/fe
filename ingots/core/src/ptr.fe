@@ -1640,19 +1640,19 @@ fn orders_before<T: Ord>(_ a: MemSlice<T>, _ b: MemSlice<T>) -> bool {
 /// Buffers order by their bytes, as spans do.
 impl Ord for MemBuffer {
     fn lt(self, _ other: MemBuffer) -> bool {
-        self.span() < other.span()
+        bytes_order_before(self.span(), other.span())
     }
 
     fn le(self, _ other: MemBuffer) -> bool {
-        self.span() <= other.span()
+        !bytes_order_before(other.span(), self.span())
     }
 
     fn gt(self, _ other: MemBuffer) -> bool {
-        self.span() > other.span()
+        bytes_order_before(other.span(), self.span())
     }
 
     fn ge(self, _ other: MemBuffer) -> bool {
-        self.span() >= other.span()
+        !bytes_order_before(self.span(), other.span())
     }
 }
 
@@ -1718,4 +1718,32 @@ fn bytes_equal(_ a: MemSpan, _ b: MemSpan) -> bool {
         read_padded_word(offset_bytes(a.ptr(), end), tail)
             == read_padded_word(offset_bytes(b.ptr(), end), tail)
     }
+}
+
+// Lexicographic byte order equals unsigned big-endian word order.
+#[arithmetic(unchecked)]
+pub(ingot) fn bytes_order_before(_ a: MemSpan, _ b: MemSpan) -> bool {
+    let len = if a.len() < b.len() { a.len() } else { b.len() }
+    if len == 0 { return a.len() < b.len() }
+    let first_a = a.byte_at(0)
+    let first_b = b.byte_at(0)
+    if first_a != first_b { return first_a < first_b }
+    if len == 1 { return a.len() < b.len() }
+    // The shared extent contains every complete word; the multiple-of-32
+    // end also bounds offset + 32 without overflow. Read the tail exactly.
+    let end = len - len % 32
+    var offset: usize = 0
+    while offset < end {
+        let x = unsafe { a.read_be_unchecked<u256>(offset) }
+        let y = unsafe { b.read_be_unchecked<u256>(offset) }
+        if x != y { return x < y }
+        offset += 32
+    }
+    let tail = len - end
+    if tail != 0 {
+        let x = unsafe { read_padded_word(offset_bytes(a.ptr(), end), tail) }
+        let y = unsafe { read_padded_word(offset_bytes(b.ptr(), end), tail) }
+        if x != y { return x < y }
+    }
+    a.len() < b.len()
 }
