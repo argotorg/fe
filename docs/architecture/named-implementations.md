@@ -16,8 +16,11 @@ and the name's visibility. The name is an item name in its own domain,
 graph, so it never collides with a type or a value. `TraitEnv` leaves named
 implementations out of ordinary lookup. `resolve_impl_name`
 (`path_resolver`) resolves a `with` operand in that domain and checks the
-name's visibility. A bare operand that also resolves to a value is
-reported as ambiguous rather than ranked.
+name's visibility. An operand, bare or qualified, that also resolves to a
+visible value is reported as ambiguous rather than ranked. The
+definition-conflict pass (`DefConflictAnalysisPass`, `ty`) gives these names
+their own domain, so two named implementations with one name in one module
+are reported where they are declared.
 
 ## Choices
 
