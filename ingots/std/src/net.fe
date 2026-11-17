@@ -1,0 +1,3 @@
+/// Networking. IP and socket addresses, with their text, work on every
+/// target.
+pub use addr::*
