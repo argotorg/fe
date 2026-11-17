@@ -1,10 +1,12 @@
 #![cfg(target_family = "unix")]
 /// The C interfaces of the native host that `std::fs` and its relatives
-/// share: `errno`, C strings, and the layouts and values that differ between
-/// hosts, which `linux` and `macos` give under the same names.
-use core::{MemBuffer, Result}
+/// share: `errno` and its kinds, C strings, descriptors and `poll`, and the
+/// layouts and values that differ between hosts, which `linux` and `macos`
+/// give under the same names.
+use core::{MemBuffer, Option, Result}
 use core::ops::Drop
 use super::io::{Display, Error, ErrorKind}
+use super::time::{Duration, Instant}
 
 #[cfg(target_os = "linux")]
 pub use linux::*
@@ -13,6 +15,9 @@ pub use macos::*
 
 extern {
     fn close(_ fd: i32) -> i32
+    // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
+    // half.
+    fn poll(_ fds: *u8, _ nfds: u64, _ timeout: i32) -> i32
 }
 
 // The `errno` values every supported host shares.
@@ -26,6 +31,14 @@ pub const ENOTDIR: i32 = 20
 pub const EISDIR: i32 = 21
 pub const EINVAL: i32 = 22
 pub const EPIPE: i32 = 32
+
+// `poll` events, the same on every supported host.
+pub const POLLIN: u16 = 0x1
+pub const POLLOUT: u16 = 0x4
+
+// The bytes of a `struct pollfd`: the descriptor, then 16 bits of events to
+// wait for and 16 of those that happened.
+const POLLFD_SIZE: usize = 8
 
 /// The calling thread's `errno`.
 pub fn errno() -> i32 {
@@ -100,5 +113,54 @@ pub(ingot) struct Fd { pub(ingot) unsafe fd: i32 }
 impl Drop for Fd {
     fn drop(own self) {
         unsafe { close(self.fd) }
+    }
+}
+
+/// Descriptors for `poll` to wait on, each with the events to wait for.
+pub(ingot) struct PollSet { fds: MemBuffer }
+
+impl PollSet {
+    pub fn new() -> Self {
+        PollSet { fds: MemBuffer::empty() }
+    }
+
+    /// Adds `fd`, to wait until one of `events` happens to it.
+    pub fn add(mut self, _ fd: i32, events: u16) {
+        let entry = self.fds.len()
+        self.fds.resize(entry + POLLFD_SIZE)
+        self.fds.write_le<i32>(offset: entry, value: fd)
+        self.fds.write_le<u16>(offset: entry + 4, value: events)
+    }
+
+    /// Waits until an event happens to a descriptor, or `timeout` passes if
+    /// there is one: the number of descriptors with events, zero if the
+    /// time passed first. A signal doesn't end the wait early.
+    pub fn wait(mut self, _ timeout: Option<Duration>) -> Result<Error, usize> {
+        let deadline = match timeout {
+            Option::Some(limit) => Option::Some(Instant::now() + limit),
+            Option::None => Option::None,
+        }
+        let fds = self.fds.ptr()
+        let count: u64 = (self.fds.len() / POLLFD_SIZE).downcast_unchecked()
+        retry(|| unsafe { poll(fds, count, poll_millis(deadline)) } as isize)
+    }
+
+    /// The events that happened, in the last `wait`, to the descriptor added
+    /// `index`th. Besides those it waits for, they may be `POLLERR`,
+    /// `POLLHUP` and `POLLNVAL`.
+    pub fn events(self, _ index: usize) -> u16 {
+        self.fds.read_le<u16>(index * POLLFD_SIZE + 6)
+    }
+}
+
+// The milliseconds until `deadline`, rounded up, as a `poll` timeout: -1,
+// forever, without one.
+fn poll_millis(_ deadline: Option<Instant>) -> i32 {
+    match deadline {
+        Option::Some(deadline) => {
+            let millis = (deadline.duration_since(Instant::now()).as_nanos() + 999999) / 1000000
+            if millis > 2147483647 { 2147483647 } else { millis.downcast_unchecked() }
+        }
+        Option::None => -1,
     }
 }
