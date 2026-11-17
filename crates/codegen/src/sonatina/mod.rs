@@ -2541,6 +2541,51 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
     }
 
     #[test]
+    fn checked_constant_base_powers_use_exp() {
+        for (base, ty) in [
+            ("10", "u256"),
+            ("3", "u8"),
+            ("3", "i8"),
+            ("0", "u256"),
+            ("1", "i256"),
+        ] {
+            let mut db = DriverDataBase::default();
+            let file_url = temp_fixture_url("checked_constant_base_pow.fe");
+            db.workspace().touch(
+                &mut db,
+                file_url.clone(),
+                Some(format!(
+                    r#"
+msg PowerMsg {{
+    #[selector = sol("power(uint256)")]
+    Power {{ exponent: {ty} }} -> {ty},
+}}
+pub contract Power {{
+    recv PowerMsg {{
+        Power {{ exponent }} -> {ty} {{ ({base} as {ty}) ** exponent }}
+    }}
+}}
+"#,
+                )),
+            );
+            let file = db.workspace().get(&db, &file_url).expect("fixture loaded");
+            let top_mod = db.top_mod(file);
+            let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
+                .expect("constant-base power should compile");
+            if base != "0" && base != "1" {
+                assert!(
+                    output.contains("evm_exp"),
+                    "{base}:{ty} should use EXP:\n{output}"
+                );
+            }
+            assert!(
+                !output.contains("umulo") && !output.contains("smulo"),
+                "{base}:{ty} should not retain checked multiplication loops:\n{output}",
+            );
+        }
+    }
+
+    #[test]
     fn optimized_static_contract_return_exposes_a_scratch_allocation() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("optimized_static_contract_return.fe");
