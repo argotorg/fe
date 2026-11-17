@@ -76,15 +76,13 @@ fn find_signature_at_cursor<'db>(
     for (expr_id, expr_data) in body.exprs(db).iter() {
         // A method call's receiver is its first parameter, `self`, so its
         // arguments start at the second.
-        let (args, first_param) = match expr_data {
+        let first_param = match expr_data {
             // A call of a callable value, such as a closure, runs the method
             // of its `Fn` trait, whose signature isn't the value's.
-            Partial::Present(Expr::Call(_, args))
-                if typed_body.call_receiver(db, expr_id).is_none() =>
-            {
-                (args, 0)
+            Partial::Present(Expr::Call(..)) if typed_body.call_receiver(db, expr_id).is_none() => {
+                0
             }
-            Partial::Present(Expr::MethodCall(.., args)) => (args, 1),
+            Partial::Present(Expr::MethodCall(..)) => 1,
             _ => continue,
         };
         if let Some(resolved) = expr_id.span(body).resolve(db)
@@ -93,9 +91,8 @@ fn find_signature_at_cursor<'db>(
                 .callable_expr(expr_id)
                 .map(|callable| callable.callable_def)
         {
-            let active_param =
-                compute_active_parameter(cursor, resolved.range, file_text, args.len())
-                    .map(|arg| first_param + arg);
+            let active_param = compute_active_parameter(cursor, resolved.range, file_text)
+                .map(|arg| first_param + arg);
             return Some(build_signature_help(db, called_func, active_param));
         }
     }
@@ -103,13 +100,13 @@ fn find_signature_at_cursor<'db>(
     None
 }
 
-/// Compute which parameter is active based on cursor position and commas.
+/// Compute which argument the cursor is in based on cursor position and
+/// commas.
 fn compute_active_parameter(
     cursor: parser::TextSize,
     call_range: parser::TextRange,
     file_text: &str,
-    arg_count: usize,
-) -> Option<u32> {
+) -> Option<usize> {
     let cursor_pos = usize::from(cursor);
     let call_start = usize::from(call_range.start());
     let call_end = usize::from(call_range.end());
@@ -133,7 +130,7 @@ fn compute_active_parameter(
     // Count commas between paren and cursor to determine active param
     let text_from_paren_to_cursor = &file_text[absolute_paren_start + 1..cursor_pos.min(call_end)];
 
-    let mut comma_count: u32 = 0;
+    let mut comma_count = 0;
     let mut paren_depth: i32 = 0;
     let mut brace_depth: i32 = 0;
     let mut bracket_depth: i32 = 0;
@@ -153,19 +150,16 @@ fn compute_active_parameter(
         }
     }
 
-    // Don't exceed the number of arguments
-    if comma_count >= arg_count as u32 && arg_count > 0 {
-        Some((arg_count - 1) as u32)
-    } else {
-        Some(comma_count)
-    }
+    Some(comma_count)
 }
 
-/// Build a SignatureHelp response for a function.
+/// Build a SignatureHelp response for a function, with the parameter at
+/// index `active` active. An argument past the last parameter is shown at
+/// the last one.
 fn build_signature_help<'db>(
     db: &'db DriverDataBase,
     func: Func<'db>,
-    active_parameter: Option<u32>,
+    active: Option<usize>,
 ) -> SignatureHelp {
     let func_name = func
         .name(db)
@@ -198,6 +192,9 @@ fn build_signature_help<'db>(
             documentation: Some(async_lsp::lsp_types::Documentation::String(doc)),
         });
     }
+    let active_parameter = active
+        .zip(params.len().checked_sub(1))
+        .map(|(active, last)| active.min(last) as u32);
 
     // Build the return type
     let ret_ty = func.return_ty(db);
@@ -267,6 +264,8 @@ fn plain(_ a: i32, _ b: i32) -> i32 {
     a
 }
 
+fn none() {}
+
 fn f() {
     let p = Point::new(1, 2)
     let _ = plain(1, 2)
@@ -277,6 +276,7 @@ fn f() {
     let _ = p.area(6)
     let g = |x: i32| x
     let _ = g(7)
+    none()
 }
 "#;
 
@@ -326,10 +326,29 @@ fn f() {
                 "p.area(",
                 Some(("fn area(self, scale: i32) -> i32", Some(1))),
             ),
+            ("    none(", Some(("fn none()", None))),
             // A call of a closure runs its `Fn` method, not a written signature.
             ("= g(", None),
         ] {
             check(CALLS, needle, expected);
         }
+    }
+
+    /// The active parameter counts the commas before the cursor, up to the
+    /// last parameter.
+    #[test]
+    fn signature_help_active_parameter() {
+        let plain = "fn plain(a: i32, b: i32) -> i32";
+        let code = "fn plain(_ a: i32, _ b: i32) -> i32 {
+    a
+}
+
+fn f() {
+    let _ = plain(1, )
+    let _ = plain(1, 2, 3)
+}
+";
+        check(code, "plain(1, ", Some((plain, Some(1))));
+        check(code, "plain(1, 2, ", Some((plain, Some(1))));
     }
 }
