@@ -6,7 +6,7 @@ use async_lsp::lsp_types::{
 use common::InputDb;
 use driver::DriverDataBase;
 use hir::{
-    analysis::ty::ty_check::check_func_body,
+    core::semantic::reference::typed_body_for_body,
     hir_def::{CallableDef, Expr, Func, ItemKind, Partial, TopLevelMod},
     lower::map_file_to_mod,
     span::LazySpan,
@@ -54,21 +54,15 @@ fn find_signature_at_cursor<'db>(
     cursor: parser::TextSize,
     file_text: &str,
 ) -> Option<SignatureHelp> {
-    // Find the enclosing function
-    let mut enclosing_func = None;
-
-    for &item in top_mod.all_items(db) {
-        if let ItemKind::Func(func) = item
-            && let Some(span) = func.span().resolve(db)
-            && span.range.contains(cursor)
-        {
-            enclosing_func = Some(func);
-        }
-    }
-
-    let func = enclosing_func?;
-    let body = func.body(db)?;
-    let (_, typed_body) = check_func_body(db, func);
+    // The body of the function, contract `init` or recv arm at the cursor.
+    let body = top_mod
+        .find_enclosing_items(db, cursor)
+        .into_iter()
+        .find_map(|item| match item {
+            ItemKind::Body(body) => Some(body),
+            _ => None,
+        })?;
+    let typed_body = typed_body_for_body(db, body)?;
 
     // Find the call whose argument list holds the cursor and whose callee the
     // type checker resolved to a function. A call is lowered after its
@@ -261,6 +255,23 @@ fn f() {
     let _ = g(7)
     none()
 }
+
+msg Token {
+    #[selector = 0x01]
+    Transfer { amount: u256 } -> bool,
+}
+
+pub contract Wallet {
+    init() {
+        let _ = plain(8, 9)
+    }
+
+    recv Token {
+        Transfer { amount } -> bool {
+            plain(10, 11) > 0
+        }
+    }
+}
 "#;
 
     /// The label and active parameter of the signature help at the end of
@@ -312,6 +323,8 @@ fn f() {
             ("    none(", Some(("fn none()", None))),
             // A call of a closure runs its `Fn` method, not a written signature.
             ("= g(", None),
+            ("let _ = plain(8, ", Some((plain, Some(1)))),
+            ("plain(10, ", Some((plain, Some(1)))),
         ] {
             check(CALLS, needle, expected);
         }
