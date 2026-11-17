@@ -67,7 +67,14 @@ pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
 
 // `open` flags.
 pub const O_CREAT: i32 = 0x40
+pub const O_EXCL: i32 = 0x80
 pub const O_TRUNC: i32 = 0x200
+pub const O_APPEND: i32 = 0x400
+pub const O_CLOEXEC: i32 = 0x80000
+
+// `fcntl`'s command to copy a descriptor to the lowest free number from its
+// argument on, close-on-exec.
+pub const F_DUPFD_CLOEXEC: i32 = 1030
 
 // The bytes a write to a pipe that `poll` finds writable takes at once.
 pub const PIPE_BUF: usize = 4096

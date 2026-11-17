@@ -3,9 +3,9 @@
 /// share: `errno` and its kinds, C strings, descriptors and `poll`, and the
 /// layouts and values that differ between hosts, which `linux` and `macos`
 /// give under the same names.
-use core::{MemBuffer, Option, Result}
+use core::{MemBuffer, MemSpan, Option, Result}
 use core::ops::Drop
-use super::io::{Display, Error, ErrorKind}
+use super::io::{Display, Error, ErrorKind, read, write}
 use super::time::{Duration, Instant}
 
 #[cfg(target_os = "linux")]
@@ -15,6 +15,7 @@ pub use macos::*
 
 extern {
     fn close(_ fd: i32) -> i32
+    pub(ingot) fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
     // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
     // half.
     fn poll(_ fds: *u8, _ nfds: u64, _ timeout: i32) -> i32
@@ -31,6 +32,15 @@ pub const ENOTDIR: i32 = 20
 pub const EISDIR: i32 = 21
 pub const EINVAL: i32 = 22
 pub const EPIPE: i32 = 32
+
+// `open` access modes, the same on every supported host.
+pub const O_RDONLY: i32 = 0
+pub const O_WRONLY: i32 = 1
+pub const O_RDWR: i32 = 2
+
+// The most bytes to ask `read` or `write` for: macOS refuses more than
+// `INT_MAX`, and a shorter transfer is no error.
+const IO_LIMIT: usize = 0x7ffffffe
 
 // `poll` events, the same on every supported host.
 pub const POLLIN: u16 = 0x1
@@ -102,6 +112,21 @@ pub fn retry<F: Fn() -> isize>(_ call: F) -> Result<Error, usize> uses F::E {
         }
     }
     Result::Ok(0)
+}
+
+/// Reads at most `buf.len()` bytes from `fd` into the start of `buf`: the
+/// number read, zero at the end of the input.
+pub fn read_fd(_ fd: i32, _ buf: mut MemSpan) -> Result<Error, usize> {
+    let ptr = buf.ptr()
+    let len = if buf.len() < IO_LIMIT { buf.len() } else { IO_LIMIT }
+    retry(|| unsafe { read(fd, ptr, len) })
+}
+
+/// Writes bytes from the start of `bytes` to `fd`: the number written.
+pub fn write_fd(_ fd: i32, _ bytes: MemSpan) -> Result<Error, usize> {
+    let ptr = bytes.ptr()
+    let len = if bytes.len() < IO_LIMIT { bytes.len() } else { IO_LIMIT }
+    retry(|| unsafe { write(fd, ptr, len) })
 }
 
 /// An open file descriptor, which it closes when destroyed. Making one

@@ -3480,6 +3480,14 @@ read_dir a: 3 entries
   empty file
   new file
 canonicalize a/b/../b/./c/file: {}/a/b/c/file
+create a/lines: descriptor past the standard streams: true, close-on-exec: true
+line: one
+line: two
+line: three
+from_raw_fd: one
+read after write: 10 bytes
+create_new a/fresh: fresh
+a/lines holds: 13 bytes
 read missing: NotFound (No such file or directory)
 read a: IsADirectory (Is a directory)
 write a: IsADirectory (Is a directory)
@@ -3487,7 +3495,14 @@ create_dir_all a/empty: AlreadyExists (File exists)
 create_dir_all a/empty/x: NotADirectory (Not a directory)
 metadata missing: NotFound (No such file or directory)
 read_dir a/empty: NotADirectory (Not a directory)
-read a\0: InvalidInput (Invalid argument)"#,
+read a\0: InvalidInput (Invalid argument)
+open missing: NotFound (No such file or directory)
+create a: IsADirectory (Is a directory)
+open_with nothing: InvalidInput (Invalid argument)
+open_with read truncate: InvalidInput (Invalid argument)
+open_with append truncate: InvalidInput (Invalid argument)
+open_with create_new a/lines: AlreadyExists (File exists)
+write to a file open for reading: Other (Bad file descriptor)"#,
             canonical.display()
         );
         assert_eq!(lines.join("\n"), expected, "O{level}");

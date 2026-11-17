@@ -6,7 +6,7 @@ use core::ops::Drop
 use ingot::env::c_string_len
 use ingot::io::{Display, Error, ErrorKind, read, write}
 use ingot::native::{Host, HostCapabilitySeal}
-use ingot::sys::{self, EBADF, EINTR, EINVAL, Fd, POLLIN, POLLOUT, PollSet, c_string, last_error}
+use ingot::sys::{self, EBADF, EINTR, EINVAL, Fd, O_RDONLY, O_WRONLY, POLLIN, POLLOUT, PollSet, c_string, fcntl, last_error}
 use ingot::time::{Clock, Duration, Instant}
 
 extern {
@@ -29,8 +29,6 @@ extern {
 }
 
 // The values every supported host shares.
-const O_RDONLY: i32 = 0
-const O_WRONLY: i32 = 1
 const WNOHANG: i32 = 1
 const SIGKILL: i32 = 9
 const SIGPIPE: i32 = 13
@@ -482,17 +480,17 @@ fn make_pipe() -> Result<Error, (Fd, Fd)> {
     Result::Ok((past_standard_streams(read_end)?, past_standard_streams(write_end)?))
 }
 
-// `fd`, or a copy of it numbered past the standard streams. `dup` takes the
-// lowest free number, and each copy holds its own until the last is made.
+// `fd`, or a copy of it numbered past the standard streams, which closes
+// `fd`.
 fn past_standard_streams(_ fd: own Fd) -> Result<Error, Fd> {
     if fd.fd > 2 {
         return Result::Ok(fd)
     }
-    let copy = unsafe { dup(fd.fd) }
+    let copy = unsafe { fcntl(fd.fd, sys::F_DUPFD_CLOEXEC, 3 as i32) }
     if copy < 0 {
         return Result::Err(last_error())
     }
-    past_standard_streams(unsafe { Fd { fd: copy } })
+    Result::Ok(unsafe { Fd { fd: copy } })
 }
 
 // Pointers to the C strings `strings`, then a null pointer.
