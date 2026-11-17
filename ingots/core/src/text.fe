@@ -268,7 +268,9 @@ fn parse_digits<T: Text>(_ text: T, from: usize, to: usize, radix: u256) -> Opti
         if digit >= radix || value > limit || (value == limit && digit > last) {
             return Option::None
         }
-        value = value * radix + digit
+        // The guard above proves value * radix + digit <= u256::max():
+        // below limit every digit fits; at limit, only digits <= last fit.
+        value = value.wrapping_mul(radix).wrapping_add(digit)
         i += 1
     }
     Option::Some(value)
