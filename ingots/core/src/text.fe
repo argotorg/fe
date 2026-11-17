@@ -436,13 +436,11 @@ pub fn base58(_ data: MemSpan) -> DynString {
     var i = zeros
     while i < len {
         let end = if len - i > 24 { i + 24 } else { len }
-        var chunk: u256 = 0
-        var j = i
-        while j < end {
-            chunk = (chunk << 8) | (data.byte_at(j) as u256)
-            j += 1
-        }
-        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << ((end - i) as u256 * 8), addend: chunk)
+        // The block has 1..24 bytes, all within `data`. Read it once and
+        // move its big-endian value from the high bytes of the padded word.
+        let bits = (end - i) as u256 * 8
+        let chunk = unsafe { ptr::read_padded_word(ptr::offset_bytes(data.ptr(), i), end - i) } >> (256 - bits)
+        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << bits, addend: chunk)
         i = end
     }
     // Every limb but the most significant one has all 10 digits.
