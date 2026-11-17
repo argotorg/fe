@@ -1,0 +1,304 @@
+use core::hint::black_box
+use core::num::{checked_mul_div, checked_mul_div_ceil}
+fn check(_ a: u256, _ b: u256, _ d: u256, _ floor: u256, _ ceil: u256, _ flags: u8) {
+    let a = black_box(a)
+    let b = black_box(b)
+    let d = black_box(d)
+    let f = checked_mul_div(a, b, d)
+    let c = checked_mul_div_ceil(a, b, d)
+    assert!(f.is_some() == (flags & 1 != 0))
+    assert!(c.is_some() == (flags & 2 != 0))
+    if flags & 1 != 0 {
+        assert!(f.unwrap() == floor)
+    }
+    if flags & 2 != 0 {
+        assert!(c.unwrap() == ceil)
+    }
+}
+#[test]
+fn every_power_of_two_divisor() {
+    for k in 0 .. 256 {
+        let d: u256 = 1 << (k as u256)
+        check(u256::max(), d, d, u256::max(), u256::max(), 3)
+    }
+}
+// Python arbitrary-precision reference vectors: a, b, divisor, floor, ceil,
+// and fit flags (bit 0: floor fits, bit 1: ceil fits).
+const CASES: [(u256, u256, u256, u256, u256, u8); 32] = [
+    (
+        0x2e01ea31e5197791aae488cc29e105a173ed0f7c7983ccf17440ab4d22252f60,
+        0x2b4354fa69bf44b255323db4c04c58bcdb58300804d5994d4d3d7017a796cd37,
+        0x59a89cd5a8eec4c16f27e869aa90a8b15ccec58f0e704378e1297842bc337b8d,
+        0x16333383a7767505d001efd945028d9cd9a422904f543db73578daba0d9bf4ea,
+        0x16333383a7767505d001efd945028d9cd9a422904f543db73578daba0d9bf4eb,
+        3,
+    ),
+    (
+        0x36fdaad38fbf5ca108b49545c63db5f88156e86e36e07e587ec235b611c0c137,
+        0xbbfaadad52e76795a3dfc1939cbcc7546d167ec46dff934ba5edcb4224cc9508,
+        0xc069a58be7ed473b13adae1cd48b25c22e8528bcc77fb45f7ca96e7c31c144be,
+        0x35b94c18057753ccac4257c11e780004d8a7ea8ff92c17255ded0007dde492ec,
+        0x35b94c18057753ccac4257c11e780004d8a7ea8ff92c17255ded0007dde492ed,
+        3,
+    ),
+    (
+        0x92b63eed1066e4fe9eb0b69fe5f97473975b8378da651c7287d5d9e6073c73de,
+        0x3aa0a5c480bad4139f2347fb11c47dfd1c006e10a93d6f6884ac6c6a31aefe67,
+        0x3bad1f815c50bc0432eb88747ce90002fe22465f4358c67de76e5dd4f8572380,
+        0x902235640ef6a9530c00013bf9577aae17feda353c11256c16303fdf0f9eea15,
+        0x902235640ef6a9530c00013bf9577aae17feda353c11256c16303fdf0f9eea16,
+        3,
+    ),
+    (
+        0x5102c43fa04ef91fd38ecc94b530f3ca9e01d28f49b451e1c29be0abccb9b2ca,
+        0x2e110e4b9f41dc3ac68b380dfad525bc137bd7127967cd0bdfc47633cb54014,
+        0x833397c8519aaa28a86888ad63fb4b9be776619d0e5c703f652926f05fe6900,
+        0x1c71a8f76011e972f8a50a9c68dcb3d31790d8fb87f8332eebefb8c1563cbc95,
+        0x1c71a8f76011e972f8a50a9c68dcb3d31790d8fb87f8332eebefb8c1563cbc96,
+        3,
+    ),
+    (
+        0x54c91c3cbba07535ae00909535feb7f97109ff16cda2344c81c04cd17ec30c64,
+        0x2799ab0c6b4300c9a8b3055b1b10ffebc98c98e930a858408e2b035c770848d,
+        0x7d2c5c5078df507de7cff7e665961c880000000000000000000000000000000,
+        0x1ad2b4c13d76e7709794301d7b202716c56746483e2712a0afcf482ac9737e43,
+        0x1ad2b4c13d76e7709794301d7b202716c56746483e2712a0afcf482ac9737e44,
+        3,
+    ),
+    (
+        0xe4a9f9d45af3d2a4548cfc576305ce89eea1280e61ae97064128ce08329abd3e,
+        0x4d2c53cae7b91665c3bd1f18871de66f64edb8c6222e806f2364f00507bafad1,
+        0xc751fda08c0e2caf616d5f99dccb19cd00000000000000000000000000000000,
+        0x5888d4836f22c941836f70ee0b26293e15f6aa2d2677d710c113d99f037a5b18,
+        0x5888d4836f22c941836f70ee0b26293e15f6aa2d2677d710c113d99f037a5b19,
+        3,
+    ),
+    (
+        0xa3f6871fbfc489231348c687614d461aae0101a4f130a41c5ca0d6662422888e,
+        0x16c95470bdbf4005c507e88ae2fbba31282aacbe7c776ca7a8c26ed4f7b11f52,
+        0x6e7ffa43558c6076800000000000000000000000000000000000000000000000,
+        0x21cfaa50d88e0f7237281ba369c857a8ad6637af8831779834dea63c3d88df5c,
+        0x21cfaa50d88e0f7237281ba369c857a8ad6637af8831779834dea63c3d88df5d,
+        3,
+    ),
+    (
+        0xce6151c4f23504e8a4c04a4b1f715ae4f6f88b01d21ebe7d9c407ebf4c74b29,
+        0x20dd3684a398fb4baf706fccd00b64889132b6b864583a5056dc167a3668afd2,
+        0x4000000000000000000000000000000000000000000000000000000000000000,
+        0x69fa00beaa72e1d7184ea586f5c51fbb1ec383ea6cdd9409c12ee14a6fbb354,
+        0x69fa00beaa72e1d7184ea586f5c51fbb1ec383ea6cdd9409c12ee14a6fbb355,
+        3,
+    ),
+    (
+        0x94744128ad29acd955da409aa111e86ff1fd433cad11085f881ec257afd8f5,
+        0x6b270535191d0c82efd8c571be528c520c3d8e574cd71f9e85b7f3d9afcb07f3,
+        0x8000000000000000000000000000000000000000000000000000000000000000,
+        0x7c466fedfaf4905f2362816f26cf4c593802f507778212e34379e87f9878b3,
+        0x7c466fedfaf4905f2362816f26cf4c593802f507778212e34379e87f9878b4,
+        3,
+    ),
+    (
+        0x733fdab2567cad4854b9c1a5d8effbe85d70591c11496485d7dc95c86608dd5b,
+        0x249e86a81eea23d825c8c6866188b291eb423d9c68778346fac9cb6aa4d9e9ec,
+        0x2f06ff7a6d657f6265f8017de233e780ca41f12ffd19464a42c6d9acbb50342c,
+        0x59be0f18ef8affa8f170667713c6ec513a26970928fda4a8d80365e0492316f5,
+        0x59be0f18ef8affa8f170667713c6ec513a26970928fda4a8d80365e0492316f6,
+        3,
+    ),
+    (
+        0x7fc1d20b41bb4a222a3dc1583df70604c022551588e034e29d6b068e0edeca3,
+        0xf2137b3b808e3ce20c631f1f8ee7904440336ab5f7612ad4b1fc16bcf307cbea,
+        0xb119fd4d983f55a51d2a681e180c7cf085686988b21e2380697e9b0dd487b41,
+        0xaea0da50c020d34398bef577f6679d8e6848cc6b8a9feb7d4b69ae6e886c4758,
+        0xaea0da50c020d34398bef577f6679d8e6848cc6b8a9feb7d4b69ae6e886c4759,
+        3,
+    ),
+    (
+        0x5fa9e8bb73ff08440f905bfc2ba42410084c94c630eaa1459b90ed67e12f55cc,
+        0xa1b36d52a7a542f4bbe20bd689d033f1faf9fd78647d5f47858969a92cf8b3eb,
+        0x2ea269934ce56139cb135985ddf72f74578a1dae07ea6dbb5d325e463c3c5bd7,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xfb01e23df54be876b1768fb35665a745497c5cefedc37de1e3ee3e05e7d12b9d,
+        0xc86da94d2773ebf89de5b4d2812a0b7b40b04ce172df4cddc5bc4679053bcc63,
+        0x9f0e077e7ca930c8777b323224eb78e6422b652eadd67f70e9c9d382c48ee9f5,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x8f472809eb56a65c8c4593bd9c60291f09d2b12515feb9474827abba6410435c,
+        0x8c8b5d786bb3d8134ff1f330143be73e5ad363f888e0dcba0964966a81a6d9c8,
+        0x85c60f92242f0bfef794be82f16f176bfe7058ae5ef7657f07152ebf4da88faa,
+        0x96879b891dcebe6778fa428fe8deea8616e545724f749d0e8b7791ef6166db4a,
+        0x96879b891dcebe6778fa428fe8deea8616e545724f749d0e8b7791ef6166db4b,
+        3,
+    ),
+    (
+        0x9fd2a1ecf916bd7784cfe62a4805efed50808b37bede021279960b9037ab85e9,
+        0xb82c9a9dc6db039af5a0fdc9a8d7b2298e714c61f6afa8b54f06fe3edc6b493a,
+        0x9f09a8768ba09daf387ebc04363ee797915080f976cb6d88e2a0bd538ccccfef,
+        0xb91557dbe050f0b0eb7353a6969a3129a902b2be09d34b55da405fdf45be6c28,
+        0xb91557dbe050f0b0eb7353a6969a3129a902b2be09d34b55da405fdf45be6c29,
+        3,
+    ),
+    (
+        0x59320d97023f0d38e9bf4c096aeb14f6fd0386b5eaf8ed6f48db88b99b030b09,
+        0xe8d092ea3108d95dd1368d0f2b83cec6a47aef62690b3470e1a55019edf6535f,
+        0xbd816ae11e9eb913f912b37610daa19379fbd5017f0e6e32b734bd2b0f5f917e,
+        0x6d94801fff587349115741aacc54071126b2bdd5c8a06087c47f28388295f0f6,
+        0x6d94801fff587349115741aacc54071126b2bdd5c8a06087c47f28388295f0f7,
+        3,
+    ),
+    (
+        0x7020444601c6594ada9d762650a17301f069e6898f969dfdfed9efd2e2f4744,
+        0xe4d31c8b691180de0808317cf7854253f27b6cb8bb71628cc0992ec077b692be,
+        0x93253b07136446c657b79812cab81d1f53ae22695323ffab87430074b8be55d8,
+        0xae5dc50af9ef5c083cda78882abd58439321f6d5500477339f870b12cbfd117,
+        0xae5dc50af9ef5c083cda78882abd58439321f6d5500477339f870b12cbfd118,
+        3,
+    ),
+    (
+        0x5cdaff1b41b06532ba6d32990862c45b9508b06706bd7dbbc7e63271f27cd1b8,
+        0x4d1867992594fd5a6f2425dbdc486d81cab15e6f8cc803ae73ba75f44b0b5a9e,
+        0xc892f267a08bdb61bbbec025a8778f09ea4f6e3e29209ef9f8e09206e04c73fc,
+        0x23b0f0cf02cf7406859ff1bc59280179ba1be6598e6c253693e79525f303a999,
+        0x23b0f0cf02cf7406859ff1bc59280179ba1be6598e6c253693e79525f303a99a,
+        3,
+    ),
+    (
+        0x9667aeedbaf1dd886fe704d347b08c24e10099e6025b06cf419e20057e636fe8,
+        0x2a83e1ea732ca9b5428827be97e63aa9166d7af6554a887bad014b5f25cf3094,
+        0xb6850af160490e90a20b12f647605d07dd3173292625783e08315ab4c97cf1b9,
+        0x2308d7c3655d36f3c6f63adb08a879175487f5e60a5419c3479537f84ca375ce,
+        0x2308d7c3655d36f3c6f63adb08a879175487f5e60a5419c3479537f84ca375cf,
+        3,
+    ),
+    (
+        0xe7c986d0e0783196664cc1ccba553facbe1c4a0137822829705f71e295e80801,
+        0x52a096d42e3a7fc1d6017ad64c1990c3fc6595d04e46867185a0c355d9287a44,
+        0x44251c9a9b5e664abe981aeceedba227f2f1ecf9924939aa236567b7c079f195,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xb78b27829ce5d3090c8b6b86bac93fc454002b572a30b6a9f386feecf429d71b,
+        0xa14450cb2e333374d050df9fb1e138816af5aa48e73fc3f7794b5c89370ec66a,
+        0xeee3ac9309c1028b89fb336c72511d9370188a2db90ab2e24e32274684611525,
+        0x7be7955d24138ded91ce9aa46e611244dded5c150cdeeba11dbb0843c08877d3,
+        0x7be7955d24138ded91ce9aa46e611244dded5c150cdeeba11dbb0843c08877d4,
+        3,
+    ),
+    (
+        0x5c8890f84dab690f4722d860ec27d6f69cb26de44bfc3feb08a5f0bf4bc18840,
+        0x311faa6fc1c5b69b52e5f2757915e6be13809e58b6d9efe0ed65771c6035628,
+        0x118eaaca32d46d7b4c45cff93a9c0ed1535b8e71cae4817cf46ef99b68bf5dbe,
+        0x102e66ea9bd8d04935eb7244b324e7bd6df12b5e52e710ea25ee6f3821da88a5,
+        0x102e66ea9bd8d04935eb7244b324e7bd6df12b5e52e710ea25ee6f3821da88a6,
+        3,
+    ),
+    (
+        0xa55d315a8308e8389bb99054e834b69f7a629e61d1b197d566049d29908cc916,
+        0x23e806295f2e88dbd965c7e26015a0034890d3e6e7dd3c35b63cf0a53610bf1b,
+        0xf3f58e21f542de77e7bf30c9398688e0572c05d2555ca197be1fba602978bdd,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0xc2074e7626b4bf5b8e8f3e016658bcefd1c462b4f8f66b0650f8ebd4b7d4b5c2,
+        0xb0d1d0596a975b6034bf7764a0bb0a7f19eeceeddb4b79445c7840860f40da90,
+        0x3a814fb3822114196e0311fbaecc30be30118e47014600fa6a62261e58472dc8,
+        0x0,
+        0x0,
+        0,
+    ),
+    (
+        0x5278676dd5a27a9aaca7ed85e28bdf4ec14bb0dd2b6df7dc417af3294c1699dd,
+        0xaae1073a4ecbd7afa6d41a55902cdf136a3bac8e9926c6d0a23a21a85887bbf8,
+        0x82391266e971d2548186e372f5eec7c305230d0b1b684e0aea0aa54b54229564,
+        0x6c37c62e038eee7c438e1f0c6b5981869e727a4a58b3ad0a6b6069b138fa48c0,
+        0x6c37c62e038eee7c438e1f0c6b5981869e727a4a58b3ad0a6b6069b138fa48c1,
+        3,
+    ),
+    (
+        0x958d4df951ca21abaeeef62eff6d72d23103a11401dff6d88606460fba746a45,
+        0x26c97014a43802f201eb2b5ea79ee2e3bfaaa1c21622f4945066b9365bcac320,
+        0x2a85be57e002ed293579c82390c801acde5ac462457e230eb5299908f797d4f9,
+        0x8869f6f5d8e9463a49587429481dd8a2d801c39f84fe3e89dceab7d259c023c0,
+        0x8869f6f5d8e9463a49587429481dd8a2d801c39f84fe3e89dceab7d259c023c1,
+        3,
+    ),
+    (
+        0xccbd1bea5ccd5b11dc104383e43b7c7706b21ca5a4967b5819a360af4af6db57,
+        0x1a40f120502118e55448adc7806235b68602ee0aab3eec85cc82a589c0acc91e,
+        0x1a771a1a0c840b1d337fa63bd6085f67939fbc811a7a9a0831c0d8ec97790391,
+        0xcb1a1e94d9f843c0f380dc148ae9bd060a51d1d4f06d78a642a6029c71021ee3,
+        0xcb1a1e94d9f843c0f380dc148ae9bd060a51d1d4f06d78a642a6029c71021ee4,
+        3,
+    ),
+    (
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0x0,
+        0x0,
+        0x0,
+        0,
+    ),
+    (0x0, 0x0, 0x0, 0x0, 0x0, 0),
+    (
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        3,
+    ),
+    (
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffe,
+        0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0x0,
+        1,
+    ),
+    (
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff,
+        0x1,
+        0x0,
+        0x0,
+        0,
+    ),
+]
+#[test]
+fn python_big_integer_vectors() {
+    for (a, b, d, f, c, flags) in CASES {
+        check(a, b, d, f, c, flags)
+    }
+}
+
+// For a = MAX and b = d - 1, a*b/d = MAX - MAX/d. Hence the
+// ceiling is MAX - floor(MAX/d), and the floor subtracts another one
+// exactly when MAX/d has a remainder. This reference needs no wide product.
+fn check_nonzero_remainder(_ d: u256) {
+    let max = u256::max()
+    let ceil = max - max / d
+    let floor = ceil - ((max % d != 0) as u256)
+    check(max, d - 1, d, floor, ceil, 3)
+}
+
+#[test]
+fn every_divisor_shift_with_remainders() {
+    for k in 0 .. 256 {
+        let d: u256 = 1 << (k as u256)
+        check_nonzero_remainder(d)
+        if k < 255 {
+            check_nonzero_remainder(3 << (k as u256))
+        }
+    }
+}

@@ -1044,11 +1044,11 @@ pub const fn checked_mul_div(_ a: u256, _ b: u256, _ d: u256) -> Option<u256> {
     low = low - remainder
 
     // Factor powers of two out of `d` and shift them out of [high low].
-    let twos = (0 - d) & d
-    let odd = d / twos
-    low = low / twos
-    let shift = (0 - twos) / twos + 1
-    low = low | (high * shift)
+    // d > high proves d != 0, so bits is in 0..=255. With an odd d,
+    // shifting high by 256 yields zero, leaving the low word unchanged.
+    let bits = trailing_zeros(d)
+    let odd = d >> bits
+    low = (low >> bits) | (high << (256 - bits))
 
     // `odd` is invertible modulo 2^256; Newton-Raphson doubles the correct
     // bits per step, starting from 4 correct bits.
