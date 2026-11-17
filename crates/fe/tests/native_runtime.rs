@@ -3510,6 +3510,40 @@ write to a file open for reading: Other (Bad file descriptor)"#,
     }
 }
 
+// One poller serves non-blocking clients and their server ends on 127.0.0.1.
+#[test]
+fn native_net_poller_serves_many_sockets() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/poll.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("poll")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            "serve: client got echo hello
+serve: client got echo hello
+serve: client got echo hello
+serve: more than one wait: true
+reregister: events before: 0
+reregister: events after: 1, readable: true, its token: true
+reregister: both: true true
+reregister: removed the replacement: true
+reregister: then get: true, remove: true
+reregister: then set_interest: NotFound
+hangup: readable: true, hangup: true
+refused: ConnectionRefused
+stale interest: the new source's event: true, as the replaced one's: false
+half close: events of a writer: 0
+half close: waited for both: readable true, writable false, hangup true
+done
+",
+            "O{level}"
+        );
+    }
+}
+
 // TCP and UDP on 127.0.0.1, each socket at a free port.
 #[test]
 fn native_net_sockets_talk_over_loopback() {

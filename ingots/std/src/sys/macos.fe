@@ -1,8 +1,12 @@
 #![cfg(target_os = "macos")]
 /// AArch64 macOS's layouts and values, with 64-bit inodes.
-use core::{MemSpan, Result}
+use core::{MemBuffer, MemSpan, Option, Result, ptr}
 use ingot::io::Error
-use super::{F_SETFD, FD_CLOEXEC, Fd, check_call, fcntl, retry, set_nonblocking, set_socket_option, socket}
+use ingot::time::Instant
+use super::{
+    ENOENT, EVENT_ERROR, EVENT_HANGUP, EVENT_READABLE, EVENT_WRITABLE, F_SETFD, FD_CLOEXEC, Fd, check_call, errno,
+    fcntl, last_error, retry, set_nonblocking, set_socket_option, socket,
+}
 
 extern {
     fn __error() -> *i32
@@ -137,4 +141,112 @@ pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
 fn set_up(_ fd: i32) -> Result<Error, ()> {
     check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
     set_socket_option(fd, level: SOL_SOCKET, name: SO_NOSIGPIPE, value: 1)
+}
+
+extern {
+    fn kqueue() -> i32
+    fn kevent(_ kq: i32, _ changes: *u8, _ change_count: i32, _ events: *u8, _ event_count: i32, _ timeout: *u8) -> i32
+}
+
+// `kqueue` filters and flags.
+const EVFILT_READ: i16 = -1
+const EVFILT_WRITE: i16 = -2
+const EV_ADD: u16 = 0x1
+const EV_DELETE: u16 = 0x2
+const EV_ERROR: u16 = 0x4000
+const EV_EOF: u16 = 0x8000
+
+// A `struct kevent`: the 64-bit identifier (a descriptor) at 0, then the
+// 16-bit filter, 16-bit flags, 32-bit filter flags, 64-bit data, and the
+// 64-bit user data at 24.
+pub const EVENT_SIZE: usize = 32
+
+/// A new event queue for a poller, close-on-exec: a `kqueue`.
+pub fn new_queue() -> Result<Error, Fd> {
+    let fd = unsafe { kqueue() }
+    check_call(fd)?
+    let queue = unsafe { Fd { fd } }
+    check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
+    Result::Ok(queue)
+}
+
+/// Makes `queue` report the `interest` events, readable and writable, of
+/// `fd` with `data`, level-triggered, and its hangups and errors. `added`
+/// says that `queue` has `fd` already. Reads and writes are separate
+/// filters, each added or deleted.
+pub fn queue_set(_ queue: i32, _ fd: i32, data: u64, interest: u8, added: bool) -> Result<Error, ()> {
+    change(queue, fd, filter: EVFILT_READ, data, wanted: interest & EVENT_READABLE != 0, added)?
+    change(queue, fd, filter: EVFILT_WRITE, data, wanted: interest & EVENT_WRITABLE != 0, added)
+}
+
+/// Takes `fd` out of `queue`.
+pub fn queue_remove(_ queue: i32, _ fd: i32) -> Result<Error, ()> {
+    change(queue, fd, filter: EVFILT_READ, data: 0, wanted: false, added: true)?
+    change(queue, fd, filter: EVFILT_WRITE, data: 0, wanted: false, added: true)
+}
+
+// Adds `filter` on `fd` with `data` if `wanted`, or else deletes it if
+// `added`, where a filter that isn't there is no error.
+fn change(_ queue: i32, _ fd: i32, filter: i16, data: u64, wanted: bool, added: bool) -> Result<Error, ()> {
+    if !wanted && !added {
+        return Result::Ok(())
+    }
+    var event = MemBuffer::new(EVENT_SIZE)
+    event.write_le<u64>(offset: 0, value: fd.downcast_unchecked())
+    event.write_le<i16>(offset: 8, value: filter)
+    event.write_le<u16>(offset: 10, value: if wanted { EV_ADD } else { EV_DELETE })
+    event.write_le<u64>(offset: 24, value: data)
+    if unsafe { kevent(queue, event.ptr(), 1, ptr::null(), 0, ptr::null()) } < 0 && (wanted || errno() != ENOENT) {
+        return Result::Err(last_error())
+    }
+    Result::Ok(())
+}
+
+/// Waits until `queue` has events, or `deadline` has passed if there is
+/// one, and writes up to `capacity` of them at `events`: how many. A signal
+/// doesn't end the wait early.
+pub fn queue_wait(_ queue: i32, _ events: *u8, _ capacity: usize, _ deadline: Option<Instant>) -> Result<Error, usize> {
+    let max: i32 = if capacity < 0x7fffffff { capacity.downcast_unchecked() } else { 0x7fffffff }
+    retry(|| {
+        match deadline {
+            Option::Some(deadline) => {
+                // A `struct timespec`: 64-bit seconds and nanoseconds.
+                let left = deadline.duration_since(Instant::now()).as_nanos()
+                var timeout = MemBuffer::new(16)
+                timeout.write_le<u64>(offset: 0, value: left / 1000000000)
+                timeout.write_le<u64>(offset: 8, value: left % 1000000000)
+                unsafe { kevent(queue, ptr::null(), 0, events, max, timeout.ptr()) } as isize
+            }
+            Option::None => unsafe { kevent(queue, ptr::null(), 0, events, max, ptr::null()) } as isize,
+        }
+    })
+}
+
+/// The user data of event `index` of `events`.
+pub fn event_data(_ events: MemSpan, _ index: usize) -> u64 {
+    events.read_le<u64>(index * EVENT_SIZE + 24)
+}
+
+/// The kinds of event `index` of `events`: `EVENT_READABLE` and its
+/// relatives. A filter's end of file is a hangup, and an error too if it
+/// carries an error number.
+pub fn event_kinds(_ events: MemSpan, _ index: usize) -> u8 {
+    let base = index * EVENT_SIZE
+    let filter = events.read_le<i16>(base + 8)
+    let flags = events.read_le<u16>(base + 10)
+    let error_number = events.read_le<u32>(base + 12)
+    var kinds: u8 = 0
+    if filter == EVFILT_READ {
+        kinds = kinds | EVENT_READABLE
+    }
+    if filter == EVFILT_WRITE {
+        kinds = kinds | EVENT_WRITABLE
+    }
+    if flags & EV_EOF != 0 {
+        kinds = kinds | EVENT_HANGUP
+    }
+    if flags & EV_ERROR != 0 || (flags & EV_EOF != 0 && error_number != 0) {
+        kinds = kinds | EVENT_ERROR
+    }
+    kinds
 }

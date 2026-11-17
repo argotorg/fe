@@ -79,6 +79,13 @@ const SOCKADDR_IN6_SIZE: u32 = 28
 // `INT_MAX`, and a shorter transfer is no error.
 const IO_LIMIT: usize = 0x7ffffffe
 
+// The kinds of an event of a poller's queue, which `event_kinds` gives, and
+// those a source may be waited for, readable and writable.
+pub const EVENT_READABLE: u8 = 1
+pub const EVENT_WRITABLE: u8 = 2
+pub const EVENT_HANGUP: u8 = 4
+pub const EVENT_ERROR: u8 = 8
+
 // `poll` events, the same on every supported host.
 pub const POLLIN: u16 = 0x1
 pub const POLLOUT: u16 = 0x4
@@ -309,8 +316,8 @@ impl PollSet {
     }
 }
 
-// The milliseconds until `deadline`, rounded up, as a `poll` timeout: -1,
-// forever, without one.
+// The milliseconds until `deadline`, rounded up, as a `poll` or
+// `epoll_wait` timeout: -1, forever, without one.
 fn poll_millis(_ deadline: Option<Instant>) -> i32 {
     match deadline {
         Option::Some(deadline) => {
