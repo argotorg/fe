@@ -70,75 +70,57 @@ fn find_signature_at_cursor<'db>(
     let body = func.body(db)?;
     let (_, typed_body) = check_func_body(db, func);
 
-    // Find the call containing the cursor whose callee the type checker
-    // resolved to a function. A call is lowered after its arguments, so the
-    // first one found is the innermost.
+    // Find the call whose argument list holds the cursor and whose callee the
+    // type checker resolved to a function. A call is lowered after its
+    // arguments, so the first one found is the innermost.
     for (expr_id, expr_data) in body.exprs(db).iter() {
+        let span = expr_id.span(body);
         // A method call's receiver is its first parameter, `self`, so its
         // arguments start at the second.
-        let first_param = match expr_data {
+        let (args, first_param) = match expr_data {
             // A call of a callable value, such as a closure, runs the method
             // of its `Fn` trait, whose signature isn't the value's.
             Partial::Present(Expr::Call(..)) if typed_body.call_receiver(db, expr_id).is_none() => {
-                0
+                (span.into_call_expr().args(), 0)
             }
-            Partial::Present(Expr::MethodCall(..)) => 1,
+            Partial::Present(Expr::MethodCall(..)) => (span.into_method_call_expr().args(), 1),
             _ => continue,
         };
-        if let Some(resolved) = expr_id.span(body).resolve(db)
-            && resolved.range.contains(cursor)
+        // The end of a list that isn't closed yet, as while typing, holds
+        // the cursor too.
+        if let Some(args) = args.resolve(db)
+            && args.range.start() < cursor
+            && cursor <= args.range.end()
+            && let Some(arg) = argument_index(cursor, args.range.start(), file_text)
             && let Some(CallableDef::Func(called_func)) = typed_body
                 .callable_expr(expr_id)
                 .map(|callable| callable.callable_def)
         {
-            let active_param = compute_active_parameter(cursor, resolved.range, file_text)
-                .map(|arg| first_param + arg);
-            return Some(build_signature_help(db, called_func, active_param));
+            return Some(build_signature_help(db, called_func, first_param + arg));
         }
     }
 
     None
 }
 
-/// Compute which argument the cursor is in based on cursor position and
-/// commas.
-fn compute_active_parameter(
+/// The index of the argument at `cursor` in the argument list whose `(` is
+/// at `list_start`: the number of commas between them outside brackets, or
+/// `None` if the list closes before the cursor.
+fn argument_index(
     cursor: parser::TextSize,
-    call_range: parser::TextRange,
+    list_start: parser::TextSize,
     file_text: &str,
 ) -> Option<usize> {
-    let cursor_pos = usize::from(cursor);
-    let call_start = usize::from(call_range.start());
-    let call_end = usize::from(call_range.end());
-
-    // Get the text of the call
-    if call_start >= file_text.len() || call_end > file_text.len() {
-        return None;
-    }
-
-    let call_text = &file_text[call_start..call_end];
-
-    // Find the opening paren
-    let paren_start = call_text.find('(')?;
-    let absolute_paren_start = call_start + paren_start;
-
-    // If cursor is before the paren, no active parameter
-    if cursor_pos <= absolute_paren_start {
-        return None;
-    }
-
-    // Count commas between paren and cursor to determine active param
-    let text_from_paren_to_cursor = &file_text[absolute_paren_start + 1..cursor_pos.min(call_end)];
-
     let mut comma_count = 0;
     let mut paren_depth: i32 = 0;
     let mut brace_depth: i32 = 0;
     let mut bracket_depth: i32 = 0;
 
-    for c in text_from_paren_to_cursor.chars() {
+    for c in file_text[usize::from(list_start) + 1..usize::from(cursor)].chars() {
         match c {
             '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
+            ')' if paren_depth == 0 => return None,
+            ')' => paren_depth -= 1,
             '{' => brace_depth += 1,
             '}' => brace_depth = brace_depth.saturating_sub(1),
             '[' => bracket_depth += 1,
@@ -159,7 +141,7 @@ fn compute_active_parameter(
 fn build_signature_help<'db>(
     db: &'db DriverDataBase,
     func: Func<'db>,
-    active: Option<usize>,
+    active: usize,
 ) -> SignatureHelp {
     let func_name = func
         .name(db)
@@ -192,9 +174,10 @@ fn build_signature_help<'db>(
             documentation: Some(async_lsp::lsp_types::Documentation::String(doc)),
         });
     }
-    let active_parameter = active
-        .zip(params.len().checked_sub(1))
-        .map(|(active, last)| active.min(last) as u32);
+    let active_parameter = params
+        .len()
+        .checked_sub(1)
+        .map(|last| active.min(last) as u32);
 
     // Build the return type
     let ret_ty = func.return_ty(db);
@@ -334,6 +317,19 @@ fn f() {
         }
     }
 
+    /// Signature help is for the call whose argument list holds the cursor.
+    #[test]
+    fn signature_help_in_argument_list() {
+        let plain = "fn plain(a: i32, b: i32) -> i32";
+        for (needle, expected) in [
+            ("plain(he", Some((plain, Some(0)))),
+            ("let _ = pla", None),
+            ("let _ = plain(1, 2)", None),
+        ] {
+            check(CALLS, needle, expected);
+        }
+    }
+
     /// The active parameter counts the commas before the cursor, up to the
     /// last parameter.
     #[test]
@@ -350,5 +346,12 @@ fn f() {
 ";
         check(code, "plain(1, ", Some((plain, Some(1))));
         check(code, "plain(1, 2, ", Some((plain, Some(1))));
+        // An argument list being typed isn't closed yet.
+        for (unclosed, active) in [("= plain(", 0), ("= plain(1, ", 1)] {
+            let code = format!(
+                "fn plain(_ a: i32, _ b: i32) -> i32 {{\n    a\n}}\n\nfn f() {{\n    let _ {unclosed}\n}}\n"
+            );
+            check(&code, unclosed, Some((plain, Some(active))));
+        }
     }
 }
