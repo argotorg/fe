@@ -6595,6 +6595,44 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.emit_empty_revert(negative)?;
         }
 
+        // A constant base greater than one has monotonically growing powers. On
+        // the EVM, bound the exponent once and use EXP instead of a checked
+        // multiplication loop. Native targets and negative bases keep the loop.
+        if checked
+            && !self.module.is_native_target()
+            && let Value::Immediate { imm, .. } = self.fb.func.dfg.value(base)
+            && (!signed || !imm.is_negative())
+        {
+            let constant = *imm;
+            if constant != Immediate::zero(ty) && constant != Immediate::one(ty) {
+                let mut power = Immediate::one(ty);
+                let mut limit = 0u64;
+                loop {
+                    let (next, overflow) = if signed {
+                        power.overflowing_smul(constant)
+                    } else {
+                        power.overflowing_umul(constant)
+                    };
+                    if overflow {
+                        break;
+                    }
+                    power = next;
+                    limit += 1;
+                }
+                let limit = self
+                    .fb
+                    .make_imm_value(Immediate::from_i256(I256::from(limit), ty));
+                let overflow = self
+                    .fb
+                    .insert_inst(Gt::new(self.module.inst_set(), exp, limit), Type::I1);
+                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
+            }
+            return Ok(self.fb.insert_inst(
+                EvmExp::new(self.module.required_inst::<EvmExp>()?, base, exp),
+                ty,
+            ));
+        }
+
         let entry = self
             .fb
             .current_block()
