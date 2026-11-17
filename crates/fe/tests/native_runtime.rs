@@ -3498,7 +3498,7 @@ read a\0: InvalidInput (Invalid argument)"#,
 // Each host error number has the kind Rust gives it, among the kinds Fe has.
 #[test]
 fn native_errors_take_the_kinds_of_host_error_numbers() {
-    const KINDS: [&str; 19] = [
+    const KINDS: [&str; 20] = [
         "NotFound",
         "PermissionDenied",
         "AlreadyExists",
@@ -3517,6 +3517,7 @@ fn native_errors_take_the_kinds_of_host_error_numbers() {
         "HostUnreachable",
         "BrokenPipe",
         "UnexpectedEof",
+        "InvalidData",
         "Other",
     ];
     let mut expected = String::new();

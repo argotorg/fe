@@ -204,3 +204,64 @@ fn buffered_readers_reach_their_reader() {
     let inner = reader.into_inner()
     assert!(inner.position == 8 && inner.chunk == 1)
 }
+
+// Whether the next line of `reader`, of at most `max` bytes, is `text`.
+fn next_line_max<R: Read>(_ reader: mut BufReader<R>, max: usize, _ text: String<31>) -> bool {
+    var line = MemBuffer::empty()
+    ok(reader.read_line_max(mut line, max)) && line.span() == text
+}
+
+#[test]
+fn capped_lines_may_reach_the_cap() {
+    var reader = BufReader::new(MemReader::new(format!("hello\n\nworld")))
+    assert!(next_line_max(mut reader, max: 5, "hello"))
+    assert!(next_line_max(mut reader, max: 0, ""))
+    // The last line needs no newline.
+    assert!(next_line_max(mut reader, max: 5, "world"))
+    var line = MemBuffer::empty()
+    assert!(!ok(reader.read_line_max(mut line, max: 5)))
+    // A line split across reads.
+    var split = BufReader::new(Trickle::new(format!("abcde\nfg\n"), chunk: 2, stall: 1000000))
+    assert!(next_line_max(mut split, max: 5, "abcde"))
+    assert!(next_line_max(mut split, max: 2, "fg"))
+}
+
+#[test]
+fn capped_lines_fail_one_byte_over() {
+    var reader = BufReader::new(MemReader::new(format!("hello!\nnext\n")))
+    var line = format!("kept")
+    assert!(failed_with(reader.read_line_max(mut line, max: 5), "invalid data"))
+    assert!(line.span() == "kept")
+    // The line stays unread, and fails again.
+    assert!(failed_with(reader.read_line_max(mut line, max: 5), "invalid data"))
+    assert!(line.span() == "kept")
+}
+
+#[test]
+fn capped_lines_fail_over_the_cap_at_the_end() {
+    var reader = BufReader::new(MemReader::new(format!("abcdefgh")))
+    var line = MemBuffer::empty()
+    assert!(failed_with(reader.read_line_max(mut line, max: 7), "invalid data"))
+    assert!(line.is_empty())
+    var exact = BufReader::new(MemReader::new(format!("abcdefgh")))
+    assert!(next_line_max(mut exact, max: 8, "abcdefgh"))
+}
+
+#[test]
+fn capped_lines_stop_reading_over_the_cap() {
+    // A long line in reads of 3 bytes: the reader stops once it holds more
+    // than the cap, long before the newline.
+    var long = MemBuffer::empty()
+    for _ in 0..1000 {
+        long.push(b'a')
+    }
+    long.push(b'\n')
+    var reader = BufReader::new(Trickle::new(long, chunk: 3, stall: 1000000))
+    var line = MemBuffer::empty()
+    assert!(failed_with(reader.read_line_max(mut line, max: 10), "invalid data"))
+    assert!(line.is_empty())
+    assert!(reader.inner().position <= 13)
+    let reads = reader.inner().reads
+    assert!(failed_with(reader.read_line_max(mut line, max: 10), "invalid data"))
+    assert!(reader.inner().reads == reads)
+}

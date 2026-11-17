@@ -33,6 +33,7 @@ fn kind_name(_ kind: ErrorKind) -> String<20> {
         ErrorKind::HostUnreachable => "HostUnreachable",
         ErrorKind::BrokenPipe => "BrokenPipe",
         ErrorKind::UnexpectedEof => "UnexpectedEof",
+        ErrorKind::InvalidData => "InvalidData",
         ErrorKind::Other => "Other",
     }
 }

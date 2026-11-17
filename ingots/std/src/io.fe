@@ -111,6 +111,9 @@ pub enum ErrorKind {
     BrokenPipe,
     /// The input ended before a read that needs more of it.
     UnexpectedEof,
+    /// The input isn't what the reader takes, such as a line longer than
+    /// its limit.
+    InvalidData,
     Other,
 }
 
@@ -138,6 +141,7 @@ impl Display for ErrorKind {
             ErrorKind::HostUnreachable => "host unreachable",
             ErrorKind::BrokenPipe => "broken pipe",
             ErrorKind::UnexpectedEof => "unexpected end of input",
+            ErrorKind::InvalidData => "invalid data",
             ErrorKind::Other => "other error",
         }
         text.fmt(mut out)
@@ -377,7 +381,7 @@ impl StdinReader {
     /// newline. Panics if the stream fails.
     pub fn read_line(mut self, _ line: mut MemBuffer) -> bool uses (input: mut Stdin) {
         var source = StdinSource {}
-        stdin_value(self.buffer.read_line(mut source, mut line))
+        stdin_value(self.buffer.read_line(mut source, mut line, max: usize::max()))
     }
 }
 
@@ -401,7 +405,18 @@ impl<R: Read> BufReader<R> {
     /// such as `WouldBlock`, leaves `line` as it was, and the next call
     /// reads the line from its start.
     pub fn read_line(mut self, _ line: mut MemBuffer) -> Result<Error, bool> {
-        self.buffer.read_line(mut self.inner, mut line)
+        self.buffer.read_line(mut self.inner, mut line, max: usize::max())
+    }
+
+    /// Appends the next line to `line` as `read_line` does if it has at most
+    /// `max` bytes, without its newline. A longer line is an `InvalidData`
+    /// error, which the reader gives as soon as it has `max` bytes of the
+    /// line and no newline, so it holds no more of the line than that and
+    /// one read. The error leaves `line` as it was and the line's bytes
+    /// unread, so each later call fails the same way: a server drops the
+    /// peer's connection.
+    pub fn read_line_max(mut self, _ line: mut MemBuffer, max: usize) -> Result<Error, bool> {
+        self.buffer.read_line(mut self.inner, mut line, max)
     }
 
     /// The reader. A read of it skips the bytes in the buffer.
@@ -448,30 +463,43 @@ impl ReadBuffer {
     }
 
     // Appends the next line to `line`, without its newline: false at the end
-    // of `source`.
-    fn read_line<S: Source>(mut self, _ source: mut S, _ line: mut MemBuffer) -> Result<Error, bool> uses S::E {
+    // of `source`. A line of more than `max` bytes is an `InvalidData` error
+    // as soon as the buffer holds more than `max` bytes of it.
+    fn read_line<S: Source>(mut self, _ source: mut S, _ line: mut MemBuffer, max: usize) -> Result<Error, bool> uses S::E {
         var scanned = self.start
         while true {
             while scanned < self.bytes.len() {
                 if self.bytes[scanned] == b'\n' {
-                    line.extend_from(self.bytes.slice(offset: self.start, len: scanned - self.start))
-                    self.start = scanned + 1
-                    return Result::Ok(true)
+                    return self.take_line(mut line, end: scanned, after: scanned + 1, max)
                 }
                 scanned += 1
+            }
+            if scanned - self.start > max {
+                return Result::Err(Error::new(ErrorKind::InvalidData))
             }
             let returned = self.start
             if !self.refill(mut source)? {
                 if self.start == self.bytes.len() {
                     return Result::Ok(false)
                 }
-                line.extend_from(self.bytes.slice(offset: self.start, len: self.bytes.len() - self.start))
-                self.start = self.bytes.len()
-                return Result::Ok(true)
+                let end = self.bytes.len()
+                return self.take_line(mut line, end, after: end, max)
             }
             scanned -= returned
         }
         Result::Ok(false)
+    }
+
+    // Appends the line from the first byte not yet returned to `end` to
+    // `line`, and returns the bytes up to `after`: an `InvalidData` error,
+    // which returns nothing, if the line has more than `max` bytes.
+    fn take_line(mut self, _ line: mut MemBuffer, end: usize, after: usize, max: usize) -> Result<Error, bool> {
+        if end - self.start > max {
+            return Result::Err(Error::new(ErrorKind::InvalidData))
+        }
+        line.extend_from(self.bytes.slice(offset: self.start, len: end - self.start))
+        self.start = after
+        Result::Ok(true)
     }
 
     // Reads into `buf` the bytes in the buffer, refilling it first if it
