@@ -17,9 +17,13 @@
 /// `buf`, a `MemBuffer` held by a local, a field or an effect
 /// (`uses (text: mut MemBuffer)`). They work on any target.
 ///
+/// `Read` and `Write` are sources and sinks of bytes, on any target: a
+/// `MemReader` reads the bytes of a `MemBuffer`, and writing to a
+/// `MemBuffer` appends.
+///
 /// A native host operation that fails, such as one of `std::fs` or
 /// `std::process`, returns the host's reason as an `Error`.
-use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
+use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes, Result}
 use core::abi::DynString
 use core::fixed::{Fixed, UFixed}
 use core::num::{IntWord, UnsignedAbs}
@@ -214,29 +218,141 @@ pub fn eprint_buffer(_ text: MemBuffer) uses (err: mut Stderr) {
     assert!(err.write_stderr(text.span()), "failed writing to stderr")
 }
 
-/// Appends the rest of standard input to `buf`. Panics if the stream fails.
-pub fn read_to_end(_ buf: mut MemBuffer) uses (input: mut Stdin) {
-    while fill(mut buf) {}
+/// A source of bytes, such as a `MemReader`.
+pub trait Read {
+    /// Reads at most `buf.len()` bytes into the start of `buf`: the number
+    /// read, which is zero only at the end of the input or for an empty
+    /// `buf`. What `buf` holds before the read is unspecified, so a read
+    /// only writes it.
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize>
+
+    /// Fills `buf`: an `UnexpectedEof` error if the input ends first.
+    fn read_exact(mut self, _ buf: mut MemSpan) -> Result<Error, ()> {
+        var filled: usize = 0
+        while filled < buf.len() {
+            let count = self.read(buf.tail(filled))?
+            if count == 0 {
+                return Result::Err(Error::new(ErrorKind::UnexpectedEof))
+            }
+            filled += count
+        }
+        Result::Ok(())
+    }
+
+    /// Appends the rest of the input to `buf`: the number of bytes appended.
+    fn read_to_end(mut self, _ buf: mut MemBuffer) -> Result<Error, usize> {
+        read_all(mut self, mut buf)
+    }
 }
 
-// Reads once into `buf`'s spare capacity, growing it first: false at the end
-// of input.
-fn fill(_ buf: mut MemBuffer) -> bool uses (input: mut Stdin) {
+/// A sink of bytes, such as a `MemBuffer`.
+pub trait Write {
+    /// Writes bytes from the start of `bytes`: the number written, which is
+    /// zero only for empty `bytes`.
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize>
+
+    /// Writes all of `bytes`. A `write` of none of them is an `Other` error.
+    fn write_all(mut self, _ bytes: MemSpan) -> Result<Error, ()> {
+        var written: usize = 0
+        while written < bytes.len() {
+            let count = self.write(bytes.tail(written))?
+            if count == 0 {
+                return Result::Err(Error::new(ErrorKind::Other))
+            }
+            written += count
+        }
+        Result::Ok(())
+    }
+}
+
+/// Appends the bytes.
+impl Write for MemBuffer {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        self.extend_from(bytes)
+        Result::Ok(bytes.len())
+    }
+}
+
+/// Reads the bytes of a `MemBuffer` it owns, from the first.
+pub struct MemReader { bytes: MemBuffer, position: usize }
+
+impl MemReader {
+    pub fn new(_ bytes: own MemBuffer) -> Self {
+        MemReader { bytes, position: 0 }
+    }
+}
+
+impl Read for MemReader {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        let rest = self.bytes.len() - self.position
+        let count = if buf.len() < rest { buf.len() } else { rest }
+        buf.head(count).copy_from(self.bytes.slice(offset: self.position, len: count))
+        self.position += count
+        Result::Ok(count)
+    }
+}
+
+// What the readers of this module read: a `Read`, or standard input, which
+// the caller's `Stdin` effect provides.
+trait Source {
+    uses E
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> uses E
+}
+
+impl<R: Read> Source for R {
+    uses E = ()
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.read(mut buf)
+    }
+}
+
+// Standard input. Its failures have no error number.
+struct StdinSource {}
+
+impl Source for StdinSource {
+    uses E = (input: mut Stdin)
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> uses E {
+        match input.read_stdin(mut buf) {
+            Option::Some(count) => Result::Ok(count),
+            Option::None => Result::Err(Error::new(ErrorKind::Other)),
+        }
+    }
+}
+
+// Appends what `source` reads to `buf`, up to its end: the number of bytes
+// appended.
+fn read_all<S: Source>(_ source: mut S, _ buf: mut MemBuffer) -> Result<Error, usize> uses S::E {
+    let start = buf.len()
+    while read_more(mut source, mut buf)? {}
+    Result::Ok(buf.len() - start)
+}
+
+// Reads once from `source` into `buf`'s spare capacity, growing it first:
+// false at the end of the input.
+fn read_more<S: Source>(_ source: mut S, _ buf: mut MemBuffer) -> Result<Error, bool> uses S::E {
     buf.reserve(4096)
     let len = buf.len()
     // The bytes past the length are allocated; the read initializes the
     // ones it counts.
     let spare = core::ptr::offset_bytes(buf.ptr(), len)
-    match input.read_stdin(unsafe { MemSlice::from_raw_parts(ptr: spare, len: buf.capacity() - len) }) {
-        Option::Some(count) => {
-            unsafe { buf.set_len(len + count) }
-            count > 0
-        }
-        Option::None => {
-            assert!(false, "failed reading stdin")
-            false
-        }
-    }
+    let count = source.fill(unsafe { MemSlice::from_raw_parts(ptr: spare, len: buf.capacity() - len) })?
+    unsafe { buf.set_len(len + count) }
+    Result::Ok(count > 0)
+}
+
+/// Appends the rest of standard input to `buf`. Panics if the stream fails.
+pub fn read_to_end(_ buf: mut MemBuffer) uses (input: mut Stdin) {
+    var source = StdinSource {}
+    let _ = stdin_value(read_all(mut source, mut buf))
+}
+
+// What a read of standard input gave. Panics if the stream failed.
+fn stdin_value<T>(_ result: own Result<Error, T>) -> T {
+    assert!(result.is_ok(), "failed reading stdin")
+    result.ok().unwrap()
 }
 
 /// Reads standard input through a buffer, a byte or a line at a time.
@@ -301,7 +417,8 @@ impl StdinReader {
         self.buffer.span().copy_within(source: self.start, dest: 0, len: rest)
         self.buffer.truncate(rest)
         self.start = 0
-        self.done = !fill(mut self.buffer)
+        var source = StdinSource {}
+        self.done = !stdin_value(read_more(mut source, mut self.buffer))
         !self.done
     }
 }

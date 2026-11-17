@@ -1,0 +1,92 @@
+use core::{MemBuffer, MemSpan}
+use std::io::{Error, ErrorKind, MemReader, Read, Write}
+
+// A sink that takes a byte a write, and nothing once it holds `room`.
+struct Narrow { taken: MemBuffer, room: usize }
+
+impl Write for Narrow {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        if bytes.is_empty() || self.taken.len() == self.room {
+            return Result::Ok(0)
+        }
+        self.taken.push(bytes[0])
+        Result::Ok(1)
+    }
+}
+
+fn greet<W: Write>(_ out: mut W) -> Result<Error, ()> {
+    out.write_all(format!("hello").span())
+}
+
+// The value of `result`, which must not be an error. (`unwrap` would need
+// an `Error` that EVM revert data can hold.)
+fn ok<T>(_ result: own Result<Error, T>) -> T {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => core::panic(),
+    }
+}
+
+// Whether `result` failed with an error of the kind whose text is `kind`.
+fn failed_with<T>(_ result: own Result<Error, T>, _ kind: String<31>) -> bool {
+    match result {
+        Result::Err(error) => format!(error.kind()).span() == kind,
+        Result::Ok(_) => false,
+    }
+}
+
+#[test]
+fn buffers_append_what_they_write() {
+    var out = MemBuffer::empty()
+    assert!(ok(out.write(format!("ab").span())) == 2)
+    assert!(ok(out.write(MemBuffer::empty().span())) == 0)
+    ok(greet(mut out))
+    assert!(out.span() == "abhello")
+}
+
+#[test]
+fn write_all_writes_until_done() {
+    var narrow = Narrow { taken: MemBuffer::empty(), room: 8 }
+    ok(greet(mut narrow))
+    assert!(narrow.taken.span() == "hello")
+    // A write of nothing would never end.
+    assert!(failed_with(greet(mut narrow), "other error"))
+    assert!(narrow.taken.span() == "hellohel")
+}
+
+#[test]
+fn readers_read_their_bytes() {
+    var reader = MemReader::new(format!("hello, world"))
+    var buf = MemBuffer::new(5)
+    assert!(ok(reader.read(buf.span())) == 5)
+    assert!(buf.span() == "hello")
+    ok(reader.read_exact(buf.span()))
+    assert!(buf.span() == ", wor")
+    // Two bytes are left.
+    assert!(failed_with(reader.read_exact(buf.span()), "unexpected end of input"))
+    assert!(buf.span().head(2) == "ld")
+    assert!(ok(reader.read(buf.span())) == 0)
+    var rest = MemBuffer::empty()
+    assert!(ok(reader.read_to_end(mut rest)) == 0)
+    assert!(rest.is_empty())
+}
+
+#[test]
+fn readers_read_to_the_end() {
+    var bytes = MemBuffer::empty()
+    for i in 0..5000 {
+        bytes.push((i % 251).downcast_unchecked())
+    }
+    var reader = MemReader::new(MemBuffer::from_span(bytes.span()))
+    var all = format!("x")
+    assert!(ok(reader.read_to_end(mut all)) == 5000)
+    assert!(all.span().tail(1) == bytes.span())
+}
+
+#[test]
+fn errors_without_host_numbers_have_kinds() {
+    let error = Error::new(ErrorKind::TimedOut)
+    assert!(error.code().is_none())
+    assert!(format!(error.kind()).span() == "timed out")
+    assert!(format!(ErrorKind::ConnectionRefused).span() == "connection refused")
+}
