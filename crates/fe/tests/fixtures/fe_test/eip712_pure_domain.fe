@@ -1,0 +1,75 @@
+use core::hint::black_box
+use core::keccak
+use core::ptr::MemBuffer
+use std::evm::{Address, crypto, eip712}
+
+fn check(_ name: u256, _ version: u256, _ chain: u256, _ address: u256, _ expected: u256) {
+    let actual = eip712::domain_separator(
+        name_hash: black_box(name),
+        version_hash: black_box(version),
+        chain_id: black_box(chain),
+        verifying_contract: Address::new(black_box(address)),
+    )
+    assert!(actual == expected)
+}
+
+#[test]
+fn domain_runtime_inputs_match_independent_vectors() {
+    check(
+        keccak("Seaport"),
+        keccak("1.6"),
+        1,
+        0x0000000000000068f116a894984e2ddb2f0000d1,
+        0x74dd84ad5408ae2607600b0cbd294cc878845e9e14d6622c739d5639ef6f2548,
+    )
+    check(
+        keccak("Test"),
+        keccak("1"),
+        31337,
+        0xcccccccccccccccccccccccccccccccccccccccc,
+        0x95f58733df49c372bc8cdfd2abc7f90ea7bca78840ba9d81ca28a3aa2939439f,
+    )
+    check(
+        keccak(""),
+        keccak(""),
+        u256::max(),
+        0xffffffffffffffffffffffffffffffffffffffff,
+        0x6e8fbdd40cdd2390d3042a77e050aa1f1b2be211e2f48f7a06da9a07f3d1fadf,
+    )
+}
+
+#[test]
+fn domain_hashes_all_five_words_in_order() {
+    var memory = MemBuffer::new(160)
+    memory.write_word(offset: 0, value: eip712::DOMAIN_TYPEHASH)
+    let marker = MemBuffer::new(32)
+    for i in 0 .. 32 {
+        let name = black_box((i as u256) << (i as u256 * 8))
+        let version = black_box(~name)
+        let chain = black_box(i as u256 + 1)
+        let address = black_box(i as u256 * 7919)
+        let addr = Address::new(address)
+        memory.write_word(offset: 32, value: name)
+        memory.write_word(offset: 64, value: version)
+        memory.write_word(offset: 96, value: chain)
+        memory.write_word(offset: 128, value: address)
+        let expected = crypto::keccak256(memory.span())
+        let actual = eip712::domain_separator(
+            name_hash: name,
+            version_hash: version,
+            chain_id: chain,
+            verifying_contract: addr,
+        )
+        assert!(actual == expected)
+        assert!(
+            eip712::domain_separator(
+                    name_hash: name,
+                    version_hash: version,
+                    chain_id: chain,
+                    verifying_contract: addr,
+                )
+                == actual,
+        )
+        assert!(marker.span().read_word(0) == 0)
+    }
+}
