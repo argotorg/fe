@@ -4077,7 +4077,7 @@ fn native_named_closures_transport_captured_and_row_evidence() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(result.status.success(), "O{level}:\n{stdout}\n{stderr}");
         assert!(
-            stdout.contains("10 passed; 0 failed"),
+            stdout.contains("11 passed; 0 failed"),
             "O{level}:\n{stdout}\n{stderr}"
         );
     }
