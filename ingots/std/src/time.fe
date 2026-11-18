@@ -30,7 +30,7 @@ pub trait Clock: HostCapabilitySeal {
 
 impl Clock for Host {
     fn instant(self) -> Instant {
-        Instant { nanos: read_clock(sys::CLOCK_MONOTONIC) }
+        Instant::now()
     }
 
     fn now(self) -> Duration {
@@ -133,6 +133,12 @@ pub struct Instant { nanos: u64 }
 impl Copy for Instant {}
 
 impl Instant {
+    /// The monotonic clock's reading, for deadlines inside `std`, which
+    /// reads the clock without the `Clock` capability.
+    pub(ingot) fn now() -> Self {
+        Instant { nanos: read_clock(sys::CLOCK_MONOTONIC) }
+    }
+
     /// The time from `earlier` to this reading, or zero if `earlier` is
     /// later.
     pub fn duration_since(self, _ earlier: Instant) -> Duration {

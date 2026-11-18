@@ -1,0 +1,40 @@
+use std::io::{Error, ErrorKind, Stdout}
+
+// Prints the kind of each host error number from 1 to 150, then the text
+// of an error the host didn't report.
+pub fn main() -> i32 uses (out: mut Stdout) {
+    var code: i32 = 1
+    while code <= 150 {
+        println!(code, " ", kind_name(Error::from_code(code).kind()))
+        code += 1
+    }
+    let eof = Error::new(ErrorKind::UnexpectedEof)
+    println!("new: ", kind_name(eof.kind()), ", code: ", eof.code().is_some(), ", text: ", eof)
+    0
+}
+
+fn kind_name(_ kind: ErrorKind) -> String<20> {
+    match kind {
+        ErrorKind::NotFound => "NotFound",
+        ErrorKind::PermissionDenied => "PermissionDenied",
+        ErrorKind::AlreadyExists => "AlreadyExists",
+        ErrorKind::NotADirectory => "NotADirectory",
+        ErrorKind::IsADirectory => "IsADirectory",
+        ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::WouldBlock => "WouldBlock",
+        ErrorKind::TimedOut => "TimedOut",
+        ErrorKind::ConnectionRefused => "ConnectionRefused",
+        ErrorKind::ConnectionReset => "ConnectionReset",
+        ErrorKind::ConnectionAborted => "ConnectionAborted",
+        ErrorKind::NotConnected => "NotConnected",
+        ErrorKind::AddrInUse => "AddrInUse",
+        ErrorKind::AddrNotAvailable => "AddrNotAvailable",
+        ErrorKind::NetworkUnreachable => "NetworkUnreachable",
+        ErrorKind::HostUnreachable => "HostUnreachable",
+        ErrorKind::BrokenPipe => "BrokenPipe",
+        ErrorKind::UnexpectedEof => "UnexpectedEof",
+        ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
+        ErrorKind::Other => "Other",
+    }
+}

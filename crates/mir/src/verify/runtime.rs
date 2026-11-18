@@ -167,7 +167,7 @@ fn verify_signature<'db>(body: &RuntimeBody<'db>) -> Result<(), VerifyError<'db>
 }
 
 fn verify_call<'db>(
-    _db: &'db dyn MirDb,
+    db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
     body: &RuntimeBody<'db>,
     callee: RuntimeInstance<'db>,
@@ -180,15 +180,27 @@ fn verify_call<'db>(
     {
         return Err(VerifyError::InvalidTerminalCall(callee));
     }
-    if params.len() != args.len() {
+    // A variadic call passes extra arguments after the parameters.
+    if args.len() < params.len() || args.len() > params.len() && !callee.key(db).is_variadic(db) {
         return Err(VerifyError::CallArgCountMismatch(callee));
     }
 
-    for (idx, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
+    for (idx, arg) in args.iter().enumerate() {
         let Some(class) = body.value_class(*arg) else {
             return Err(VerifyError::ErasedRuntimeValue(*arg));
         };
-        if class != &param.class {
+        let valid = match params.get(idx) {
+            Some(param) => class == &param.class,
+            // An extra argument is a C integer or pointer.
+            None => matches!(
+                class,
+                RuntimeClass::Scalar(ScalarClass {
+                    repr: ScalarRepr::Int { bits: 32 | 64, .. },
+                    role: ScalarRole::Plain | ScalarRole::Pointer,
+                })
+            ),
+        };
+        if !valid {
             return Err(VerifyError::CallArgClassMismatch(callee, idx));
         }
     }

@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use common::{
     InputDb,
     compilation::{Arch, Os, Platform, Target},
+    ingot::IngotKind,
 };
 use driver::DriverDataBase;
 use salsa::Setter;
@@ -90,6 +91,62 @@ fn native_signatures() {
     let evm = diagnostics(&mut DriverDataBase::default(), path, content);
     assert!(!evm.contains("to or from C"), "{evm}");
     assert!(!evm.contains("native `main`"), "{evm}");
+}
+
+// A variadic `extern` function takes C integers and raw pointers after its
+// parameters, natively. On the EVM it is an error.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_variadic() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/native/variadic.fe");
+    let content = include_str!("../fixtures/native/variadic.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let native = diagnostics(&mut db, path, content);
+    assert!(
+        !native.contains("only supported on the native target"),
+        "{native}"
+    );
+    snap_test!(native, path);
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(evm.contains("only supported on the native target"), "{evm}");
+}
+
+// `std` declares C functions without checks, as it does compiler intrinsics,
+// but not variadic ones: each fixed parameter takes one C integer register.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn std_variadic_signatures() {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let root = Url::parse("file:///variadic_std/").unwrap();
+    db.workspace().touch(
+        &mut db,
+        root.join("fe.toml").unwrap(),
+        Some("[ingot]\nname = \"std\"\nversion = \"0.1.0\"\n".to_string()),
+    );
+    let file = db.workspace().touch(
+        &mut db,
+        root.join("src/lib.fe").unwrap(),
+        Some(
+            "extern {\n    fn fixed(_ a: u8) -> bool\n    fn narrow(_ a: u8, ...) -> bool\n}\n"
+                .to_string(),
+        ),
+    );
+    let top_mod = db.top_mod(file);
+    assert_eq!(top_mod.ingot(&db).kind(&db), IngotKind::Std);
+    let diags = db.run_on_top_mod(top_mod).format_diags(&db);
+    assert_eq!(
+        diags.matches("cannot pass this type to or from C").count(),
+        2,
+        "{diags}"
+    );
+    assert_eq!(diags.matches("lib.fe:3:").count(), 2, "{diags}");
 }
 
 // A WebAssembly export takes the effects of the root effect, `std::wasm::Host`,

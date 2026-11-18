@@ -14,7 +14,7 @@ use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::diagnostics::{
-    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag, VariadicIssue,
 };
 use crate::analysis::ty::effects::EffectKeyKind;
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
@@ -414,6 +414,61 @@ impl<'db> Func<'db> {
         .collect()
     }
 
+    /// A variadic `extern` function is a C function that native code calls
+    /// as it is declared: without generic arguments or effects, and not at
+    /// compile time. Each fixed parameter takes one C integer register, and
+    /// the result is a C scalar or nothing. Unlike another `extern`
+    /// function's, its signature is checked in `core` and `std` too.
+    pub fn diags_variadic(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if !self.is_variadic(db) {
+            return Vec::new();
+        }
+        // A generic parameter is reported as such.
+        let no_c_form =
+            |ty: TyId<'db>| !(ty.has_invalid(db) || ty.has_param(db) || is_c_scalar(db, ty));
+        let c_abi = |span: DynLazySpan<'db>, ty, mutable| {
+            TyDiagCollection::from(TyLowerDiag::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported: false,
+            })
+        };
+        let ret = self.return_ty(db);
+        let types = self
+            .params(db)
+            .enumerate()
+            .filter_map(|(idx, param)| {
+                let ty = param.ty(db);
+                let mutable = param.mode_at(db, None) == FuncParamMode::Mut;
+                (mutable || no_c_form(ty))
+                    .then(|| c_abi(self.span().params().param(idx).ty().into(), ty, mutable))
+            })
+            .chain(
+                (no_c_form(ret) && ret != TyId::unit(db) && !ret.is_never(db))
+                    .then(|| c_abi(self.span().ret_ty().into(), ret, false)),
+            );
+        [
+            (db.compilation_settings().target(db) != Target::Native).then(|| {
+                (
+                    self.span().params().variadic().into(),
+                    VariadicIssue::NotNative,
+                )
+            }),
+            (GenericParamOwner::Func(self).params(db).next().is_some())
+                .then(|| (self.span().generic_params().into(), VariadicIssue::Generic)),
+            (!self.declared_effects(db).data(db).is_empty())
+                .then(|| (self.span().effects().into(), VariadicIssue::Effects)),
+            self.is_const(db)
+                .then(|| (self.span().const_kw().into(), VariadicIssue::Const)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(span, issue)| TyLowerDiag::InvalidVariadic { span, issue }.into())
+        .chain(types)
+        .collect()
+    }
+
     /// Natively, `main` returns an exit status or nothing, and a function that C
     /// calls or that calls C passes only values with a C form. `core` and `std`
     /// declare compiler intrinsics as `extern` too.
@@ -437,7 +492,9 @@ impl<'db> Func<'db> {
             );
         }
         let exported = self.is_exported(db);
+        // `diags_variadic` checks a variadic function's signature.
         let foreign = self.is_extern(db)
+            && !self.is_variadic(db)
             && !matches!(
                 self.top_mod(db).ingot(db).kind(db),
                 IngotKind::Core | IngotKind::Std
@@ -2452,10 +2509,13 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
 /// Whether C can pass a `ty`. An invalid type reports elsewhere, and a generic
 /// one is checked when codegen lowers its instance.
 fn has_c_form<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    ty.has_invalid(db)
-        || ty.has_param(db)
-        || ty == TyId::unit(db)
-        || ty.as_ptr(db).is_some()
+    ty.has_invalid(db) || ty.has_param(db) || ty == TyId::unit(db) || is_c_scalar(db, ty)
+}
+
+/// Whether C passes `ty` as one integer register or stack slot: a 32- or
+/// 64-bit integer or a raw pointer.
+pub(crate) fn is_c_scalar<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty.as_ptr(db).is_some()
         || matches!(
             ty.as_prim(db),
             Some(
@@ -2481,6 +2541,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_effects(db));
         out.extend(self.diags_export(db));
         out.extend(self.diags_native_signature(db));
+        out.extend(self.diags_variadic(db));
         out.extend(self.diags_view_types(db));
         out.extend(self.diags_state_only_types(db));
 

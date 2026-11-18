@@ -137,19 +137,23 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         self.select_materialized_operand_value(operand.local, operand)
     }
 
+    /// The inputs a call passes to its callee's parameters and effects. A
+    /// variadic call's extra arguments are not among them
+    /// (`selected_variadic_args`).
     pub(super) fn selected_call_inputs(
         &mut self,
         args: &[SemanticOperand],
         effect_args: &[NEffectArg<'db>],
         plan: &CompiledCallInputPlan<'db>,
     ) -> Vec<SelectedRuntimeArg<'db>> {
-        assert_eq!(
-            args.len(),
-            plan.param_plans.len(),
+        assert!(
+            args.len() == plan.param_plans.len()
+                || plan.variadic && args.len() > plan.param_plans.len(),
             "runtime call arg count mismatch during value evaluation: caller={:?} args={args:?} plans={:?}",
             self.env.body().owner().key(self.env.db()),
             plan.param_plans,
         );
+        let args = &args[..plan.param_plans.len()];
         assert_eq!(
             effect_args.len(),
             plan.effect_boundaries.len(),
@@ -167,6 +171,33 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
                 }),
         );
         selected
+    }
+
+    /// The extra arguments of a variadic call, which it passes after all
+    /// its other inputs as plain values. They take no part in choosing the
+    /// callee's runtime instance, so every call shares one.
+    pub(super) fn selected_variadic_args(
+        &mut self,
+        args: &[SemanticOperand],
+        plan: &CompiledCallInputPlan<'db>,
+    ) -> Vec<SelectedRuntimeArg<'db>> {
+        args[plan.param_plans.len()..]
+            .iter()
+            .map(|arg| {
+                self.env
+                    .body()
+                    .runtime_operand(*arg)
+                    .and_then(|arg| {
+                        self.selected_value_pass_plan(arg, &CompiledValuePassPlan::VisibleValue)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "a variadic call's extra argument has no runtime value: caller={:?} arg={arg:?}",
+                            self.env.body().owner().key(self.env.db()),
+                        )
+                    })
+            })
+            .collect()
     }
 
     pub(super) fn selected_param_inputs(

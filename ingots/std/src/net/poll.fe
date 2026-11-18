@@ -1,0 +1,319 @@
+#![cfg(target_family = "unix")]
+/// Waiting for events on many sockets at once: a `Poller`, on `epoll` on
+/// Linux and `kqueue` on macOS.
+use core::{MemBuffer, MemVec, Option, Result}
+use core::ops::Eq
+use ingot::io::{Error, ErrorKind}
+use ingot::sys::{self, EVENT_ERROR, EVENT_HANGUP, EVENT_READABLE, EVENT_WRITABLE, Fd}
+use ingot::time::{Duration, Instant}
+use super::{TcpListener, TcpStream, UdpSocket}
+
+/// A source of events for a `Poller`: a socket, or anything that holds a
+/// descriptor, such as a connection type of a program's own.
+pub trait Pollable {
+    /// The descriptor to wait on, which the source owns.
+    fn raw_fd(self) -> i32
+}
+
+impl Pollable for TcpStream {
+    fn raw_fd(self) -> i32 {
+        self.as_raw_fd()
+    }
+}
+
+impl Pollable for TcpListener {
+    fn raw_fd(self) -> i32 {
+        self.as_raw_fd()
+    }
+}
+
+impl Pollable for UdpSocket {
+    fn raw_fd(self) -> i32 {
+        self.as_raw_fd()
+    }
+}
+
+/// The events a source is waited for.
+pub struct Interest { kinds: u8 }
+
+impl Copy for Interest {}
+
+impl Interest {
+    /// When the source can be read, or accept a connection, without waiting.
+    pub const READABLE: Interest = Interest { kinds: EVENT_READABLE }
+    /// When the source can be written without waiting, as a non-blocking
+    /// connection in progress can once it is made or has failed.
+    pub const WRITABLE: Interest = Interest { kinds: EVENT_WRITABLE }
+    pub const BOTH: Interest = Interest { kinds: EVENT_READABLE | EVENT_WRITABLE }
+}
+
+/// The name of a source in its `Poller`, which `add` gives. The token of a
+/// removed source names no other.
+pub struct Token { index: u32, generation: u32 }
+
+impl Copy for Token {}
+
+impl Eq for Token {
+    fn eq(self, _ other: Self) -> bool {
+        self.index == other.index && self.generation == other.generation
+    }
+}
+
+impl Token {
+    // The token as the kernel's user data of its events.
+    fn data(self) -> u64 {
+        (self.generation as u64) << 32 | self.index as u64
+    }
+}
+
+/// What happened to a source, which a `Poller::wait` reports.
+pub struct Event { token: Token, kinds: u8 }
+
+impl Copy for Event {}
+
+impl Event {
+    /// The source's token.
+    pub fn token(self) -> Token {
+        self.token
+    }
+
+    /// Whether the source can be read without waiting, which includes
+    /// reading the end of a stream, or a listener can accept.
+    pub fn is_readable(self) -> bool {
+        self.kinds & EVENT_READABLE != 0
+    }
+
+    /// Whether the source can be written without waiting.
+    pub fn is_writable(self) -> bool {
+        self.kinds & EVENT_WRITABLE != 0
+    }
+
+    /// Whether the peer has closed the connection, or its writing side. A
+    /// source waited for writes alone has no event for a peer that only shut
+    /// down its writing side, which it would have at every wait; it has one
+    /// once the connection is closed both ways or reset.
+    pub fn is_hangup(self) -> bool {
+        self.kinds & EVENT_HANGUP != 0
+    }
+
+    /// Whether the source has an error, such as a non-blocking connection
+    /// that failed, which `TcpStream::take_error` gives.
+    pub fn is_error(self) -> bool {
+        self.kinds & EVENT_ERROR != 0
+    }
+}
+
+/// The events of one `Poller::wait`, in a buffer the caller owns and the
+/// kernel fills. A source can have two events in one wait: on macOS one for
+/// reading and one for writing.
+pub struct Events { raw: MemBuffer, capacity: usize, len: usize }
+
+impl Events {
+    /// Room for `capacity` events, which must not be zero.
+    pub fn with_capacity(_ capacity: usize) -> Self {
+        assert!(capacity > 0, "an `Events` with no room")
+        Events { raw: MemBuffer::new(capacity * sys::EVENT_SIZE), capacity, len: 0 }
+    }
+
+    /// The number of events the last wait reported.
+    pub fn len(self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Event `index`, which must be below `len()`.
+    pub fn get(self, _ index: usize) -> Event {
+        assert!(index < self.len, "event index out of bounds")
+        let data = sys::event_data(self.raw.span(), index)
+        let token = Token { index: (data & 0xffffffff).downcast_truncate(), generation: (data >> 32).downcast_truncate() }
+        Event { token, kinds: sys::event_kinds(self.raw.span(), index) }
+    }
+}
+
+/// Sources it waits for events on, which it owns, and a kernel queue,
+/// which reports their events level-triggered: an event comes back at each
+/// wait until the source is read, written or removed. `get` reaches a
+/// source by its token, and `remove` gives it back.
+///
+/// The queue knows a descriptor and not the source, so a source that `get`
+/// replaces at `mut` isn't waited for until `reregister` registers it. The
+/// old source's events, if the caller kept it, come with the token until
+/// then.
+///
+/// A peer that shuts down its writing side makes a source waited for reads
+/// readable, at the end of the stream, and a hangup; a source waited for
+/// writes alone has no event for it.
+pub struct Poller<S> {
+    queue: Fd,
+    slots: MemVec<Slot<S>>,
+    // The indices of the slots without a source.
+    free: MemVec<u32>,
+}
+
+// A source and its registration, or none. The generation counts the sources
+// the slot has had, so that a token names one of them.
+struct Slot<S> {
+    source: Option<S>,
+    generation: u32,
+    fd: i32,
+    interest: Interest,
+}
+
+impl<S: Pollable> Poller<S> {
+    /// A poller without sources.
+    pub fn new() -> Result<Error, Self> {
+        Result::Ok(Poller { queue: sys::new_queue()?, slots: MemVec::new(), free: MemVec::new() })
+    }
+
+    /// Takes `source`, and waits for its `interest` events from the next
+    /// wait on: its token. If registering it fails, the source is dropped.
+    pub fn add(mut self, _ source: own S, _ interest: Interest) -> Result<Error, Token> {
+        let fd = source.raw_fd()
+        let index = match self.free.pop() {
+            Option::Some(index) => index,
+            Option::None => {
+                self.slots.push(Slot { source: Option::None, generation: 0, fd: -1, interest })
+                (self.slots.len() - 1).downcast_unchecked()
+            }
+        }
+        let token = Token { index, generation: self.slots[index as usize].generation }
+        match sys::queue_set(self.queue.fd, fd, data: token.data(), interest: interest.kinds, added: false) {
+            Result::Ok(_) => {}
+            Result::Err(error) => {
+                self.free.push(index)
+                return Result::Err(error)
+            }
+        }
+        self.slots[index as usize] = Slot { source: Option::Some(source), generation: token.generation, fd, interest }
+        Result::Ok(token)
+    }
+
+    /// The source of `token`, or `None` if it has been removed.
+    pub fn get(mut? self, _ token: Token) -> Option<mut? S> {
+        if !self.has(token) {
+            return Option::None
+        }
+        match self.slots[token.index as usize].source {
+            Option::Some(mut? source) => Option::Some(mut? source),
+            Option::None => Option::None,
+        }
+    }
+
+    /// Waits for `interest`'s events of the source of `token` in place of
+    /// those it waited for: a `NotFound` error if it has been removed.
+    pub fn set_interest(mut self, _ token: Token, _ interest: Interest) -> Result<Error, ()> {
+        if !self.has(token) {
+            return Result::Err(Error::new(ErrorKind::NotFound))
+        }
+        self.register(token, interest)
+    }
+
+    /// Registers the descriptor of the source of `token` again, after `get`
+    /// has replaced the source, and ends the wait for the old source if the
+    /// caller kept it: a `NotFound` error if the source has been removed.
+    pub fn reregister(mut self, _ token: Token) -> Result<Error, ()> {
+        if !self.has(token) {
+            return Result::Err(Error::new(ErrorKind::NotFound))
+        }
+        self.register(token, self.slots[token.index as usize].interest)
+    }
+
+    /// Takes the source of `token` out of the poller and gives it back, or
+    /// `None` if it has been removed.
+    pub fn remove(mut self, _ token: Token) -> Option<S> {
+        if !self.has(token) {
+            return Option::None
+        }
+        self.deregister(token.index)
+        let slot = mut self.slots[token.index as usize]
+        let source = slot.source.take()
+        slot.generation = slot.generation.wrapping_add(1)
+        self.free.push(token.index)
+        source
+    }
+
+    /// Waits until a source has an event, or `timeout` has passed if there
+    /// is one, and puts the events in `events`: how many, zero if the time
+    /// passed first. A signal doesn't end the wait early.
+    pub fn wait(mut self, _ events: mut Events, _ timeout: Option<Duration>) -> Result<Error, usize> {
+        let deadline = match timeout {
+            Option::Some(limit) => Option::Some(Instant::now() + limit),
+            Option::None => Option::None,
+        }
+        let count = sys::queue_wait(self.queue.fd, events.raw.ptr(), events.capacity, deadline)?
+        events.len = count
+        Result::Ok(count)
+    }
+
+    // Registers the descriptor that the source of `token` has now for
+    // `interest`: changes the queue's registration of it, or else adds one,
+    // after taking out that of the descriptor `get` replaced.
+    fn register(mut self, _ token: Token, _ interest: Interest) -> Result<Error, ()> {
+        let queue = self.queue.fd
+        let fd = match self.slots[token.index as usize].source {
+            Option::Some(ref source) => source.raw_fd(),
+            Option::None => return Result::Err(Error::new(ErrorKind::NotFound)),
+        }
+        // A replacement with the old source's number has no registration
+        // to change either: the old one closed with its own.
+        let modified = fd == self.slots[token.index as usize].fd
+            && sys::queue_set(queue, fd, data: token.data(), interest: interest.kinds, added: true).is_ok()
+        if !modified {
+            if fd != self.slots[token.index as usize].fd {
+                self.deregister(token.index)
+            }
+            sys::queue_set(queue, fd, data: token.data(), interest: interest.kinds, added: false)?
+        }
+        let slot = mut self.slots[token.index as usize]
+        slot.fd = fd
+        slot.interest = interest
+        Result::Ok(())
+    }
+
+    // Takes the registration of slot `index` out of the queue: that of the
+    // descriptor it was registered with. If `get` replaced the source, that
+    // is the old source's, which closed with its registration unless the
+    // caller kept it. Its number may then be another source's, whose
+    // registration stays.
+    fn deregister(mut self, _ index: u32) {
+        let fd = self.slots[index as usize].fd
+        let current = match self.slots[index as usize].source {
+            Option::Some(ref source) => source.raw_fd() == fd,
+            Option::None => false,
+        }
+        if current || !self.registered_elsewhere(fd, except: index) {
+            let _ = sys::queue_remove(self.queue.fd, fd)
+        }
+    }
+
+    // Whether a source of a slot other than `except` is registered with
+    // `fd`, as it is if it has that descriptor still.
+    fn registered_elsewhere(self, _ fd: i32, except: u32) -> bool {
+        var index: usize = 0
+        while index < self.slots.len() {
+            if index != except as usize && self.slots[index].fd == fd {
+                match self.slots[index].source {
+                    Option::Some(ref source) => {
+                        if source.raw_fd() == fd {
+                            return true
+                        }
+                    }
+                    Option::None => {}
+                }
+            }
+            index += 1
+        }
+        false
+    }
+
+    // Whether `token` names a source of the poller.
+    fn has(self, _ token: Token) -> bool {
+        let index = token.index as usize
+        index < self.slots.len()
+            && self.slots[index].generation == token.generation
+            && self.slots[index].source.is_some()
+    }
+}

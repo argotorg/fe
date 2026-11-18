@@ -6,23 +6,20 @@
 /// them `uses (fs: mut Fs)`. A path is the text of a `Display` value, such as
 /// a string literal, an `Arg` or a `MemBuffer`. An operation that fails
 /// returns the host's reason as a `std::io::Error`.
-use core::{MemBuffer, MemSlice, MemSpan, MemVec, Result, ptr}
+///
+/// A `File` is an open file, which reads and writes as a `std::io::Read` and
+/// `Write`. Owning it is the authority to use it: `Fs` opens it.
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
 use super::env::c_string_len
-use super::io::{Display, Error, ErrorKind}
+use super::io::{Display, Error, ErrorKind, Read, Write}
 use super::native::{Host, HostCapabilitySeal}
-use super::sys::{self, c_string, last_error}
+use super::sys::{self, EINVAL, Fd, O_RDONLY, O_RDWR, O_WRONLY, c_string, last_error}
 
 extern {
-    // C stdio reads and writes file contents. Its calls take fixed
-    // arguments, while `open` takes its mode as a variadic argument, which
-    // AArch64 macOS passes on the stack.
-    fn fopen(_ path: *u8, _ mode: *u8) -> *u8
-    fn fread(_ buf: *u8, _ size: usize, _ count: usize, _ file: *u8) -> usize
-    fn fwrite(_ buf: *u8, _ size: usize, _ count: usize, _ file: *u8) -> usize
-    fn ferror(_ file: *u8) -> i32
-    fn fclose(_ file: *u8) -> i32
     // POSIX file system calls. `mode_t` is 16 bits on macOS, where the
-    // caller extends it to 32 bits, so a 32-bit mode passes the same.
+    // caller extends it to 32 bits, so a 32-bit mode passes the same, and a
+    // variadic argument is promoted to an `int` anyway.
+    fn open(_ path: *u8, _ flags: i32, ...) -> i32
     fn mkdir(_ path: *u8, _ mode: u32) -> i32
     fn stat(_ path: *u8, _ buf: *u8) -> i32
     fn lstat(_ path: *u8, _ buf: *u8) -> i32
@@ -59,6 +56,13 @@ pub trait Fs: HostCapabilitySeal {
     /// Appends `bytes` to the file at `path`, creating the file if it
     /// doesn't exist.
     fn append<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()>
+    /// Opens the file at `path` for reading.
+    fn open<P: Display>(self, _ path: P) -> Result<Error, File>
+    /// Opens the file at `path` for writing, creating it if it doesn't exist
+    /// and emptying it if it does.
+    fn create<P: Display>(mut self, _ path: P) -> Result<Error, File>
+    /// Opens the file at `path` as `options` say.
+    fn open_with<P: Display>(mut self, _ path: P, _ options: OpenOptions) -> Result<Error, File>
     /// Creates the directory at `path` and any of its missing parents. An
     /// existing directory is no error.
     fn create_dir_all<P: Display>(mut self, _ path: P) -> Result<Error, ()>
@@ -69,6 +73,123 @@ pub trait Fs: HostCapabilitySeal {
     fn read_dir<P: Display>(self, _ path: P) -> Result<Error, MemVec<DirEntry>>
     /// The absolute form of `path`, without symbolic links, `.` or `..`.
     fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer>
+}
+
+/// An open file, which closes when destroyed. Each read or write starts
+/// where the last one ended.
+pub struct File { fd: Fd }
+
+impl File {
+    /// The file's descriptor, which the file still owns.
+    pub fn as_raw_fd(self) -> i32 {
+        self.fd.fd
+    }
+
+    /// The file of the open descriptor `fd`, which it takes over: nothing
+    /// else may close `fd`.
+    pub unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        File { fd: Fd { fd } }
+    }
+}
+
+impl Read for File {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        sys::read_fd(self.fd.fd, mut buf)
+    }
+}
+
+impl Write for File {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        sys::write_fd(self.fd.fd, bytes)
+    }
+}
+
+/// How `Fs::open_with` opens a file: what the file allows, and whether
+/// opening creates or empties it. Each method returns the options with one
+/// more setting: `OpenOptions::new().append(true).create(true)` appends to a
+/// file, creating it if it doesn't exist.
+pub struct OpenOptions {
+    read: bool,
+    write: bool,
+    append: bool,
+    truncate: bool,
+    create: bool,
+    create_new: bool,
+}
+
+impl Copy for OpenOptions {}
+
+impl OpenOptions {
+    /// Options that allow nothing, which `open_with` refuses until `read`,
+    /// `write` or `append` is set.
+    pub fn new() -> Self {
+        OpenOptions { read: false, write: false, append: false, truncate: false, create: false, create_new: false }
+    }
+
+    /// Allows reads.
+    pub fn read(var own self, _ read: bool) -> Self {
+        self.read = read
+        self
+    }
+
+    /// Allows writes, the first from the start of the file.
+    pub fn write(var own self, _ write: bool) -> Self {
+        self.write = write
+        self
+    }
+
+    /// Allows writes, each to the end of the file.
+    pub fn append(var own self, _ append: bool) -> Self {
+        self.append = append
+        self
+    }
+
+    /// Empties the file as it opens, which needs `write`.
+    pub fn truncate(var own self, _ truncate: bool) -> Self {
+        self.truncate = truncate
+        self
+    }
+
+    /// Creates the file if it doesn't exist, which needs `write` or
+    /// `append`.
+    pub fn create(var own self, _ create: bool) -> Self {
+        self.create = create
+        self
+    }
+
+    /// Creates the file, with an `AlreadyExists` error if it exists. It
+    /// needs `write` or `append`.
+    pub fn create_new(var own self, _ create_new: bool) -> Self {
+        self.create_new = create_new
+        self
+    }
+
+    // The `open` flags, or an `InvalidInput` error for options that allow
+    // nothing or conflict.
+    fn flags(self) -> Result<Error, i32> {
+        let writes = self.write || self.append
+        let valid = (self.read || writes)
+            && (writes || !(self.truncate || self.create || self.create_new))
+            && !(self.append && self.truncate && !self.create_new)
+        if !valid {
+            return Result::Err(Error::from_code(EINVAL))
+        }
+        var flags = if !writes { O_RDONLY } else if self.read { O_RDWR } else { O_WRONLY }
+        if self.append {
+            flags = flags | sys::O_APPEND
+        }
+        if self.create_new {
+            flags = flags | sys::O_CREAT | sys::O_EXCL
+        } else {
+            if self.create {
+                flags = flags | sys::O_CREAT
+            }
+            if self.truncate {
+                flags = flags | sys::O_TRUNC
+            }
+        }
+        Result::Ok(flags)
+    }
 }
 
 /// The type of a file.
@@ -129,31 +250,32 @@ impl DirEntry {
 
 impl Fs for Host {
     fn read<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {
-        let file = open(c_string(path)?, mode: "r")?
+        var file = self.open(path)?
         var contents = MemBuffer::empty()
-        while true {
-            contents.reserve(4096)
-            let len = contents.len()
-            let spare = contents.capacity() - len
-            let count = unsafe { fread(ptr::offset_bytes(contents.ptr(), len), 1, spare, file) }
-            unsafe { contents.set_len(len + count) }
-            // A short read is the end of the file or a failure.
-            if count < spare {
-                break
-            }
-        }
-        let failed = unsafe { ferror(file) } != 0
-        let error = last_error()
-        unsafe { fclose(file) }
-        if failed { Result::Err(error) } else { Result::Ok(contents) }
+        file.read_to_end(mut contents)?
+        Result::Ok(contents)
     }
 
     fn write<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()> {
-        write_file(open(c_string(path)?, mode: "w")?, bytes)
+        var file = self.create(path)?
+        file.write_all(bytes)
     }
 
     fn append<P: Display>(mut self, _ path: P, _ bytes: MemSpan) -> Result<Error, ()> {
-        write_file(open(c_string(path)?, mode: "a")?, bytes)
+        var file = self.open_with(path, OpenOptions::new().append(true).create(true))?
+        file.write_all(bytes)
+    }
+
+    fn open<P: Display>(self, _ path: P) -> Result<Error, File> {
+        open_file(c_string(path)?, flags: O_RDONLY)
+    }
+
+    fn create<P: Display>(mut self, _ path: P) -> Result<Error, File> {
+        open_file(c_string(path)?, flags: O_WRONLY | sys::O_CREAT | sys::O_TRUNC)
+    }
+
+    fn open_with<P: Display>(mut self, _ path: P, _ options: OpenOptions) -> Result<Error, File> {
+        open_file(c_string(path)?, flags: options.flags()?)
     }
 
     fn create_dir_all<P: Display>(mut self, _ path: P) -> Result<Error, ()> {
@@ -169,18 +291,21 @@ impl Fs for Host {
     fn read_dir<P: Display>(self, _ path: P) -> Result<Error, MemVec<DirEntry>> {
         let path = c_string(path)?
         let dir = unsafe { opendir(path.ptr()) }
-        if dir as usize == 0 {
+        if ptr::is_null(dir) {
             return Result::Err(last_error())
         }
         var entries = MemVec::new()
-        var code: i32 = 0
-        while code == 0 {
+        var failure: Option<Error> = Option::None
+        while failure.is_none() {
             // `readdir` returns null at the end and on a failure, which
             // alone sets `errno`.
             unsafe { *sys::errno_location() = 0 }
             let entry = unsafe { readdir(dir) }
-            if entry as usize == 0 {
-                code = sys::errno()
+            if ptr::is_null(entry) {
+                let code = sys::errno()
+                if code != 0 {
+                    failure = Option::Some(Error::from_code(code))
+                }
                 break
             }
             let name_ptr = ptr::offset_bytes(entry, sys::DIRENT_NAME)
@@ -190,18 +315,21 @@ impl Fs for Host {
             }
             match dir_entry(path, name, unsafe { *ptr::offset_bytes(entry, sys::DIRENT_TYPE) }) {
                 Result::Ok(entry) => entries.push(entry),
-                Result::Err(error) => code = error.code(),
+                Result::Err(error) => failure = Option::Some(error),
             }
         }
         unsafe { closedir(dir) }
-        if code != 0 { Result::Err(Error::from_code(code)) } else { Result::Ok(entries) }
+        match failure {
+            Option::Some(error) => Result::Err(error),
+            Option::None => Result::Ok(entries),
+        }
     }
 
     fn canonicalize<P: Display>(self, _ path: P) -> Result<Error, MemBuffer> {
         let path = c_string(path)?
         // At least `PATH_MAX`: 4096 on Linux, 1024 on macOS.
         var resolved = MemBuffer::new(4096)
-        if unsafe { realpath(path.ptr(), resolved.ptr()) } as usize == 0 {
+        if ptr::is_null(unsafe { realpath(path.ptr(), resolved.ptr()) }) {
             return Result::Err(last_error())
         }
         resolved.truncate(c_string_len(resolved.ptr()))
@@ -209,24 +337,13 @@ impl Fs for Host {
     }
 }
 
-// Opens the file at the C string `path` with the stdio `mode`.
-fn open(_ path: MemBuffer, mode: String<1>) -> Result<Error, *u8> {
-    var mode_text = MemBuffer::empty()
-    mode.fmt(mut mode_text)
-    mode_text.push(0)
-    let file = unsafe { fopen(path.ptr(), mode_text.ptr()) }
-    if file as usize == 0 { Result::Err(last_error()) } else { Result::Ok(file) }
-}
-
-// Writes `bytes` to `file`, then closes it.
-fn write_file(_ file: *u8, _ bytes: MemSpan) -> Result<Error, ()> {
-    let short = unsafe { fwrite(bytes.ptr(), 1, bytes.len(), file) } < bytes.len()
-    let error = last_error()
-    // Closing flushes what stdio buffered, which can fail too.
-    if unsafe { fclose(file) } != 0 && !short {
-        return Result::Err(last_error())
-    }
-    if short { Result::Err(error) } else { Result::Ok(()) }
+// Opens the file at the C string `path` with the `open` flags `flags`,
+// close-on-exec. A file it creates has mode `0o666`, less the umask.
+fn open_file(_ path: MemBuffer, flags: i32) -> Result<Error, File> {
+    let c_path = path.ptr()
+    let fd = sys::retry(|| unsafe { open(c_path, flags | sys::O_CLOEXEC, 0o666 as u32) } as isize)?
+    // `open` returned a new descriptor, which nothing else has.
+    Result::Ok(unsafe { File::from_raw_fd(fd.downcast_unchecked()) })
 }
 
 // Creates the directory named by the first `len` bytes of `path`, which a

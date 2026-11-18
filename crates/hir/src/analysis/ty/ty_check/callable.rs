@@ -374,6 +374,9 @@ pub struct Callable<'db> {
     generic_args: Vec<TyId<'db>>,
     effect_providers: Vec<EffectProviderSpecialization<'db>>,
     checked_input_tys: Option<Vec<TyId<'db>>>,
+    /// The types of the extra arguments a call of a variadic function
+    /// passes after its parameters.
+    variadic_arg_tys: Vec<TyId<'db>>,
     /// The originating trait instance if this callable comes from a trait method
     /// (e.g., operator overloading, method call, indexing). None for inherent functions.
     pub trait_inst: Option<TraitInstId<'db>>,
@@ -393,6 +396,7 @@ impl<'db> TyVisitable<'db> for Callable<'db> {
         if let Some(inputs) = &self.checked_input_tys {
             inputs.visit_with(visitor);
         }
+        self.variadic_arg_tys.visit_with(visitor);
         if let Some(inst) = self.trait_inst {
             inst.visit_with(visitor);
         }
@@ -413,6 +417,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
             checked_input_tys: self
                 .checked_input_tys
                 .map(|inputs| inputs.fold_with(db, folder)),
+            variadic_arg_tys: self.variadic_arg_tys.fold_with(db, folder),
             trait_inst: self.trait_inst.map(|i| i.fold_with(db, folder)),
             use_evidence: self.use_evidence.fold_with(db, folder),
             mode: self.mode,
@@ -465,6 +470,7 @@ impl<'db> Callable<'db> {
             generic_args: args.to_vec(),
             effect_providers: Vec::new(),
             checked_input_tys: None,
+            variadic_arg_tys: Vec::new(),
             trait_inst,
             use_evidence: UseEvidence::default(),
             mode: callable_def.modes(db)[0],
@@ -484,6 +490,7 @@ impl<'db> Callable<'db> {
             generic_args,
             effect_providers: Vec::new(),
             checked_input_tys: None,
+            variadic_arg_tys: Vec::new(),
             trait_inst,
             use_evidence: UseEvidence::default(),
             mode: callable_def.modes(db)[0],
@@ -500,6 +507,12 @@ impl<'db> Callable<'db> {
 
     pub(super) fn set_checked_input_tys(&mut self, inputs: Vec<TyId<'db>>) {
         self.checked_input_tys = Some(inputs);
+    }
+
+    /// The types of the extra arguments the call of a variadic function
+    /// passes after its parameters.
+    pub fn variadic_arg_tys(&self) -> &[TyId<'db>] {
+        &self.variadic_arg_tys
     }
 
     pub fn generic_args_mut(&mut self) -> &mut Vec<TyId<'db>> {
@@ -878,7 +891,9 @@ impl<'db> Callable<'db> {
             call_args.len()
         };
         let has_receiver = receiver.is_some();
-        if given_arity != expected_arity {
+        // A variadic function takes extra arguments after its parameters.
+        let variadic = matches!(self.callable_def, CallableDef::Func(func) if func.is_variadic(db));
+        if given_arity < expected_arity || !variadic && given_arity > expected_arity {
             let diag = BodyDiag::CallArgNumMismatch {
                 primary: span.into(),
                 def_span: self.callable_def.name_span(),
@@ -906,11 +921,22 @@ impl<'db> Callable<'db> {
 
         for (i, hir_arg) in call_args.iter().enumerate() {
             let arg_idx = if has_receiver { i + 1 } else { i };
+            // An extra argument of a variadic call takes its own type.
+            let Some(param) = params.get(arg_idx) else {
+                args.push(CallArg::from_hir_arg(
+                    tc,
+                    hir_arg,
+                    span.clone().arg(i),
+                    already_typed,
+                    None,
+                ));
+                continue;
+            };
             // A variant or tuple struct constructor's arguments see its field
             // types, like a struct literal's fields. Keep this contextual typing
             // selective: applying it to every call argument changes ordinary
             // inference and compile-time evaluation.
-            let param_ty = params[arg_idx].shape.erased_ty(db);
+            let param_ty = param.shape.erased_ty(db);
             let expected_hint = self
                 .compile_time_string_literal_arg_expected(tc, hir_arg.expr, param_ty)
                 .or_else(|| {
@@ -948,6 +974,19 @@ impl<'db> Callable<'db> {
                 expected_hint,
             ));
         }
+
+        // No parameter names an extra argument, and the finalizer checks
+        // that C can take its inferred type.
+        let extras = args.split_off(expected_arity);
+        for extra in &extras {
+            if let Some(label_span) = &extra.label_span {
+                tc.push_diag(BodyDiag::VariadicArgLabel(label_span.clone()));
+            }
+        }
+        self.variadic_arg_tys = extras
+            .iter()
+            .map(|extra| tc.normalize_ty(extra.expr_prop.ty))
+            .collect();
 
         let mut checked_inputs = Vec::with_capacity(expected_arity);
         for (i, (mut given, param)) in args.into_iter().zip(params).enumerate() {

@@ -733,6 +733,12 @@ impl ToDoc for ast::Func {
 impl ToDoc for ast::FuncParamList {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let indent = ctx.config.indent_width as isize;
+        // No comma follows the `...` that ends a variadic function's
+        // parameters.
+        let variadic = self
+            .into_iter()
+            .last()
+            .is_some_and(|param| param.variadic_token().is_some());
         block_list_auto(
             ctx,
             self.syntax(),
@@ -740,7 +746,7 @@ impl ToDoc for ast::FuncParamList {
             ")",
             ast::FuncParam::cast,
             indent,
-            true,
+            !variadic,
         )
     }
 }
@@ -748,6 +754,10 @@ impl ToDoc for ast::FuncParamList {
 impl ToDoc for ast::FuncParam {
     fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
         let alloc = &ctx.alloc;
+
+        if self.variadic_token().is_some() {
+            return alloc.text("...");
+        }
 
         if has_comment_tokens(self.syntax()) {
             return token_doc(

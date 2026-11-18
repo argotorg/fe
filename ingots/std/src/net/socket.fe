@@ -1,0 +1,539 @@
+#![cfg(target_family = "unix")]
+/// TCP and UDP sockets, and the `Net` capability that makes them.
+use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
+use ingot::io::{Display, Error, ErrorKind, Read, Write}
+use ingot::native::{Host, HostCapabilitySeal}
+use ingot::sys::{
+    self, EINTR, EINVAL, Fd, IPPROTO_TCP, POLLIN, POLLOUT, PollSet, SHUT_RD, SHUT_RDWR, SHUT_WR,
+    SOCK_DGRAM, SOCK_STREAM, TCP_NODELAY, accept_socket, bind, c_string, check_call, connect,
+    freeaddrinfo, getaddrinfo, getpeername, getsockname, getsockopt, listen, recv, recvfrom, send,
+    sendto, setsockopt, shutdown,
+}
+use ingot::time::{Duration, Instant}
+use super::{IpAddr, SocketAddr}
+
+// The connections a listener queues before it accepts them.
+const BACKLOG: i32 = 128
+
+/// Making sockets. Owning a socket is the authority to use it; only making
+/// one needs `Net`.
+pub trait Net: HostCapabilitySeal {
+    /// A TCP connection to `addr`.
+    fn connect(mut self, _ addr: SocketAddr) -> Result<Error, TcpStream>
+    /// A TCP connection to `addr`, or a `TimedOut` error if it takes longer
+    /// than `timeout`. A zero timeout is an `InvalidInput` error.
+    fn connect_timeout(mut self, _ addr: SocketAddr, _ timeout: Duration) -> Result<Error, TcpStream>
+    /// A non-blocking TCP stream whose connection to `addr` may still be in
+    /// progress. Once the stream is writable, `take_error` gives the
+    /// connection's failure, if it failed.
+    fn connect_nonblocking(mut self, _ addr: SocketAddr) -> Result<Error, TcpStream>
+    /// A TCP listener at `addr`, which may take the address of a connection
+    /// that is closed but not yet gone (`SO_REUSEADDR`). Port 0 takes a free
+    /// port, which `local_addr` gives.
+    fn listen(mut self, _ addr: SocketAddr) -> Result<Error, TcpListener>
+    /// A UDP socket at `addr`. Port 0 takes a free port.
+    fn bind_udp(mut self, _ addr: SocketAddr) -> Result<Error, UdpSocket>
+    /// The addresses of `host`, the text of a `Display` value such as a name
+    /// or an address, each with `port`, in the order the host's resolver
+    /// gives them: at least one, or else a `HostNotFound` error.
+    fn lookup<H: Display>(self, _ host: H, _ port: u16) -> Result<Error, MemVec<SocketAddr>>
+}
+
+impl Net for Host {
+    fn connect(mut self, _ addr: SocketAddr) -> Result<Error, TcpStream> {
+        var socket = Socket::new(addr, kind: SOCK_STREAM)?
+        if !socket.start_connect(addr)? {
+            // A signal interrupted the call; the connection goes on.
+            socket.finish_connect(Option::None)?
+        }
+        Result::Ok(TcpStream { socket })
+    }
+
+    fn connect_timeout(mut self, _ addr: SocketAddr, _ timeout: Duration) -> Result<Error, TcpStream> {
+        if timeout.as_nanos() == 0 {
+            return Result::Err(Error::from_code(EINVAL))
+        }
+        var socket = Socket::new(addr, kind: SOCK_STREAM)?
+        socket.set_nonblocking(true)?
+        if !socket.start_connect(addr)? {
+            socket.finish_connect(Option::Some(timeout))?
+        }
+        socket.set_nonblocking(false)?
+        Result::Ok(TcpStream { socket })
+    }
+
+    fn connect_nonblocking(mut self, _ addr: SocketAddr) -> Result<Error, TcpStream> {
+        var socket = Socket::new(addr, kind: SOCK_STREAM)?
+        socket.set_nonblocking(true)?
+        socket.start_connect(addr)?
+        Result::Ok(TcpStream { socket })
+    }
+
+    fn listen(mut self, _ addr: SocketAddr) -> Result<Error, TcpListener> {
+        var socket = Socket::new(addr, kind: SOCK_STREAM)?
+        socket.set_option(level: sys::SOL_SOCKET, name: sys::SO_REUSEADDR, true)?
+        socket.bind(addr)?
+        check_call(unsafe { listen(socket.fd.fd, BACKLOG) })?
+        Result::Ok(TcpListener { socket })
+    }
+
+    fn bind_udp(mut self, _ addr: SocketAddr) -> Result<Error, UdpSocket> {
+        var socket = Socket::new(addr, kind: SOCK_DGRAM)?
+        socket.bind(addr)?
+        Result::Ok(UdpSocket { socket })
+    }
+
+    fn lookup<H: Display>(self, _ host: H, _ port: u16) -> Result<Error, MemVec<SocketAddr>> {
+        let name = c_string(host)?
+        // Stream sockets only, so that each address comes once.
+        var hints = MemBuffer::new(sys::ADDRINFO_SIZE)
+        hints.write_le<i32>(offset: sys::ADDRINFO_SOCKTYPE, value: SOCK_STREAM)
+        let head = MemBuffer::new(8)
+        let code = unsafe { getaddrinfo(name.ptr(), ptr::null(), hints.ptr(), ptr::cast(head.ptr())) }
+        if code != 0 {
+            return Result::Err(Error::from_lookup_code(code))
+        }
+        // The results are live until `freeaddrinfo`.
+        let first = unsafe { *ptr::cast<u8, *u8>(head.ptr()) }
+        var found = MemVec::new()
+        var result = first
+        while !ptr::is_null(result) {
+            let raw = unsafe { *ptr::cast<u8, *u8>(ptr::offset_bytes(result, sys::ADDRINFO_ADDR)) }
+            let len = unsafe { *ptr::cast<u8, u32>(ptr::offset_bytes(result, sys::ADDRINFO_ADDRLEN)) }
+            // An address of another family is skipped.
+            match sys::decode_sockaddr(unsafe { MemSlice::from_raw_parts(ptr: raw, len: len as usize) }) {
+                Result::Ok(addr) => found.push(
+                    match addr.ip() {
+                        IpAddr::V4(_) => SocketAddr::new(addr.ip(), port),
+                        IpAddr::V6(ip) => SocketAddr::new_v6(ip, port, scope_id: addr.scope_id()),
+                    },
+                ),
+                Result::Err(_) => {}
+            }
+            result = unsafe { *ptr::cast<u8, *u8>(ptr::offset_bytes(result, sys::ADDRINFO_NEXT)) }
+        }
+        unsafe { freeaddrinfo(first) }
+        if found.is_empty() {
+            // Each address was of another family.
+            return Result::Err(Error::new(ErrorKind::HostNotFound))
+        }
+        Result::Ok(found)
+    }
+}
+
+/// What `TcpStream::shutdown` shuts down.
+pub enum Shutdown {
+    /// Reads, which then read the end of the stream.
+    Read,
+    /// Writes, so that the peer reads the end of the stream.
+    Write,
+    Both,
+}
+
+impl Copy for Shutdown {}
+
+/// A TCP connection, which closes when destroyed. It reads and writes as a
+/// `Read` and `Write`; `BufReader` reads it a line at a time.
+///
+/// A blocking stream waits to read and write, at most its read or write
+/// timeout if it has one, after which the operation fails with `TimedOut`.
+/// A signal neither ends the wait nor starts the timeout again.
+/// A non-blocking one fails with `WouldBlock` instead of waiting. A write to
+/// a connection the peer has closed fails with `BrokenPipe`, without a
+/// `SIGPIPE`.
+pub struct TcpStream { socket: Socket }
+
+impl TcpStream {
+    /// The address of this end of the connection.
+    pub fn local_addr(self) -> Result<Error, SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    /// The address of the peer.
+    pub fn peer_addr(self) -> Result<Error, SocketAddr> {
+        let fd = self.socket.fd.fd
+        sys::read_sockaddr(|addr: *u8, len: *u32| unsafe { getpeername(fd, addr, len) })
+    }
+
+    /// Shuts down reads, writes or both, for this stream and every copy of
+    /// its descriptor.
+    pub fn shutdown(mut self, _ how: Shutdown) -> Result<Error, ()> {
+        let how = match how {
+            Shutdown::Read => SHUT_RD,
+            Shutdown::Write => SHUT_WR,
+            Shutdown::Both => SHUT_RDWR,
+        }
+        check_call(unsafe { shutdown(self.socket.fd.fd, how) })
+    }
+
+    /// Whether a write is sent at once, without waiting to gather small
+    /// writes into one segment (`TCP_NODELAY`).
+    pub fn set_nodelay(mut self, _ nodelay: bool) -> Result<Error, ()> {
+        self.socket.set_option(level: IPPROTO_TCP, name: TCP_NODELAY, nodelay)
+    }
+
+    /// The longest a read waits, or `None` to wait forever. Each timeout is
+    /// whole microseconds, rounded up; a zero one is an `InvalidInput`
+    /// error.
+    pub fn set_read_timeout(mut self, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        self.socket.set_timeout(name: sys::SO_RCVTIMEO, timeout)
+    }
+
+    /// The longest a write waits; see `set_read_timeout`.
+    pub fn set_write_timeout(mut self, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        self.socket.set_timeout(name: sys::SO_SNDTIMEO, timeout)
+    }
+
+    /// Whether reads and writes fail with `WouldBlock` rather than wait.
+    pub fn set_nonblocking(mut self, _ nonblocking: bool) -> Result<Error, ()> {
+        self.socket.set_nonblocking(nonblocking)
+    }
+
+    /// The socket's pending error, which this clears: how a non-blocking
+    /// connection failed, if it did.
+    pub fn take_error(mut self) -> Result<Error, Option<Error>> {
+        self.socket.take_error()
+    }
+
+    /// The stream's descriptor, which the stream still owns.
+    pub fn as_raw_fd(self) -> i32 {
+        self.socket.fd.fd
+    }
+
+    /// The stream of the connected TCP socket `fd`, which it takes over:
+    /// nothing else may close `fd`.
+    pub unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        TcpStream { socket: Socket::from_raw_fd(fd) }
+    }
+}
+
+impl Read for TcpStream {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.socket.recv(mut buf)
+    }
+}
+
+impl Write for TcpStream {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        self.socket.send(bytes)
+    }
+}
+
+/// A TCP socket that accepts connections, which closes when destroyed.
+pub struct TcpListener { socket: Socket }
+
+impl TcpListener {
+    /// The next connection, and the peer's address. The stream is blocking
+    /// even if the listener isn't. A non-blocking listener without a
+    /// connection waiting fails with `WouldBlock`.
+    pub fn accept(mut self) -> Result<Error, (TcpStream, SocketAddr)> {
+        let fd = self.socket.fd.fd
+        var raw = MemBuffer::new(sys::SOCKADDR_STORAGE_SIZE)
+        var len = MemBuffer::new(4)
+        len.write_le<u32>(offset: 0, value: sys::SOCKADDR_STORAGE_SIZE.downcast_unchecked())
+        let accepted = accept_socket(fd, raw.ptr(), core::ptr::cast(len.ptr()))?
+        let peer = sys::decode_sockaddr(raw.span())?
+        Result::Ok((TcpStream { socket: Socket::adopt(accepted, nonblocking: false) }, peer))
+    }
+
+    /// The address the listener is at.
+    pub fn local_addr(self) -> Result<Error, SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    /// Whether `accept` fails with `WouldBlock` rather than wait.
+    pub fn set_nonblocking(mut self, _ nonblocking: bool) -> Result<Error, ()> {
+        self.socket.set_nonblocking(nonblocking)
+    }
+
+    /// The listener's descriptor, which the listener still owns.
+    pub fn as_raw_fd(self) -> i32 {
+        self.socket.fd.fd
+    }
+
+    /// The listener of the listening TCP socket `fd`, which it takes over:
+    /// nothing else may close `fd`.
+    pub unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        TcpListener { socket: Socket::from_raw_fd(fd) }
+    }
+}
+
+/// A UDP socket, which closes when destroyed. Each send is one datagram,
+/// and each receive takes one, losing what doesn't fit the buffer. Timeouts
+/// and non-blocking receives fail as a `TcpStream`'s reads do.
+pub struct UdpSocket { socket: Socket }
+
+impl UdpSocket {
+    /// Sends `bytes` to `addr`: the number sent.
+    pub fn send_to(mut self, _ bytes: MemSpan, _ addr: SocketAddr) -> Result<Error, usize> {
+        let fd = self.socket.fd.fd
+        let (raw, raw_len) = sys::encode_sockaddr(addr)
+        let (ptr, len) = (bytes.ptr(), sys::io_len(bytes.len()))
+        let target = raw.ptr()
+        self.socket.transfer(
+            events: POLLOUT,
+            timeout: self.socket.write_timeout,
+            |flags: i32| unsafe { sendto(fd, ptr, len, sys::SEND_FLAGS | flags, target, raw_len) },
+        )
+    }
+
+    /// Receives a datagram into the start of `buf`: its length, at most
+    /// `buf.len()`, and the sender's address.
+    pub fn recv_from(mut self, _ buf: mut MemSpan) -> Result<Error, (usize, SocketAddr)> {
+        let fd = self.socket.fd.fd
+        let (ptr, len) = (buf.ptr(), sys::io_len(buf.len()))
+        var raw = MemBuffer::new(sys::SOCKADDR_STORAGE_SIZE)
+        var raw_len = MemBuffer::new(4)
+        raw_len.write_le<u32>(offset: 0, value: sys::SOCKADDR_STORAGE_SIZE.downcast_unchecked())
+        let (source, source_len) = (raw.ptr(), core::ptr::cast<u8, u32>(raw_len.ptr()))
+        let count = self.socket.transfer(
+            events: POLLIN,
+            timeout: self.socket.read_timeout,
+            |flags: i32| unsafe { recvfrom(fd, ptr, len, flags, source, source_len) },
+        )?
+        Result::Ok((count, sys::decode_sockaddr(raw.span())?))
+    }
+
+    /// Sends to and receives from `addr` alone, with `send` and `recv`.
+    pub fn connect(mut self, _ addr: SocketAddr) -> Result<Error, ()> {
+        let (raw, len) = sys::encode_sockaddr(addr)
+        check_call(unsafe { connect(self.socket.fd.fd, raw.ptr(), len) })
+    }
+
+    /// Sends `bytes` to the address `connect` set: the number sent.
+    pub fn send(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        self.socket.send(bytes)
+    }
+
+    /// Receives a datagram from the address `connect` set into the start of
+    /// `buf`: its length, at most `buf.len()`.
+    pub fn recv(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.socket.recv(mut buf)
+    }
+
+    /// The address the socket is at.
+    pub fn local_addr(self) -> Result<Error, SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    /// The longest a receive waits; see `TcpStream::set_read_timeout`.
+    pub fn set_read_timeout(mut self, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        self.socket.set_timeout(name: sys::SO_RCVTIMEO, timeout)
+    }
+
+    /// The longest a send waits; see `TcpStream::set_read_timeout`.
+    pub fn set_write_timeout(mut self, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        self.socket.set_timeout(name: sys::SO_SNDTIMEO, timeout)
+    }
+
+    /// Whether sends and receives fail with `WouldBlock` rather than wait.
+    pub fn set_nonblocking(mut self, _ nonblocking: bool) -> Result<Error, ()> {
+        self.socket.set_nonblocking(nonblocking)
+    }
+
+    /// Whether the socket may send to a broadcast address.
+    pub fn set_broadcast(mut self, _ broadcast: bool) -> Result<Error, ()> {
+        self.socket.set_option(level: sys::SOL_SOCKET, name: sys::SO_BROADCAST, broadcast)
+    }
+
+    /// The socket's descriptor, which the socket still owns.
+    pub fn as_raw_fd(self) -> i32 {
+        self.socket.fd.fd
+    }
+
+    /// The socket of the UDP socket `fd`, which it takes over: nothing else
+    /// may close `fd`.
+    pub unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        UdpSocket { socket: Socket::from_raw_fd(fd) }
+    }
+}
+
+// A socket, whether it is non-blocking, and its timeouts, which its
+// options `SO_RCVTIMEO` and `SO_SNDTIMEO` hold too: what TCP and UDP sockets
+// share.
+struct Socket {
+    fd: Fd,
+    nonblocking: bool,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+}
+
+impl Socket {
+    // A new blocking socket of `kind` for addresses of `addr`'s family.
+    fn new(_ addr: SocketAddr, kind: i32) -> Result<Error, Self> {
+        Result::Ok(
+            Socket {
+                fd: sys::new_socket(sys::address_domain(addr), kind)?,
+                nonblocking: false,
+                read_timeout: Option::None,
+                write_timeout: Option::None,
+            },
+        )
+    }
+
+    // The socket `fd`, made elsewhere, which it takes over.
+    unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        // This fails only for a descriptor that is no socket, whose writes
+        // raise no `SIGPIPE` here: they fail in `send`.
+        let _ = sys::no_sigpipe(fd)
+        Socket::adopt(Fd { fd }, nonblocking: sys::is_nonblocking(fd).unwrap_or(default: false))
+    }
+
+    // The socket `fd`, which was accepted or made elsewhere, with the
+    // timeouts it has: on Linux a connection takes its listener's.
+    fn adopt(_ fd: own Fd, nonblocking: bool) -> Self {
+        let read_timeout = socket_timeout(fd.fd, name: sys::SO_RCVTIMEO)
+        let write_timeout = socket_timeout(fd.fd, name: sys::SO_SNDTIMEO)
+        Socket { fd, nonblocking, read_timeout, write_timeout }
+    }
+
+    fn bind(mut self, _ addr: SocketAddr) -> Result<Error, ()> {
+        let (raw, len) = sys::encode_sockaddr(addr)
+        check_call(unsafe { bind(self.fd.fd, raw.ptr(), len) })
+    }
+
+    // Starts connecting to `addr`: true once connected, false while the
+    // connection goes on without the caller, as it does on a non-blocking
+    // socket and after a signal. `connect` isn't called again.
+    fn start_connect(mut self, _ addr: SocketAddr) -> Result<Error, bool> {
+        let (raw, len) = sys::encode_sockaddr(addr)
+        if unsafe { connect(self.fd.fd, raw.ptr(), len) } == 0 {
+            return Result::Ok(true)
+        }
+        let code = sys::errno()
+        if code == EINTR || code == sys::EINPROGRESS {
+            Result::Ok(false)
+        } else {
+            Result::Err(Error::from_code(code))
+        }
+    }
+
+    // Waits for the connection in progress, at most `timeout` if there is
+    // one, and gives its failure.
+    fn finish_connect(mut self, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        var fds = PollSet::new()
+        fds.add(self.fd.fd, events: POLLOUT)
+        if fds.wait(timeout)? == 0 {
+            return Result::Err(Error::new(ErrorKind::TimedOut))
+        }
+        match self.take_error()? {
+            Option::Some(error) => Result::Err(error),
+            Option::None => Result::Ok(()),
+        }
+    }
+
+    fn recv(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        let fd = self.fd.fd
+        let (ptr, len) = (buf.ptr(), sys::io_len(buf.len()))
+        self.transfer(events: POLLIN, timeout: self.read_timeout, |flags: i32| unsafe { recv(fd, ptr, len, flags) })
+    }
+
+    fn send(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        let fd = self.fd.fd
+        let (ptr, len) = (bytes.ptr(), sys::io_len(bytes.len()))
+        self.transfer(
+            events: POLLOUT,
+            timeout: self.write_timeout,
+            |flags: i32| unsafe { send(fd, ptr, len, sys::SEND_FLAGS | flags) },
+        )
+    }
+
+    // Makes `call`, a receive or send with the flags it is given, until it
+    // does other than fail with `EINTR`: its result. On a blocking socket
+    // with a `timeout`, a signal doesn't start the timeout again: the
+    // socket waits for `events` for the rest of it, and the next call
+    // doesn't wait.
+    fn transfer<F: Fn(i32) -> isize>(self, events: u16, timeout: Option<Duration>, _ call: F) -> Result<Error, usize> uses F::E {
+        let deadline = match timeout {
+            Option::Some(limit) => if self.nonblocking { Option::None } else { Option::Some(Instant::now() + limit) },
+            Option::None => Option::None,
+        }
+        var flags: i32 = 0
+        while true {
+            let result = call(flags)
+            if result >= 0 {
+                return Result::Ok(result.downcast_unchecked())
+            }
+            let code = sys::errno()
+            // A call that doesn't wait finds nothing if the socket had an
+            // event of another kind.
+            if code != EINTR && !(code == sys::EAGAIN && flags != 0) {
+                // `EAGAIN` on a blocking socket is the end of its timeout.
+                let timed_out = code == sys::EAGAIN && !self.nonblocking
+                return Result::Err(if timed_out { Error::new(ErrorKind::TimedOut) } else { Error::from_code(code) })
+            }
+            match deadline {
+                Option::Some(deadline) => {
+                    var fds = PollSet::new()
+                    fds.add(self.fd.fd, events)
+                    if fds.wait(Option::Some(deadline.duration_since(Instant::now())))? == 0 {
+                        return Result::Err(Error::new(ErrorKind::TimedOut))
+                    }
+                    flags = sys::MSG_DONTWAIT
+                }
+                Option::None => {}
+            }
+        }
+        Result::Ok(0)
+    }
+
+    fn local_addr(self) -> Result<Error, SocketAddr> {
+        let fd = self.fd.fd
+        sys::read_sockaddr(|addr: *u8, len: *u32| unsafe { getsockname(fd, addr, len) })
+    }
+
+    fn set_option(mut self, level: i32, name: i32, _ on: bool) -> Result<Error, ()> {
+        sys::set_socket_option(self.fd.fd, level, name, value: if on { 1 } else { 0 })
+    }
+
+    // Sets the socket option `name`, a `struct timeval`, to `timeout`, where
+    // zero is forever.
+    fn set_timeout(mut self, name: i32, _ timeout: Option<Duration>) -> Result<Error, ()> {
+        // 64-bit seconds, then microseconds, which fit the low 32 bits of
+        // the field on every host.
+        var time = MemBuffer::new(16)
+        match timeout {
+            Option::Some(limit) => {
+                if limit.as_nanos() == 0 {
+                    return Result::Err(Error::from_code(EINVAL))
+                }
+                let micros = (limit.as_nanos() + 999) / 1000
+                time.write_le<u64>(offset: 0, value: micros / 1000000)
+                time.write_le<u64>(offset: 8, value: micros % 1000000)
+            }
+            Option::None => {}
+        }
+        check_call(unsafe { setsockopt(self.fd.fd, sys::SOL_SOCKET, name, time.ptr(), 16) })?
+        if name == sys::SO_RCVTIMEO {
+            self.read_timeout = timeout
+        } else {
+            self.write_timeout = timeout
+        }
+        Result::Ok(())
+    }
+
+    fn set_nonblocking(mut self, _ nonblocking: bool) -> Result<Error, ()> {
+        sys::set_nonblocking(self.fd.fd, nonblocking)?
+        self.nonblocking = nonblocking
+        Result::Ok(())
+    }
+
+    fn take_error(mut self) -> Result<Error, Option<Error>> {
+        let code = sys::socket_option(self.fd.fd, level: sys::SOL_SOCKET, name: sys::SO_ERROR)?
+        Result::Ok(if code == 0 { Option::None } else { Option::Some(Error::from_code(code)) })
+    }
+}
+
+// The timeout that the option `name` of the socket `fd` holds, a `struct
+// timeval`: none if it is zero, which is forever, or `fd` is no socket.
+fn socket_timeout(_ fd: i32, name: i32) -> Option<Duration> {
+    let time = MemBuffer::new(16)
+    var len = MemBuffer::new(4)
+    len.write_le<u32>(offset: 0, value: 16)
+    if unsafe { getsockopt(fd, sys::SOL_SOCKET, name, time.ptr(), core::ptr::cast(len.ptr())) } != 0 {
+        return Option::None
+    }
+    // 64-bit seconds, then microseconds in the low 32 bits of their field.
+    let micros = time.read_le<u64>(0) * 1000000 + time.read_le<u32>(8) as u64
+    if micros == 0 { Option::None } else { Option::Some(Duration::from_micros(micros)) }
+}

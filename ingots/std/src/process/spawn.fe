@@ -1,11 +1,12 @@
 #![cfg(target_family = "unix")]
 /// Starting other programs and waiting for them to end.
 use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
+use core::mem::drop
 use core::ops::Drop
 use ingot::env::c_string_len
-use ingot::io::{Display, EINVAL, Error, read, write}
+use ingot::io::{Display, Error, ErrorKind, read, write}
 use ingot::native::{Host, HostCapabilitySeal}
-use ingot::sys::{self, c_string, last_error}
+use ingot::sys::{self, EBADF, EINTR, EINVAL, Fd, O_RDONLY, O_WRONLY, POLLIN, POLLOUT, PollSet, c_string, fcntl, last_error}
 use ingot::time::{Clock, Duration, Instant}
 
 extern {
@@ -22,30 +23,17 @@ extern {
     fn posix_spawnattr_destroy(_ attr: *u8) -> i32
     fn pipe(_ fds: *i32) -> i32
     fn dup(_ fd: i32) -> i32
-    fn close(_ fd: i32) -> i32
-    // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
-    // half.
-    fn poll(_ fds: *u8, _ nfds: u64, _ timeout: i32) -> i32
     fn wait4(_ pid: i32, _ status: *i32, _ options: i32, _ usage: *u8) -> i32
     fn kill(_ pid: i32, _ signal: i32) -> i32
     fn signal(_ signal: i32, _ handler: *u8) -> *u8
 }
 
 // The values every supported host shares.
-const EINTR: i32 = 4
-const EBADF: i32 = 9
-const EPIPE: i32 = 32
-const O_RDONLY: i32 = 0
-const O_WRONLY: i32 = 1
-const POLLIN: u16 = 0x1
-const POLLOUT: u16 = 0x4
 const WNOHANG: i32 = 1
 const SIGKILL: i32 = 9
 const SIGPIPE: i32 = 13
 const SIG_IGN: usize = 1
-const NULL: usize = 0
-// The bytes of a `struct pollfd` and a `struct rusage`.
-const POLLFD_SIZE: usize = 8
+// The bytes of a `struct rusage`.
 const RUSAGE_SIZE: usize = 144
 // `=`.
 const EQUALS: u8 = 61
@@ -187,9 +175,9 @@ pub enum Redirect {
 pub struct Child {
     pid: i32,
     // The parent's ends of the pipes to the child's streams.
-    stdin: Fd,
-    stdout: Fd,
-    stderr: Fd,
+    stdin: Option<Fd>,
+    stdout: Option<Fd>,
+    stderr: Option<Fd>,
     // The child's input, and how much of it the child has taken.
     input: MemBuffer,
     written: usize,
@@ -287,17 +275,17 @@ impl Spawn for Host {
         var stdin = match command.stdin {
             Input::Inherit => {
                 setup.inherit(0)?
-                Fd::none()
+                Option::None
             }
             Input::Null => {
                 setup.open(0, c_string("/dev/null")?, flags: O_RDONLY)?
-                Fd::none()
+                Option::None
             }
             Input::Bytes(_) => {
                 let (read_end, write_end) = make_pipe()?
                 setup.dup(read_end.fd, to: 0)?
                 child_ends.push(read_end)
-                write_end
+                Option::Some(write_end)
             }
         }
         let stdout = redirect(setup, 1, command.stdout, mut child_ends)?
@@ -319,7 +307,7 @@ impl Spawn for Host {
         }
         // Empty input ends at once.
         if input.is_empty() {
-            stdin = Fd::none()
+            stdin = Option::None
         }
         let deadline = match command.timeout {
             Option::Some(limit) => Option::Some(self.instant() + limit),
@@ -353,19 +341,19 @@ impl Spawn for Host {
         assert!(count > 0, "no children to wait for")
         // The milliseconds to sleep before checking again on children
         // without pipes, which `poll` can't watch.
-        var nap: i32 = 1
+        var nap: u64 = 1
         while true {
             let now = self.instant()
-            var timeout: i32 = -1
+            var timeout: Option<Duration> = Option::None
             var napping = false
-            var fds = MemBuffer::empty()
+            var fds = PollSet::new()
             var streams = MemVec::new()
             for i in 0..count {
                 if children[i].check(now)? {
                     return Result::Ok(i)
                 }
                 match children[i].deadline {
-                    Option::Some(deadline) => timeout = earlier(timeout, poll_millis(deadline.duration_since(now))),
+                    Option::Some(deadline) => timeout = earlier(timeout, deadline.duration_since(now)),
                     Option::None => {}
                 }
                 if children[i].has_pipes() {
@@ -377,22 +365,17 @@ impl Spawn for Host {
             if napping {
                 // A lone child without pipes or a deadline is waited for
                 // outright.
-                if count == 1 && timeout < 0 {
+                if count == 1 && timeout.is_none() {
                     let ended = children[0].reap_blocking()?
                     children[0].ended = Option::Some(ended)
                     return Result::Ok(0)
                 }
-                timeout = earlier(timeout, nap)
+                timeout = earlier(timeout, Duration::from_millis(nap))
                 nap = if nap < 64 { nap * 2 } else { 64 }
             }
-            if unsafe { poll(fds.ptr(), streams.len().downcast_unchecked(), timeout) } < 0 {
-                if sys::errno() != EINTR {
-                    return Result::Err(last_error())
-                }
-                continue
-            }
+            fds.wait(timeout)?
             for k in 0..streams.len() {
-                if fds.read_le<u16>(k * POLLFD_SIZE + 6) != 0 {
+                if fds.events(k) != 0 {
                     let stream = streams[k]
                     children[stream / 3].serve(stream % 3)?
                 }
@@ -426,10 +409,12 @@ impl Setup {
     // Gives the child's standard stream `fd` the parent's. A stream the parent
     // has closed stays closed: macOS refuses to inherit it.
     fn inherit(self, _ fd: i32) -> Result<Error, ()> {
-        let copy = Fd { fd: unsafe { dup(fd) } }
-        if !copy.is_open() {
+        // A copy of `fd` shows whether it is open, and closes at once.
+        let copy = unsafe { dup(fd) }
+        if copy < 0 {
             return if sys::errno() == EBADF { Result::Ok(()) } else { Result::Err(last_error()) }
         }
+        drop(unsafe { Fd { fd: copy } })
         check(sys::inherit_fd(self.actions.ptr(), fd))
     }
 
@@ -461,7 +446,7 @@ fn check(_ code: i32) -> Result<Error, ()> {
 // Gives the child's standard stream `fd` its `redirect`, and returns the
 // parent's end of the pipe it needs, if any, putting the child's in
 // `child_ends`.
-fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut MemVec<Fd>) -> Result<Error, Fd> {
+fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut MemVec<Fd>) -> Result<Error, Option<Fd>> {
     match redirect {
         Redirect::Inherit => setup.inherit(fd)?,
         Redirect::Null => setup.open(fd, c_string("/dev/null")?, flags: O_WRONLY)?,
@@ -469,7 +454,7 @@ fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut M
             let (read_end, write_end) = make_pipe()?
             setup.dup(write_end.fd, to: fd)?
             child_ends.push(write_end)
-            return Result::Ok(read_end)
+            return Result::Ok(Option::Some(read_end))
         }
         Redirect::File(ref path) => setup.open(fd, c_string(path)?, flags: O_WRONLY | sys::O_CREAT | sys::O_TRUNC)?,
         Redirect::Stdout => {
@@ -479,7 +464,7 @@ fn redirect(_ setup: Setup, _ fd: i32, _ redirect: Redirect, _ child_ends: mut M
             setup.dup(1, to: fd)?
         }
     }
-    Result::Ok(Fd::none())
+    Result::Ok(Option::None)
 }
 
 // A new pipe's read and write ends. If this process has closed a standard
@@ -490,22 +475,22 @@ fn make_pipe() -> Result<Error, (Fd, Fd)> {
     if unsafe { pipe(ptr::cast(fds.ptr())) } != 0 {
         return Result::Err(last_error())
     }
-    let read_end = Fd { fd: fds.read_le<i32>(0) }
-    let write_end = Fd { fd: fds.read_le<i32>(4) }
+    let read_end = unsafe { Fd { fd: fds.read_le<i32>(0) } }
+    let write_end = unsafe { Fd { fd: fds.read_le<i32>(4) } }
     Result::Ok((past_standard_streams(read_end)?, past_standard_streams(write_end)?))
 }
 
-// `fd`, or a copy of it numbered past the standard streams. `dup` takes the
-// lowest free number, and each copy holds its own until the last is made.
+// `fd`, or a copy of it numbered past the standard streams, which closes
+// `fd`.
 fn past_standard_streams(_ fd: own Fd) -> Result<Error, Fd> {
     if fd.fd > 2 {
         return Result::Ok(fd)
     }
-    let copy = unsafe { dup(fd.fd) }
+    let copy = unsafe { fcntl(fd.fd, sys::F_DUPFD_CLOEXEC, 3 as i32) }
     if copy < 0 {
         return Result::Err(last_error())
     }
-    past_standard_streams(Fd { fd: copy })
+    Result::Ok(unsafe { Fd { fd: copy } })
 }
 
 // Pointers to the C strings `strings`, then a null pointer.
@@ -514,7 +499,7 @@ fn c_array(_ strings: MemSlice<MemBuffer>) -> MemVec<*u8> {
     for ref string in strings {
         pointers.push(string.ptr())
     }
-    pointers.push(NULL as *u8)
+    pointers.push(ptr::null())
     pointers
 }
 
@@ -544,7 +529,7 @@ fn environment(_ changes: MemSlice<EnvChange>, _ vars: mut MemVec<MemBuffer>) ->
     var pointers = MemVec::new()
     let parent = unsafe { __fe_native_environ() }
     var index: usize = 0
-    while unsafe { *ptr::offset(parent, index) } as usize != NULL {
+    while !ptr::is_null(unsafe { *ptr::offset(parent, index) }) {
         let entry = unsafe { *ptr::offset(parent, index) }
         // A variable is a live C string while the environment is unchanged.
         let text = unsafe { MemSlice::from_raw_parts(ptr: entry, len: c_string_len(entry)) }
@@ -556,7 +541,7 @@ fn environment(_ changes: MemSlice<EnvChange>, _ vars: mut MemVec<MemBuffer>) ->
     for ref var_text in vars.as_slice() {
         pointers.push(var_text.ptr())
     }
-    pointers.push(NULL as *u8)
+    pointers.push(ptr::null())
     Result::Ok(pointers)
 }
 
@@ -582,16 +567,12 @@ fn is_variable_of(_ changes: MemSlice<EnvChange>, _ entry: MemSpan) -> bool {
     false
 }
 
-// `duration` in milliseconds, rounded up, as a `poll` timeout.
-fn poll_millis(_ duration: Duration) -> i32 {
-    let millis = (duration.as_nanos() + 999999) / 1000000
-    if millis > 2147483647 { 2147483647 } else { millis.downcast_unchecked() }
-}
-
-// The earlier of a `poll` timeout, where a negative one waits forever, and
-// `millis`.
-fn earlier(_ timeout: i32, _ millis: i32) -> i32 {
-    if timeout < 0 || millis < timeout { millis } else { timeout }
+// The shorter of `timeout`, where none waits forever, and `limit`.
+fn earlier(_ timeout: Option<Duration>, _ limit: Duration) -> Option<Duration> {
+    match timeout {
+        Option::Some(current) => Option::Some(if limit < current { limit } else { current }),
+        Option::None => Option::Some(limit),
+    }
 }
 
 impl Child {
@@ -624,7 +605,7 @@ impl Child {
     }
 
     fn has_pipes(self) -> bool {
-        self.stdin.is_open() || self.stdout.is_open() || self.stderr.is_open()
+        self.stdin.is_some() || self.stdout.is_some() || self.stderr.is_some()
     }
 
     // Kills the child, unless it has already ended, and reaps it, then reads
@@ -637,11 +618,11 @@ impl Child {
             let usage = self.reap_blocking()?.usage
             self.ended = Option::Some(Ended { status: Status::TimedOut, usage })
         }
-        self.stdin = Fd::none()
+        self.stdin = Option::None
         drain(mut self.stdout, mut self.out)?
-        self.stdout = Fd::none()
+        self.stdout = Option::None
         drain(mut self.stderr, mut self.err)?
-        self.stderr = Fd::none()
+        self.stderr = Option::None
         Result::Ok(())
     }
 
@@ -682,13 +663,12 @@ impl Child {
         )
     }
 
-    // Adds a `struct pollfd` to `fds` for each of the child's open pipes,
-    // and to `streams` the pipe's stream: `index * 3` plus its standard
-    // descriptor.
-    fn watch(self, _ index: usize, _ fds: mut MemBuffer, _ streams: mut MemVec<usize>) {
-        add_pollfd(mut fds, mut streams, self.stdin.fd, events: POLLOUT, stream: index * 3)
-        add_pollfd(mut fds, mut streams, self.stdout.fd, events: POLLIN, stream: index * 3 + 1)
-        add_pollfd(mut fds, mut streams, self.stderr.fd, events: POLLIN, stream: index * 3 + 2)
+    // Adds each of the child's open pipes to `fds`, and to `streams` the
+    // pipe's stream: `index * 3` plus its standard descriptor.
+    fn watch(self, _ index: usize, _ fds: mut PollSet, _ streams: mut MemVec<usize>) {
+        watch_pipe(mut fds, mut streams, self.stdin, events: POLLOUT, stream: index * 3)
+        watch_pipe(mut fds, mut streams, self.stdout, events: POLLIN, stream: index * 3 + 1)
+        watch_pipe(mut fds, mut streams, self.stderr, events: POLLIN, stream: index * 3 + 2)
     }
 
     // Writes or reads the child's pipe for `stream`, whose descriptor `poll`
@@ -706,24 +686,30 @@ impl Child {
     // Writes the next of the child's input bytes that its pipe takes at
     // once, closing the pipe after the last.
     fn write_input(mut self) -> Result<Error, ()> {
+        let fd = match self.stdin {
+            Option::Some(ref pipe) => pipe.fd,
+            Option::None => return Result::Ok(()),
+        }
         let rest = self.input.len() - self.written
         let len = if rest < sys::PIPE_BUF { rest } else { sys::PIPE_BUF }
+        let bytes = ptr::offset_bytes(self.input.ptr(), self.written)
         // A write to a pipe the child has closed raises `SIGPIPE`, which
         // would end the parent.
         let handler = unsafe { signal(SIGPIPE, SIG_IGN as *u8) }
-        let count = unsafe { write(self.stdin.fd, ptr::offset_bytes(self.input.ptr(), self.written), len) }
-        let code = sys::errno()
+        let written = sys::retry(|| unsafe { write(fd, bytes, len) })
         unsafe { signal(SIGPIPE, handler) }
-        if count >= 0 {
-            self.written += count.downcast_unchecked()
-            if self.written == self.input.len() {
-                self.stdin = Fd::none()
+        match written {
+            Result::Ok(count) => {
+                self.written += count
+                if self.written == self.input.len() {
+                    self.stdin = Option::None
+                }
             }
-        } else if code == EPIPE {
-            // The child takes no more input.
-            self.stdin = Fd::none()
-        } else if code != EINTR {
-            return Result::Err(Error::from_code(code))
+            Result::Err(error) => match error.kind() {
+                // The child takes no more input.
+                ErrorKind::BrokenPipe => self.stdin = Option::None,
+                _ => return Result::Err(error),
+            },
         }
         Result::Ok(())
     }
@@ -734,52 +720,53 @@ impl Child {
     }
 }
 
-// Adds a `struct pollfd` waiting for `events` on `fd` to `fds`, and
-// `stream` to `streams`, unless `fd` is closed.
-fn add_pollfd(_ fds: mut MemBuffer, _ streams: mut MemVec<usize>, _ fd: i32, events: u16, stream: usize) {
-    if fd < 0 {
-        return
+// Adds `pipe` to `fds`, waiting for `events`, and `stream` to `streams`,
+// unless `pipe` is closed.
+fn watch_pipe(_ fds: mut PollSet, _ streams: mut MemVec<usize>, _ pipe: Option<Fd>, events: u16, stream: usize) {
+    match pipe {
+        Option::Some(ref fd) => {
+            fds.add(fd.fd, events)
+            streams.push(stream)
+        }
+        Option::None => {}
     }
-    let entry = fds.len()
-    fds.resize(entry + POLLFD_SIZE)
-    fds.write_le<i32>(offset: entry, value: fd)
-    fds.write_le<u16>(offset: entry + 4, value: events)
-    streams.push(stream)
 }
 
-// Reads what the pipe `fd` holds into `buffer`, closing the pipe at the end
-// of its stream.
-fn read_into(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
+// Reads what `pipe` holds into `buffer`, closing the pipe at the end of its
+// stream.
+fn read_into(_ pipe: mut Option<Fd>, _ buffer: mut MemBuffer) -> Result<Error, ()> {
+    let fd = match pipe {
+        Option::Some(ref open) => open.fd,
+        Option::None => return Result::Ok(()),
+    }
     buffer.reserve(65536)
     let len = buffer.len()
-    let count = unsafe { read(fd.fd, ptr::offset_bytes(buffer.ptr(), len), buffer.capacity() - len) }
+    let spare = ptr::offset_bytes(buffer.ptr(), len)
+    let room = buffer.capacity() - len
+    let count = sys::retry(|| unsafe { read(fd, spare, room) })?
     if count > 0 {
         // The read initialized the bytes it counts.
-        unsafe { buffer.set_len(len + count.downcast_unchecked()) }
-    } else if count == 0 {
-        fd = Fd::none()
-    } else if sys::errno() != EINTR {
-        return Result::Err(last_error())
+        unsafe { buffer.set_len(len + count) }
+    } else {
+        pipe = Option::None
     }
     Result::Ok(())
 }
 
-// Reads what the pipe `fd` holds now into `buffer`, closing the pipe at the
-// end of its stream, up to `DRAIN_LIMIT` bytes.
-fn drain(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
-    var entry = MemBuffer::new(POLLFD_SIZE)
-    entry.write_le<i32>(offset: 0, value: fd.fd)
-    entry.write_le<u16>(offset: 4, value: POLLIN)
+// Reads what `pipe` holds now into `buffer`, closing the pipe at the end of
+// its stream, up to `DRAIN_LIMIT` bytes.
+fn drain(_ pipe: mut Option<Fd>, _ buffer: mut MemBuffer) -> Result<Error, ()> {
+    var fds = PollSet::new()
+    match pipe {
+        Option::Some(ref open) => fds.add(open.fd, events: POLLIN),
+        Option::None => return Result::Ok(()),
+    }
     let start = buffer.len()
-    while fd.is_open() && buffer.len() - start < DRAIN_LIMIT {
-        let ready = unsafe { poll(entry.ptr(), 1, 0) }
-        if ready > 0 {
-            read_into(mut fd, mut buffer)?
-        } else if ready == 0 {
+    while pipe.is_some() && buffer.len() - start < DRAIN_LIMIT {
+        if fds.wait(Option::Some(Duration::from_nanos(0)))? == 0 {
             return Result::Ok(())
-        } else if sys::errno() != EINTR {
-            return Result::Err(last_error())
         }
+        read_into(mut pipe, mut buffer)?
     }
     Result::Ok(())
 }
@@ -788,25 +775,4 @@ fn drain(_ fd: mut Fd, _ buffer: mut MemBuffer) -> Result<Error, ()> {
 // fit the low 32 bits of the field on every host.
 fn timeval(_ raw: MemSpan, _ offset: usize) -> Duration {
     Duration::from_secs(raw.read_le<u64>(offset)) + Duration::from_micros(raw.read_le<u32>(offset + 8) as u64)
-}
-
-// An open file descriptor, closed when destroyed, or none.
-struct Fd { fd: i32 }
-
-impl Fd {
-    fn none() -> Self {
-        Fd { fd: -1 }
-    }
-
-    fn is_open(self) -> bool {
-        self.fd >= 0
-    }
-}
-
-impl Drop for Fd {
-    fn drop(own self) {
-        if self.fd >= 0 {
-            unsafe { close(self.fd) }
-        }
-    }
 }

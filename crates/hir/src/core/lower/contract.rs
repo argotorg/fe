@@ -224,7 +224,7 @@ fn lower_contract_init<'db>(
     let id = ctxt.joined_id(TrackedItemVariant::ContractInit);
     let params = init_ast
         .params()
-        .map(|p| FuncParamListId::lower_ast(ctxt, p))
+        .map(|p| FuncParamListId::lower_ast(ctxt, p, false))
         .unwrap_or_else(|| FuncParamListId::new(db, vec![]));
     let effects = lower_uses_clause_opt(ctxt, init_ast.uses_clause());
     let body_ast = init_ast

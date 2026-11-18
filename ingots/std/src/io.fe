@@ -17,77 +17,108 @@
 /// `buf`, a `MemBuffer` held by a local, a field or an effect
 /// (`uses (text: mut MemBuffer)`). They work on any target.
 ///
+/// `Read` and `Write` are sources and sinks of bytes, on any target: a
+/// `MemReader` reads the bytes of a `MemBuffer`, and writing to a
+/// `MemBuffer` appends. A `BufReader` reads a `Read` a byte or a line at a
+/// time, as a `StdinReader` reads standard input.
+///
 /// A native host operation that fails, such as one of `std::fs` or
 /// `std::process`, returns the host's reason as an `Error`.
-use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes}
+use core::{MemBuffer, MemSlice, MemSpan, Option, PackedBytes, Result}
 use core::abi::DynString
 use core::fixed::{Fixed, UFixed}
 use core::num::{IntWord, UnsignedAbs}
 use super::env::c_string_len
 use super::native::{Host, HostCapabilitySeal}
+use super::sys
 
 extern {
     // POSIX descriptor I/O.
     pub(ingot) fn read(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
     pub(ingot) fn write(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
     fn strerror(_ code: i32) -> *u8
+    fn gai_strerror(_ code: i32) -> *u8
 }
 
-// The `errno` values every supported host shares.
-const EPERM: i32 = 1
-const ENOENT: i32 = 2
-const EACCES: i32 = 13
-const EEXIST: i32 = 17
-const ENOTDIR: i32 = 20
-const EISDIR: i32 = 21
-pub(ingot) const EINVAL: i32 = 22
-
-/// Why a host operation failed: the host's `errno`.
-pub struct Error { code: i32 }
+/// Why an operation failed: its kind, and the host's error number if the
+/// host reported it, or the code `getaddrinfo` gave a failed lookup.
+pub struct Error { kind: ErrorKind, code: Option<i32>, lookup: bool }
 
 impl Copy for Error {}
 
 impl Error {
-    /// The error with the host's error number `code`.
-    pub fn from_code(_ code: i32) -> Self {
-        Error { code }
+    /// An error of `kind` that no host error number gives, such as one a
+    /// `Read` implementation returns.
+    pub fn new(_ kind: ErrorKind) -> Self {
+        Error { kind, code: Option::None, lookup: false }
     }
 
-    /// The host's error number.
-    pub fn code(self) -> i32 {
-        self.code
+    /// The host's error number, if the host reported the error. A failed
+    /// lookup has none, but its text is the host's.
+    pub fn code(self) -> Option<i32> {
+        if self.lookup { Option::None } else { self.code }
     }
 
     /// What went wrong, in terms every host shares.
     pub fn kind(self) -> ErrorKind {
-        let code = self.code
-        if code == EPERM || code == EACCES {
-            ErrorKind::PermissionDenied
-        } else if code == ENOENT {
-            ErrorKind::NotFound
-        } else if code == EEXIST {
-            ErrorKind::AlreadyExists
-        } else if code == ENOTDIR {
-            ErrorKind::NotADirectory
-        } else if code == EISDIR {
-            ErrorKind::IsADirectory
-        } else if code == EINVAL {
-            ErrorKind::InvalidInput
-        } else {
-            ErrorKind::Other
+        self.kind
+    }
+}
+
+// The error numbers differ between hosts, which `sys` knows.
+#[cfg(target_family = "unix")]
+impl Error {
+    /// The error with the host's error number `code`.
+    pub fn from_code(_ code: i32) -> Self {
+        Error { kind: sys::errno_kind(code), code: Option::Some(code), lookup: false }
+    }
+
+    /// The error of a `getaddrinfo` that returned `code`: `errno`'s for
+    /// `EAI_SYSTEM`.
+    pub(ingot) fn from_lookup_code(_ code: i32) -> Self {
+        if code == sys::EAI_SYSTEM {
+            return sys::last_error()
+        }
+        let not_found = code == sys::EAI_NONAME || code == sys::EAI_NODATA
+        let kind = if not_found { ErrorKind::HostNotFound } else { ErrorKind::Other }
+        Error { kind, code: Option::Some(code), lookup: true }
+    }
+}
+
+/// The host's description of an error it reported, such as `No such file or
+/// directory`, or `gai_strerror`'s of a failed lookup, and otherwise the
+/// kind's.
+#[cfg(target = "native")]
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        match self.code {
+            Option::Some(code) => {
+                let text = if self.lookup { unsafe { gai_strerror(code) } } else { unsafe { strerror(code) } }
+                out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
+            }
+            Option::None => self.kind.fmt(mut out),
         }
     }
 }
 
-/// The host's description of the error, such as `No such file or directory`.
+/// The kind's description: no host reports errors on the EVM.
+#[cfg(target = "evm")]
 impl Display for Error {
     fn fmt(self, _ out: mut MemBuffer) {
-        let text = unsafe { strerror(self.code) }
-        out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
+        self.kind.fmt(mut out)
     }
 }
 
-/// The kinds of `Error`.
+/// The kind's description: a WebAssembly host reports no error numbers.
+#[cfg(target = "wasm")]
+impl Display for Error {
+    fn fmt(self, _ out: mut MemBuffer) {
+        self.kind.fmt(mut out)
+    }
+}
+
+/// The kinds of `Error`. A signal that interrupts a host call is none:
+/// `std` makes the call again.
 pub enum ErrorKind {
     NotFound,
     PermissionDenied,
@@ -96,10 +127,60 @@ pub enum ErrorKind {
     IsADirectory,
     /// A path or other text holds a NUL byte, or an argument is invalid.
     InvalidInput,
+    /// A non-blocking operation would have to wait.
+    WouldBlock,
+    TimedOut,
+    ConnectionRefused,
+    ConnectionReset,
+    ConnectionAborted,
+    NotConnected,
+    AddrInUse,
+    AddrNotAvailable,
+    NetworkUnreachable,
+    HostUnreachable,
+    /// A write to a pipe or socket whose reading end is closed.
+    BrokenPipe,
+    /// The input ended before a read that needs more of it.
+    UnexpectedEof,
+    /// The input isn't what the reader takes, such as a line longer than
+    /// its limit.
+    InvalidData,
+    /// A lookup found no address for the host name.
+    HostNotFound,
     Other,
 }
 
 impl Copy for ErrorKind {}
+
+/// A short description, such as `connection refused`.
+impl Display for ErrorKind {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let text: String<24> = match self {
+            ErrorKind::NotFound => "not found",
+            ErrorKind::PermissionDenied => "permission denied",
+            ErrorKind::AlreadyExists => "already exists",
+            ErrorKind::NotADirectory => "not a directory",
+            ErrorKind::IsADirectory => "is a directory",
+            ErrorKind::InvalidInput => "invalid input",
+            ErrorKind::WouldBlock => "operation would block",
+            ErrorKind::TimedOut => "timed out",
+            ErrorKind::ConnectionRefused => "connection refused",
+            ErrorKind::ConnectionReset => "connection reset",
+            ErrorKind::ConnectionAborted => "connection aborted",
+            ErrorKind::NotConnected => "not connected",
+            ErrorKind::AddrInUse => "address in use",
+            ErrorKind::AddrNotAvailable => "address not available",
+            ErrorKind::NetworkUnreachable => "network unreachable",
+            ErrorKind::HostUnreachable => "host unreachable",
+            ErrorKind::BrokenPipe => "broken pipe",
+            ErrorKind::UnexpectedEof => "unexpected end of input",
+            ErrorKind::InvalidData => "invalid data",
+            ErrorKind::HostNotFound => "host not found",
+            ErrorKind::Other => "other error",
+        }
+        text.fmt(mut out)
+    }
+}
 
 /// The standard output of the process, or of a WebAssembly module's host.
 pub trait Stdout: HostCapabilitySeal {
@@ -176,95 +257,310 @@ pub fn eprint_buffer(_ text: MemBuffer) uses (err: mut Stderr) {
     assert!(err.write_stderr(text.span()), "failed writing to stderr")
 }
 
-/// Appends the rest of standard input to `buf`. Panics if the stream fails.
-pub fn read_to_end(_ buf: mut MemBuffer) uses (input: mut Stdin) {
-    while fill(mut buf) {}
+/// A source of bytes, such as a `MemReader`.
+pub trait Read {
+    /// Reads at most `buf.len()` bytes into the start of `buf`: the number
+    /// read, which is zero only at the end of the input or for an empty
+    /// `buf`. What `buf` holds before the read is unspecified, so a read
+    /// only writes it.
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize>
+
+    /// Fills `buf`: an `UnexpectedEof` error if the input ends first.
+    fn read_exact(mut self, _ buf: mut MemSpan) -> Result<Error, ()> {
+        var filled: usize = 0
+        while filled < buf.len() {
+            let count = self.read(buf.tail(filled))?
+            if count == 0 {
+                return Result::Err(Error::new(ErrorKind::UnexpectedEof))
+            }
+            filled += count
+        }
+        Result::Ok(())
+    }
+
+    /// Appends the rest of the input to `buf`: the number of bytes appended.
+    fn read_to_end(mut self, _ buf: mut MemBuffer) -> Result<Error, usize> {
+        read_all(mut self, mut buf)
+    }
 }
 
-// Reads once into `buf`'s spare capacity, growing it first: false at the end
-// of input.
-fn fill(_ buf: mut MemBuffer) -> bool uses (input: mut Stdin) {
+/// A sink of bytes, such as a `MemBuffer`.
+pub trait Write {
+    /// Writes bytes from the start of `bytes`: the number written, which is
+    /// zero only for empty `bytes`.
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize>
+
+    /// Writes all of `bytes`. A `write` of none of them is an `Other` error.
+    fn write_all(mut self, _ bytes: MemSpan) -> Result<Error, ()> {
+        var written: usize = 0
+        while written < bytes.len() {
+            let count = self.write(bytes.tail(written))?
+            if count == 0 {
+                return Result::Err(Error::new(ErrorKind::Other))
+            }
+            written += count
+        }
+        Result::Ok(())
+    }
+}
+
+/// Appends the bytes.
+impl Write for MemBuffer {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        self.extend_from(bytes)
+        Result::Ok(bytes.len())
+    }
+}
+
+/// Reads the bytes of a `MemBuffer` it owns, from the first.
+pub struct MemReader { bytes: MemBuffer, position: usize }
+
+impl MemReader {
+    pub fn new(_ bytes: own MemBuffer) -> Self {
+        MemReader { bytes, position: 0 }
+    }
+}
+
+impl Read for MemReader {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        let rest = self.bytes.len() - self.position
+        let count = if buf.len() < rest { buf.len() } else { rest }
+        buf.head(count).copy_from(self.bytes.slice(offset: self.position, len: count))
+        self.position += count
+        Result::Ok(count)
+    }
+}
+
+// What the readers of this module read: a `Read`, or standard input, which
+// the caller's `Stdin` effect provides.
+trait Source {
+    uses E
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> uses E
+}
+
+impl<R: Read> Source for R {
+    uses E = ()
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.read(mut buf)
+    }
+}
+
+// Standard input. Its failures have no error number.
+struct StdinSource {}
+
+impl Source for StdinSource {
+    uses E = (input: mut Stdin)
+
+    fn fill(mut self, _ buf: mut MemSpan) -> Result<Error, usize> uses E {
+        match input.read_stdin(mut buf) {
+            Option::Some(count) => Result::Ok(count),
+            Option::None => Result::Err(Error::new(ErrorKind::Other)),
+        }
+    }
+}
+
+// Appends what `source` reads to `buf`, up to its end: the number of bytes
+// appended.
+fn read_all<S: Source>(_ source: mut S, _ buf: mut MemBuffer) -> Result<Error, usize> uses S::E {
+    let start = buf.len()
+    while read_more(mut source, mut buf)? {}
+    Result::Ok(buf.len() - start)
+}
+
+// Reads once from `source` into `buf`'s spare capacity, growing it first:
+// false at the end of the input.
+fn read_more<S: Source>(_ source: mut S, _ buf: mut MemBuffer) -> Result<Error, bool> uses S::E {
     buf.reserve(4096)
     let len = buf.len()
     // The bytes past the length are allocated; the read initializes the
     // ones it counts.
     let spare = core::ptr::offset_bytes(buf.ptr(), len)
-    match input.read_stdin(unsafe { MemSlice::from_raw_parts(ptr: spare, len: buf.capacity() - len) }) {
-        Option::Some(count) => {
-            unsafe { buf.set_len(len + count) }
-            count > 0
-        }
-        Option::None => {
-            assert!(false, "failed reading stdin")
-            false
-        }
-    }
+    let count = source.fill(unsafe { MemSlice::from_raw_parts(ptr: spare, len: buf.capacity() - len) })?
+    unsafe { buf.set_len(len + count) }
+    Result::Ok(count > 0)
 }
 
-/// Reads standard input through a buffer, a byte or a line at a time.
-pub struct StdinReader {
-    buffer: MemBuffer,
-    // The first byte of `buffer` not yet returned.
-    start: usize,
-    done: bool,
+/// Appends the rest of standard input to `buf`. Panics if the stream fails.
+pub fn read_to_end(_ buf: mut MemBuffer) uses (input: mut Stdin) {
+    var source = StdinSource {}
+    let _ = stdin_value(read_all(mut source, mut buf))
 }
+
+// What a read of standard input gave. Panics if the stream failed.
+fn stdin_value<T>(_ result: own Result<Error, T>) -> T {
+    assert!(result.is_ok(), "failed reading stdin")
+    result.ok().unwrap()
+}
+
+/// Reads standard input through a buffer, a byte or a line at a time, as a
+/// `BufReader` reads its reader.
+pub struct StdinReader { buffer: ReadBuffer }
 
 impl StdinReader {
     pub fn new() -> Self {
-        StdinReader { buffer: MemBuffer::empty(), start: 0, done: false }
+        StdinReader { buffer: ReadBuffer::new() }
     }
 
     /// The next byte of standard input, or `None` at its end. Panics if the
     /// stream fails.
     pub fn read_byte(mut self) -> Option<u8> uses (input: mut Stdin) {
-        if self.start == self.buffer.len() && !self.refill() {
-            return Option::None
-        }
-        let byte = self.buffer[self.start]
-        self.start += 1
-        Option::Some(byte)
+        var source = StdinSource {}
+        stdin_value(self.buffer.read_byte(mut source))
     }
 
     /// Appends the next line of standard input to `line`, without its
     /// newline: false at the end of input. The last line need not end in a
     /// newline. Panics if the stream fails.
     pub fn read_line(mut self, _ line: mut MemBuffer) -> bool uses (input: mut Stdin) {
+        var source = StdinSource {}
+        stdin_value(self.buffer.read_line(mut source, mut line, max: usize::max()))
+    }
+}
+
+/// Reads a `Read` through a buffer, a byte or a line at a time. It owns the
+/// reader, which `inner()` reaches, as to write to a socket it reads, and
+/// `into_inner()` gives back.
+pub struct BufReader<R> { inner: R, buffer: ReadBuffer }
+
+impl<R: Read> BufReader<R> {
+    pub fn new(_ inner: own R) -> Self {
+        BufReader { inner, buffer: ReadBuffer::new() }
+    }
+
+    /// The next byte, or `None` at the end of the input.
+    pub fn read_byte(mut self) -> Result<Error, Option<u8>> {
+        self.buffer.read_byte(mut self.inner)
+    }
+
+    /// Appends the next line to `line`, without its newline: false at the
+    /// end of the input. The last line need not end in a newline. An error,
+    /// such as `WouldBlock`, leaves `line` as it was, and the next call
+    /// reads the line from its start.
+    pub fn read_line(mut self, _ line: mut MemBuffer) -> Result<Error, bool> {
+        self.buffer.read_line(mut self.inner, mut line, max: usize::max())
+    }
+
+    /// Appends the next line to `line` as `read_line` does if it has at most
+    /// `max` bytes, without its newline. A longer line is an `InvalidData`
+    /// error, which the reader gives as soon as it has `max` bytes of the
+    /// line and no newline, so it holds no more of the line than that and
+    /// one read. The error leaves `line` as it was and the line's bytes
+    /// unread, so each later call fails the same way: a server drops the
+    /// peer's connection.
+    pub fn read_line_max(mut self, _ line: mut MemBuffer, max: usize) -> Result<Error, bool> {
+        self.buffer.read_line(mut self.inner, mut line, max)
+    }
+
+    /// The reader. A read of it skips the bytes in the buffer.
+    pub fn inner(mut? self) -> mut? R {
+        mut? self.inner
+    }
+
+    /// The reader, without the bytes in the buffer.
+    pub fn into_inner(own self) -> R {
+        self.inner
+    }
+}
+
+/// Reads the bytes in the buffer, or reads the reader once into the buffer
+/// if it holds none.
+impl<R: Read> Read for BufReader<R> {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.buffer.read(mut self.inner, mut buf)
+    }
+}
+
+// The bytes a buffered reader has read from its source and not yet
+// returned. Once the source has ended, the buffer reads it no more.
+struct ReadBuffer {
+    bytes: MemBuffer,
+    // The first byte of `bytes` not yet returned.
+    start: usize,
+    done: bool,
+}
+
+impl ReadBuffer {
+    fn new() -> Self {
+        ReadBuffer { bytes: MemBuffer::empty(), start: 0, done: false }
+    }
+
+    // The next byte, or `None` at the end of `source`.
+    fn read_byte<S: Source>(mut self, _ source: mut S) -> Result<Error, Option<u8>> uses S::E {
+        if self.start == self.bytes.len() && !self.refill(mut source)? {
+            return Result::Ok(Option::None)
+        }
+        let byte = self.bytes[self.start]
+        self.start += 1
+        Result::Ok(Option::Some(byte))
+    }
+
+    // Appends the next line to `line`, without its newline: false at the end
+    // of `source`. A line of more than `max` bytes is an `InvalidData` error
+    // as soon as the buffer holds more than `max` bytes of it.
+    fn read_line<S: Source>(mut self, _ source: mut S, _ line: mut MemBuffer, max: usize) -> Result<Error, bool> uses S::E {
         var scanned = self.start
         while true {
-            while scanned < self.buffer.len() {
-                if self.buffer[scanned] == 10 {
-                    line.extend_from(self.buffer.slice(offset: self.start, len: scanned - self.start))
-                    self.start = scanned + 1
-                    return true
+            while scanned < self.bytes.len() {
+                if self.bytes[scanned] == b'\n' {
+                    return self.take_line(mut line, end: scanned, after: scanned + 1, max)
                 }
                 scanned += 1
             }
+            if scanned - self.start > max {
+                return Result::Err(Error::new(ErrorKind::InvalidData))
+            }
             let returned = self.start
-            if !self.refill() {
-                if self.start == self.buffer.len() {
-                    return false
+            if !self.refill(mut source)? {
+                if self.start == self.bytes.len() {
+                    return Result::Ok(false)
                 }
-                line.extend_from(self.buffer.slice(offset: self.start, len: self.buffer.len() - self.start))
-                self.start = self.buffer.len()
-                return true
+                let end = self.bytes.len()
+                return self.take_line(mut line, end, after: end, max)
             }
             scanned -= returned
         }
-        false
+        Result::Ok(false)
     }
 
-    // Moves the unreturned bytes to the front of the buffer and reads more
-    // after them: false at the end of input.
-    fn refill(mut self) -> bool uses (input: mut Stdin) {
-        if self.done {
-            return false
+    // Appends the line from the first byte not yet returned to `end` to
+    // `line`, and returns the bytes up to `after`: an `InvalidData` error,
+    // which returns nothing, if the line has more than `max` bytes.
+    fn take_line(mut self, _ line: mut MemBuffer, end: usize, after: usize, max: usize) -> Result<Error, bool> {
+        if end - self.start > max {
+            return Result::Err(Error::new(ErrorKind::InvalidData))
         }
-        let rest = self.buffer.len() - self.start
-        self.buffer.span().copy_within(source: self.start, dest: 0, len: rest)
-        self.buffer.truncate(rest)
+        line.extend_from(self.bytes.slice(offset: self.start, len: end - self.start))
+        self.start = after
+        Result::Ok(true)
+    }
+
+    // Reads into `buf` the bytes in the buffer, refilling it first if it
+    // holds none.
+    fn read<S: Source>(mut self, _ source: mut S, _ buf: mut MemSpan) -> Result<Error, usize> uses S::E {
+        if self.start == self.bytes.len() && !self.refill(mut source)? {
+            return Result::Ok(0)
+        }
+        let rest = self.bytes.len() - self.start
+        let count = if buf.len() < rest { buf.len() } else { rest }
+        buf.head(count).copy_from(self.bytes.slice(offset: self.start, len: count))
+        self.start += count
+        Result::Ok(count)
+    }
+
+    // Moves the bytes not yet returned to the front and reads more after
+    // them: false at the end of `source`.
+    fn refill<S: Source>(mut self, _ source: mut S) -> Result<Error, bool> uses S::E {
+        if self.done {
+            return Result::Ok(false)
+        }
+        let rest = self.bytes.len() - self.start
+        self.bytes.span().copy_within(source: self.start, dest: 0, len: rest)
+        self.bytes.truncate(rest)
         self.start = 0
-        self.done = !fill(mut self.buffer)
-        !self.done
+        self.done = !read_more(mut source, mut self.bytes)?
+        Result::Ok(!self.done)
     }
 }
 

@@ -1,6 +1,12 @@
 #![cfg(target_os = "macos")]
 /// AArch64 macOS's layouts and values, with 64-bit inodes.
-use core::MemSpan
+use core::{MemBuffer, MemSpan, Option, Result, ptr}
+use ingot::io::Error
+use ingot::time::Instant
+use super::{
+    ENOENT, EVENT_ERROR, EVENT_HANGUP, EVENT_READABLE, EVENT_WRITABLE, F_SETFD, FD_CLOEXEC, Fd, check_call, errno,
+    fcntl, last_error, retry, set_nonblocking, set_socket_option, socket,
+}
 
 extern {
     fn __error() -> *i32
@@ -9,6 +15,19 @@ extern {
 pub fn errno_location() -> *i32 {
     unsafe { __error() }
 }
+
+// `errno` values.
+pub const EAGAIN: i32 = 35
+pub const EINPROGRESS: i32 = 36
+pub const ECONNREFUSED: i32 = 61
+pub const ECONNRESET: i32 = 54
+pub const ECONNABORTED: i32 = 53
+pub const ENOTCONN: i32 = 57
+pub const EADDRINUSE: i32 = 48
+pub const EADDRNOTAVAIL: i32 = 49
+pub const ETIMEDOUT: i32 = 60
+pub const ENETUNREACH: i32 = 51
+pub const EHOSTUNREACH: i32 = 65
 
 // `struct stat` and `struct dirent`.
 pub fn stat_mode(_ stat: MemSpan) -> u32 {
@@ -50,10 +69,202 @@ pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
 
 // `open` flags.
 pub const O_CREAT: i32 = 0x200
+pub const O_EXCL: i32 = 0x800
 pub const O_TRUNC: i32 = 0x400
+pub const O_APPEND: i32 = 0x8
+pub const O_CLOEXEC: i32 = 0x1000000
+pub const O_NONBLOCK: i32 = 0x4
+
+// `fcntl`'s command to copy a descriptor to the lowest free number from its
+// argument on, close-on-exec.
+pub const F_DUPFD_CLOEXEC: i32 = 67
 
 // The bytes a write to a pipe that `poll` finds writable takes at once.
 pub const PIPE_BUF: usize = 512
 
 // The bytes in a unit of `struct rusage`'s `ru_maxrss`.
 pub const MAXRSS_UNIT: u64 = 1
+
+extern {
+    fn accept(_ fd: i32, _ addr: *u8, _ len: *u32) -> i32
+}
+
+// Socket values.
+pub const AF_INET6: i32 = 30
+pub const SOL_SOCKET: i32 = 0xffff
+pub const SO_REUSEADDR: i32 = 0x4
+pub const SO_ERROR: i32 = 0x1007
+pub const SO_BROADCAST: i32 = 0x20
+pub const SO_RCVTIMEO: i32 = 0x1006
+pub const SO_SNDTIMEO: i32 = 0x1005
+const SO_NOSIGPIPE: i32 = 0x1022
+
+// The flags of each `send`: none, since every socket has `SO_NOSIGPIPE`.
+pub const SEND_FLAGS: i32 = 0
+// The flag of a receive or send that doesn't wait.
+pub const MSG_DONTWAIT: i32 = 0x80
+
+/// The first 16 bits of a socket address of `domain`: its length, then its
+/// family.
+pub fn sockaddr_header(_ domain: i32) -> u16 {
+    let len: u16 = if domain == AF_INET6 { 28 } else { 16 }
+    let family: u16 = domain.downcast_truncate()
+    family << 8 | len
+}
+
+/// The domain of a socket address whose first 16 bits are `header`.
+pub fn sockaddr_domain(_ header: u16) -> i32 {
+    (header >> 8) as i32
+}
+
+/// A new socket of `domain` and `kind`, close-on-exec.
+pub fn new_socket(_ domain: i32, _ kind: i32) -> Result<Error, Fd> {
+    let fd = unsafe { socket(domain, kind, 0) }
+    check_call(fd)?
+    let socket = unsafe { Fd { fd } }
+    set_up(fd)?
+    Result::Ok(socket)
+}
+
+/// A connection that the listening socket `fd` accepts, blocking and
+/// close-on-exec. The peer's address goes to `addr`, whose length is at
+/// `len`.
+pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
+    let accepted = retry(|| unsafe { accept(fd, addr, len) } as isize)?
+    let socket = unsafe { Fd { fd: accepted.downcast_unchecked() } }
+    set_up(socket.fd)?
+    // It takes `O_NONBLOCK` from a non-blocking listener.
+    set_nonblocking(socket.fd, false)?
+    Result::Ok(socket)
+}
+
+// Makes the socket `fd` close-on-exec, and keeps a write to a closed
+// connection from raising `SIGPIPE`.
+fn set_up(_ fd: i32) -> Result<Error, ()> {
+    check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
+    no_sigpipe(fd)
+}
+
+/// Keeps a write to the socket `fd` whose connection is closed from
+/// raising `SIGPIPE`, with `SO_NOSIGPIPE`.
+pub fn no_sigpipe(_ fd: i32) -> Result<Error, ()> {
+    set_socket_option(fd, level: SOL_SOCKET, name: SO_NOSIGPIPE, value: 1)
+}
+
+extern {
+    fn kqueue() -> i32
+    fn kevent(_ kq: i32, _ changes: *u8, _ change_count: i32, _ events: *u8, _ event_count: i32, _ timeout: *u8) -> i32
+}
+
+// `kqueue` filters and flags.
+const EVFILT_READ: i16 = -1
+const EVFILT_WRITE: i16 = -2
+const EV_ADD: u16 = 0x1
+const EV_DELETE: u16 = 0x2
+const EV_ERROR: u16 = 0x4000
+const EV_EOF: u16 = 0x8000
+
+// A `struct kevent`: the 64-bit identifier (a descriptor) at 0, then the
+// 16-bit filter, 16-bit flags, 32-bit filter flags, 64-bit data, and the
+// 64-bit user data at 24.
+pub const EVENT_SIZE: usize = 32
+
+/// A new event queue for a poller, close-on-exec: a `kqueue`.
+pub fn new_queue() -> Result<Error, Fd> {
+    let fd = unsafe { kqueue() }
+    check_call(fd)?
+    let queue = unsafe { Fd { fd } }
+    check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
+    Result::Ok(queue)
+}
+
+/// Makes `queue` report the `interest` events, readable and writable, of
+/// `fd` with `data`, level-triggered, and its hangups and errors. `added`
+/// says that `queue` has `fd` already. Reads and writes are separate
+/// filters, each added or deleted.
+pub fn queue_set(_ queue: i32, _ fd: i32, data: u64, interest: u8, added: bool) -> Result<Error, ()> {
+    change(queue, fd, filter: EVFILT_READ, data, wanted: interest & EVENT_READABLE != 0, added)?
+    change(queue, fd, filter: EVFILT_WRITE, data, wanted: interest & EVENT_WRITABLE != 0, added)
+}
+
+/// Takes `fd` out of `queue`.
+pub fn queue_remove(_ queue: i32, _ fd: i32) -> Result<Error, ()> {
+    change(queue, fd, filter: EVFILT_READ, data: 0, wanted: false, added: true)?
+    change(queue, fd, filter: EVFILT_WRITE, data: 0, wanted: false, added: true)
+}
+
+// Adds `filter` on `fd` with `data` if `wanted`, or else deletes it if
+// `added`, where a filter that isn't there is no error.
+fn change(_ queue: i32, _ fd: i32, filter: i16, data: u64, wanted: bool, added: bool) -> Result<Error, ()> {
+    if !wanted && !added {
+        return Result::Ok(())
+    }
+    var event = MemBuffer::new(EVENT_SIZE)
+    event.write_le<u64>(offset: 0, value: fd.downcast_unchecked())
+    event.write_le<i16>(offset: 8, value: filter)
+    event.write_le<u16>(offset: 10, value: if wanted { EV_ADD } else { EV_DELETE })
+    event.write_le<u64>(offset: 24, value: data)
+    if unsafe { kevent(queue, event.ptr(), 1, ptr::null(), 0, ptr::null()) } < 0 && (wanted || errno() != ENOENT) {
+        return Result::Err(last_error())
+    }
+    Result::Ok(())
+}
+
+/// Waits until `queue` has events, or `deadline` has passed if there is
+/// one, and writes up to `capacity` of them at `events`: how many. A signal
+/// doesn't end the wait early.
+pub fn queue_wait(_ queue: i32, _ events: *u8, _ capacity: usize, _ deadline: Option<Instant>) -> Result<Error, usize> {
+    let max: i32 = if capacity < 0x7fffffff { capacity.downcast_unchecked() } else { 0x7fffffff }
+    retry(|| {
+        match deadline {
+            Option::Some(deadline) => {
+                // A `struct timespec`: 64-bit seconds and nanoseconds.
+                let left = deadline.duration_since(Instant::now()).as_nanos()
+                var timeout = MemBuffer::new(16)
+                timeout.write_le<u64>(offset: 0, value: left / 1000000000)
+                timeout.write_le<u64>(offset: 8, value: left % 1000000000)
+                unsafe { kevent(queue, ptr::null(), 0, events, max, timeout.ptr()) } as isize
+            }
+            Option::None => unsafe { kevent(queue, ptr::null(), 0, events, max, ptr::null()) } as isize,
+        }
+    })
+}
+
+/// The user data of event `index` of `events`.
+pub fn event_data(_ events: MemSpan, _ index: usize) -> u64 {
+    events.read_le<u64>(index * EVENT_SIZE + 24)
+}
+
+/// The kinds of event `index` of `events`: `EVENT_READABLE` and its
+/// relatives. A filter's end of file is a hangup, and an error too if it
+/// carries an error number.
+pub fn event_kinds(_ events: MemSpan, _ index: usize) -> u8 {
+    let base = index * EVENT_SIZE
+    let filter = events.read_le<i16>(base + 8)
+    let flags = events.read_le<u16>(base + 10)
+    let error_number = events.read_le<u32>(base + 12)
+    var kinds: u8 = 0
+    if filter == EVFILT_READ {
+        kinds = kinds | EVENT_READABLE
+    }
+    if filter == EVFILT_WRITE {
+        kinds = kinds | EVENT_WRITABLE
+    }
+    if flags & EV_EOF != 0 {
+        kinds = kinds | EVENT_HANGUP
+    }
+    if flags & EV_ERROR != 0 || (flags & EV_EOF != 0 && error_number != 0) {
+        kinds = kinds | EVENT_ERROR
+    }
+    kinds
+}
+
+// `getaddrinfo` results: the host name is unknown, it has no address, and
+// a call failed with `errno`.
+pub const EAI_NONAME: i32 = 8
+pub const EAI_NODATA: i32 = 7
+pub const EAI_SYSTEM: i32 = 11
+
+// The offset of a `struct addrinfo`'s address, after its canonical name on
+// macOS and before it on Linux.
+pub const ADDRINFO_ADDR: usize = 32

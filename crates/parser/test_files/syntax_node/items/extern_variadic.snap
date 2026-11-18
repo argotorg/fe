@@ -1,0 +1,134 @@
+---
+source: crates/parser/tests/syntax_node.rs
+assertion_line: 18
+expression: node
+input_file: test_files/syntax_node/items/extern_variadic.fe
+---
+Root@0..159
+  ItemList@0..158
+    Item@0..158
+      Extern@0..158
+        ExternKw@0..6 "extern"
+        WhiteSpace@6..7 " "
+        ExternItemList@7..158
+          LBrace@7..8 "{"
+          Newline@8..9 "\n"
+          WhiteSpace@9..13 "    "
+          Func@13..49
+            FnKw@13..15 "fn"
+            WhiteSpace@15..16 " "
+            FuncSignature@16..49
+              Ident@16..22 "printf"
+              FuncParamList@22..42
+                LParen@22..23 "("
+                FnParam@23..36
+                  Underscore@23..24 "_"
+                  WhiteSpace@24..25 " "
+                  Ident@25..31 "format"
+                  Colon@31..32 ":"
+                  WhiteSpace@32..33 " "
+                  PtrType@33..36
+                    Star@33..34 "*"
+                    PathType@34..36
+                      Path@34..36
+                        PathSegment@34..36
+                          Ident@34..36 "u8"
+                Comma@36..37 ","
+                WhiteSpace@37..38 " "
+                FnParam@38..41
+                  Dot3@38..41 "..."
+                RParen@41..42 ")"
+              WhiteSpace@42..43 " "
+              Arrow@43..45 "->"
+              WhiteSpace@45..46 " "
+              PathType@46..49
+                Path@46..49
+                  PathSegment@46..49
+                    Ident@46..49 "i32"
+          Newline@49..50 "\n"
+          WhiteSpace@50..54 "    "
+          Func@54..108
+            UnsafeKw@54..60 "unsafe"
+            WhiteSpace@60..61 " "
+            FnKw@61..63 "fn"
+            WhiteSpace@63..64 " "
+            FuncSignature@64..108
+              Ident@64..68 "open"
+              FuncParamList@68..101
+                LParen@68..69 "("
+                FnParam@69..80
+                  Underscore@69..70 "_"
+                  WhiteSpace@70..71 " "
+                  Ident@71..75 "path"
+                  Colon@75..76 ":"
+                  WhiteSpace@76..77 " "
+                  PtrType@77..80
+                    Star@77..78 "*"
+                    PathType@78..80
+                      Path@78..80
+                        PathSegment@78..80
+                          Ident@78..80 "u8"
+                Comma@80..81 ","
+                WhiteSpace@81..82 " "
+                FnParam@82..94
+                  Underscore@82..83 "_"
+                  WhiteSpace@83..84 " "
+                  Ident@84..89 "flags"
+                  Colon@89..90 ":"
+                  WhiteSpace@90..91 " "
+                  PathType@91..94
+                    Path@91..94
+                      PathSegment@91..94
+                        Ident@91..94 "i32"
+                Comma@94..95 ","
+                WhiteSpace@95..96 " "
+                FnParam@96..99
+                  Dot3@96..99 "..."
+                Comma@99..100 ","
+                RParen@100..101 ")"
+              WhiteSpace@101..102 " "
+              Arrow@102..104 "->"
+              WhiteSpace@104..105 " "
+              PathType@105..108
+                Path@105..108
+                  PathSegment@105..108
+                    Ident@105..108 "i32"
+          Newline@108..109 "\n"
+          WhiteSpace@109..113 "    "
+          Func@113..124
+            FnKw@113..115 "fn"
+            WhiteSpace@115..116 " "
+            FuncSignature@116..124
+              Ident@116..119 "any"
+              FuncParamList@119..124
+                LParen@119..120 "("
+                FnParam@120..123
+                  Dot3@120..123 "..."
+                RParen@123..124 ")"
+          Newline@124..125 "\n"
+          WhiteSpace@125..129 "    "
+          Func@129..156
+            FnKw@129..131 "fn"
+            WhiteSpace@131..132 " "
+            FuncSignature@132..156
+              Ident@132..141 "misplaced"
+              FuncParamList@141..156
+                LParen@141..142 "("
+                FnParam@142..145
+                  Dot3@142..145 "..."
+                Comma@145..146 ","
+                WhiteSpace@146..147 " "
+                FnParam@147..155
+                  Underscore@147..148 "_"
+                  WhiteSpace@148..149 " "
+                  Ident@149..150 "x"
+                  Colon@150..151 ":"
+                  WhiteSpace@151..152 " "
+                  PathType@152..155
+                    Path@152..155
+                      PathSegment@152..155
+                        Ident@152..155 "i32"
+                RParen@155..156 ")"
+          Newline@156..157 "\n"
+          RBrace@157..158 "}"
+  Newline@158..159 "\n"

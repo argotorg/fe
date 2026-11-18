@@ -1,14 +1,109 @@
 #![cfg(target_family = "unix")]
 /// The C interfaces of the native host that `std::fs` and its relatives
-/// share: `errno`, C strings, and the layouts and values that differ between
-/// hosts, which `linux` and `macos` give under the same names.
-use core::{MemBuffer, Result}
-use super::io::{Display, EINVAL, Error}
+/// share: `errno` and its kinds, C strings, descriptors, `poll` and sockets,
+/// and the layouts and values that differ between hosts, which `linux` and
+/// `macos` give under the same names.
+use core::{MemBuffer, MemSpan, Option, Result}
+use core::ops::Drop
+use super::io::{Display, Error, ErrorKind, read, write}
+use super::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}
+use super::time::{Duration, Instant}
 
 #[cfg(target_os = "linux")]
 pub use linux::*
 #[cfg(target_os = "macos")]
 pub use macos::*
+
+extern {
+    fn close(_ fd: i32) -> i32
+    pub(ingot) fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
+    // `nfds` is an `nfds_t`, 32 bits on macOS, where the callee reads the low
+    // half.
+    fn poll(_ fds: *u8, _ nfds: u64, _ timeout: i32) -> i32
+    // BSD sockets. A `socklen_t` is 32 bits.
+    pub(ingot) fn socket(_ domain: i32, _ kind: i32, _ protocol: i32) -> i32
+    pub(ingot) fn bind(_ fd: i32, _ addr: *u8, _ len: u32) -> i32
+    pub(ingot) fn listen(_ fd: i32, _ backlog: i32) -> i32
+    pub(ingot) fn connect(_ fd: i32, _ addr: *u8, _ len: u32) -> i32
+    pub(ingot) fn getsockname(_ fd: i32, _ addr: *u8, _ len: *u32) -> i32
+    pub(ingot) fn getpeername(_ fd: i32, _ addr: *u8, _ len: *u32) -> i32
+    pub(ingot) fn setsockopt(_ fd: i32, _ level: i32, _ name: i32, _ value: *u8, _ len: u32) -> i32
+    pub(ingot) fn getsockopt(_ fd: i32, _ level: i32, _ name: i32, _ value: *u8, _ len: *u32) -> i32
+    pub(ingot) fn recv(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32) -> isize
+    pub(ingot) fn send(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32) -> isize
+    pub(ingot) fn recvfrom(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32, _ addr: *u8, _ addr_len: *u32) -> isize
+    pub(ingot) fn sendto(_ fd: i32, _ buf: *u8, _ len: usize, _ flags: i32, _ addr: *u8, _ addr_len: u32) -> isize
+    pub(ingot) fn shutdown(_ fd: i32, _ how: i32) -> i32
+    // Host name lookup. `hints` and each result are a `struct addrinfo`.
+    pub(ingot) fn getaddrinfo(_ host: *u8, _ service: *u8, _ hints: *u8, _ results: **u8) -> i32
+    pub(ingot) fn freeaddrinfo(_ results: *u8)
+}
+
+// The `errno` values every supported host shares.
+pub const EPERM: i32 = 1
+pub const ENOENT: i32 = 2
+pub const EINTR: i32 = 4
+pub const EBADF: i32 = 9
+pub const EACCES: i32 = 13
+pub const EEXIST: i32 = 17
+pub const ENOTDIR: i32 = 20
+pub const EISDIR: i32 = 21
+pub const EINVAL: i32 = 22
+pub const EPIPE: i32 = 32
+
+// `open` access modes, the same on every supported host.
+pub const O_RDONLY: i32 = 0
+pub const O_WRONLY: i32 = 1
+pub const O_RDWR: i32 = 2
+
+// `fcntl` commands and flags, the same on every supported host.
+pub const F_SETFD: i32 = 2
+pub const F_GETFL: i32 = 3
+pub const F_SETFL: i32 = 4
+pub const FD_CLOEXEC: i32 = 1
+
+// Socket values the same on every supported host.
+pub const AF_INET: i32 = 2
+pub const SOCK_STREAM: i32 = 1
+pub const SOCK_DGRAM: i32 = 2
+pub const IPPROTO_TCP: i32 = 6
+pub const TCP_NODELAY: i32 = 1
+pub const SHUT_RD: i32 = 0
+pub const SHUT_WR: i32 = 1
+pub const SHUT_RDWR: i32 = 2
+
+// The bytes of a `struct sockaddr_storage`, which holds any socket address,
+// and of a `struct sockaddr_in` and `sockaddr_in6`.
+pub const SOCKADDR_STORAGE_SIZE: usize = 128
+const SOCKADDR_IN_SIZE: u32 = 16
+const SOCKADDR_IN6_SIZE: u32 = 28
+
+// A `struct addrinfo`: its bytes, and the offsets of the socket type, the
+// address length and the next result, the same on every supported host.
+// The address is at `ADDRINFO_ADDR`, which isn't.
+pub const ADDRINFO_SIZE: usize = 48
+pub const ADDRINFO_SOCKTYPE: usize = 8
+pub const ADDRINFO_ADDRLEN: usize = 16
+pub const ADDRINFO_NEXT: usize = 40
+
+// The most bytes to ask `read` or `write` for: macOS refuses more than
+// `INT_MAX`, and a shorter transfer is no error.
+const IO_LIMIT: usize = 0x7ffffffe
+
+// The kinds of an event of a poller's queue, which `event_kinds` gives, and
+// those a source may be waited for, readable and writable.
+pub const EVENT_READABLE: u8 = 1
+pub const EVENT_WRITABLE: u8 = 2
+pub const EVENT_HANGUP: u8 = 4
+pub const EVENT_ERROR: u8 = 8
+
+// `poll` events, the same on every supported host.
+pub const POLLIN: u16 = 0x1
+pub const POLLOUT: u16 = 0x4
+
+// The bytes of a `struct pollfd`: the descriptor, then 16 bits of events to
+// wait for and 16 of those that happened.
+const POLLFD_SIZE: usize = 8
 
 /// The calling thread's `errno`.
 pub fn errno() -> i32 {
@@ -18,6 +113,30 @@ pub fn errno() -> i32 {
 /// The calling thread's `errno` as an `Error`.
 pub fn last_error() -> Error {
     Error::from_code(errno())
+}
+
+/// The kind of the host's error number `code`.
+pub fn errno_kind(_ code: i32) -> ErrorKind {
+    match code {
+        EPERM | EACCES => ErrorKind::PermissionDenied,
+        ENOENT => ErrorKind::NotFound,
+        EEXIST => ErrorKind::AlreadyExists,
+        ENOTDIR => ErrorKind::NotADirectory,
+        EISDIR => ErrorKind::IsADirectory,
+        EINVAL => ErrorKind::InvalidInput,
+        EAGAIN => ErrorKind::WouldBlock,
+        ETIMEDOUT => ErrorKind::TimedOut,
+        ECONNREFUSED => ErrorKind::ConnectionRefused,
+        ECONNRESET => ErrorKind::ConnectionReset,
+        ECONNABORTED => ErrorKind::ConnectionAborted,
+        ENOTCONN => ErrorKind::NotConnected,
+        EADDRINUSE => ErrorKind::AddrInUse,
+        EADDRNOTAVAIL => ErrorKind::AddrNotAvailable,
+        ENETUNREACH => ErrorKind::NetworkUnreachable,
+        EHOSTUNREACH => ErrorKind::HostUnreachable,
+        EPIPE => ErrorKind::BrokenPipe,
+        _ => ErrorKind::Other,
+    }
 }
 
 /// `value`'s text and a NUL, or an `EINVAL` error if the text holds a NUL.
@@ -31,4 +150,191 @@ pub fn c_string<T: Display>(_ value: T) -> Result<Error, MemBuffer> {
     }
     text.push(0)
     Result::Ok(text)
+}
+
+/// Calls `call` until it does other than fail with `EINTR`: its result, or
+/// `errno` if it fails. For calls that a signal interrupts before they do
+/// anything, such as `read`, `write`, `accept`, `recv`, `send` and `poll`;
+/// not `connect`, which goes on without the caller, nor `close`.
+pub fn retry<F: Fn() -> isize>(_ call: F) -> Result<Error, usize> uses F::E {
+    while true {
+        let result = call()
+        if result >= 0 {
+            return Result::Ok(result.downcast_unchecked())
+        }
+        if errno() != EINTR {
+            return Result::Err(last_error())
+        }
+    }
+    Result::Ok(0)
+}
+
+/// Zero, or `errno` as an error if `result`, a C call's, is -1.
+pub fn check_call(_ result: i32) -> Result<Error, ()> {
+    if result < 0 { Result::Err(last_error()) } else { Result::Ok(()) }
+}
+
+/// The bytes to ask `read`, `write` or their relatives for, of `len`.
+pub fn io_len(_ len: usize) -> usize {
+    if len < IO_LIMIT { len } else { IO_LIMIT }
+}
+
+/// Reads at most `buf.len()` bytes from `fd` into the start of `buf`: the
+/// number read, zero at the end of the input.
+pub fn read_fd(_ fd: i32, _ buf: mut MemSpan) -> Result<Error, usize> {
+    let ptr = buf.ptr()
+    let len = io_len(buf.len())
+    retry(|| unsafe { read(fd, ptr, len) })
+}
+
+/// Writes bytes from the start of `bytes` to `fd`: the number written.
+pub fn write_fd(_ fd: i32, _ bytes: MemSpan) -> Result<Error, usize> {
+    let ptr = bytes.ptr()
+    let len = io_len(bytes.len())
+    retry(|| unsafe { write(fd, ptr, len) })
+}
+
+/// Makes `fd` non-blocking, or blocking.
+pub fn set_nonblocking(_ fd: i32, _ nonblocking: bool) -> Result<Error, ()> {
+    let flags = unsafe { fcntl(fd, F_GETFL) }
+    check_call(flags)?
+    let set = if nonblocking { flags | O_NONBLOCK } else { flags & !O_NONBLOCK }
+    check_call(unsafe { fcntl(fd, F_SETFL, set) })
+}
+
+/// Whether `fd` is non-blocking.
+pub fn is_nonblocking(_ fd: i32) -> Result<Error, bool> {
+    let flags = unsafe { fcntl(fd, F_GETFL) }
+    check_call(flags)?
+    Result::Ok(flags & O_NONBLOCK != 0)
+}
+
+/// Sets the `int` socket option `name` of `level` on `fd` to `value`.
+pub fn set_socket_option(_ fd: i32, level: i32, name: i32, value: i32) -> Result<Error, ()> {
+    var raw = MemBuffer::new(4)
+    raw.write_le<i32>(offset: 0, value)
+    check_call(unsafe { setsockopt(fd, level, name, raw.ptr(), 4) })
+}
+
+/// The `int` socket option `name` of `level` on `fd`.
+pub fn socket_option(_ fd: i32, level: i32, name: i32) -> Result<Error, i32> {
+    let raw = MemBuffer::new(4)
+    var len = MemBuffer::new(4)
+    len.write_le<u32>(offset: 0, value: 4)
+    check_call(unsafe { getsockopt(fd, level, name, raw.ptr(), core::ptr::cast(len.ptr())) })?
+    Result::Ok(raw.read_le<i32>(0))
+}
+
+/// The socket domain of `addr`'s family.
+pub fn address_domain(_ addr: SocketAddr) -> i32 {
+    match addr.ip() {
+        IpAddr::V4(_) => AF_INET,
+        IpAddr::V6(_) => AF_INET6,
+    }
+}
+
+/// `addr` as a C socket address: a `struct sockaddr_storage`, and the
+/// length of the address at its start. The port, the IPv4 address, the IPv6
+/// flow info and the IPv6 address are big-endian; the scope id is the
+/// host's.
+pub fn encode_sockaddr(_ addr: SocketAddr) -> (MemBuffer, u32) {
+    var raw = MemBuffer::new(SOCKADDR_STORAGE_SIZE)
+    raw.write_le<u16>(offset: 0, value: sockaddr_header(address_domain(addr)))
+    raw.write_be<u16>(offset: 2, value: addr.port())
+    match addr.ip() {
+        IpAddr::V4(ip) => {
+            raw.write_be<u32>(offset: 4, value: ip.to_bits())
+            (raw, SOCKADDR_IN_SIZE)
+        }
+        IpAddr::V6(ip) => {
+            raw.write_be<u128>(offset: 8, value: ip.to_bits())
+            raw.write_le<u32>(offset: 24, value: addr.scope_id())
+            (raw, SOCKADDR_IN6_SIZE)
+        }
+    }
+}
+
+/// The address of the C socket address `raw`: an `InvalidInput` error
+/// unless it is IPv4 or IPv6.
+pub fn decode_sockaddr(_ raw: MemSpan) -> Result<Error, SocketAddr> {
+    let domain = sockaddr_domain(raw.read_le<u16>(0))
+    let port = raw.read_be<u16>(2)
+    if domain == AF_INET {
+        Result::Ok(SocketAddr::new(IpAddr::V4(Ipv4Addr::from_bits(raw.read_be<u32>(4))), port))
+    } else if domain == AF_INET6 {
+        Result::Ok(SocketAddr::new_v6(Ipv6Addr::from_bits(raw.read_be<u128>(8)), port, scope_id: raw.read_le<u32>(24)))
+    } else {
+        Result::Err(Error::new(ErrorKind::InvalidInput))
+    }
+}
+
+/// The address `call` writes, such as `getsockname` of a socket: `call`
+/// takes the address buffer and its length.
+pub fn read_sockaddr<F: Fn(*u8, *u32) -> i32>(_ call: F) -> Result<Error, SocketAddr> uses F::E {
+    let raw = MemBuffer::new(SOCKADDR_STORAGE_SIZE)
+    var len = MemBuffer::new(4)
+    len.write_le<u32>(offset: 0, value: SOCKADDR_STORAGE_SIZE.downcast_unchecked())
+    check_call(call(raw.ptr(), core::ptr::cast(len.ptr())))?
+    decode_sockaddr(raw.span())
+}
+
+/// An open file descriptor, which it closes when destroyed. Making one
+/// vouches that `fd` is open and that nothing else closes it.
+pub(ingot) struct Fd { pub(ingot) unsafe fd: i32 }
+
+/// A `close` that a signal interrupts isn't made again: the descriptor may
+/// be closed already, and its number another's by then.
+impl Drop for Fd {
+    fn drop(own self) {
+        unsafe { close(self.fd) }
+    }
+}
+
+/// Descriptors for `poll` to wait on, each with the events to wait for.
+pub(ingot) struct PollSet { fds: MemBuffer }
+
+impl PollSet {
+    pub fn new() -> Self {
+        PollSet { fds: MemBuffer::empty() }
+    }
+
+    /// Adds `fd`, to wait until one of `events` happens to it.
+    pub fn add(mut self, _ fd: i32, events: u16) {
+        let entry = self.fds.len()
+        self.fds.resize(entry + POLLFD_SIZE)
+        self.fds.write_le<i32>(offset: entry, value: fd)
+        self.fds.write_le<u16>(offset: entry + 4, value: events)
+    }
+
+    /// Waits until an event happens to a descriptor, or `timeout` passes if
+    /// there is one: the number of descriptors with events, zero if the
+    /// time passed first. A signal doesn't end the wait early.
+    pub fn wait(mut self, _ timeout: Option<Duration>) -> Result<Error, usize> {
+        let deadline = match timeout {
+            Option::Some(limit) => Option::Some(Instant::now() + limit),
+            Option::None => Option::None,
+        }
+        let fds = self.fds.ptr()
+        let count: u64 = (self.fds.len() / POLLFD_SIZE).downcast_unchecked()
+        retry(|| unsafe { poll(fds, count, poll_millis(deadline)) } as isize)
+    }
+
+    /// The events that happened, in the last `wait`, to the descriptor added
+    /// `index`th. Besides those it waits for, they may be `POLLERR`,
+    /// `POLLHUP` and `POLLNVAL`.
+    pub fn events(self, _ index: usize) -> u16 {
+        self.fds.read_le<u16>(index * POLLFD_SIZE + 6)
+    }
+}
+
+// The milliseconds until `deadline`, rounded up, as a `poll` or
+// `epoll_wait` timeout: -1, forever, without one.
+fn poll_millis(_ deadline: Option<Instant>) -> i32 {
+    match deadline {
+        Option::Some(deadline) => {
+            let millis = (deadline.duration_since(Instant::now()).as_nanos() + 999999) / 1000000
+            if millis > 2147483647 { 2147483647 } else { millis.downcast_unchecked() }
+        }
+        Option::None => -1,
+    }
 }

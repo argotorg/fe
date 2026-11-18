@@ -1,0 +1,6 @@
+extern {
+    fn printf(_ format: *u8, ...) -> i32
+    unsafe fn open(_ path: *u8, _ flags: i32, ...,) -> i32
+    fn any(...)
+    fn misplaced(..., _ x: i32)
+}

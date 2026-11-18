@@ -441,7 +441,8 @@ fn field_ty_range(
         )
 }
 
-/// Analysis pass that collects generic attribute misuse diagnostics.
+/// Analysis pass that collects misused attributes, field modifiers and
+/// `...` parameters.
 pub struct AttrMisusePass {}
 
 impl ModuleAnalysisPass for AttrMisusePass {
@@ -461,6 +462,7 @@ impl ModuleAnalysisPass for AttrMisusePass {
             .chain(func_body_diagnostics)
             .filter_map(|d| match d {
                 LowerDiagnostic::AttrMisuse(d) => Some(Box::new(d.clone()) as _),
+                LowerDiagnostic::VariadicParam(d) => Some(Box::new(d.clone()) as _),
                 _ => None,
             })
             .collect::<Vec<_>>();

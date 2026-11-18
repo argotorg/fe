@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/native/variadic_access.fe
+---
+error[16-0001]: access conflict in `fn main`
+   ┌─ variadic_access.fe:11:37
+   │
+10 │     let held = mut count
+   │                --------- access opened here
+11 │     let _ = unsafe { printf(format, count) }
+   │                                     ^^^^^ cannot read this place while a `mut` access of it is open

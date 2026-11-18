@@ -42,6 +42,7 @@ use crate::hir_def::{
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
+    diagnosable::is_c_scalar,
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, Body, CondId, Const, Contract, ContractRecvArm, Expr,
         ExprId, Func, GenericParam, GenericParamOwner, IntegerId, LitKind, ManualContractRootAttr,
@@ -7555,7 +7556,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
     ) {
         let ty = self.body.pat_ty(self.db, pat);
         let span = ctxt.span().unwrap();
-        self.check_unknown(ty, span.clone().into());
+        self.check_unknown(ty, span.clone().into(), false);
         if let Pat::Lit(Partial::Present(LitKind::Int(int))) = pat_data
             && self.body.body() == Some(ctxt.body())
         {
@@ -7583,7 +7584,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         if !matches!(expr_data, Expr::Block(..)) {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
-            self.check_unknown(prop.ty, span.clone().into());
+            self.check_unknown(prop.ty, span.clone().into(), false);
             // A string literal only gets an oversized `String<N>` type through
             // inference fallback; report it here instead of leaving an invalid
             // literal type for constant evaluation to trip over.
@@ -7623,7 +7624,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
         {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
-            self.check_unknown(callable_ty, span.into());
+            self.check_unknown(callable_ty, span.into(), false);
         }
 
         match expr_data {
@@ -7746,6 +7747,9 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
                 {
                     self.check_view_call(&callable, expr, ctxt.span().unwrap().into());
                     self.check_state_only_call(&callable, expr, ctxt.span().unwrap().into());
+                    if let Expr::Call(_, args) = expr_data {
+                        self.check_variadic_args(&callable, args);
+                    }
                 }
             }
             _ => {}
@@ -7847,7 +7851,10 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
     }
 
-    fn check_unknown(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>) {
+    /// Reports `ty`, of the expression or pattern at `span`, if inference
+    /// left it unknown; with `variadic`, of an extra argument of a variadic
+    /// call.
+    fn check_unknown(&mut self, ty: TyId<'db>, span: DynLazySpan<'db>, variadic: bool) {
         let flags = ty.flags(self.db);
         if flags.contains(TyFlags::HAS_INVALID) || !flags.contains(TyFlags::HAS_VAR) {
             return;
@@ -7870,8 +7877,27 @@ impl<'db> TyCheckerFinalizer<'db> {
         }
 
         if !skip_diag {
-            let diag = BodyDiag::TypeAnnotationNeeded { span, ty };
+            let diag = BodyDiag::TypeAnnotationNeeded { span, ty, variadic };
             self.diags.push(diag.into())
+        }
+    }
+
+    /// Each extra argument of a variadic call is a C integer or a raw
+    /// pointer. Its type comes from the argument alone, as no parameter
+    /// gives it one.
+    fn check_variadic_args(&mut self, callable: &Callable<'db>, args: &[CallArg<'db>]) {
+        let (db, extras) = (self.db, callable.variadic_arg_tys());
+        let Some(body) = self.body.body() else {
+            return;
+        };
+        for (arg, &ty) in args[args.len() - extras.len()..].iter().zip(extras) {
+            let span: DynLazySpan<'db> = arg.expr.span(body).into();
+            if ty.has_var(db) {
+                self.check_unknown(ty, span, true);
+            } else if !ty.has_invalid(db) && !is_c_scalar(db, ty) {
+                self.diags
+                    .push(BodyDiag::InvalidVariadicArg { primary: span, ty }.into());
+            }
         }
     }
 

@@ -1,0 +1,106 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: native
+input_file: fixtures/native/variadic.fe
+---
+error[12-0007]: `...` must be the last parameter
+  ┌─ variadic.fe:6:28
+  │
+6 │     fn misplaced(_ a: i32, ..., _ b: i32)
+  │                            ^^^ a parameter follows `...`
+
+error[12-0007]: `...` must be the last parameter
+  ┌─ variadic.fe:7:24
+  │
+7 │     fn twice(_ a: i32, ..., ...)
+  │                        ^^^ a parameter follows `...`
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ variadic.fe:14:20
+   │
+14 │     fn narrow(_ a: u8, ...)
+   │                    ^^ `u8` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ variadic.fe:15:23
+   │
+15 │     fn borrowing(_ a: mut i64, ...)
+   │                       ^^^^^^^ `mut i64` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0090]: an `extern` function cannot pass this type to or from C
+   ┌─ variadic.fe:16:31
+   │
+16 │     fn wide(_ a: i32, ...) -> u256
+   │                               ^^^^ `u256` has no C form
+   │
+   = C functions take and return `i32`, `u32`, `i64`, `u64`, `isize`, `usize` and raw pointers, and may return nothing
+
+error[3-0095]: a variadic `extern` function cannot be generic
+  ┌─ variadic.fe:9:15
+  │
+9 │     fn generic<T>(_ a: i32, ...)
+  │               ^^^ generic parameters
+
+error[3-0095]: a variadic `extern` function cannot take effects
+   ┌─ variadic.fe:10:31
+   │
+10 │     fn effects(_ a: i32, ...) uses (counter: Counter)
+   │                               ^^^^^^^^^^^^^^^^^^^^^^^ effects
+
+error[3-0095]: a variadic `extern` function cannot be `const`
+   ┌─ variadic.fe:11:5
+   │
+11 │     const fn constant(_ a: i32, ...) -> i32
+   │     ^^^^^ `const`
+
+error[8-0023]: argument number mismatch
+   ┌─ variadic.fe:33:23
+   │
+ 4 │     fn printf(_ format: *u8, ...) -> i32
+   │        ------ function defined here
+   ·
+33 │         let _ = printf()
+   │                       ^^ expected 1 arguments, but 0 given
+
+error[8-0031]: type annotation is needed
+   ┌─ variadic.fe:31:32
+   │
+31 │         let _ = printf(format, 5)
+   │                                ^
+   │                                │
+   │                                type annotation is needed
+   │                                a variadic argument has no parameter to take a type from: give it one, as in `0 as i32`
+
+error[8-0160]: a variadic argument takes no label
+   ┌─ variadic.fe:32:32
+   │
+32 │         let _ = printf(format, value: 1 as i32)
+   │                                ^^^^^ no parameter has this label
+
+error[8-0161]: a variadic argument must be a C integer or a raw pointer
+   ┌─ variadic.fe:27:32
+   │
+27 │         let _ = printf(format, byte)
+   │                                ^^^^ `u8` cannot pass to C here
+   │
+   = cast it to `i32`, which C passes in its place
+
+error[8-0161]: a variadic argument must be a C integer or a raw pointer
+   ┌─ variadic.fe:28:32
+   │
+28 │         let _ = printf(format, true)
+   │                                ^^^^ `bool` cannot pass to C here
+   │
+   = cast it to `i32`, which C passes in its place
+
+error[8-0161]: a variadic argument must be a C integer or a raw pointer
+   ┌─ variadic.fe:29:32
+   │
+29 │         let _ = printf(format, word)
+   │                                ^^^^ `u256` cannot pass to C here
+   │
+   = a variadic argument is an `i32`, `u32`, `i64`, `u64`, `isize`, `usize` or a raw pointer

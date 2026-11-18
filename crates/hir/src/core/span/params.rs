@@ -7,13 +7,50 @@ use super::{
 };
 use crate::span::{LazySpanAtom, path::LazyPathSpan};
 
-define_lazy_span_node!(
-    LazyFuncParamListSpan,
-    ast::FuncParamList,
-    @idx {
-        (param, LazyFuncParamSpan),
+define_lazy_span_node!(LazyFuncParamListSpan, ast::FuncParamList, @idx {});
+
+impl<'db> LazyFuncParamListSpan<'db> {
+    /// Parameter `idx`, counting no `...`, which stands for no parameter.
+    pub fn param(mut self, idx: usize) -> LazyFuncParamSpan<'db> {
+        fn f(origin: ResolvedOrigin, arg: LazyArg) -> ResolvedOrigin {
+            let LazyArg::Idx(idx) = arg else {
+                unreachable!()
+            };
+            origin.map(|node| {
+                ast::FuncParamList::cast(node)?
+                    .into_iter()
+                    .filter(|param| param.variadic_token().is_none())
+                    .nth(idx)
+                    .map(|param| param.syntax().clone().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::Idx(idx),
+        });
+        LazyFuncParamSpan(self.0)
     }
-);
+
+    /// The `...` that ends a variadic function's parameters.
+    pub fn variadic(mut self) -> LazyFuncParamSpan<'db> {
+        fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
+            origin.map(|node| {
+                ast::FuncParamList::cast(node)?
+                    .into_iter()
+                    .last()
+                    .filter(|param| param.variadic_token().is_some())
+                    .map(|param| param.syntax().clone().into())
+            })
+        }
+
+        self.0.push(LazyTransitionFn {
+            f,
+            arg: LazyArg::None,
+        });
+        LazyFuncParamSpan(self.0)
+    }
+}
 
 define_lazy_span_node!(
     LazyGenericParamListSpan,
