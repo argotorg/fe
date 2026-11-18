@@ -688,13 +688,16 @@ pub(crate) fn resolve_impl_name<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
 ) -> ImplNameRes<'db> {
+    let scope = path.hygiene_scope(db).unwrap_or(scope);
     let mut parent_scope = None;
     for segment_idx in 0..path.len(db) {
         let Some(segment) = path.segment(db, segment_idx) else {
             return ImplNameRes::NotFound;
         };
-        if !matches!(segment.kind(db), PathKind::Ident { .. })
-            || segment_idx + 1 != path.len(db) && !segment.generic_args(db).is_empty(db)
+        if !matches!(
+            segment.kind(db),
+            PathKind::Ident { .. } | PathKind::InScope { .. }
+        ) || segment_idx + 1 != path.len(db) && !segment.generic_args(db).is_empty(db)
         {
             return ImplNameRes::NotFound;
         }

@@ -84,6 +84,52 @@ fn eval(db: &DriverDataBase, name: &str) -> String {
     value.to_string()
 }
 
+#[test]
+fn a_quoted_opening_uses_the_producers_named_implementation() {
+    let source = r#"
+trait Gate { const fn code(_ value: u8) -> u8 }
+impl Gate for u8 { const fn code(_ value: u8) -> u8 { value } }
+
+mod producer {
+    use ingot::Gate
+    use core::derive::{Derive, Inherent}
+    use core::meta::{Code, Item, Record}
+
+    trait Eligible {}
+    impl Eligible for u8 {}
+    impl<T: Eligible> Gate for T as Encoded {
+        const fn code(_ value: u8) -> u8 { value ^ 1 }
+    }
+
+    pub struct Provider {}
+    impl Derive<Inherent> for Provider {
+        const fn derive(_ record: Record) -> Code<Item> {
+            quote {
+                pub const fn code(self, _ input: u8) -> u8 {
+                    with (Encoded<u8>) { <u8 as Gate>::code(input) }
+                }
+            }
+        }
+    }
+}
+
+impl Gate for u8 as Encoded {
+    const fn code(_ value: u8) -> u8 { value ^ 2 }
+}
+struct Generated {}
+impl Generated with (producer::Provider)
+
+const fn generated() -> u8 { Generated {}.code(7) }
+const fn written() -> u8 { with (Encoded) { <u8 as Gate>::code(7) } }
+"#;
+    let db = prepare(source).unwrap();
+    assert_eq!(eval(&db, "generated"), "6");
+    assert_eq!(eval(&db, "written"), "5");
+
+    let missing = source.replace("impl Eligible for u8 {}", "");
+    assert!(prepare_err(&missing).contains("trait bound is not satisfied"));
+}
+
 /// A trait with a constant, an associated type, two required methods and a
 /// default method; the provider supplies all but the default. `Square` has
 /// three fields, so every expected value below follows from SIDES = 3.

@@ -2354,7 +2354,10 @@ impl<'db> TyChecker<'db> {
                             self.env.assumptions(),
                             true,
                         ) && self.is_with_operand_value(&value)
-                            && value.is_visible_from(self.db, self.env.scope())
+                            && value.is_visible_from(
+                                self.db,
+                                path.hygiene_scope(self.db).unwrap_or(self.env.scope()),
+                            )
                         {
                             ambiguous_opening = true;
                             // A generated implementation only fills gaps:
