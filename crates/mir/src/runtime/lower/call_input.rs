@@ -38,6 +38,9 @@ pub(super) struct CompiledCallInputPlan<'db> {
     /// The boundary each effect's place crosses, if the callee has a
     /// runtime plan for the effect.
     pub(super) effect_boundaries: Box<[Option<StagedBoundary<'db>>]>,
+    /// Whether the callee is variadic: a call passes extra arguments after
+    /// those `param_plans` covers.
+    pub(super) variadic: bool,
 }
 
 pub(super) fn compile_value_pass_plan<'db>(
@@ -94,5 +97,6 @@ pub(super) fn compile_call_input_plan_for_semantic<'db>(
     CompiledCallInputPlan {
         param_plans,
         effect_boundaries,
+        variadic: semantic.key(db).owner(db).is_variadic(db),
     }
 }

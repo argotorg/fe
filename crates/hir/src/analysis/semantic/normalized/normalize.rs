@@ -1100,16 +1100,25 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                             }
                             Ok(self.operand(result, origin, ReadMode::Read))
                         } else {
-                            let value = self.read_operand(
-                                block,
-                                origin,
-                                *arg,
-                                self.call_arg_mode(*callee, index, arg.value),
-                            )?;
-                            let expected = self
-                                .call_param_ty(*callee, index)
-                                .ok_or(NormalizeError::InvalidProjection)?;
+                            let param_ty = self.call_param_ty(*callee, index);
+                            // An extra argument of a variadic call is a C
+                            // scalar, which the call copies.
+                            let extra = param_ty.is_none()
+                                && callee.key.owner(self.db).is_variadic(self.db);
+                            let mode = if extra {
+                                Some(ReadMode::Copy)
+                            } else {
+                                self.call_arg_mode(*callee, index, arg.value)
+                            };
+                            let value = self.read_operand(block, origin, *arg, mode)?;
                             let actual = self.values[value.value.index()].ty;
+                            let expected = match param_ty {
+                                Some(ty) => ty,
+                                None if extra => actual
+                                    .as_capability(self.db)
+                                    .map_or(actual, |(_, target)| target),
+                                None => return Err(NormalizeError::InvalidProjection),
+                            };
                             let target = match (
                                 actual.as_capability(self.db),
                                 expected.as_capability(self.db),

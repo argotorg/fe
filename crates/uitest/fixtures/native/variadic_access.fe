@@ -1,0 +1,13 @@
+extern {
+    fn printf(_ format: *u8, ...) -> i32
+}
+
+// A variadic call reads its extra arguments, which a `mut` access must not
+// hold open.
+pub fn main() {
+    let format = core::ptr::alloc_bytes(1)
+    var count: i32 = 1
+    let held = mut count
+    let _ = unsafe { printf(format, count) }
+    held = 2
+}

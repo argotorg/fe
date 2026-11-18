@@ -3402,6 +3402,7 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(BodyDiag::TypeAnnotationNeeded {
                             span: span.clone(),
                             ty: provider.ty,
+                            variadic: false,
                         });
                     }
                     return Err(Box::new(EffectPatternKey::Trait(pattern)));

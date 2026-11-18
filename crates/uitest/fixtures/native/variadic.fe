@@ -1,0 +1,35 @@
+struct Counter { n: i64 }
+
+extern {
+    fn printf(_ format: *u8, ...) -> i32
+    // `...` ends the parameters.
+    fn misplaced(_ a: i32, ..., _ b: i32)
+    fn twice(_ a: i32, ..., ...)
+    // C calls a variadic function as it is declared.
+    fn generic<T>(_ a: i32, ...)
+    fn effects(_ a: i32, ...) uses (counter: Counter)
+    const fn constant(_ a: i32, ...) -> i32
+    // Each fixed parameter takes one C integer register, and the result is
+    // a C scalar or nothing.
+    fn narrow(_ a: u8, ...)
+    fn borrowing(_ a: mut i64, ...)
+    fn wide(_ a: i32, ...) -> u256
+}
+
+pub fn main() {
+    let format = core::ptr::alloc_bytes(1)
+    let byte: u8 = 1
+    let word: u256 = 1
+    unsafe {
+        // Each extra argument is a C integer or a raw pointer.
+        let _ = printf(format)
+        let _ = printf(format, 1 as i32, 2 as u32, 3 as i64, 4 as u64, 5 as isize, 6 as usize, format)
+        let _ = printf(format, byte)
+        let _ = printf(format, true)
+        let _ = printf(format, word)
+        // An extra argument has no parameter to take a type or a label from.
+        let _ = printf(format, 5)
+        let _ = printf(format, value: 1 as i32)
+        let _ = printf()
+    }
+}
