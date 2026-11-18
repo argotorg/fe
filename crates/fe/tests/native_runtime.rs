@@ -3532,6 +3532,11 @@ reregister: both: true true
 reregister: removed the replacement: true
 reregister: then get: true, remove: true
 reregister: then set_interest: NotFound
+kept: events before: 1
+kept: events after reregister: 0
+kept: events before: 1
+kept: events after remove: 0
+kept: removed the third: true
 hangup: readable: true, hangup: true
 refused: ConnectionRefused
 stale interest: the new source's event: true, as the replaced one's: false

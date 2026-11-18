@@ -138,9 +138,10 @@ impl Events {
 /// wait until the source is read, written or removed. `get` reaches a
 /// source by its token, and `remove` gives it back.
 ///
-/// A source that `get` replaces at `mut` loses its kernel registration,
-/// since the queue knows a descriptor and not the source: `reregister`
-/// registers the new one.
+/// The queue knows a descriptor and not the source, so a source that `get`
+/// replaces at `mut` isn't waited for until `reregister` registers it. The
+/// old source's events, if the caller kept it, come with the token until
+/// then.
 ///
 /// A peer that shuts down its writing side makes a source waited for reads
 /// readable, at the end of the stream, and a hangup; a source waited for
@@ -211,7 +212,8 @@ impl<S: Pollable> Poller<S> {
     }
 
     /// Registers the descriptor of the source of `token` again, after `get`
-    /// has replaced the source: a `NotFound` error if it has been removed.
+    /// has replaced the source, and ends the wait for the old source if the
+    /// caller kept it: a `NotFound` error if the source has been removed.
     pub fn reregister(mut self, _ token: Token) -> Result<Error, ()> {
         if !self.has(token) {
             return Result::Err(Error::new(ErrorKind::NotFound))
@@ -225,19 +227,9 @@ impl<S: Pollable> Poller<S> {
         if !self.has(token) {
             return Option::None
         }
-        let queue = self.queue.fd
+        self.deregister(token.index)
         let slot = mut self.slots[token.index as usize]
         let source = slot.source.take()
-        // A source that `get` replaced and that wasn't registered again has
-        // a descriptor the queue doesn't know, and the old number may be
-        // another source's by now.
-        let registered = match source {
-            Option::Some(ref source) => source.raw_fd() == slot.fd,
-            Option::None => false,
-        }
-        if registered {
-            let _ = sys::queue_remove(queue, slot.fd)
-        }
         slot.generation = slot.generation.wrapping_add(1)
         self.free.push(token.index)
         source
@@ -257,25 +249,64 @@ impl<S: Pollable> Poller<S> {
     }
 
     // Registers the descriptor that the source of `token` has now for
-    // `interest`: changes the queue's registration of it, or else adds one.
-    // It touches no other number: the source's old descriptor, if `get`
-    // replaced it, closed with its registration, and its number may be
-    // another source's by now.
+    // `interest`: changes the queue's registration of it, or else adds one,
+    // after taking out that of the descriptor `get` replaced.
     fn register(mut self, _ token: Token, _ interest: Interest) -> Result<Error, ()> {
         let queue = self.queue.fd
-        let slot = mut self.slots[token.index as usize]
-        let fd = match slot.source {
+        let fd = match self.slots[token.index as usize].source {
             Option::Some(ref source) => source.raw_fd(),
             Option::None => return Result::Err(Error::new(ErrorKind::NotFound)),
         }
-        let modified = fd == slot.fd
+        // A replacement with the old source's number has no registration
+        // to change either: the old one closed with its own.
+        let modified = fd == self.slots[token.index as usize].fd
             && sys::queue_set(queue, fd, data: token.data(), interest: interest.kinds, added: true).is_ok()
         if !modified {
+            if fd != self.slots[token.index as usize].fd {
+                self.deregister(token.index)
+            }
             sys::queue_set(queue, fd, data: token.data(), interest: interest.kinds, added: false)?
         }
+        let slot = mut self.slots[token.index as usize]
         slot.fd = fd
         slot.interest = interest
         Result::Ok(())
+    }
+
+    // Takes the registration of slot `index` out of the queue: that of the
+    // descriptor it was registered with. If `get` replaced the source, that
+    // is the old source's, which closed with its registration unless the
+    // caller kept it. Its number may then be another source's, whose
+    // registration stays.
+    fn deregister(mut self, _ index: u32) {
+        let fd = self.slots[index as usize].fd
+        let current = match self.slots[index as usize].source {
+            Option::Some(ref source) => source.raw_fd() == fd,
+            Option::None => false,
+        }
+        if current || !self.registered_elsewhere(fd, except: index) {
+            let _ = sys::queue_remove(self.queue.fd, fd)
+        }
+    }
+
+    // Whether a source of a slot other than `except` is registered with
+    // `fd`, as it is if it has that descriptor still.
+    fn registered_elsewhere(self, _ fd: i32, except: u32) -> bool {
+        var index: usize = 0
+        while index < self.slots.len() {
+            if index != except as usize && self.slots[index].fd == fd {
+                match self.slots[index].source {
+                    Option::Some(ref source) => {
+                        if source.raw_fd() == fd {
+                            return true
+                        }
+                    }
+                    Option::None => {}
+                }
+            }
+            index += 1
+        }
+        false
     }
 
     // Whether `token` names a source of the poller.

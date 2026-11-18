@@ -55,6 +55,7 @@ struct Next {
 pub fn main() -> i32 uses (out: mut Stdout, net: mut Net) {
     report("serve", serve())
     report("reregister", reregister())
+    report("kept", kept())
     report("hangup", hangup())
     report("refused", refused())
     report("stale interest", stale_interest())
@@ -213,6 +214,38 @@ fn reregister() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
     println!("reregister: removed the replacement: ", removed.unwrap().local_addr()? == addr)
     println!("reregister: then get: ", poller.get(token).is_none(), ", remove: ", poller.remove(token).is_none())
     failure("reregister: then set_interest", poller.set_interest(token, Interest::READABLE))
+    Result::Ok(())
+}
+
+// A source that `get` replaces and the caller keeps stays open, and so
+// registered: `reregister` and `remove` end the wait for it.
+fn kept() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var poller: Poller<UdpSocket> = Poller::new()?
+    var sender = net.bind_udp(loopback())?
+    let token = poller.add(net.bind_udp(loopback())?, Interest::READABLE)?
+    let second = net.bind_udp(loopback())?
+    let first = match poller.get(token) {
+        Option::Some(mut socket) => core::mem::replace(mut socket, second),
+        Option::None => return Result::Ok(()),
+    }
+    // The kept source has a datagram to read from here on.
+    sender.send_to(format!("x").span(), first.local_addr()?)?
+    var events = Events::with_capacity(4)
+    println!("kept: events before: ", poller.wait(mut events, Option::Some(Duration::from_secs(5)))?)
+    poller.reregister(token)?
+    println!("kept: events after reregister: ", poller.wait(mut events, Option::Some(Duration::from_millis(50)))?)
+    // The second source is registered now. Kept too, and never replaced
+    // in the queue, it is still registered when its token is removed.
+    let third = net.bind_udp(loopback())?
+    let second = match poller.get(token) {
+        Option::Some(mut socket) => core::mem::replace(mut socket, third),
+        Option::None => return Result::Ok(()),
+    }
+    sender.send_to(format!("x").span(), second.local_addr()?)?
+    println!("kept: events before: ", poller.wait(mut events, Option::Some(Duration::from_secs(5)))?)
+    let removed = poller.remove(token)
+    println!("kept: events after remove: ", poller.wait(mut events, Option::Some(Duration::from_millis(50)))?)
+    println!("kept: removed the third: ", removed.is_some())
     Result::Ok(())
 }
 
