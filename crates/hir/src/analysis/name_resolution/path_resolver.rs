@@ -628,9 +628,9 @@ pub(crate) fn resolve_type_path_definition<'db>(
             continue;
         }
         if segment_idx == 0
-            && let PathKind::BoundIngot { ingot, .. } = segment.kind(db)
+            && let PathKind::BoundIngot { scope, .. } = segment.kind(db)
         {
-            parent_scope = Some(ingot.root_mod(db).scope());
+            parent_scope = Some(scope.ingot(db).root_mod(db).scope());
             continue;
         }
         if !matches!(
@@ -694,6 +694,13 @@ pub(crate) fn resolve_impl_name<'db>(
         let Some(segment) = path.segment(db, segment_idx) else {
             return ImplNameRes::NotFound;
         };
+        if segment_idx == 0
+            && path.len(db) > 1
+            && let PathKind::BoundIngot { scope, .. } = segment.kind(db)
+        {
+            parent_scope = Some(scope.ingot(db).root_mod(db).scope());
+            continue;
+        }
         if !matches!(
             segment.kind(db),
             PathKind::Ident { .. } | PathKind::InScope { .. }
@@ -1467,11 +1474,11 @@ fn resolve_segment<'db>(
         );
     }
 
-    if let PathKind::BoundIngot { ingot, .. } = path.kind(db) {
+    if let PathKind::BoundIngot { scope, .. } = path.kind(db) {
         if path.parent(db).is_some() {
             return Err(PathResError::parse_err(path));
         }
-        return Ok(PathRes::Mod(ingot.root_mod(db).scope()));
+        return Ok(PathRes::Mod(scope.ingot(db).root_mod(db).scope()));
     }
 
     if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {

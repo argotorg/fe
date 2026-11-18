@@ -95,6 +95,52 @@ const APP_WITH_LIB_TOML: &str =
     "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n";
 const LIB_TOML: &str = "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n";
 
+#[test]
+fn quoted_ingot_path_uses_the_dependency_producers_scope() {
+    let library = r#"
+trait Gate { const fn code(_ value: u8) -> u8 }
+impl Gate for u8 { const fn code(_ value: u8) -> u8 { value } }
+
+pub mod producer {
+    use ingot::Gate
+    use core::derive::{Derive, Inherent}
+    use core::meta::{Code, Item, Record}
+
+    impl Gate for u8 as Encoded {
+        const fn code(_ value: u8) -> u8 { value ^ 1 }
+    }
+
+    pub struct Provider {}
+    impl Derive<Inherent> for Provider {
+        const fn derive(_ record: Record) -> Code<Item> {
+            quote {
+                pub const fn code(self, _ input: u8) -> u8 {
+                    with (ingot::producer::Encoded) { <u8 as Gate>::code(input) }
+                }
+            }
+        }
+    }
+}
+"#;
+    let app = r#"
+use lib::producer::Provider
+struct Target {}
+impl Target with (Provider)
+pub const fn result() -> u8 { Target {}.code(7) }
+"#;
+    let files = [
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", app),
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", library),
+    ];
+    let db = project(&files);
+    let prepared = prepare(&db, "app/");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "6");
+    assert_authored_unchanged(&db, &files);
+}
+
 const SCORE: &str = "pub trait Score {\n    const fn score() -> usize\n}\n";
 const MODEL: &str = "pub struct Pair {\n    pub a: u256,\n    pub b: u256,\n}\n";
 const PROVIDERS: &str = r#"use core::derive::Derive

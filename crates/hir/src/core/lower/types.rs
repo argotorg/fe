@@ -302,7 +302,7 @@ pub(super) fn bind_path_to_scope<'db, B: BindBodies<'db>>(
                     return PathId::new(
                         db,
                         PathKind::BoundIngot {
-                            ingot: scope.ingot(db),
+                            scope,
                             display: ident_id,
                         },
                         None,
@@ -342,8 +342,8 @@ pub(super) fn bind_path_to_scope<'db, B: BindBodies<'db>>(
             let trait_ = bind_trait_ref_to_scope(bodies, trait_, scope, param_names);
             PathId::new(db, PathKind::QualifiedType { type_, trait_ }, parent)
         }
-        PathKind::BoundIngot { ingot, display } => {
-            PathId::new(db, PathKind::BoundIngot { ingot, display }, parent)
+        PathKind::BoundIngot { scope, display } => {
+            PathId::new(db, PathKind::BoundIngot { scope, display }, parent)
         }
         PathKind::BoundItem {
             item: bound_item,

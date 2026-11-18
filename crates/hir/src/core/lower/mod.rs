@@ -714,11 +714,13 @@ impl<'db> FileLowerCtxt<'db> {
             .is_some_and(|frame| frame.is_sub_quote || frame.is_member_quote)
     }
 
-    pub(super) fn current_quote_ingot(&self) -> Option<common::ingot::Ingot<'db>> {
+    pub(super) fn quote_producer_in_other_ingot(
+        &self,
+    ) -> Option<crate::hir_def::AuthoredScope<'db>> {
         let frame = self.quote_frames.last()?;
         let db = self.db();
-        let quote_ingot = frame.quote_top_mod.ingot(db);
-        (quote_ingot != self.top_mod().ingot(db)).then_some(quote_ingot)
+        let quote_ingot = frame.producer.ingot(db);
+        (quote_ingot != self.top_mod().ingot(db)).then_some(frame.producer)
     }
 
     pub(super) fn resolve_quote_template(

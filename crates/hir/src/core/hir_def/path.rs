@@ -1,6 +1,6 @@
 use super::{GenericArgListId, IdentId, TraitRefId, TypeId};
 use crate::{HirDb, hir_def::Partial};
-use common::{ingot::Ingot, stdlib::BUILTIN_CORE_BASE_URL};
+use common::stdlib::BUILTIN_CORE_BASE_URL;
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -18,7 +18,7 @@ pub enum PathKind<'db> {
         generic_args: GenericArgListId<'db>,
     },
     BoundIngot {
-        ingot: Ingot<'db>,
+        scope: super::AuthoredScope<'db>,
         display: IdentId<'db>,
     },
     /// A declaration written in an authored module, bound when the path is
@@ -116,7 +116,9 @@ impl<'db> PathId<'db> {
             parent.hygiene_scope(db)
         } else {
             match self.kind(db) {
-                PathKind::InScope { scope, .. } => Some(scope.resolve(db)),
+                PathKind::InScope { scope, .. } | PathKind::BoundIngot { scope, .. } => {
+                    Some(scope.resolve(db))
+                }
                 _ => None,
             }
         }
@@ -212,8 +214,8 @@ impl<'db> PathId<'db> {
         match self.parent(db) {
             Some(parent) => parent.is_core_lib_path(db),
             None => match self.kind(db) {
-                PathKind::BoundIngot { ingot, .. } => {
-                    ingot.base(db).as_str() == BUILTIN_CORE_BASE_URL
+                PathKind::BoundIngot { scope, .. } => {
+                    scope.ingot(db).base(db).as_str() == BUILTIN_CORE_BASE_URL
                 }
                 PathKind::BoundItem { display, .. } => display.is_core_lib_path(db),
                 PathKind::InScope { display, .. } => display.is_core_lib_path(db),

@@ -33,12 +33,12 @@ impl<'db> PathId<'db> {
                 }
                 Some(ast::PathSegmentKind::Ingot(_))
                     if path.is_none()
-                        && let Some(ingot) = ctxt.current_quote_ingot() =>
+                        && let Some(scope) = ctxt.quote_producer_in_other_ingot() =>
                 {
                     path = Some(Self::new(
                         db,
                         PathKind::BoundIngot {
-                            ingot,
+                            scope,
                             display: IdentId::make_ingot(db),
                         },
                         None,
