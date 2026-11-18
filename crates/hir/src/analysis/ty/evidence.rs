@@ -316,6 +316,7 @@ pub struct EvidenceId<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct DeferredProofBounds<'db> {
     source_goal: TraitInstId<'db>,
+    source_choices: Option<ChosenImpls<'db>>,
     source_slots: PredicateListId<'db>,
     applied_slots: PredicateListId<'db>,
     entries: EvidenceList<'db>,
@@ -325,9 +326,9 @@ impl<'db> DeferredProofBounds<'db> {
     fn capture(
         db: &'db dyn HirAnalysisDb,
         source_goal: TraitInstId<'db>,
-        assumptions: PredicateListId<'db>,
+        cx: TraitSolveCx<'db>,
     ) -> Option<Self> {
-        let slots = assumptions.extend_all_bounds(db);
+        let slots = cx.assumptions().extend_all_bounds(db);
         if slots.is_empty(db) {
             return None;
         }
@@ -340,6 +341,7 @@ impl<'db> DeferredProofBounds<'db> {
         );
         Some(Self {
             source_goal,
+            source_choices: cx.choices(),
             source_slots: slots,
             applied_slots: slots,
             entries,
@@ -350,14 +352,27 @@ impl<'db> DeferredProofBounds<'db> {
         Self { entries, ..self }
     }
 
-    fn slot_for(self, db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> Option<usize> {
-        self.source_slots
+    fn proof_for(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> Result<Option<EvidenceId<'db>>, ()> {
+        let matching = self
+            .source_slots
             .list(db)
             .iter()
-            .zip(self.applied_slots.list(db))
-            .enumerate()
-            .find(|&(_, (&source, &applied))| source == self.source_goal && applied == goal)
-            .map(|(index, _)| index)
+            .zip(self.applied_slots.list(db));
+        let mut answer = None;
+        for (index, (&source, &applied)) in matching.enumerate() {
+            if source == self.source_goal && applied == goal {
+                let proof = self.entries.get(db, index).ok_or(())?;
+                if answer.is_some_and(|other| other != proof) {
+                    return Err(());
+                }
+                answer = Some(proof);
+            }
+        }
+        Ok(answer)
     }
 }
 
@@ -1270,10 +1285,10 @@ fn expanded_condition_evidence<'db>(
 fn source_conditions<'db>(
     db: &'db dyn HirAnalysisDb,
     selected: ImplementorId<'db>,
-    source: TraitInstId<'db>,
-) -> Option<PredicateListId<'db>> {
+    mut bounds: DeferredProofBounds<'db>,
+) -> Option<(PredicateListId<'db>, DeferredProofBounds<'db>)> {
     let mut table = UnificationTable::new(db);
-    let (source, origins) = table.freshen_with_origins(source);
+    let (source, origins) = table.freshen_with_origins(bounds.source_goal);
     let implementation = table.instantiate_with_fresh_vars(selected);
     for (&selected, &source) in implementation
         .trait_inst(db)
@@ -1283,34 +1298,35 @@ fn source_conditions<'db>(
     {
         table.unify(selected, source).ok()?;
     }
-    struct Restore<'db>(FxHashMap<TyId<'db>, Option<TyId<'db>>>);
+    struct Restore<'db>(FxHashMap<TyId<'db>, TyId<'db>>);
     impl<'db> TyFolder<'db> for Restore<'db> {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
             self.0
                 .get(&ty)
-                .and_then(|&param| param)
+                .copied()
                 .unwrap_or_else(|| ty.super_fold_with(db, self))
         }
     }
     let mut restore = Restore(FxHashMap::default());
+    let mut aliases = Restore(FxHashMap::default());
     for (param, origin) in origins {
         let origin = origin.fold_with(db, &mut table);
         if origin.has_var(db) {
-            // A header that identifies two origins cannot give either sole
-            // ownership of the matched variable.
-            restore
-                .0
-                .entry(origin)
-                .and_modify(|entry| *entry = None)
-                .or_insert(Some(param));
+            let representative = *restore.0.entry(origin).or_insert(param);
+            aliases.0.insert(param, representative);
         }
     }
-    Some(
-        implementation
-            .constraints(db)
-            .fold_with(db, &mut table)
-            .fold_with(db, &mut restore),
-    )
+    // Apply header equalities to the source predicates without reordering
+    // their slots. The proof lookup can require their actual entries to agree.
+    bounds.source_slots = bounds.source_slots.fold_with(db, &mut aliases);
+    bounds.source_choices = bounds
+        .source_choices
+        .map(|choices| choices.fold_with(db, &mut aliases));
+    let conditions = implementation
+        .constraints(db)
+        .fold_with(db, &mut table)
+        .fold_with(db, &mut restore);
+    Some((conditions, bounds))
 }
 
 #[salsa::tracked(returns(copy), cycle_initial = prove_cycle_initial)]
@@ -1324,14 +1340,15 @@ fn prove_in<'db>(
     if !settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
     }
+    let chosen = bounds.and_then(|_| solve_cx.matching_choice_index(db, goal));
     if let Some(bounds) = bounds
-        && !solve_cx.has_matching_choice(db, goal)
-        && let Some(index) = bounds.slot_for(db, goal)
+        && chosen.is_none()
     {
-        return bounds
-            .entries
-            .get(db, index)
-            .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven);
+        match bounds.proof_for(db, goal) {
+            Ok(Some(proof)) => return ProofOutcome::Proven(proof),
+            Ok(None) => {}
+            Err(()) => return ProofOutcome::Unavailable,
+        }
     }
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, goal) else {
         return if collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
@@ -1356,7 +1373,7 @@ fn prove_in<'db>(
                 goal: resolved.trait_inst(),
                 scope: solve_cx.origin_scope(db),
                 choices: solve_cx.choices(),
-                bounds: DeferredProofBounds::capture(db, goal, solve_cx.assumptions()),
+                bounds: DeferredProofBounds::capture(db, goal, solve_cx),
             },
         ));
     }
@@ -1376,7 +1393,17 @@ fn prove_in<'db>(
                     BorrowKind::Ref
                 });
                 let conditions = bounds.and_then(|bounds| {
-                    source_conditions(db, resolved.selected(), bounds.source_goal)
+                    let applied = chosen.and_then(|index| {
+                        let choice = bounds.source_choices?.items(db)[index];
+                        (choice.template.origin(db) == resolved.selected().origin(db))
+                            .then_some(choice.applied)
+                            .flatten()
+                    });
+                    if let Some(applied) = applied {
+                        Some((applied.constraints(db), bounds))
+                    } else {
+                        source_conditions(db, resolved.selected(), bounds)
+                    }
                 });
                 Evidence::Impl {
                     selected: resolved.selected(),
@@ -1388,14 +1415,11 @@ fn prove_in<'db>(
                         .enumerate()
                         .map(|(index, &cond)| {
                             let cond = cond.at_mode(db, mode);
-                            if let Some(bounds) = bounds {
-                                let source = conditions
-                                    .and_then(|conditions| conditions.list(db).get(index))
-                                    .copied()
-                                    .map(|source| source.at_mode(db, mode));
-                                if let Some(source_goal) = source
-                                    && settled(collect_flags(db, source_goal))
-                                {
+                            if let Some((conditions, bounds)) = conditions
+                                && let Some(&source) = conditions.list(db).get(index)
+                            {
+                                let source_goal = source.at_mode(db, mode);
+                                if settled(collect_flags(db, source_goal)) {
                                     return prove_in(
                                         db,
                                         solve_cx,
@@ -1407,13 +1431,13 @@ fn prove_in<'db>(
                                     )
                                     .evidence();
                                 }
-                                return prove(
-                                    db,
-                                    solve_cx.with_assumptions(PredicateListId::empty_list(db)),
-                                    cond,
-                                );
                             }
-                            prove(db, solve_cx, cond)
+                            let cx = if bounds.is_some() {
+                                solve_cx.with_assumptions(PredicateListId::empty_list(db))
+                            } else {
+                                solve_cx
+                            };
+                            prove(db, cx, cond)
                         })
                         .collect::<Option<_>>()?,
                 }

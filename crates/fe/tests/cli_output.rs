@@ -5801,12 +5801,20 @@ fn deferred_argument_selects_the_codec() uses (evm: mut std::evm::Evm) {
 #[test]
 fn named_storage_late_codec_uses_declared_bound_evidence() {
     let source = include_str!("fixtures/named_storage_codec_bound_evidence.fe");
+    let repeated = source.replace("SolPacked for Elem<u8, T>", "SolPacked for Elem<T, T>");
+    let applied = include_str!("fixtures/named_storage_codec_applied_choice.fe");
     let temp = tempdir().unwrap();
-    let path = temp.path().join("codec_bound_evidence.fe");
-    fs::write(&path, source).unwrap();
-    let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
-    assert_eq!(exit, 0, "{output}");
-    assert!(output.contains("2 passed; 0 failed"), "{output}");
+    for (name, source, expected) in [
+        ("distinct", source, "2 passed; 0 failed"),
+        ("repeated", repeated.as_str(), "2 passed; 0 failed"),
+        ("applied", applied, "1 passed; 0 failed"),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains(expected), "{name}: {output}");
+    }
 }
 
 #[test]

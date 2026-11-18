@@ -280,9 +280,18 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         goal: TraitInstId<'db>,
     ) -> Option<ImplementorId<'db>> {
+        let index = self.matching_choice_index(db, goal)?;
+        Some(self.choices?.items(db)[index].template)
+    }
+
+    pub(super) fn matching_choice_index(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> Option<usize> {
         let scope = self.normalization_scope_for_trait_inst(db, goal);
         let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
-        table_solver::matching_choice(db, self.choices, goal)
+        table_solver::matching_choice_index(db, self.choices, goal)
     }
 
     pub(crate) fn matching_named_choice(

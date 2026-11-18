@@ -92,34 +92,28 @@ fn impl_header_may_match<'db>(
 
 /// Select a lexical header before checking its conditions. A failing explicit
 /// candidate does not silently fall back to an ordinary implementation.
-pub(super) fn matching_choice<'db>(
+pub(super) fn matching_choice_index<'db>(
     db: &'db dyn HirAnalysisDb,
     choices: Option<super::ChosenImpls<'db>>,
     goal: TraitInstId<'db>,
-) -> Option<ImplementorId<'db>> {
+) -> Option<usize> {
     let choices = choices?;
-    choices
-        .items(db)
-        .iter()
-        .rev()
-        .copied()
-        .find(|&choice| {
-            let implementation = choice.implementation();
-            if implementation.trait_inst(db).def(db) != goal.def(db)
-                || !impl_header_may_match(db, implementation, goal)
-            {
-                return false;
-            }
-            let mut table = PersistentUnificationTable::new(db);
-            let candidate = choice.instantiate(&mut table);
-            table
-                .unify(
-                    trait_inst_head(db, candidate.trait_inst(db)),
-                    trait_inst_head(db, goal),
-                )
-                .is_ok()
-        })
-        .map(|choice| choice.template)
+    choices.items(db).iter().rposition(|&choice| {
+        let implementation = choice.implementation();
+        if implementation.trait_inst(db).def(db) != goal.def(db)
+            || !impl_header_may_match(db, implementation, goal)
+        {
+            return false;
+        }
+        let mut table = PersistentUnificationTable::new(db);
+        let candidate = choice.instantiate(&mut table);
+        table
+            .unify(
+                trait_inst_head(db, candidate.trait_inst(db)),
+                trait_inst_head(db, goal),
+            )
+            .is_ok()
+    })
 }
 
 /// The trait goal that either choice could answer, if there is one: both
