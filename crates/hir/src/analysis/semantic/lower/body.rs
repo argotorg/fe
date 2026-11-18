@@ -536,7 +536,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         id
     }
 
-    fn binding_ty(&self, binding: LocalBinding<'db>) -> TyId<'db> {
+    pub(super) fn binding_ty(&self, binding: LocalBinding<'db>) -> TyId<'db> {
         match self.binding_role_mode {
             BindingRoleMode::Final => self.instance.binding_ty(self.db, binding),
             BindingRoleMode::Provisional => self.instance.provisional_binding_ty(self.db, binding),

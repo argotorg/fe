@@ -45,7 +45,7 @@ func private %match_nested_extract(v0.@layout_1) -> i8 {
         jump block3;
 
     block2:
-        v1.i8 = phi (v17 block8) (v23 block18) (v31 block19) (v36 block20) (v41 block21);
+        v1.i8 = phi (v17 block8) (v33 block20) (v41 block21);
         return v1;
 
     block3:
@@ -83,39 +83,40 @@ func private %match_nested_extract(v0.@layout_1) -> i8 {
         jump block9;
 
     block11:
-        (v23.i8, v24.i1) = uaddo v11 v7;
-        br v24 block17 block18;
+        jump block17;
 
     block12:
-        (v31.i8, v32.i1) = uaddo v11 v19;
-        br v32 block17 block19;
+        jump block18;
 
     block13:
         jump block12;
 
     block14:
-        v34.i8 = extract_value v4 0.i256;
-        (v36.i8, v37.i1) = uaddo v34 v7;
-        br v37 block17 block20;
+        v26.i8 = extract_value v4 0.i256;
+        jump block17;
 
     block15:
-        v39.i8 = extract_value v4 0.i256;
-        (v41.i8, v42.i1) = uaddo v39 v14;
-        br v42 block17 block21;
+        v29.i8 = extract_value v4 0.i256;
+        jump block18;
 
     block16:
         jump block15;
 
     block17:
+        v31.i8 = phi (v11 block11) (v26 block14);
+        (v33.i8, v34.i1) = uaddo v31 v7;
+        br v34 block19 block20;
+
+    block18:
+        v40.i8 = phi (v19 block12) (v14 block15);
+        v39.i8 = phi (v11 block12) (v29 block15);
+        (v41.i8, v42.i1) = uaddo v39 v40;
+        br v42 block19 block21;
+
+    block19:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
         mstore 4.i256 17.i256 i256;
         evm_revert 0.i256 36.i256;
-
-    block18:
-        jump block2;
-
-    block19:
-        jump block2;
 
     block20:
         jump block2;

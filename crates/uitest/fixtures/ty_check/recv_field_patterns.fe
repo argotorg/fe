@@ -1,6 +1,6 @@
 // A recv arm field whose pattern destructures reports what the arm's
-// pattern would: a name it binds twice, an effect's name, or a pattern that
-// may not match.
+// pattern would: a name it binds twice, an effect's name, a pattern that may
+// not match, or a name missing from a `|` alternative.
 use std::abi::sol
 
 msg M {
@@ -14,6 +14,8 @@ msg M {
     Dup { t: (u256, u256) } -> u256,
     #[selector = sol("set((uint256,uint256))")]
     Set { t: (u256, u256) } -> u256,
+    #[selector = sol("miss((uint256,uint256))")]
+    Miss { t: (u256, u256) } -> u256,
 }
 
 pub contract C {
@@ -34,6 +36,9 @@ pub contract C {
         }
         Set { t: (total, _) } -> u256 uses (mut total) {
             total
+        }
+        Miss { t: (x, _) | (_, _) } -> u256 {
+            x
         }
     }
 }

@@ -161,7 +161,7 @@ fn analyze_patterns<'db>(
 ) -> Result<Analysis<ConstructorKind<'db>, Infallible>, InputError> {
     let arms = roots
         .iter()
-        .map(|root| Arm::new([to_matchcov_pattern(store, *root)]));
+        .map(|root| Arm::new([to_matchcov_pattern(db, store, *root)]));
     matchcov::analyze(
         &mut FeConstructorOracle::new(db),
         &[ty],
@@ -169,7 +169,11 @@ fn analyze_patterns<'db>(
     )
 }
 
+/// `pat` as matchcov's pattern. The alternatives of a `|` after one that
+/// matches anything are left out, as they match nothing more: each would
+/// double the rows of a matrix with the pattern.
 pub(crate) fn to_matchcov_pattern<'db>(
+    db: &'db dyn HirAnalysisDb,
     store: &PatternStore<'db>,
     pat: ValidatedPatId,
 ) -> Pattern<ConstructorKind<'db>> {
@@ -179,14 +183,39 @@ pub(crate) fn to_matchcov_pattern<'db>(
             *ctor,
             fields
                 .iter()
-                .copied()
-                .map(|field| to_matchcov_pattern(store, field)),
+                .map(|&field| to_matchcov_pattern(db, store, field)),
         ),
-        ValidatedPatKind::Or(pats) => Pattern::or(
-            pats.iter()
-                .copied()
-                .map(|pat| to_matchcov_pattern(store, pat)),
-        ),
+        ValidatedPatKind::Or(pats) => {
+            let mut alternatives = Vec::new();
+            for &pat in pats {
+                let alternative = to_matchcov_pattern(db, store, pat);
+                let total = matches_anything(db, &alternative);
+                alternatives.push(alternative);
+                if total {
+                    break;
+                }
+            }
+            if alternatives.len() == 1 {
+                alternatives.pop().unwrap()
+            } else {
+                Pattern::or(alternatives)
+            }
+        }
+    }
+}
+
+/// Whether `pat` matches every value of its type: a wildcard, its type's only
+/// constructor with such fields, or a `|` with such an alternative.
+pub(crate) fn matches_anything<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pat: &Pattern<ConstructorKind<'db>>,
+) -> bool {
+    match pat {
+        Pattern::Wildcard => true,
+        Pattern::Constructor { head, arguments } => {
+            head.is_only(db) && arguments.iter().all(|arg| matches_anything(db, arg))
+        }
+        Pattern::Or(alternatives) => alternatives.iter().any(|alt| matches_anything(db, alt)),
     }
 }
 

@@ -29,7 +29,7 @@ func private %deeply_nested_wildcard(v0.@layout_2) -> i8 {
         br_table v2 (0.enumtag(@layout_2) block3);
 
     block2:
-        v4.i8 = phi (0.i8 block5) (1.i8 block6) (0.i8 block7);
+        v4.i8 = phi (1.i8 block6) (0.i8 block8);
         return v4;
 
     block3:
@@ -45,12 +45,15 @@ func private %deeply_nested_wildcard(v0.@layout_2) -> i8 {
         br_table v12 block7 (0.enumtag(@layout_0) block6);
 
     block5:
-        jump block2;
+        jump block8;
 
     block6:
         jump block2;
 
     block7:
+        jump block8;
+
+    block8:
         jump block2;
 }
 
@@ -134,7 +137,7 @@ func private %nested_with_defaults(v0.@layout_1) -> i8 {
         br_table v2 (0.enumtag(@layout_1) block3) (1.enumtag(@layout_1) block4);
 
     block2:
-        v5.i8 = phi (1.i8 block5) (0.i8 block6) (2.i8 block7) (0.i8 block8);
+        v5.i8 = phi (1.i8 block5) (2.i8 block7) (0.i8 block9);
         return v5;
 
     block3:
@@ -153,12 +156,15 @@ func private %nested_with_defaults(v0.@layout_1) -> i8 {
         jump block2;
 
     block6:
-        jump block2;
+        jump block9;
 
     block7:
         jump block2;
 
     block8:
+        jump block9;
+
+    block9:
         jump block2;
 }
 

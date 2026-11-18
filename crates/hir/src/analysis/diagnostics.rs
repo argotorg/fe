@@ -14,9 +14,9 @@ use crate::analysis::{
         closure::func_item_callable_inst,
         diagnostics::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
-            ExportIssue, FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
-            ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
-            TyLowerDiag,
+            ExportIssue, FuncBodyDiag, ImplDiag, JoinedBindingMode, MarkerPosition, MustUseSubject,
+            MutabilityFix, ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag,
+            TyDiagCollection, TyLowerDiag,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
@@ -2936,13 +2936,144 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
-            Self::BindingsInOrPat(span) => primary_diag(
-                Severity::Error,
-                "bindings in `|` patterns are not supported",
-                "split this into separate arms or remove the binding",
-                span.resolve(db),
-                error_code,
-            ),
+            Self::OrPatBindingMissing {
+                primary,
+                binding,
+                name,
+            } => {
+                let name = name.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{name}` is not bound in every alternative of the pattern"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("this alternative doesn't bind `{name}`"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is bound here"),
+                            span: binding.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "each alternative of a `|` pattern must bind the same names".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::OrPatBindingTypeMismatch {
+                primary,
+                first,
+                name,
+                ty,
+                first_ty,
+            } => {
+                let name = name.data(db);
+                let (mut ty_name, mut first_ty_name) =
+                    (ty.pretty_print(db).to_string(), first_ty.pretty_print(db).to_string());
+                if ty_name == first_ty_name {
+                    ty_name = pretty_print_ty_for_mismatch(db, *ty);
+                    first_ty_name = pretty_print_ty_for_mismatch(db, *first_ty);
+                }
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "`{name}` has a different type in each alternative of the pattern"
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` is a `{ty_name}` here"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is a `{first_ty_name}` here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "a name bound in the alternatives of a `|` pattern has one type"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::OrPatBindingModeMismatch {
+                primary,
+                first,
+                name,
+                mode,
+                first_mode,
+            } => {
+                let name = name.data(db);
+                let describe = |mode: &JoinedBindingMode| match mode {
+                    JoinedBindingMode::Value => "by value",
+                    JoinedBindingMode::Var => "as a `var`",
+                    JoinedBindingMode::Access(BorrowKind::Ref) => "as a `ref` access",
+                    JoinedBindingMode::Access(BorrowKind::Mut) => "as a `mut` access",
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "`{name}` is bound in different ways in the alternatives of the pattern"
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` is bound {} here", describe(mode)),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is bound {} here", describe(first_mode)),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "a name bound in the alternatives of a `|` pattern is bound one way"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::OrPatAccessJoined {
+                primary,
+                first,
+                name,
+            } => {
+                let name = name.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "the access `{name}` reaches a different part in each alternative of the pattern"
+                    ),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` reaches this part here"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: "and another part here".to_string(),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "outside `match`, the alternatives of a `|` pattern meet before the \
+                         code that follows, where an access reaches one place"
+                            .to_string(),
+                        format!("bind `{name}` in a `match` arm instead"),
+                    ],
+                    error_code,
+                }
+            }
 
             Self::DuplicatedRestPat(span) => primary_diag(
                 Severity::Error,

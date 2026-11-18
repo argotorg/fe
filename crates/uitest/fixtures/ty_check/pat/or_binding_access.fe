@@ -1,0 +1,59 @@
+// Outside `match`, the alternatives of a `|` pattern meet before the code
+// that follows, so an access they bind reaches one place.
+pub enum E {
+    A(u256, u256),
+    B(u256),
+    C,
+}
+
+fn bump(x: mut u256) {
+    x += 1
+}
+
+fn in_match(e: mut E) {
+    match e {
+        E::A(mut x, _) | E::B(mut x) => bump(mut x),
+        E::C => {},
+    }
+}
+
+fn same_place(e: mut (bool, E)) {
+    if let (true, E::A(_, mut x)) | (false, E::A(_, mut x)) = e {
+        bump(mut x)
+    }
+}
+
+fn if_let(e: mut E) {
+    if let E::A(mut x, _) | E::B(mut x) = e {
+        bump(mut x)
+    }
+}
+
+fn while_let(e: mut E) {
+    while let E::A(_, ref x) | E::B(ref x) = e {
+        if x > 3 { return }
+    }
+}
+
+fn let_else(e: mut E) {
+    let E::A(mut x, _) | E::B(mut x) = e else {
+        return
+    }
+    bump(mut x)
+}
+
+pub enum Side {
+    L(u256),
+    R(u256),
+}
+
+fn let_irrefutable(s: mut Side) {
+    let Side::L(mut x) | Side::R(mut x) = s
+    bump(mut x)
+}
+
+fn for_loop(sides: mut [Side; 2]) {
+    for Side::L(mut x) | Side::R(mut x) in sides {
+        bump(mut x)
+    }
+}

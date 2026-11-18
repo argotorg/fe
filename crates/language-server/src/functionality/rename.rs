@@ -357,6 +357,31 @@ fn get_x(p: Point) -> i32 {
     }
 
     #[test]
+    fn rename_or_pattern_binding_renames_every_alternative() {
+        let code = r#"enum E {
+    A(i32),
+    B(i32, i32)
+}
+
+fn get(e: E) -> i32 {
+    match e {
+        E::A(x) | E::B(_, x) => x
+    }
+}
+"#;
+        // From the first alternative's `x`, the second's, and the use.
+        for col in [13, 26, 32] {
+            let outcome = run_rename(code, 7, col, "y");
+            let ranges = collect_edit_ranges(&outcome);
+            assert_eq!(
+                ranges,
+                vec![(7, 13, 14), (7, 26, 27), (7, 32, 33)],
+                "renaming from column {col}"
+            );
+        }
+    }
+
+    #[test]
     fn rename_binding_in_destructured_recv_field() {
         let code = r#"msg M {
     #[selector = 0x01]

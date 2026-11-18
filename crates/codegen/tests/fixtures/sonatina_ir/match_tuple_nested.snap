@@ -51,7 +51,7 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         jump block3;
 
     block2:
-        v1.i8 = phi (0.i8 block7) (8.i8 block10) (8.i8 block13) (15.i8 block15) (8.i8 block16);
+        v1.i8 = phi (0.i8 block7) (15.i8 block15) (8.i8 block18);
         return v1;
 
     block3:
@@ -97,24 +97,24 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         br v31 block12 block14;
 
     block10:
-        jump block2;
+        jump block18;
 
     block11:
         jump block10;
 
     block12:
-        v34.constref<@layout_2> = const.proj v0 0.i256;
-        v35.constref<@layout_1> = const.proj v34 0.i256;
-        v36.constref<i1> = const.proj v35 1.i256;
-        v37.constref<@layout_2> = const.proj v0 0.i256;
-        v38.constref<@layout_1> = const.proj v37 0.i256;
-        v39.constref<i1> = const.proj v38 1.i256;
-        v40.i1 = const.load v39;
-        v41.i1 = eq v40 1.i1;
-        br v41 block15 block17;
+        v33.constref<@layout_2> = const.proj v0 0.i256;
+        v34.constref<@layout_1> = const.proj v33 0.i256;
+        v35.constref<i1> = const.proj v34 1.i256;
+        v36.constref<@layout_2> = const.proj v0 0.i256;
+        v37.constref<@layout_1> = const.proj v36 0.i256;
+        v38.constref<i1> = const.proj v37 1.i256;
+        v39.i1 = const.load v38;
+        v40.i1 = eq v39 1.i1;
+        br v40 block15 block17;
 
     block13:
-        jump block2;
+        jump block18;
 
     block14:
         jump block13;
@@ -123,10 +123,13 @@ func private %match_deeply_nested(v0.constref<@layout_3>) -> i8 {
         jump block2;
 
     block16:
-        jump block2;
+        jump block18;
 
     block17:
         jump block16;
+
+    block18:
+        jump block2;
 }
 
 func private %match_nested_tuple(v0.constref<@layout_2>) -> i8 {
