@@ -136,12 +136,16 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
+    // "0123456789abcdef" packed with digit zero in the low byte.
+    let alphabet: u256 = 0x66656463626139383736353433323130
     var remaining = value
     var i = digits
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'a' } }
+        unsafe {
+            *ptr::offset_bytes(data, i) = (alphabet >> (nibble as u256 * 8)).downcast_truncate()
+        }
         remaining >>= 4
     }
     out
@@ -152,12 +156,16 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
+    // "0123456789ABCDEF" packed with digit zero in the low byte.
+    let alphabet: u256 = 0x46454443424139383736353433323130
     var remaining = value
     var i = digits
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'A' } }
+        unsafe {
+            *ptr::offset_bytes(data, i) = (alphabet >> (nibble as u256 * 8)).downcast_truncate()
+        }
         remaining >>= 4
     }
     out
