@@ -12,8 +12,9 @@
 /// hashes it twice). Leaves must not be 64-byte values that could be read
 /// as a pair of internal nodes, or an internal node can be proven as a leaf.
 ///
-/// Every function allocates one 64-byte hashing buffer per call and reuses
+/// Proof traversal allocates one 64-byte hashing buffer per call and reuses
 /// it for every level, so memory cost does not grow with the proof length.
+/// `hash_pair_sorted` uses the compiler's pure word-hashing intrinsic.
 ///
 /// Proofs are read in place from any `ProofNodes` source: `MemSlice<u256>`,
 /// or an ABI `bytes32[]` / `uint256[]` (`DynArray<Bytes32>` /
@@ -71,8 +72,11 @@ unsafe fn dyn_array_words(_ data: *u8, len: usize) -> ref MemSlice<u256> {
 ///
 /// The result does not depend on argument order.
 pub fn hash_pair_sorted(_ a: u256, _ b: u256) -> u256 {
-    let scratch = unsafe { FixedMemBuffer<64>::alloc_uninit() }
-    sorted_into(scratch.ptr(), a, b)
+    if a < b {
+        super::crypto::keccak_words([a, b])
+    } else {
+        super::crypto::keccak_words([b, a])
+    }
 }
 
 /// The root implied by `leaf` and a sorted-pair `proof`:
