@@ -2586,6 +2586,50 @@ pub contract Power {{
     }
 
     #[test]
+    fn small_constant_exponents_use_straight_line_multiplication() {
+        for ty in ["u256", "i256", "u8", "i8"] {
+            for (exponent, products) in [(0, 0), (1, 0), (2, 1), (3, 2), (4, 2)] {
+                let mut db = DriverDataBase::default();
+                let file_url = temp_fixture_url("small_constant_exponent.fe");
+                let file = db.workspace().touch(
+                    &mut db,
+                    file_url,
+                    Some(format!(
+                        r#"
+msg PowerMsg {{
+    #[selector = 1]
+    Power {{ base: {ty} }} -> {ty},
+}}
+pub contract Power {{
+    recv PowerMsg {{
+        Power {{ base }} -> {ty} {{ base ** {exponent} }}
+    }}
+}}
+"#,
+                    )),
+                );
+                let output =
+                    emit_module_sonatina_ir_optimized(&db, db.top_mod(file), OptLevel::O1, None)
+                        .expect("constant exponent should compile");
+                assert!(
+                    !output.contains("phi ") && !output.contains("evm_exp"),
+                    "{ty} ** {exponent} should not retain a power loop or EXP:\n{output}",
+                );
+                let multiply = if ty.starts_with('i') {
+                    " = smulo "
+                } else {
+                    " = umulo "
+                };
+                assert_eq!(
+                    output.matches(multiply).count(),
+                    products,
+                    "{ty} ** {exponent} should use {products} checked products:\n{output}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn optimized_static_contract_return_exposes_a_scratch_allocation() {
         let mut db = DriverDataBase::default();
         let file_url = temp_fixture_url("optimized_static_contract_return.fe");

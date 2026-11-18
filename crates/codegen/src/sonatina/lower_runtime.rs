@@ -6633,6 +6633,29 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             ));
         }
 
+        // Preserve small constant exponents before expanding power into a loop.
+        // At most two checked multiplications suffice for exponents up to four;
+        // unlike general unrolling this does not duplicate a long multiply chain.
+        if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(exp)
+            && let Some(exponent) = immediate_to_u64_index(*imm)
+            && exponent <= 4
+        {
+            return match exponent {
+                0 => Ok(one),
+                1 => Ok(base),
+                _ => {
+                    let square =
+                        self.lower_arith(ArithBinOp::Mul, checked, base, base, ty, signed)?;
+                    match exponent {
+                        2 => Ok(square),
+                        3 => self.lower_arith(ArithBinOp::Mul, checked, square, base, ty, signed),
+                        4 => self.lower_arith(ArithBinOp::Mul, checked, square, square, ty, signed),
+                        _ => unreachable!(),
+                    }
+                }
+            };
+        }
+
         let entry = self
             .fb
             .current_block()
