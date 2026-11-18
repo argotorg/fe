@@ -129,12 +129,24 @@ impl<const D: u256> UFixed<D> {
 
     /// The same number with `E` decimals, rounded down.
     pub const fn rescale<const E: u256>(self) -> UFixed<E> {
-        UFixed { raw: mul_div(self.raw, UFixed<E>::SCALE, Self::SCALE) }
+        // One scale divides the other exactly. The scale ratio is constant,
+        // and multiplying by it overflows exactly when the result does.
+        if E >= D {
+            UFixed { raw: self.raw * (UFixed<E>::SCALE / Self::SCALE) }
+        } else {
+            UFixed { raw: self.raw / (Self::SCALE / UFixed<E>::SCALE) }
+        }
     }
 
     /// The same number with `E` decimals, rounded up.
     pub const fn rescale_up<const E: u256>(self) -> UFixed<E> {
-        UFixed { raw: mul_div_ceil(self.raw, UFixed<E>::SCALE, Self::SCALE) }
+        if E >= D {
+            UFixed { raw: self.raw * (UFixed<E>::SCALE / Self::SCALE) }
+        } else {
+            let divisor = Self::SCALE / UFixed<E>::SCALE
+            // E < D makes divisor >= 10, so rounding up cannot overflow.
+            UFixed { raw: self.raw / divisor + ((self.raw % divisor != 0) as u256) }
+        }
     }
 
     /// The signed number with the same value. Fails if it exceeds `i256`.

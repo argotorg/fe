@@ -1,0 +1,68 @@
+use core::fixed::UFixed
+use core::hint::black_box
+use core::num::{mul_div, mul_div_ceil}
+const DOWN: u256 = UFixed<18>::from_raw(1234567890123456789).rescale<6>().raw()
+const UP: u256 = UFixed<18>::from_raw(1234567890123456789).rescale_up<6>().raw()
+const WIDE: u256 = UFixed<6>::from_raw(123456789).rescale<18>().raw()
+fn check<const D: u256, const E: u256>(_ raw: u256) {
+    let raw = black_box(raw)
+    let x = UFixed<D>::from_raw(raw)
+    assert!(
+        x.rescale<E>().raw() == mul_div(raw, UFixed<E>::SCALE, UFixed<D>::SCALE),
+    )
+    assert!(
+        x.rescale_up<E>().raw() == mul_div_ceil(raw, UFixed<E>::SCALE, UFixed<D>::SCALE),
+    )
+}
+fn pair<const D: u256, const E: u256>() {
+    let limit = if E > D {
+        u256::max() / (UFixed<E>::SCALE / UFixed<D>::SCALE)
+    } else {
+        u256::max()
+    }
+    for raw in [0, 1, 2, 9, 10, 11, limit / 2, limit - 1, limit] {
+        if raw <= limit {
+            check<D, E>(raw)
+        }
+    }
+    if E < D {
+        let factor = UFixed<D>::SCALE / UFixed<E>::SCALE
+        for raw in [factor - 1, factor, factor + 1, factor * (u256::max() / factor)] {
+            check<D, E>(raw)
+        }
+    }
+}
+#[test]
+fn scales_and_boundaries() {
+    assert!(DOWN == 1234567)
+    assert!(UP == 1234568)
+    assert!(WIDE == 123456789000000000000)
+    pair<0, 0>()
+    pair<0, 1>()
+    pair<0, 77>()
+    pair<1, 0>()
+    pair<6, 18>()
+    pair<18, 6>()
+    pair<18, 18>()
+    pair<76, 77>()
+    pair<77, 76>()
+    pair<77, 0>()
+    pair<77, 77>()
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_rescale() {
+    let raw = black_box(u256::max() / 1000000000000 + 1)
+    black_box(UFixed<6>::from_raw(raw).rescale<18>().raw())
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_rescale_up() {
+    let raw = black_box(u256::max() / 1000000000000 + 1)
+    black_box(UFixed<6>::from_raw(raw).rescale_up<18>().raw())
+}
+#[test(should_revert, panic = 0x11)]
+#[arithmetic(unchecked)]
+fn unchecked_caller_keeps_overflow_check() {
+    black_box(
+        UFixed<0>::from_raw(black_box(u256::max())).rescale<1>().raw(),
+    )
+}
