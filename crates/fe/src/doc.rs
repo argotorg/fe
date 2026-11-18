@@ -474,7 +474,10 @@ fn extract_single_file(
     }
 
     let extractor = DocExtractor::new(db).with_include_tests(include_tests);
-    Some(extractor.extract_module(top_mod))
+    let mut index = extractor.extract_module(top_mod);
+    let ingot = top_mod.ingot(db);
+    index.link_trait_impls(trait_impl_links_for_ingot(db, ingot).clone());
+    Some(index)
 }
 
 fn extract_workspace(
