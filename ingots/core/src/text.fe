@@ -491,13 +491,11 @@ pub fn base58(_ data: MemSpan) -> DynString {
     var i = zeros
     while i < len {
         let end = if len - i > 24 { i + 24 } else { len }
-        var chunk: u256 = 0
-        var j = i
-        while j < end {
-            chunk = (chunk << 8) | (data.byte_at(j) as u256)
-            j += 1
-        }
-        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << ((end - i) as u256 * 8), addend: chunk)
+        // The block has 1..24 bytes, all within `data`. Read it once and
+        // move its big-endian value from the high bytes of the padded word.
+        let bits = (end - i) as u256 * 8
+        let chunk = unsafe { ptr::read_padded_word(ptr::offset_bytes(data.ptr(), i), end - i) } >> (256 - bits)
+        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << bits, addend: chunk)
         i = end
     }
     // Every limb but the most significant one has all 10 digits.
@@ -567,28 +565,27 @@ pub fn decode_base58<T: Text>(_ input: T) -> Option<Bytes> {
     // Every limb but the most significant one has all 24 bytes.
     var bytes: usize = 0
     if used > 0 {
-        var top = limbs[used - 1]
-        while top != 0 {
-            bytes += 1
-            top >>= 8
-        }
+        // The top limb is nonzero. Count its significant bytes directly.
+        let top = limbs[used - 1]
+        bytes = (32 - super::num::leading_zeros(top) / 8).downcast_unchecked()
         bytes += (used - 1) * 24
     }
     // The leading `zeros` bytes stay zero.
     let decoded = Bytes::zeroed(zeros + bytes)
     let out = decoded.span().ptr()
-    var pos = zeros + bytes
-    var k: usize = 0
-    while pos > zeros {
-        var limb = limbs[k]
-        var n: u256 = 0
-        while n < 24 && pos > zeros {
-            pos -= 1
-            unsafe { *ptr::offset_bytes(out, pos) = limb.downcast_truncate() }
-            limb >>= 8
-            n += 1
+    if bytes != 0 {
+        // Reuse one word as a big-endian view of each limb, then copy only
+        // its significant bytes. The final limb can be shorter than 24.
+        var scratch = MemBuffer::new(32)
+        var pos = zeros + bytes
+        var k: usize = 0
+        while pos > zeros {
+            let count = if pos - zeros > 24 { 24 } else { pos - zeros }
+            pos -= count
+            scratch.write_word(offset: 0, value: limbs[k])
+            unsafe { ptr::copy(dest: ptr::offset_bytes(out, pos), source: scratch.slice(offset: 32 - count, len: count)) }
+            k += 1
         }
-        k += 1
     }
     Option::Some(decoded)
 }
@@ -608,20 +605,14 @@ fn mul_add(_ limbs: MemArray<u256>, used: usize, base: u256, factor: u256, adden
     k
 }
 
+// `value` is a remainder modulo 58 at the only call site.
 fn base58_digit(_ value: u8) -> u8 {
-    if value < 9 {
-        value + 49
-    } else if value < 17 {
-        value + 56
-    } else if value < 22 {
-        value + 57
-    } else if value < 33 {
-        value + 58
-    } else if value < 44 {
-        value + 64
-    } else {
-        value + 65
-    }
+    // Pack each half of the alphabet with its first digit in the low byte.
+    // value >> 5 is 0 or 1, selecting the second half without a branch.
+    let first: u256 = 0x595857565554535251504e4d4c4b4a4847464544434241393837363534333231
+    let difference: u256 = 0x595857565554292b292738383838383937292b29282828515f5153515751536b
+    let alphabet = first ^ difference.wrapping_mul(value as u256 >> 5)
+    (alphabet >> ((value as u256 & 31) * 8)).downcast_truncate()
 }
 
 // Inverse of `base58_digit`, 58 for a byte outside the alphabet (`0`, `I`,

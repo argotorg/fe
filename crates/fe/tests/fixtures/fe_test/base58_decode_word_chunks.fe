@@ -1,0 +1,162 @@
+use core::abi::{Bytes, DynString}
+use core::ptr::MemBuffer
+use core::text
+
+fn canonical(_ decoded: Bytes) {
+    let encoded = decoded.encoded_span()
+    assert!(encoded.read_word(0) == decoded.len() as u256)
+    for i in decoded.len() + 32 .. encoded.len() {
+        assert!(encoded.byte_at(i) == 0)
+    }
+}
+
+#[test]
+fn decode58_handles_every_limb_tail_and_leading_zero_count() {
+    var data = MemBuffer::new(100)
+    for prefix in 0 .. 4 {
+        for len in 0 .. 75 {
+            for i in 0 .. len + prefix {
+                data[i] = if i < prefix {
+                    0
+                } else {
+                    (i * 73 + 17).downcast_truncate()
+                }
+            }
+            let input = data.slice(offset: 0, len: len + prefix)
+            let encoded = text::base58(input)
+            let result = text::decode_base58(encoded).unwrap()
+            assert!(result.span() == input)
+            canonical(result)
+            assert!(
+                text::decode_base58(encoded.span()).unwrap().span() == input,
+            )
+        }
+    }
+}
+
+#[test]
+fn decode58_counts_every_possible_top_limb_bit() {
+    for bit in 0 .. 192 {
+        let top_len = bit / 8 + 1
+        for lower_limbs in 0 .. 3 {
+            var input = MemBuffer::new(top_len + lower_limbs * 24)
+            input[0] = ((1 as u256) << ((bit % 8) as u256)).downcast_truncate()
+            for i in top_len .. input.len() {
+                input[i] = (i * 37 + 1).downcast_truncate()
+            }
+            let result = text::decode_base58(text::base58(input.span())).unwrap()
+            assert!(result.span() == input.span())
+            canonical(result)
+        }
+    }
+}
+
+#[test]
+fn decode58_preserves_all_zero_inputs() {
+    for len in 0 .. 75 {
+        var input = MemBuffer::new(len)
+        for i in 0 .. len {
+            input[i] = b'1'
+        }
+        let result = text::decode_base58(input.span()).unwrap()
+        assert!(result.len() == len)
+        for i in 0 .. len {
+            assert!(result.byte_at(i) == 0)
+        }
+        canonical(result)
+    }
+}
+
+fn check_vector(_ encoded: DynString, _ hex: DynString) {
+    let result = text::decode_base58(encoded).unwrap()
+    assert!(result == text::decode_hex(hex).unwrap())
+    canonical(result)
+}
+
+#[test]
+fn decode58_matches_independent_vectors() {
+    check_vector(
+        "6HgC8KRBEhXYbF4riJyJFLSHt32XBnGv",
+        "ffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "MnnKvsS2LixkpWBWdtQKDKaeww8H1Rx",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57",
+    )
+    check_vector(
+        "118uJcBywRgR26uXyPp8csFKUDVx9u1",
+        "0000808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "QLbz7JHiBTspS962RLKV8GndWFwiEaqKL",
+        "ffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "2am54YmbSv4D6QfoPoosuPP1YVTu7euAX",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0",
+    )
+    check_vector(
+        "11bsriKUKDvy1s4shuh2dJnCX8AnSGZD",
+        "000080808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "2n1XR4oJkmBdJMxhBGQGb96gQ88xUzxLFyG",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "7z1WvfDq3PBANsUFmfbugDn9Pzdj2NHF5S",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9",
+    )
+    check_vector(
+        "113ewURNXZS5CEoz6oZZgBFUVqxeBYXfCB",
+        "00008080808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "38QCEV3JxdU8LcBi8vBGbMWTneYyJSGaykXWHgSqovg91yHicMSrXuDUawyKPgFFc",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "9NBWfPDisEGu94KSpfa9zwpT5AZ7NUzRVQbqduPALvBkpQrJhAJRggB6MLriyE8N",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f",
+    )
+    check_vector(
+        "114BQtATsgdHLJ1FLxfM85pdFRCWbUzLbgyiVt4XGZJ89nGFJhropcciHUCD8nHM",
+        "0000808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "APfNaWmCGXxjPYJGZwiKpdX3EUk7VxXnyV7eGd74S7ukPHSnf3F7dPU4kqdaB6DuXt",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "dvVPvR59nhbB8ZeQyPFLikxS5PAj7pYT6PAmftCpEukUQGGd6G3ux7uYcneUFAwXm",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78",
+    )
+    check_vector(
+        "11F2xQpmchu96A46K6gFpGHCzdoodCY5W7TLAUNYbfYaZknJ99LqfACdDh2UZLsBV",
+        "000080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "iT2NEvN4jZez6V9DiQVQ5EBarVTHgp6uvK6KVxMk9sVpVMapWtuJFcATaVeRRY3xsNW",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "3oy6LAmFKni9qiP68osCJ3K1fgLqvu6qpAkr8Ad19WPpswgPxJDRriHUvYxUPFYsgpY",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78c1",
+    )
+    check_vector(
+        "1124wda9qvbX8hkxeSt4GPcSXwPTanmvAsVVDaop6U18P9aEvewpZmRcJs1fWdkgVJo",
+        "00008080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+    )
+    check_vector(
+        "HgL4wMZaYouGnRPDjDsuZPBp8kKakqxnMoWDqcpLjsjTGVqYYmdCm24fu6KvuvPbLhansCFEmVoWdvEpwiPrATTwepGhpmZ1msjL",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    )
+    check_vector(
+        "28aKnh6bgQK4nqRGgE72VeLHLuJGpeJhiPBTZCr7YKet9fgMrCyVZt9JyKyDNzThfVLpYjVb3WquMYg1y3Qd2cydDGD4qHSB4pUg",
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78c10a539ce52e77c009529be42d76bf08519ae32c75be075099",
+    )
+    check_vector(
+        "11Rvbm9DngpGc6oZjsAJiZTvoETL7PmXfm6hFN5e8mWpNRqHZkQc722VijsEwnqfj2T4gYawRNaqJ7GeARTp3kDjDf4s74LcvmD",
+        "00008080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+    )
+}
