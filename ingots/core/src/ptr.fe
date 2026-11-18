@@ -1689,7 +1689,7 @@ pub(ingot) fn index_out_of_bounds() -> ! {
 
 // Compare only initialized bytes, including a possibly partial final word.
 #[arithmetic(unchecked)]
-fn bytes_equal(_ a: MemSpan, _ b: MemSpan) -> bool {
+pub(ingot) fn bytes_equal(_ a: MemSpan, _ b: MemSpan) -> bool {
     let len = a.len()
     if len != b.len() {
         return false
