@@ -379,7 +379,7 @@ pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
         return Option::None
     }
     var padding: usize = 0
-    if len > 0 && input.text_byte(len - 1) == 61 {
+    if input.text_byte(len - 1) == 61 {
         padding = if input.text_byte(len - 2) == 61 { 2 } else { 1 }
     }
     let out_len = len / 4 * 3 - padding
