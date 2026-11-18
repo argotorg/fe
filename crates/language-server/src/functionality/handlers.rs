@@ -22,7 +22,7 @@ use resolver::{
     ResolutionHandler, Resolver,
     files::{FilesResolver, FilesResource},
 };
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashSet;
 use url::Url;
 
 use super::{capabilities::server_capabilities, hover::hover_helper};
