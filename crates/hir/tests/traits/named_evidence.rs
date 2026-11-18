@@ -1390,6 +1390,62 @@ fn named_implementations_of_traits_decided_by_presence_are_refused() {
 }
 
 #[test]
+fn one_trait_instance_with_a_length_written_in_two_forms_is_one_method_candidate() {
+    // The ordinary and the chosen implementation name one instance: a method
+    // through an associated type, through a trait argument, and an operator.
+    for source in [
+        r#"
+trait Holds {
+    type Base
+    fn size(self) -> u256
+}
+struct H {}
+impl Holds for H {
+    type Base = [u8; 3]
+    fn size(self) -> u256 { 3 }
+}
+impl Holds for H as Other {
+    type Base = [u8; 3]
+    fn size(self) -> u256 { 4 }
+}
+fn chosen() -> u256 { with (Other) { H {}.size() } }
+"#,
+        r#"
+trait Measure<T> { fn measure(self) -> u256 }
+struct Cell {}
+impl Measure<[u8; 3]> for Cell { fn measure(self) -> u256 { 1 } }
+impl Measure<[u8; 3]> for Cell as Doubled { fn measure(self) -> u256 { 2 } }
+fn chosen() -> u256 { with (Doubled) { Cell {}.measure() } }
+"#,
+        r#"
+use core::ops::Eq
+struct Row<const N: usize> { v: u256 }
+impl Copy for Row<3> {}
+impl Eq for Row<3> { fn eq(self, _ o: Row<3>) -> bool { self.v == o.v } }
+impl Eq for Row<3> as AnyRow { fn eq(self, _ o: Row<3>) -> bool { true } }
+fn chosen(_ a: Row<3>, _ b: Row<3>) -> bool { with (AnyRow) { a == b } }
+"#,
+    ] {
+        let codes = diagnostics(source);
+        assert!(codes.is_empty(), "{source}: {codes:?}");
+    }
+    // `Measure<[u8; 3]>` and `Measure<[u8; 4]>` are two instances: a call that
+    // nothing disambiguates stays ambiguous, with and without a choice.
+    let codes = diagnostics(
+        r#"
+trait Measure<T> { fn measure(self) -> u256 }
+struct Cell {}
+impl Measure<[u8; 3]> for Cell { fn measure(self) -> u256 { 3 } }
+impl Measure<[u8; 4]> for Cell { fn measure(self) -> u256 { 4 } }
+impl Measure<[u8; 3]> for Cell as Three { fn measure(self) -> u256 { 30 } }
+fn outside() -> u256 { Cell {}.measure() }
+fn chosen() -> u256 { with (Three) { Cell {}.measure() } }
+"#,
+    );
+    assert_eq!(codes, vec!["8-0026".to_string(), "8-0026".to_string()]);
+}
+
+#[test]
 fn with_operand_keeps_unambiguous_and_explicit_value_meanings() {
     values(
         r#"

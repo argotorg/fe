@@ -1186,10 +1186,10 @@ pub(crate) fn named_output_mismatch<'db>(
     None
 }
 
-/// `ty` with each constant in it evaluated, so two written forms of one type
-/// (`Arr<{ 100 }>` and `Arr<100>`, or one braced constant written twice)
-/// compare equal.
-fn consts_evaluated<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+/// `value` with each constant in it evaluated, so two written forms of one
+/// type (`Arr<{ 100 }>` and `Arr<100>`, one braced constant written twice, or
+/// an impl header's deferred extent and its value) compare equal.
+pub(crate) fn consts_evaluated<'db, T: TyFoldable<'db>>(db: &'db dyn HirAnalysisDb, value: T) -> T {
     struct Evaluate;
     impl<'db> TyFolder<'db> for Evaluate {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
@@ -1197,7 +1197,7 @@ fn consts_evaluated<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db>
             super::const_ty::normalize_const_tys_for_comparison(db, ty)
         }
     }
-    ty.fold_with(db, &mut Evaluate)
+    value.fold_with(db, &mut Evaluate)
 }
 
 type CanonicalOverlapConstBody<'db> = (

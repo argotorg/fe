@@ -47,6 +47,11 @@ with the list's choices except the opening itself. A call or obligation that
 is decided after the surrounding expression keeps the choices in scope where
 it was written.
 
+Method selection compares trait instances after evaluating their constants.
+A chosen or opened implementation may hold an array length as a value while
+the ordinary implementation still holds it as an expression. Both forms name
+the same method candidate when the lengths agree.
+
 ## Evidence
 
 `Evidence` (`ty::evidence`) is a proof: an implementation with its

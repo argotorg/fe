@@ -529,6 +529,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             })
             .collect();
 
+        let visible = self.merge_equal_instances(visible);
         match visible.len() {
             0 => {
                 if checked.is_empty() {
@@ -669,6 +670,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .map(|cand| (cand, self.check_trait_cand(cand)))
                 .collect(),
         );
+        let checked = self.merge_equal_instances(checked);
         let mut selected = IndexMap::default();
         let mut diagnostic_traits = ThinVec::new();
         for (cand, check) in checked {
@@ -696,6 +698,59 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             candidates,
             diagnostic_traits,
         }
+    }
+
+    /// Rewrites each candidate to the first one that names the same method of
+    /// the same trait instance once constants are evaluated. An
+    /// implementation's header, as candidates are lowered, keeps an array
+    /// length such as the `3` of `[u256; 3]` deferred, while the header of a
+    /// chosen or opened implementation, which `with` adds as an assumption,
+    /// holds its value: the two name one instance. Which implementation
+    /// answers it is decided when the call's goal is solved under the
+    /// choices, not here. Different instances, such as `Get<[u8; 3]>` and
+    /// `Get<[u8; 4]>`, stay apart.
+    fn merge_equal_instances(
+        &self,
+        checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>,
+    ) -> Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> {
+        let cand_of = |check: &TraitCandidateCheck<'db>| match *check {
+            TraitCandidateCheck::Confirmed(cand)
+            | TraitCandidateCheck::NeedsConfirmation(cand)
+            | TraitCandidateCheck::Unsatisfied(cand) => Some(cand),
+            TraitCandidateCheck::Rejected => None,
+        };
+        // Only candidates of one trait method can name one instance.
+        let mut methods = FxHashSet::default();
+        if checked
+            .iter()
+            .filter_map(|(_, check)| cand_of(check))
+            .all(|cand| methods.insert(cand.method))
+        {
+            return checked;
+        }
+        let mut first: IndexMap<TraitMethodCand<'db>, TraitMethodCand<'db>> = IndexMap::default();
+        let mut representative = |cand: TraitMethodCand<'db>| {
+            let key = TraitMethodCand::new(cand.inst.consts_evaluated(self.db), cand.method);
+            *first.entry(key).or_insert(cand)
+        };
+        checked
+            .into_iter()
+            .map(|(assembled, check)| {
+                let check = match check {
+                    TraitCandidateCheck::Confirmed(cand) => {
+                        TraitCandidateCheck::Confirmed(representative(cand))
+                    }
+                    TraitCandidateCheck::NeedsConfirmation(cand) => {
+                        TraitCandidateCheck::NeedsConfirmation(representative(cand))
+                    }
+                    TraitCandidateCheck::Unsatisfied(cand) => {
+                        TraitCandidateCheck::Unsatisfied(representative(cand))
+                    }
+                    TraitCandidateCheck::Rejected => TraitCandidateCheck::Rejected,
+                };
+                (assembled, check)
+            })
+            .collect()
     }
 
     fn prune_inapplicable_trait_checks(

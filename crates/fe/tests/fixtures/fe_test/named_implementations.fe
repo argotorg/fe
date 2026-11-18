@@ -110,3 +110,25 @@ pub fn main() -> i32 {
     exercise()
     0
 }
+
+// An ordinary and a named implementation of one instance that holds an array
+// length: the choice answers a method call and an operator.
+use core::ops::Eq
+trait Measure<T> { fn measure(self) -> u256 }
+struct Cell {}
+impl Measure<[u8; 3]> for Cell { fn measure(self) -> u256 { 1 } }
+impl Measure<[u8; 3]> for Cell as Doubled { fn measure(self) -> u256 { 2 } }
+struct Row<const N: usize> { v: u256 }
+impl Copy for Row<3> {}
+impl Eq for Row<3> { fn eq(self, _ o: Row<3>) -> bool { self.v == o.v } }
+impl Eq for Row<3> as AnyRow { fn eq(self, _ o: Row<3>) -> bool { true } }
+
+#[test]
+fn a_choice_of_an_instance_that_holds_a_length() {
+    assert!(Cell {}.measure() == 1)
+    assert!(with (Doubled) { Cell {}.measure() } == 2)
+    let a = Row<3> { v: 1 }
+    let b = Row<3> { v: 2 }
+    assert!(!(a == b))
+    assert!(with (AnyRow) { a == b })
+}

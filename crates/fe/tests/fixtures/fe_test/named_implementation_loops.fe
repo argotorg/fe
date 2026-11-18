@@ -1,6 +1,6 @@
 // Loops, iterator adapters and generic helpers inside `with` blocks, and the
 // bounds that traits declare on associated types under a choice.
-use core::iter::Collection
+use core::iter::{Collection, Driver, Producer}
 use core::marker::Copy
 use core::ptr::MemVec
 
@@ -154,4 +154,100 @@ fn associated_type_bound_through_a_condition() {
 fn concrete_associated_type_bound_keeps_its_declaration_proof() {
     assert!(Holder {}.cprice() == 100)
     assert!(with (Wholesale) { Holder {}.cprice() } == 100)
+}
+
+// A producer and a driver whose base type holds an array length, in a loop
+// chosen, opened and ordinary.
+struct Prod {}
+impl Copy for Prod {}
+impl Producer for Prod {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    type Out = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn produce(mut self, _ base: [u256; 3], _ s: usize) -> u256 { base[s] }
+}
+impl Producer for Prod as TenfoldProducer {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    type Out = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn produce(mut self, _ base: [u256; 3], _ s: usize) -> u256 { base[s] * 10 }
+}
+
+struct Drv {}
+impl Copy for Drv {}
+impl Driver for Drv {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    shape Step = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn at(self, _ base: [u256; 3], _ s: usize) -> Self::Step<ref> { base[s] }
+}
+impl Driver for Drv as TenfoldDriver {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    shape Step = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn at(self, _ base: [u256; 3], _ s: usize) -> Self::Step<ref> { base[s] * 10 }
+}
+
+#[test]
+fn producer_over_an_array_ordinary() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    for x in xs.by(Prod {}) { sum += x }
+    assert!(sum == 6)
+}
+
+#[test]
+fn producer_over_an_array_chosen() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (TenfoldProducer) { for x in xs.by(Prod {}) { sum += x } }
+    assert!(sum == 60)
+}
+
+#[test]
+fn producer_over_an_array_opened() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (<Prod as Producer>) { for x in xs.by(Prod {}) { sum += x } }
+    assert!(sum == 6)
+}
+
+#[test]
+fn driver_over_an_array_ordinary() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    for x in xs.by(Drv {}) { sum += x }
+    assert!(sum == 6)
+}
+
+#[test]
+fn driver_over_an_array_chosen() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (TenfoldDriver) { for x in xs.by(Drv {}) { sum += x } }
+    assert!(sum == 60)
+}
+
+#[test]
+fn a_method_of_a_chosen_producer_over_an_array() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let s: usize = 1
+    assert!(Prod {}.produce(xs, s) == 2)
+    assert!(with (TenfoldProducer) { Prod {}.produce(xs, s) } == 20)
 }
