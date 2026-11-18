@@ -658,17 +658,7 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
     match matched.len() {
         1 => Selection::Unique(*matched.iter().next().unwrap()),
         0 => Selection::NotFound,
-        _ => match resolve_trait_impl_instance(db, solve_cx.with_choices(None), inst) {
-            Selection::Unique(resolved)
-                if !matches!(
-                    resolved.selected().origin(db),
-                    ImplementorOrigin::Assumption
-                ) =>
-            {
-                Selection::Unique(resolved)
-            }
-            _ => Selection::Ambiguous(matched),
-        },
+        _ => Selection::Ambiguous(matched),
     }
 }
 

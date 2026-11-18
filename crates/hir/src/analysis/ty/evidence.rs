@@ -894,12 +894,37 @@ pub(crate) fn declared_bound_evidence_with_pending<'db>(
 ) -> (EvidenceList<'db>, Vec<GenerationRequest<'db>>) {
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
     let mut pending = Vec::new();
-    let mut declared_proof = |goal| {
-        let outcome = prove_outcome(db, solve_cx, goal);
-        pending.extend(outcome.request());
-        outcome.evidence()
-    };
-    let evidence = EvidenceList::of(
+    let evidence = declared_bound_evidence_from(
+        db,
+        declared,
+        signature,
+        subst,
+        assumptions,
+        |_, goal, direct| {
+            if direct
+                && is_closed_goal(db, goal)
+                && solve_cx.choices().is_none()
+                && !assumptions.list(db).contains(&goal)
+            {
+                return None;
+            }
+            let outcome = prove_outcome(db, solve_cx, goal);
+            pending.extend(outcome.request());
+            outcome.evidence()
+        },
+    );
+    (evidence, pending)
+}
+
+pub(crate) fn declared_bound_evidence_from<'db>(
+    db: &'db dyn HirAnalysisDb,
+    declared: PredicateListId<'db>,
+    signature: PredicateListId<'db>,
+    subst: &CompleteSubst<'db>,
+    assumptions: PredicateListId<'db>,
+    mut declared_proof: impl FnMut(TraitInstId<'db>, TraitInstId<'db>, bool) -> Option<EvidenceId<'db>>,
+) -> EvidenceList<'db> {
+    EvidenceList::of(
         db,
         signature
             .list(db)
@@ -907,15 +932,8 @@ pub(crate) fn declared_bound_evidence_with_pending<'db>(
             .map(|&bound| {
                 let goal = substitute_complete(db, bound, subst).ok()?;
                 let directly_declared = declared.list(db).contains(&bound);
-                if directly_declared
-                    && is_closed_goal(db, goal)
-                    && solve_cx.choices().is_none()
-                    && !assumptions.list(db).contains(&goal)
-                {
-                    return None;
-                }
                 let mut answer = if directly_declared {
-                    Some(declared_proof(goal)?)
+                    Some(declared_proof(bound, goal, true)?)
                 } else {
                     None
                 };
@@ -931,7 +949,7 @@ pub(crate) fn declared_bound_evidence_with_pending<'db>(
                         continue;
                     }
                     let source_goal = substitute_complete(db, root, subst).ok()?;
-                    let proof = declared_proof(source_goal)?;
+                    let proof = declared_proof(root, source_goal, false)?;
                     let projected = implied_bound_evidence(db, proof, goal, assumptions)?;
                     if answer.is_some_and(|previous| previous != projected) {
                         return None;
@@ -941,8 +959,7 @@ pub(crate) fn declared_bound_evidence_with_pending<'db>(
                 answer
             })
             .collect(),
-    );
-    (evidence, pending)
+    )
 }
 
 /// An implementation's implied bound is proved in its declaration context,

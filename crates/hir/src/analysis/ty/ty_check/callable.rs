@@ -24,10 +24,11 @@ use crate::analysis::{
         const_ty::LoweringContext,
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
+        effects::{place_effect_provider_param_index_map, rows::RowPath},
         evidence::{
             BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
-            RowEvidence, UseEvidence, declared_bound_evidence_with_pending, instantiated_selection,
-            prove_outcome,
+            RowEvidence, UseEvidence, declared_bound_evidence_from,
+            declared_bound_evidence_with_pending, instantiated_selection, prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
@@ -36,8 +37,8 @@ use crate::analysis::{
         shape::Shape,
         trait_def::{AssocBinding, ResolvedMethodInstance, TraitInstId},
         trait_resolution::{
-            TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
-            generation::GenerationRequest,
+            PredicateListId, TraitSolveCx, check_trait_inst_wf,
+            constraint::collect_func_decl_constraints, generation::GenerationRequest,
         },
         ty_def::{
             BorrowKind, InvalidCause, Kind, ShapeCon, StringFallback, TyBase, TyData, TyFlags,
@@ -565,7 +566,7 @@ impl<'db> Callable<'db> {
 
     /// Proves, in the checked body's context `solve_cx`, the bounds the
     /// callee's body declares, instantiated for this call, as
-    /// `declared_bound_evidence` records them, and the trait key of each
+    /// `declared_bound_evidence_with_pending` records them, and the trait key of each
     /// component of the callee's rows for the provider that the call's
     /// `effect_args` give that component.
     /// Returns the generation requests the producer met.
@@ -627,14 +628,82 @@ impl<'db> Callable<'db> {
                 })
             })
             .collect();
-        let evidence = evidence.with_rows(db, rows);
+        self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
+        pending
+    }
+
+    /// The callable trait wraps a function item's effects in one row. After
+    /// removing the wrapper, a declared trait-key effect supplies the bound
+    /// on its hidden provider parameter. A nested component keeps its path.
+    pub(crate) fn supply_function_item_effect_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        source: EvidenceList<'db>,
+        assumptions: PredicateListId<'db>,
+    ) {
+        let CallableDef::Func(func) = self.callable_def else {
+            return;
+        };
+        if source.rows(db).is_empty() {
+            return;
+        }
+        let mode = BodyOwner::func_at(db, func, self.mode).mode();
+        let provider_params = place_effect_provider_param_index_map(db, func);
+        let mut args = self.generic_args.clone();
+        let mut proofs = vec![None; args.len()];
+        let mut rows = Vec::new();
+        for row in source.rows(db) {
+            let Some((&entry, steps)) = row.path.steps.split_first() else {
+                continue;
+            };
+            if steps.is_empty() {
+                if let Some(&Some(param)) = provider_params.get(entry as usize) {
+                    args[param] = row.goal.self_ty(db);
+                    proofs[param] = row.proof;
+                }
+            } else {
+                rows.push(RowEvidence {
+                    path: RowPath {
+                        entry,
+                        steps: steps.to_vec(),
+                    },
+                    ..row.clone()
+                });
+            }
+        }
+        let Ok(subst) = CompleteSubst::for_owner(db, func.into(), args) else {
+            return;
+        };
+        let evidence = declared_bound_evidence_from(
+            db,
+            func_declared_bounds(db, func, mode),
+            func_signature(db, func, mode),
+            &subst,
+            assumptions,
+            |root, _, _| match root.self_ty(db).data(db) {
+                TyData::TyParam(param) if param.is_effect_provider() => {
+                    proofs.get(param.idx).copied().flatten()
+                }
+                _ => None,
+            },
+        );
+        self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
+    }
+
+    fn set_bound_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        func: crate::hir_def::Func<'db>,
+        mode: Option<BorrowKind>,
+        entries: EvidenceList<'db>,
+    ) {
         self.use_evidence.bounds = Some(BoundEvidence {
             schema: BoundSchemaId::new(
                 db,
                 BoundOwner::Body(BodyOwner::func_at(db, func, mode)),
                 func_signature(db, func, mode),
             ),
-            entries: evidence,
+            entries,
         });
         pending
     }
