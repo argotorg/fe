@@ -251,9 +251,17 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         goal: TraitInstId<'db>,
     ) -> bool {
+        self.matching_choice(db, goal).is_some()
+    }
+
+    pub(crate) fn matching_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> Option<ImplementorId<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, goal);
         let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
-        table_solver::matching_choice(db, self.choices, goal).is_some()
+        table_solver::matching_choice(db, self.choices, goal)
     }
 
     pub fn choices(self) -> Option<ChosenImpls<'db>> {

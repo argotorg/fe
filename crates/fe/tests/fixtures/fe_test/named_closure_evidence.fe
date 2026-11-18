@@ -31,6 +31,16 @@ fn effect_row() {
     with (Wholesale, Price = Item {}) { assert!(apply(f) == 70) }
 }
 
+#[test]
+fn function_item_effect_row() {
+    let f = charge
+    with (Price = Item {}) {
+        assert!(apply(f) == 100)
+        with (Wholesale) { assert!(apply(f) == 70) }
+        assert!(apply(f) == 100)
+    }
+}
+
 // Both receiver implementations return u256, so the result annotation does
 // not settle the receiver. Its call must keep the choices where it was written.
 struct Deferred<T> { v: T }

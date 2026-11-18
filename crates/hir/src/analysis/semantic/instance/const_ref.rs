@@ -647,7 +647,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             normalize_ty(db, inst, impl_env.normalization_scope(db), assumptions),
         )
     {
-        let target = Callable::new(db, item, DynLazySpan::invalid(), None)
+        let mut target = Callable::new(db, item, DynLazySpan::invalid(), None)
             .expect("a function item is callable");
         let CallableDef::Func(func) = target.callable_def() else {
             unreachable!("a callable function item is a function")
@@ -732,6 +732,9 @@ fn semantic_callee_key_with_assumptions<'db>(
                 Some(specialization)
             })
             .collect();
+        if let Some(evidence) = callable.bound_evidence() {
+            target.supply_function_item_effect_evidence(db, evidence, assumptions);
+        }
         let Some(callee) = semantic_callee_key_with_assumptions(
             db,
             caller,

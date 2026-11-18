@@ -6074,10 +6074,11 @@ fn resolve_ident_expr<'db>(
     let ident = path.ident(db).unwrap();
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
-        // First, surface any ambiguity/conflict in the bucket as a dedicated
-        // name-resolution diagnostic instead of silently degrading to
-        // "undefined variable".
-        for (_, err) in bucket.errors() {
+        // Surface ambiguity or conflict in an expression's name domains.
+        for (domain, err) in bucket.errors() {
+            if !domain.intersects(NameDomain::VALUE | NameDomain::TYPE) {
+                continue;
+            }
             match err {
                 NameResolutionError::Ambiguous(cands) => {
                     let mut cand_spans = Vec::new();

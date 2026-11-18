@@ -650,6 +650,30 @@ fn allowed() {{
 }
 
 #[test]
+fn written_types_refuse_selected_reads_with_unmet_conditions() {
+    for value in ["Item::value()", "bound<Item>()"] {
+        let codes = diagnostics(&format!(
+            r#"
+struct Item {{}}
+trait Missing {{}}
+trait Pick {{ const fn value() -> u256 }}
+impl Pick for Item {{ const fn value() -> u256 {{ 100 }} }}
+impl<T: Missing> Pick for T as NeedsMissing {{ const fn value() -> u256 {{ 7 }} }}
+struct Array<const N: u256> {{}}
+const fn bound<T: Pick>() -> u256 {{ T::value() }}
+fn chosen() {{
+    with (NeedsMissing) {{
+        let x: Array<{{ {value} }}> = Array {{}}
+        let y: Array<100> = x
+    }}
+}}
+"#
+        ));
+        assert!(codes.contains(&"8-0138".to_string()), "{value}: {codes:?}");
+    }
+}
+
+#[test]
 fn a_written_alias_keeps_its_type_constant_provenance() {
     let codes = diagnostics(&format!(
         r#"{PICKS}
@@ -705,6 +729,28 @@ pub fn imported() -> u256 { with (Name) { read() } }
         diagnostics(&hidden).contains(&"2-0003".to_string()),
         "{:?}",
         diagnostics(&hidden)
+    );
+}
+
+#[test]
+fn an_ambiguous_implementation_name_does_not_hide_a_visible_value() {
+    values(
+        r#"
+trait Pick {}
+mod a {
+    use super::Pick
+    pub impl Pick for u8 as K {}
+}
+mod b {
+    use super::Pick
+    pub impl Pick for u16 as K {}
+}
+use a::*
+use b::*
+const K: u256 = 1
+const fn read() -> u256 { K }
+"#,
+        &[("read", 1)],
     );
 }
 
@@ -1257,6 +1303,23 @@ const fn ordinary_mark_first() -> u256 { with (M2, <Box<Item> as Tally>) { <Box<
             ("ordinary_mark_first", 10),
         ],
     );
+}
+
+#[test]
+fn an_ordinary_opening_requires_a_unique_header_before_proving_conditions() {
+    let codes = diagnostics(
+        r#"
+struct Item {}
+struct Box<T> { value: T }
+trait Gate {}
+impl Gate for u8 {}
+trait Pick {}
+impl<T: Gate> Pick for Box<T> {}
+impl Pick for Box<Item> {}
+fn open() { with (<Box<Item> as Pick>) {} }
+"#,
+    );
+    assert_eq!(codes, vec!["6-0003"]);
 }
 
 #[test]
