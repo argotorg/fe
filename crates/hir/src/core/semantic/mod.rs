@@ -927,11 +927,18 @@ pub enum CallSiteKind<'db> {
 }
 
 impl<'db> CallSiteView<'db> {
-    /// Resolve the callee of this call site via type checking.
+    /// Resolve the callee of this call site via type checking. A call of a
+    /// callable value, such as a closure, has none: it runs the method of the
+    /// value's `Fn` trait, which the call doesn't name.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
         use crate::analysis::ty::ty_check::check_func_body;
         let func = self.body.containing_func(db)?;
         let (_, typed_body) = check_func_body(db, func);
+        if matches!(self.kind, CallSiteKind::FnCall)
+            && typed_body.call_receiver(db, self.expr_id).is_some()
+        {
+            return None;
+        }
         typed_body
             .callable_expr(self.expr_id)
             .map(|c| c.callable_def)
