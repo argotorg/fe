@@ -10,6 +10,8 @@ fn relay<T: Pick>() -> u256 {
 trait Price { fn amount(self) -> u256 }
 impl Price for Item { fn amount(self) -> u256 { 100 } }
 impl Price for Item as Wholesale { fn amount(self) -> u256 { 70 } }
+struct NamedPrice {}
+impl Price for NamedPrice as NamedOnlyPrice { fn amount(self) -> u256 { 71 } }
 fn charge() -> u256 uses (p: Price) { p.amount() }
 #[test]
 fn lexical_choice_escapes() {
@@ -39,6 +41,14 @@ fn function_item_effect_row() {
         with (Wholesale) { assert!(apply(f) == 70) }
         assert!(apply(f) == 100)
     }
+    with (NamedOnlyPrice) {
+        with (Price = NamedPrice {}) {
+            assert!(charge() == 71)
+            assert!(apply(f) == 71)
+        }
+    }
+    with (NamedOnlyPrice, Price = NamedPrice {}) { assert!(apply(f) == 71) }
+    with (Price = NamedPrice {}, NamedOnlyPrice) { assert!(apply(|| charge()) == 71) }
 }
 
 // Both receiver implementations return u256, so the result annotation does

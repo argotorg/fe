@@ -1896,6 +1896,7 @@ impl<'db> TyChecker<'db> {
                         locate: callable,
                         codec,
                         codec_choice_failed: false,
+                        codec_choices: None,
                     },
                 );
                 return ExprProp::new(output_ty, lhs.is_mut);
@@ -2259,6 +2260,7 @@ impl<'db> TyChecker<'db> {
         // position in the list's choices and its operand's span.
         let mut opening_conditions: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> =
             Vec::new();
+        let mut providers = Vec::new();
 
         for binding in bindings {
             let named = if binding.key_path.is_none()
@@ -2737,61 +2739,8 @@ impl<'db> TyChecker<'db> {
                 is_mut,
             };
 
-            match binding.key_path {
-                Some(key_path) => {
-                    if let Some(key_path) = key_path.to_opt() {
-                        let folded_provider_ty = self.table.fold_ty(self.db, provided.ty);
-                        match self.validate_keyed_with(
-                            key_path,
-                            ProvidedEffect {
-                                ty: folded_provider_ty,
-                                ..provided
-                            },
-                            binding.value.span(self.body()).into(),
-                        ) {
-                            Ok((witness, commit)) => {
-                                let committed = self.apply_effect_commit_plan(commit);
-                                debug_assert!(
-                                    committed,
-                                    "validated keyed `with` binding commit failed"
-                                );
-                                if !committed {
-                                    let pattern =
-                                        build_barrier_pattern_for_with_key(self, key_path).expect(
-                                            "validated keyed binding should have a barrier pattern",
-                                        );
-                                    self.insert_effect_barrier(key_path, pattern);
-                                    continue;
-                                }
-                                let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                                if let Some((_, first)) =
-                                    keyed.iter().find(|(key, _)| *key == witness.key)
-                                {
-                                    self.push_diag(BodyDiag::DuplicateWithKey {
-                                        primary: span,
-                                        first: first.clone(),
-                                        key: key_path,
-                                    });
-                                    continue;
-                                }
-                                keyed.push((witness.key.clone(), span));
-                                let (scope, assumptions) =
-                                    (self.env.scope(), self.env.assumptions());
-                                self.env.effect_env_mut().insert_witness(
-                                    self.db,
-                                    witness,
-                                    scope,
-                                    assumptions,
-                                );
-                            }
-                            Err(pattern) => self.insert_effect_barrier(key_path, *pattern),
-                        }
-                    }
-                }
-                None => {
-                    self.env.effect_env_mut().insert_unkeyed(provided);
-                }
-            }
+            self.install_with_provider(binding, provided, &mut keyed, false);
+            providers.push((binding, provided));
         }
 
         // An opened implementation's conditions are proved in the frame this
@@ -2891,6 +2840,22 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        // Operand expressions see the effects and choices already in scope
+        // when they are checked. The body gets each checked provider under
+        // the complete set of choices. Rebuild the witnesses without checking
+        // or evaluating the operand expressions again.
+        if providers
+            .iter()
+            .any(|(binding, _)| binding.key_path.is_some())
+        {
+            self.env.effect_env_mut().pop_frame();
+            self.env.effect_env_mut().push_frame();
+            keyed.clear();
+            for (binding, provided) in providers {
+                self.install_with_provider(binding, provided, &mut keyed, true);
+            }
+        }
+
         let result = if result_discarded {
             self.check_expr_with_discarded_result(body_expr, expected)
         } else {
@@ -2899,6 +2864,58 @@ impl<'db> TyChecker<'db> {
         self.env.effect_env_mut().pop_frame();
         self.env.choices = outer_choices;
         result
+    }
+
+    fn install_with_provider(
+        &mut self,
+        binding: &WithBinding<'db>,
+        provider: ProvidedEffect<'db>,
+        keyed: &mut Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)>,
+        emit_diag: bool,
+    ) {
+        let Some(key_path) = binding.key_path else {
+            self.env.effect_env_mut().insert_unkeyed(provider);
+            return;
+        };
+        let Some(key_path) = key_path.to_opt() else {
+            return;
+        };
+        let provider = ProvidedEffect {
+            ty: self.table.fold_ty(self.db, provider.ty),
+            ..provider
+        };
+        let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+        let (witness, commit) =
+            match self.validate_keyed_with(key_path, provider, span.clone(), emit_diag) {
+                Ok(witness) => witness,
+                Err(pattern) => {
+                    self.insert_effect_barrier(key_path, *pattern);
+                    return;
+                }
+            };
+        let committed = self.apply_effect_commit_plan(commit);
+        debug_assert!(committed, "validated keyed `with` binding commit failed");
+        if !committed {
+            let pattern = build_barrier_pattern_for_with_key(self, key_path)
+                .expect("validated keyed binding should have a barrier pattern");
+            self.insert_effect_barrier(key_path, pattern);
+            return;
+        }
+        if let Some((_, first)) = keyed.iter().find(|(key, _)| *key == witness.key) {
+            if emit_diag {
+                self.push_diag(BodyDiag::DuplicateWithKey {
+                    primary: span,
+                    first: first.clone(),
+                    key: key_path,
+                });
+            }
+            return;
+        }
+        keyed.push((witness.key.clone(), span));
+        let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
+        self.env
+            .effect_env_mut()
+            .insert_witness(self.db, witness, scope, assumptions);
     }
 
     /// Whether `value`, what a path names, is a value that a `with` operand
@@ -4198,12 +4215,10 @@ impl<'db> TyChecker<'db> {
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
-        let solve_cx = TraitSolveCx::new(self.db, scope, tier).with_assumptions(assumptions);
-        let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
-            self.db,
-            trait_goal,
-            assumptions,
-        );
+        let solve_cx = TraitSolveCx::new(self.db, scope, tier)
+            .with_assumptions(assumptions)
+            .with_choices(self.env.choices);
+        let query = solve_cx.query(self.db, trait_goal);
         crate::analysis::ty::trait_resolution::is_goal_query_satisfiable(self.db, solve_cx, &query)
     }
 
@@ -4240,6 +4255,7 @@ impl<'db> TyChecker<'db> {
         key_path: PathId<'db>,
         provider: ProvidedEffect<'db>,
         span: DynLazySpan<'db>,
+        emit_diag: bool,
     ) -> Result<
         (
             EffectWitness<'db, ProvidedEffect<'db>>,
@@ -4255,30 +4271,34 @@ impl<'db> TyChecker<'db> {
                 key_path,
             );
             if let Some(EffectPatternKey::Trait(pattern)) = fallback.clone() {
-                self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
-                    primary: span.clone(),
-                    key: key_path,
-                    trait_req: instantiate_trait_self(
-                        self.db,
-                        TraitKeySchema {
-                            def: pattern.def,
-                            args_no_self: pattern.args_no_self.clone(),
-                            assoc_bindings: pattern.assoc_bindings.clone(),
-                        }
-                        .into_trait_inst(self.db),
-                        provider.ty,
-                    ),
-                    given: provider.ty,
-                });
+                if emit_diag {
+                    self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                        primary: span,
+                        key: key_path,
+                        trait_req: instantiate_trait_self(
+                            self.db,
+                            TraitKeySchema {
+                                def: pattern.def,
+                                args_no_self: pattern.args_no_self.clone(),
+                                assoc_bindings: pattern.assoc_bindings.clone(),
+                            }
+                            .into_trait_inst(self.db),
+                            provider.ty,
+                        ),
+                        given: provider.ty,
+                    });
+                }
                 return Err(Box::new(EffectPatternKey::Trait(pattern)));
             }
             let expected = TyId::invalid(self.db, InvalidCause::Other);
-            self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
-                primary: span.clone(),
-                key: key_path,
-                expected,
-                given: provider.ty,
-            });
+            if emit_diag {
+                self.push_diag(BodyDiag::WithEffectTypeUnsatisfied {
+                    primary: span,
+                    key: key_path,
+                    expected,
+                    given: provider.ty,
+                });
+            }
             return Err(Box::new(fallback.unwrap_or(EffectPatternKey::Type(
                 TypePatternKey {
                     carrier: expected,
@@ -4298,7 +4318,7 @@ impl<'db> TyChecker<'db> {
                     scope: self.env.scope(),
                     assumptions: self.env.assumptions(),
                 },
-                emit_diag: true,
+                emit_diag,
                 mode: WitnessBuildMode::ExplicitKeyedWith,
             },
         )
@@ -4435,23 +4455,28 @@ impl<'db> TyChecker<'db> {
                     pattern.clone(),
                 );
                 let trait_goal = instantiate_trait_self(self.db, instantiated, provider.ty);
-                let GoalSatisfiability::Satisfied(solution) = self
-                    .trait_effect_goal_satisfiability_in_scope(
-                        Tier::All,
-                        scope,
-                        assumptions,
-                        trait_goal,
-                    )
-                else {
-                    if emit_diag {
-                        self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
-                            primary: span.clone(),
-                            key: key_path,
-                            trait_req: trait_goal,
-                            given: provider.ty,
-                        });
+                let solution = match self.trait_effect_goal_satisfiability_in_scope(
+                    Tier::All,
+                    scope,
+                    assumptions,
+                    trait_goal,
+                ) {
+                    GoalSatisfiability::Satisfied(solution) => solution,
+                    GoalSatisfiability::NeedsGeneration(request) if emit_diag => {
+                        self.env.generation_demands.request(self.db, request);
+                        return Err(Box::new(EffectPatternKey::Trait(pattern)));
                     }
-                    return Err(Box::new(EffectPatternKey::Trait(pattern)));
+                    _ => {
+                        if emit_diag {
+                            self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
+                                primary: span,
+                                key: key_path,
+                                trait_req: trait_goal,
+                                given: provider.ty,
+                            });
+                        }
+                        return Err(Box::new(EffectPatternKey::Trait(pattern)));
+                    }
                 };
                 let canonical_goal = Canonicalized::new(self.db, trait_goal);
                 let solved = canonical_goal.extract_solution(&mut table, solution);

@@ -6243,6 +6243,7 @@ fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
 #[test]
 fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
     let source = include_str!("fixtures/named_storage_codec_failure.fe");
+    let prerequisite = include_str!("fixtures/named_storage_codec_prerequisite.fe");
     let temp = tempdir().unwrap();
     let path = temp.path().join("codec.fe");
     for (name, source, should_pass) in [
@@ -6255,6 +6256,12 @@ fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
         (
             "unused whole-slot codec",
             source.replace("BITS: u256 = 32", "BITS: u256 = 256"),
+            true,
+        ),
+        ("failed codec prerequisite", prerequisite.to_string(), false),
+        (
+            "satisfied codec prerequisite",
+            format!("{prerequisite}\nimpl Missing for u8 {{}}\n"),
             true,
         ),
     ] {

@@ -192,6 +192,22 @@ impl<'db> ChosenImpls<'db> {
     }
 }
 
+impl<'db> TyFoldable<'db> for ChosenImpls<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self::new(db, self.items(db).clone().fold_with(db, folder))
+    }
+}
+
+impl<'db> TyVisitable<'db> for ChosenImpls<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.items(visitor.db()).as_slice().visit_with(visitor);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TraitSolverQuery<'db> {
     pub goal: TraitInstId<'db>,

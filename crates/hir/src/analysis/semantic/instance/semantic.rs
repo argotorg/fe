@@ -1796,11 +1796,11 @@ impl<'db> SemanticInstance<'db> {
                     SemOrigin::Expr(expr),
                 )
             })?;
-        if calls.codec_choice_failed {
+        let failed_choice = || {
             let goal = calls.codec[0]
                 .trait_inst()
                 .expect("a checked codec has its trait goal");
-            return Err(SemanticDiagnosticId::new(
+            SemanticDiagnosticId::new(
                 db,
                 SemanticDiagnostic::new(
                     self,
@@ -1814,39 +1814,37 @@ impl<'db> SemanticInstance<'db> {
                         origin: SemOrigin::Expr(expr),
                     },
                 ),
-            ));
-        }
-        let finalize = || {
-            let one = |callable: &Callable<'db>| {
-                let mut callable = callable.clone();
-                if callable.evidence().is_none() {
-                    // A codec's layout obligation can first become decidable
-                    // here. Produce its proof once, including prerequisites,
-                    // before applying the ordinary shared call finalizer.
-                    // Existing named or bound proofs are never replaced.
-                    callable.record_evidence(
-                        db,
-                        TraitSolveCx::new(db, self.normalization_scope(db), Tier::All)
-                            .with_assumptions(self.assumptions(db)),
-                    );
-                }
-                let callee = semantic_callee_key_with_effect_providers(
-                    db,
-                    self.key(db),
-                    &callable,
-                    &[],
-                    &[],
-                )?
-                .ok_or(MethodArgMapError::MissingBody)?;
-                if !callee.concrete_dispatch {
-                    return Err(MethodArgMapError::MissingBody);
-                }
-                Ok(callee.key)
-            };
-            Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+            )
         };
-        finalize()
-            .map_err(|error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr)))
+        if calls.codec_choice_failed {
+            return Err(failed_choice());
+        }
+        let call_error = |error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr));
+        let one = |callable: &Callable<'db>| {
+            let mut callable = callable.clone();
+            if callable.evidence().is_none() {
+                // Specialization supplies concrete arguments for the
+                // deferred proof. Its lexical choices still apply.
+                let outcome = callable.record_evidence(
+                    db,
+                    TraitSolveCx::new(db, self.normalization_scope(db), Tier::All)
+                        .with_assumptions(self.assumptions(db))
+                        .with_choices(calls.codec_choices),
+                );
+                if outcome.evidence().is_none() && calls.codec_choices.is_some() {
+                    return Err(failed_choice());
+                }
+            }
+            let callee =
+                semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
+                    .map_err(call_error)?
+                    .ok_or_else(|| call_error(MethodArgMapError::MissingBody))?;
+            if !callee.concrete_dispatch {
+                return Err(call_error(MethodArgMapError::MissingBody));
+            }
+            Ok(callee.key)
+        };
+        Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
     }
 
     /// How `ty` packs its elements into lanes when its elements are places

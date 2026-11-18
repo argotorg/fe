@@ -43,10 +43,20 @@ impl Derive<RowScore> for RowProvider {
 fn row_charge() -> u256 uses (p: RowScore) { p.row_score() }
 fn row_apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
 
+trait LocalPrice { fn price(self) -> u256 }
+struct LocalItem {}
+impl LocalPrice for LocalItem as LocalRate { fn price(self) -> u256 { 7 } }
+fn price() -> u256 uses (p: LocalPrice) { p.price() }
+
 #[test]
 fn generated_choice_fills_a_deferred_closure_effect_row() {
     let ordinary = || row_charge()
     with (RowScore = Pair { a: 0, b: 0 }) { assert!(row_apply(ordinary) == 100) }
     let generated = || row_charge()
     with (RowProvider, RowScore = Pair { a: 0, b: 0 }) { assert!(row_apply(generated) == 42) }
+    let reversed = || row_charge()
+    with (RowScore = Pair { a: 0, b: 0 }, RowProvider, LocalPrice = LocalItem {}, LocalRate) {
+        assert!(row_apply(reversed) == 42)
+        assert!(price() == 7)
+    }
 }

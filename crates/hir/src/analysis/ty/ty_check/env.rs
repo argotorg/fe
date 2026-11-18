@@ -1793,6 +1793,7 @@ impl<'db> TyCheckEnv<'db> {
             let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
             let mut codec_choice_failed = false;
             let mut pending = false;
+            let mut codec_deferred = false;
             for (index, callable) in calls.iter_mut().enumerate() {
                 *callable = callable.clone().fold_with(self.db, &mut prober);
                 let outcome = callable.record_evidence(self.db, solve_cx);
@@ -1803,6 +1804,8 @@ impl<'db> TyCheckEnv<'db> {
                 codec_choice_failed |= index > 0
                     && solve_cx.choices().is_some()
                     && matches!(outcome, super::super::evidence::ProofOutcome::Unavailable);
+                codec_deferred |=
+                    index > 0 && matches!(outcome, super::super::evidence::ProofOutcome::Deferred);
                 // A storage entry's calls pass no effect arguments.
                 let requests = callable.record_bound_evidence(self.db, solve_cx, &[]);
                 pending |= !requests.is_empty();
@@ -1810,6 +1813,11 @@ impl<'db> TyCheckEnv<'db> {
                 callable.qualify_evidence(self.db, self.owner);
             }
             calls.codec_choice_failed = codec_choice_failed;
+            if codec_deferred {
+                calls.codec_choices = solve_cx
+                    .choices()
+                    .map(|choices| choices.fold_with(self.db, &mut prober));
+            }
             if pending {
                 diags.push(pending_proof(expr.span(self.body).into()));
                 continue;
