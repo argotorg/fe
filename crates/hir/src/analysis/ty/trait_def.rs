@@ -1334,10 +1334,8 @@ fn same_overlap_const<'db>(
         let mut evidence = UseEvidence::default();
         evidence.record_dispatch(goal, Some(proof));
         let mut const_ref = ConstRef::TraitConst { use_, evidence };
-        if !const_ref
-            .record_bound_evidence(db, Some(choices))
-            .is_empty()
-        {
+        let (missing, requests) = const_ref.record_bound_evidence(db, Some(choices));
+        if !missing.is_empty() || !requests.is_empty() {
             return None;
         }
         resolve_semantic_const_ref_with_policy(

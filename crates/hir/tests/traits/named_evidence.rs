@@ -651,16 +651,25 @@ fn allowed() {{
 
 #[test]
 fn written_types_refuse_selected_reads_with_unmet_conditions() {
-    for value in ["Item::value()", "bound<Item>()"] {
-        let codes = diagnostics(&format!(
+    for value in [
+        "Item::value()",
+        "bound<Item>()",
+        "<Box<Item> as Total>::total()",
+        "bound_total<Box<Item>>()",
+    ] {
+        let source = format!(
             r#"
 struct Item {{}}
+struct Box<T> {{ value: T }}
 trait Missing {{}}
 trait Pick {{ const fn value() -> u256 }}
 impl Pick for Item {{ const fn value() -> u256 {{ 100 }} }}
 impl<T: Missing> Pick for T as NeedsMissing {{ const fn value() -> u256 {{ 7 }} }}
+trait Total {{ const fn total() -> u256 }}
+impl<T: Pick> Total for Box<T> {{ const fn total() -> u256 {{ T::value() }} }}
 struct Array<const N: u256> {{}}
 const fn bound<T: Pick>() -> u256 {{ T::value() }}
+const fn bound_total<T: Total>() -> u256 {{ T::total() }}
 fn chosen() {{
     with (NeedsMissing) {{
         let x: Array<{{ {value} }}> = Array {{}}
@@ -668,8 +677,10 @@ fn chosen() {{
     }}
 }}
 "#
-        ));
+        );
+        let codes = diagnostics(&source);
         assert!(codes.contains(&"8-0138".to_string()), "{value}: {codes:?}");
+        assert!(diagnostics(&source.replace("with (NeedsMissing) ", "")).is_empty());
     }
 }
 

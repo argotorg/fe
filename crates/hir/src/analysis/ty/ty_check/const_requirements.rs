@@ -2958,7 +2958,6 @@ fn type_choice_read<'db>(
     use crate::analysis::ty::{
         const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
         evidence::{ProofOutcome, prove_outcome},
-        trait_def::ImplementorOrigin,
         visitor::{TyVisitable, TyVisitor, walk_const_ty},
     };
     struct Reads<'db, 'a> {
@@ -2981,14 +2980,7 @@ fn type_choice_read<'db>(
             }
             let outcome = prove(db);
             self.demands.requests(db, outcome.request());
-            if outcome
-                .evidence()
-                .is_some_and(|proof| proof.has_named_impl(db))
-                || cx.matching_choice(db, goal).is_some_and(|choice| {
-                    matches!(choice.origin(db), ImplementorOrigin::Hir(item)
-                        if item.selection_name(db).is_some())
-                })
-            {
+            if outcome.reads_named_choice(db, cx, goal) {
                 self.found = Some(goal);
             }
         }
@@ -3023,6 +3015,11 @@ fn type_choice_read<'db>(
                         typed.call_effect_args(expr).unwrap_or(&[]).to_vec(),
                     );
                     let requests = callable.record_bound_evidence(self.db, cx, &effect_args);
+                    let unavailable = if requests.is_empty() {
+                        ProofOutcome::Unavailable
+                    } else {
+                        ProofOutcome::Deferred
+                    };
                     self.demands.requests(self.db, requests);
                     if let (CallableDef::Func(func), Some(proofs)) =
                         (callable.callable_def(), callable.bound_evidence())
@@ -3041,7 +3038,7 @@ fn type_choice_read<'db>(
                                 self.goal_in(cx, goal, |db| {
                                     proofs
                                         .get(db, index)
-                                        .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+                                        .map_or(unavailable, ProofOutcome::Proven)
                                 });
                             }
                         }

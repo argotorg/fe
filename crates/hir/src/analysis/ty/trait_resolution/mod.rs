@@ -90,6 +90,11 @@ impl<'db> TyFoldable<'db> for ChosenImpl<'db> {
         }
     }
 }
+fn is_named<'db>(db: &'db dyn HirAnalysisDb, implementation: ImplementorId<'db>) -> bool {
+    matches!(implementation.origin(db), super::trait_def::ImplementorOrigin::Hir(item)
+        if item.selection_name(db).is_some())
+}
+
 impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
     fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
         if let Some(applied) = self.applied {
@@ -330,14 +335,40 @@ impl<'db> TraitSolveCx<'db> {
         self.matching_choice(db, goal).is_some()
     }
 
-    pub(crate) fn matching_choice(
+    fn matching_choice(
         self,
         db: &'db dyn HirAnalysisDb,
         goal: TraitInstId<'db>,
-    ) -> Option<ImplementorId<'db>> {
+    ) -> Option<table_solver::ChoiceMatch<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, goal);
         let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
         table_solver::matching_choice(db, self.choices, goal)
+    }
+
+    pub(crate) fn matching_named_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> bool {
+        matches!(
+            self.matching_choice(db, goal),
+            Some(table_solver::ChoiceMatch::Implementation(choice))
+                if is_named(db, choice.template)
+        )
+    }
+
+    /// Remove named overrides while retaining ordinary openings in lexical order.
+    pub(crate) fn without_named_choices(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        let choices = self.choices?.items(db);
+        let ordinary = choices
+            .iter()
+            .copied()
+            .filter(|choice| !is_named(db, choice.template))
+            .collect::<Vec<_>>();
+        (ordinary.len() != choices.len()).then(|| {
+            let retained = (!ordinary.is_empty()).then(|| ChosenImpls::new(db, ordinary));
+            self.with_choices(retained)
+        })
     }
 
     pub fn choices(self) -> Option<ChosenImpls<'db>> {
