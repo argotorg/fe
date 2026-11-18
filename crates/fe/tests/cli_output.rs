@@ -5875,6 +5875,27 @@ fn named_storage_late_codec_uses_declared_bound_evidence() {
     let applied = include_str!("fixtures/named_storage_codec_applied_choice.fe");
     let stronger = include_str!("fixtures/named_storage_codec_stronger_bound.fe");
     let projected = include_str!("fixtures/named_storage_codec_projected_bound.fe");
+    let projected_stronger = projected
+        .replace("trait Gate {", "trait Gate {\n    type Tag")
+        .replace("trait Missing {}\n", "")
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("impl Gate for u8 {", "impl Gate for u8 {\n    type Tag = u8")
+        .replace(
+            "impl<T: Missing> Gate for T as Encoded {",
+            "impl Gate for u8 as Encoded {\n    type Tag = u8",
+        )
+        .replace("Encoded<u8>", "Encoded")
+        .replace(
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate",
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate<Tag = u8>",
+        );
+    let blanket = stronger
+        .replace("impl Gate for u8 {", "impl<T> Gate for T {")
+        .replace(".1 == 6", ".1 == 7");
+    let blanket_known_key = blanket.replace(
+        "fn write<K, T: Gate<Tag = u8>>(array: mut SolArray<Elem<K, T>>)",
+        "fn write<T: Gate<Tag = u8>>(array: mut SolArray<Elem<u8, T>>)",
+    );
     let temp = tempdir().unwrap();
     for (name, source, expected) in [
         ("distinct", source, "2 passed; 0 failed"),
@@ -5882,6 +5903,17 @@ fn named_storage_late_codec_uses_declared_bound_evidence() {
         ("applied", applied, "1 passed; 0 failed"),
         ("stronger_bound", stronger, "2 passed; 0 failed"),
         ("projected_bound", projected, "2 passed; 0 failed"),
+        (
+            "stronger_projected_bound",
+            projected_stronger.as_str(),
+            "2 passed; 0 failed",
+        ),
+        ("blanket_impl", blanket.as_str(), "2 passed; 0 failed"),
+        (
+            "blanket_impl_known_key",
+            blanket_known_key.as_str(),
+            "2 passed; 0 failed",
+        ),
     ] {
         let path = temp.path().join(format!("{name}.fe"));
         fs::write(&path, source).unwrap();

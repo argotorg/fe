@@ -205,17 +205,24 @@ pub(crate) fn assumption_matcher<'db>(
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
     let normalized_goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
     move |assumption| {
-        // An exact declared predicate already proves the use. Normalization
-        // may resolve a projection that this slot still names symbolically.
-        assumption == goal
-            || assumption_answers(
-                db,
-                &mut PersistentUnificationTable::new(db),
-                assumption,
-                normalized_goal,
-                scope,
-                assumptions,
-            )
+        if assumption == goal {
+            return true;
+        }
+        // A stronger predicate can name the same symbolic projection. Keep
+        // that shared head while checking mode and the required equalities.
+        let goal = if assumption.def(db) == goal.def(db) && assumption.args(db) == goal.args(db) {
+            goal
+        } else {
+            normalized_goal
+        };
+        assumption_answers(
+            db,
+            &mut PersistentUnificationTable::new(db),
+            assumption,
+            goal,
+            scope,
+            assumptions,
+        )
     }
 }
 

@@ -364,12 +364,27 @@ impl<'db> DeferredProofBounds<'db> {
             .list(db)
             .iter()
             .zip(self.applied_slots.list(db));
-        let source_answers =
-            assumption_matcher(db, cx.with_assumptions(self.source_slots), self.source_goal);
+        let source_cx = cx
+            .with_assumptions(self.source_slots)
+            .with_choices(self.source_choices);
+        let source_answers = assumption_matcher(db, source_cx, self.source_goal);
         let applied_answers = assumption_matcher(db, cx, goal);
         let mut answer = None;
         for (index, (&source, &applied)) in matching.enumerate() {
             if source_answers(source) && applied_answers(applied) {
+                // Exact declared predicates have priority in proof production.
+                // Otherwise a stronger slot is used only when the source
+                // proof did not already select an implementation.
+                if answer.is_none()
+                    && !self.source_slots.list(db).contains(&self.source_goal)
+                    && matches!(
+                        resolve_trait_impl_instance(db, source_cx, self.source_goal),
+                        Selection::Unique(resolved)
+                            if resolved.selected().origin(db) != ImplementorOrigin::Assumption
+                    )
+                {
+                    return Ok(None);
+                }
                 let proof = self.entries.get(db, index).ok_or(())?;
                 if answer.is_some_and(|other| other != proof) {
                     return Err(());
