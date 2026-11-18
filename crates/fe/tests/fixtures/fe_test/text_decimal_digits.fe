@@ -1,0 +1,67 @@
+use core::abi::DynString
+use core::hint::black_box
+use core::num::IntDowncast
+use core::ptr
+use core::text
+
+// Independent reference: count decimal digits by repeated division.
+fn reference_decimal(_ value: u256) -> DynString {
+    var digits: usize = 1
+    var rest = value / 10
+    while rest != 0 {
+        digits += 1
+        rest /= 10
+    }
+    let out = DynString::zeroed(digits)
+    var remaining = value
+    var i = digits
+    while i > 0 {
+        i -= 1
+        unsafe {
+            *ptr::offset_bytes(out.span().ptr(), i) = ((remaining % 10) + 48).downcast_truncate()
+        }
+        remaining /= 10
+    }
+    out
+}
+fn check_decimal(_ value: u256) {
+    let value = black_box(value)
+    let result = text::decimal(value)
+    assert!(result == reference_decimal(value))
+    assert!(text::parse_uint(result).unwrap() == value)
+}
+// Powers of ten and two partition u256 into intervals with constant
+// decimal length and bit length. Check both sides of every boundary.
+#[test]
+fn decimal_thresholds() {
+    check_decimal(0)
+    check_decimal(u256::max())
+    var power: u256 = 1
+    for n in 0 .. 78 {
+        check_decimal(power - 1)
+        check_decimal(power)
+        check_decimal(power + 1)
+        if n < 77 { power *= 10 }
+    }
+}
+#[test]
+fn binary_thresholds() {
+    for n in 0 .. 256 {
+        let value: u256 = 1 << (n as u256)
+        check_decimal(value - 1)
+        check_decimal(value)
+        check_decimal(value + 1)
+    }
+}
+
+#[test]
+fn small_values_and_mixed_words() {
+    for value in 0 .. 100 {
+        check_decimal(value as u256)
+    }
+    var value: u256 = 123456789
+    for i in 0 .. 100 {
+        value = value.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+        check_decimal(value)
+    }
+}
