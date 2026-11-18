@@ -10,6 +10,19 @@ pub fn errno_location() -> *i32 {
     unsafe { __error() }
 }
 
+// `errno` values.
+pub const EAGAIN: i32 = 35
+pub const EINPROGRESS: i32 = 36
+pub const ECONNREFUSED: i32 = 61
+pub const ECONNRESET: i32 = 54
+pub const ECONNABORTED: i32 = 53
+pub const ENOTCONN: i32 = 57
+pub const EADDRINUSE: i32 = 48
+pub const EADDRNOTAVAIL: i32 = 49
+pub const ETIMEDOUT: i32 = 60
+pub const ENETUNREACH: i32 = 51
+pub const EHOSTUNREACH: i32 = 65
+
 // `struct stat` and `struct dirent`.
 pub fn stat_mode(_ stat: MemSpan) -> u32 {
     stat.read_le<u16>(4) as u32
@@ -50,7 +63,14 @@ pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
 
 // `open` flags.
 pub const O_CREAT: i32 = 0x200
+pub const O_EXCL: i32 = 0x800
 pub const O_TRUNC: i32 = 0x400
+pub const O_APPEND: i32 = 0x8
+pub const O_CLOEXEC: i32 = 0x1000000
+
+// `fcntl`'s command to copy a descriptor to the lowest free number from its
+// argument on, close-on-exec.
+pub const F_DUPFD_CLOEXEC: i32 = 67
 
 // The bytes a write to a pipe that `poll` finds writable takes at once.
 pub const PIPE_BUF: usize = 512
