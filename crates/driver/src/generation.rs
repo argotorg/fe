@@ -1,7 +1,7 @@
-//! Generation for derive headers: finds the headers of a source file,
-//! evaluates each provider at compile time and admits the generated items
-//! into one prepared view of the file, which checks, builds and the language
-//! server read in place of the written file.
+//! Generation for derive headers: finds the headers of a source file or of a
+//! package with its dependencies, evaluates each provider at compile time
+//! and admits the generated items into one prepared view, which checks, builds
+//! and the language server read in place of the written file.
 use crate::DriverDataBase;
 use common::{InputDb, file::File, ingot::IngotKind};
 use hir::{
@@ -256,13 +256,13 @@ fn prepare_file_within(
     };
     // A standalone file has no dependencies whose output could be read, so the
     // authored view shows its openings.
-    let Some(scan) = scan_file(db, file, syntax)? else {
+    let Some(scan) = scan_file(db, file, syntax, true)? else {
         return Ok(None);
     };
     // The one view every provider is admitted and evaluated in: the authored
     // text, with the implementation headers an author wrote counted as facts.
     let basis = ViewBasis::Standalone(file);
-    let input_db = input_view(db, &basis);
+    let input_db = input_view(db, &basis, &[]);
     let db = &input_db;
     let file = db
         .workspace()
@@ -282,9 +282,218 @@ fn prepare_file_within(
             standalone_root: Some(root_range),
             max_rounds,
         },
+        Vec::new(),
         &[found],
     )
-    .map(Some)
+    .map(|(output, _)| Some(output))
+}
+
+/// One ingot to prepare: its authored source files and the ingots it depends
+/// on (directly or not) among the ones to prepare.
+struct IngotPlan {
+    files: Vec<url::Url>,
+    /// Indices into the plan list, ascending. Dependencies come first.
+    dependencies: Vec<usize>,
+}
+
+/// The ingots containing `roots` and the ingots they depend on, dependencies
+/// first. The builtin libraries carry no generation requests; standalone files
+/// are prepared one at a time by `prepare_file`.
+fn plan_ingots(db: &DriverDataBase, roots: &[url::Url]) -> Vec<IngotPlan> {
+    use hir::hir_def::HirIngot;
+    fn visit<'db>(
+        db: &'db DriverDataBase,
+        ingot: common::ingot::Ingot<'db>,
+        index: &mut std::collections::HashMap<url::Url, usize>,
+        in_progress: &mut std::collections::HashSet<url::Url>,
+        plans: &mut Vec<IngotPlan>,
+    ) -> Option<usize> {
+        if matches!(
+            ingot.kind(db),
+            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
+        ) {
+            return None;
+        }
+        let base = ingot.base(db).clone();
+        if let Some(&done) = index.get(&base) {
+            return Some(done);
+        }
+        // Dependency cycles are refused when the workspace is resolved; do not
+        // follow one here.
+        if !in_progress.insert(base.clone()) {
+            return None;
+        }
+        let mut dependencies = std::collections::BTreeSet::new();
+        for (_, dependency) in ingot.resolved_external_ingots(db).iter() {
+            if let Some(done) = visit(db, *dependency, index, in_progress, plans) {
+                dependencies.insert(done);
+                dependencies.extend(plans[done].dependencies.iter().copied());
+            }
+        }
+        let files = ingot
+            .files(db)
+            .iter()
+            .filter(|(_, file)| matches!(file.kind(db), Some(common::file::IngotFileKind::Source)))
+            .map(|(url, _)| url.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        plans.push(IngotPlan {
+            files,
+            dependencies: dependencies.into_iter().collect(),
+        });
+        let done = plans.len() - 1;
+        index.insert(base, done);
+        Some(done)
+    }
+    let mut index = std::collections::HashMap::new();
+    let mut in_progress = std::collections::HashSet::new();
+    let mut plans = Vec::new();
+    for root in roots {
+        if let Some(ingot) = db.workspace().containing_ingot(db, root.clone()) {
+            visit(db, ingot, &mut index, &mut in_progress, &mut plans);
+        }
+    }
+    plans
+}
+
+/// Prepare every authored request of the given ingots and of the ingots they
+/// depend on, one ingot at a time, dependencies first. Each ingot is prepared
+/// once, in a view that holds the sealed output of the ingots it depends on as
+/// ordinary code, and its providers read nothing else that generation
+/// produced. The authored database is unchanged, also on failure. `None`
+/// means there is nothing to generate, so consumers keep using the authored
+/// view.
+///
+/// Requests are evaluated against authored input exactly as for a standalone
+/// file; scoped openings use the same dependency frontier. Output diagnostics
+/// stay in the returned view, where each consumer reports them with their own
+/// spans, instead of being collapsed into one preparation error.
+pub fn prepare_ingots(
+    db: &DriverDataBase,
+    roots: &[url::Url],
+) -> Result<Option<DriverDataBase>, GenerationError> {
+    let Some(first) = roots.first() else {
+        return Ok(None);
+    };
+    if !db.generation_inputs().functions(db).is_empty()
+        || !db.generation_inputs().requests(db).is_empty()
+    {
+        return Err(GenerationError {
+            file: first.clone(),
+            range: parser::TextRange::empty(0.into()),
+            cause: "generation requires the authored input view; output is checked once".into(),
+        });
+    }
+    let plans = plan_ingots(db, roots);
+    // The sealed output of each prepared ingot, by its index in `plans`. A
+    // seal lasts for this preparation only: it is the output of the ingot's
+    // text, of the seals of its dependencies and of the settings the database
+    // holds now, and none of these is recorded with it. A seal kept for a
+    // later call would need a key that holds all of them, such as the hashes of
+    // the files, the keys of the dependencies' seals and the settings.
+    let mut seals: Vec<Option<Vec<common::generation::FrozenGenerationRequest>>> =
+        vec![None; plans.len()];
+    let mut last = None;
+    for (index, plan) in plans.iter().enumerate() {
+        // A first look at the text decides which ingots can need preparing
+        // before any view is copied.
+        let mut syntaxes = Vec::new();
+        for url in &plan.files {
+            let file = db
+                .workspace()
+                .get(db, url)
+                .expect("a planned ingot file is in the database");
+            if let Some(syntax) = scan_syntax(url, file.text(db))? {
+                syntaxes.push((url.clone(), syntax));
+            }
+        }
+        if syntaxes.is_empty() {
+            continue;
+        }
+        let mut sealed = Vec::new();
+        for &dependency in &plan.dependencies {
+            if let Some(requests) = &seals[dependency] {
+                sealed.extend(requests.iter().cloned());
+            }
+        }
+        // The one view this ingot's providers are admitted and evaluated in:
+        // authored text, the sealed output of its dependencies, and the
+        // implementation headers an author wrote counted as facts. The `with`
+        // blocks that need a provider are found in it too, since a block can
+        // name what a dependency generated. Without a sealed dependency and
+        // without a request of its own, the authored view shows the same
+        // blocks and no copy is made until a block needs preparing.
+        let wants_view =
+            !sealed.is_empty() || syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
+        let mut input_db = wants_view.then(|| input_view(db, &ViewBasis::Package, &sealed));
+        let mut scans = Vec::new();
+        for (url, syntax) in syntaxes {
+            let scanned_in = input_db.as_ref().unwrap_or(db);
+            let file = scanned_in
+                .workspace()
+                .get(scanned_in, &url)
+                .expect("the view holds every authored file");
+            if let Some(scan) = scan_file(scanned_in, file, syntax, false)? {
+                scans.push((url, scan));
+            }
+        }
+        if scans.is_empty() {
+            continue;
+        }
+        let input_db = input_db
+            .take()
+            .unwrap_or_else(|| input_view(db, &ViewBasis::Package, &sealed));
+        let view = &input_db;
+        let mut found_requests = Vec::new();
+        for (url, scan) in scans {
+            let file = view
+                .workspace()
+                .get(view, &url)
+                .expect("the input view holds every authored file");
+            found_requests.push(file_requests(view, file, scan)?);
+        }
+        let (output, own) = admit_requests(
+            view,
+            &Transaction {
+                basis: ViewBasis::Package,
+                modules: &plan.files,
+                standalone_root: None,
+                max_rounds: MAX_PREPARATION_ROUNDS,
+            },
+            sealed,
+            &found_requests,
+        )?;
+        seals[index] = Some(own);
+        last = Some(output);
+    }
+    // No ingot needed preparing: consumers keep using the authored view.
+    let Some(output) = last else {
+        return Ok(None);
+    };
+    let total = seals.iter().flatten().map(Vec::len).sum::<usize>();
+    // The last view holds the output of its own ingot and of the ones it
+    // depends on. Other ingots (several roots) need a view of everything.
+    if output.generation_inputs().requests(&output).len() == total {
+        return Ok(Some(output));
+    }
+    let mut everything = Vec::new();
+    for requests in seals.iter().flatten() {
+        everything.extend(requests.iter().cloned());
+    }
+    Ok(Some(prepared_view(db, &ViewBasis::Package, &everything)))
+}
+
+/// Replace an authored database with the prepared view of `roots` when they
+/// request generation, so every later consumer reads the generated program.
+pub fn prepare_ingots_in_place(
+    db: &mut DriverDataBase,
+    roots: &[url::Url],
+) -> Result<(), GenerationError> {
+    if let Some(prepared) = prepare_ingots(db, roots)? {
+        *db = prepared;
+    }
+    Ok(())
 }
 
 /// What a first look at the text of an authored file finds.
@@ -383,6 +592,7 @@ fn scan_file(
     db: &DriverDataBase,
     file: File,
     syntax: FileSyntax,
+    standalone_only: bool,
 ) -> Result<Option<FileScan>, GenerationError> {
     analyze_type_definitions_first(db, db.top_mod(file));
     // Ordinary lexical implementation choices do not require preparation or
@@ -396,9 +606,10 @@ fn scan_file(
     if !syntax.has_requests && !has_scoped_opening {
         return Ok(None);
     }
-    if file
-        .containing_ingot(db)
-        .is_none_or(|ingot| ingot.kind(db) != IngotKind::StandAlone)
+    if standalone_only
+        && file
+            .containing_ingot(db)
+            .is_none_or(|ingot| ingot.kind(db) != IngotKind::StandAlone)
     {
         return Err(GenerationError {
             file: file.url(db).expect("indexed generation input"),
@@ -611,6 +822,8 @@ fn header_provider_ty<'db>(
 enum ViewBasis {
     /// Only the one standalone file, over the builtin libraries.
     Standalone(File),
+    /// Every authored input of the database, including dependencies.
+    Package,
 }
 
 /// The most views one transaction builds. The providers of the derive headers
@@ -631,24 +844,35 @@ struct Transaction<'a> {
     max_rounds: usize,
 }
 
-/// One preparation transaction over its modules. `authored` are the requests
-/// the modules write. The providers of the derive headers of every file run
-/// first, and every view holds their output; each round then discovers scoped
-/// demands in the output view and serves them. Every provider, whichever
+/// One preparation transaction over its modules. `sealed` is the output of the
+/// ingots the modules depend on, already prepared and part of every view;
+/// `authored` are the requests the modules write. The providers of the derive
+/// headers of every file run first, and every view holds their output; each
+/// round then discovers scoped demands in the output view and serves them.
+/// Every provider, whichever
 /// channel names it, is admitted and evaluated in the input view `db`, so the
 /// order of the channels decides only which refusal is reported first. A
 /// standalone transaction also admits the whole output once, as before; a
 /// package view is returned with its ordinary diagnostics for consumers to
-/// report. The result is the output view.
+/// report. The result is the output view and the requests the transaction
+/// added to `sealed`.
 fn admit_requests(
     db: &DriverDataBase,
     transaction: &Transaction<'_>,
+    sealed: Vec<common::generation::FrozenGenerationRequest>,
     authored: &[FileRequests],
-) -> Result<DriverDataBase, GenerationError> {
+) -> Result<
+    (
+        DriverDataBase,
+        Vec<common::generation::FrozenGenerationRequest>,
+    ),
+    GenerationError,
+> {
     let basis = &transaction.basis;
     let modules = transaction.modules;
     let (standalone_root, max_rounds) = (transaction.standalone_root, transaction.max_rounds);
-    let mut requests = Vec::new();
+    let sealed_len = sealed.len();
+    let mut requests = sealed;
     let error_at = |file: &url::Url, range, cause| GenerationError {
         file: file.clone(),
         range,
@@ -709,7 +933,7 @@ fn admit_requests(
         // A generated header is not eligible merely because it was lowered.
         // Validate conformance before retrying any goal against the new plan.
         use hir::diagnosable::Diagnosable;
-        for request in &requests {
+        for request in &requests[sealed_len..] {
             let Some(scoped) = request.scoped_impl.as_ref() else {
                 continue;
             };
@@ -854,28 +1078,30 @@ fn admit_requests(
             requests.extend(new_requests);
             continue;
         }
-        let (_, module) = output_module(fallback_file);
-        let diagnostics = output.run_on_top_mod(module);
-        if diagnostics.has_errors(&output) {
-            let complete = diagnostics.finalize(&output);
-            // Written errors are reported by the ordinary check of the prepared view.
-            if complete.iter().any(|diagnostic| {
-                matches!(diagnostic.severity, common::diagnostics::Severity::Error)
-                    && !in_written_code(&output, diagnostic)
-            }) {
-                return Err(diagnostic_error(
-                    &output,
-                    &complete,
-                    error_at(
-                        fallback_file,
-                        whole_input,
-                        "generated output admission failed".into(),
-                    ),
-                ));
+        if let ViewBasis::Standalone(_) = basis {
+            let (_, module) = output_module(fallback_file);
+            let diagnostics = output.run_on_top_mod(module);
+            if diagnostics.has_errors(&output) {
+                let complete = diagnostics.finalize(&output);
+                // Written errors are reported by the ordinary check of the prepared view.
+                if complete.iter().any(|diagnostic| {
+                    matches!(diagnostic.severity, common::diagnostics::Severity::Error)
+                        && !in_written_code(&output, diagnostic)
+                }) {
+                    return Err(diagnostic_error(
+                        &output,
+                        &complete,
+                        error_at(
+                            fallback_file,
+                            whole_input,
+                            "generated output admission failed".into(),
+                        ),
+                    ));
+                }
             }
+            drop(diagnostics);
         }
-        drop(diagnostics);
-        return Ok(output);
+        return Ok((output, requests.split_off(sealed_len)));
     }
     // A round rebuilds the whole view, so the limit bounds the work spent.
     let (file, range) = last_round_first.unwrap_or_else(|| (fallback_file.clone(), whole_input));
@@ -1094,13 +1320,18 @@ fn provider_error(
     )
 }
 
-/// The authored text of `basis` as the one view every provider runs in.
-/// Written implementation headers, `impl Trait for T with (Provider)`, are
-/// implementors in it whose members are unavailable. What generation produces
-/// in the ingot being prepared is absent. It is a copy, so the caller's
-/// authored view is unchanged.
-fn input_view(db: &DriverDataBase, basis: &ViewBasis) -> DriverDataBase {
-    let mut view = prepared_view(db, basis, &[]);
+/// The authored text of `basis` as the one view every provider runs in, with
+/// the `sealed` output of the ingots it depends on as ordinary code. Written
+/// implementation headers, `impl Trait for T with (Provider)`, that no sealed
+/// output serves are implementors in it whose members are unavailable. What
+/// generation produces in the ingot being prepared is absent. It is a copy, so
+/// the caller's authored view is unchanged.
+fn input_view(
+    db: &DriverDataBase,
+    basis: &ViewBasis,
+    sealed: &[common::generation::FrozenGenerationRequest],
+) -> DriverDataBase {
+    let mut view = prepared_view(db, basis, sealed);
     view.generation_inputs()
         .set_declared_headers(&mut view)
         .to(true);
@@ -1129,6 +1360,7 @@ fn prepared_view(
                 .to(db.compilation_settings().profile(db).clone());
             output
         }
+        ViewBasis::Package => db.fork_inputs(),
     };
     output
         .compilation_settings()

@@ -729,26 +729,36 @@ pub async fn handle_files_need_diagnostics(
         // and all subsequent LSP requests fail with SendError.
         use crate::lsp_diagnostics::LspDiagnostics;
         let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let standalone_url = if ingot.kind(&backend.db) == IngotKind::StandAlone {
-                ingot
-                    .files(&backend.db)
-                    .iter()
-                    .find(|(_, file)| matches!(file.kind(&backend.db), Some(IngotFileKind::Source)))
-                    .map(|(url, _)| url.clone())
-            } else {
-                None
-            };
-            if let Some(url) = standalone_url {
+            // Diagnostics come from the same prepared view that hover, goto
+            // and every other request of this revision use.
+            let standalone = ingot.kind(&backend.db) == IngotKind::StandAlone;
+            let source_url = ingot
+                .files(&backend.db)
+                .iter()
+                .find(|(_, file)| matches!(file.kind(&backend.db), Some(IngotFileKind::Source)))
+                .map(|(url, _)| url.clone());
+            if let Some(url) = source_url {
                 return match backend.try_analysis_db_for_url(&url) {
                     Ok(db) => {
                         let prepared_ingot = db
                             .workspace()
                             .containing_ingot(&db, url)
-                            .expect("prepared standalone file remains indexed");
+                            .expect("prepared view keeps every indexed file");
                         db.diagnostics_for_ingot(prepared_ingot)
                     }
-                    Err(error) => {
+                    Err(error) if standalone => {
                         crate::lsp_diagnostics::generation_error_diagnostics(&backend.db, error)
+                    }
+                    // A package keeps its authored diagnostics, such as parse
+                    // errors in the file being edited, beside the failure.
+                    Err(error) => {
+                        let mut diagnostics = backend.db.diagnostics_for_ingot(ingot);
+                        for (uri, failure) in
+                            crate::lsp_diagnostics::generation_error_diagnostics(&backend.db, error)
+                        {
+                            diagnostics.entry(uri).or_default().extend(failure);
+                        }
+                        diagnostics
                     }
                 };
             }

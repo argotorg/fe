@@ -1487,6 +1487,35 @@ pub fn declared_only_projection<'db>(
     }
 }
 
+/// Every ingot `ingot` depends on, directly or through other dependencies,
+/// each once and after the ingots it depends on itself.
+///
+/// Implementations are program-wide: a trait implemented for a type in one
+/// ingot applies wherever both are visible, so an ingot's trait environment,
+/// and the coherence check that reads it, must hold the implementations of its
+/// whole dependency closure. An implementation reached through a re-export is
+/// in the closure even when its ingot is not a direct dependency.
+fn transitive_dependencies<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Vec<Ingot<'db>> {
+    fn visit<'db>(
+        db: &'db dyn HirAnalysisDb,
+        ingot: Ingot<'db>,
+        seen: &mut rustc_hash::FxHashSet<Ingot<'db>>,
+        order: &mut Vec<Ingot<'db>>,
+    ) {
+        for (_, external) in ingot.resolved_external_ingots(db) {
+            if seen.insert(*external) {
+                visit(db, *external, seen, order);
+                order.push(*external);
+            }
+        }
+    }
+    let mut seen = rustc_hash::FxHashSet::default();
+    seen.insert(ingot);
+    let mut order = Vec::new();
+    visit(db, ingot, &mut seen, &mut order);
+    order
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, SalsaValue)]
@@ -1511,10 +1540,9 @@ impl<'db> TraitEnv<'db> {
             FxHashMap::default();
         let mut unindexed_self_impls = Vec::new();
 
-        for impl_map in ingot
-            .resolved_external_ingots(db)
-            .iter()
-            .map(|(_, external)| collect_trait_impls(db, *external))
+        for impl_map in transitive_dependencies(db, ingot)
+            .into_iter()
+            .map(|external| collect_trait_impls(db, external))
             .chain(std::iter::once(collect_trait_impls(db, ingot)))
         {
             // Raw collection is syntax-only. Candidate lookup performs semantic

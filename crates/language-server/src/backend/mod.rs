@@ -46,8 +46,9 @@ type PreparedViews =
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,
-    /// Prepared views are private to each standalone file. The authored `db`
-    /// continues to index every file in the workspace and receives edits.
+    /// Prepared views, keyed by standalone file URL or by package base URL.
+    /// The authored `db` continues to index every file in the workspace and
+    /// receives edits; any edit clears every view.
     prepared_views: Mutex<PreparedViews>,
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
@@ -150,33 +151,41 @@ impl Backend {
         self.virtual_files.as_mut()
     }
 
-    /// Return the checked output view for a generated standalone file, or the
-    /// authored workspace for an ordinary file. Generation failures are kept
-    /// for diagnostics; semantic requests can use the authored view while an
-    /// edit is incomplete.
+    /// Return the checked output view for a file: its standalone view, the one
+    /// prepared view of its package, or the authored workspace when nothing
+    /// is generated. Generation failures are kept for diagnostics; semantic
+    /// requests can use the authored view while an edit is incomplete.
     pub fn try_analysis_db_for_url(
         &self,
         url: &Url,
     ) -> Result<DriverDataBase, driver::generation::GenerationError> {
-        if let Some(view) = self.prepared_views.lock().unwrap().get(url) {
+        let Some(file) = self.db.workspace().get(&self.db, url) else {
+            return Ok(self.db.clone());
+        };
+        let Some(ingot) = file.containing_ingot(&self.db) else {
+            return Ok(self.db.clone());
+        };
+        // Standalone files are prepared one at a time; every file of a package
+        // shares the view prepared for that package and its dependencies.
+        let (key, standalone) = match ingot.kind(&self.db) {
+            IngotKind::StandAlone => (url.clone(), true),
+            IngotKind::Local | IngotKind::External => (ingot.base(&self.db).clone(), false),
+            IngotKind::Core | IngotKind::Std => return Ok(self.db.clone()),
+        };
+        if let Some(view) = self.prepared_views.lock().unwrap().get(&key) {
             return (*view)
                 .clone()
                 .map(|prepared| prepared.unwrap_or_else(|| self.db.clone()));
         }
-        let Some(file) = self.db.workspace().get(&self.db, url) else {
-            return Ok(self.db.clone());
+        let result = if standalone {
+            driver::generation::prepare_file(&self.db, file)
+        } else {
+            driver::generation::prepare_ingots(&self.db, std::slice::from_ref(&key))
         };
-        if file
-            .containing_ingot(&self.db)
-            .is_none_or(|ingot| ingot.kind(&self.db) != IngotKind::StandAlone)
-        {
-            return Ok(self.db.clone());
-        }
-        let result = driver::generation::prepare_file(&self.db, file);
         self.prepared_views
             .lock()
             .unwrap()
-            .insert(url.clone(), result.clone());
+            .insert(key, result.clone());
         result.map(|prepared| prepared.unwrap_or_else(|| self.db.clone()))
     }
 

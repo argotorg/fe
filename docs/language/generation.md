@@ -231,10 +231,73 @@ A header under a `#[cfg(..)]` attribute that does not hold is not a request: its
 - A provider does not read what another provider generated. Calling `First::one()` in a provider, where `one` comes from another header, is refused with the note `a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it`. A provider that opens another provider in a `with` block is refused before any provider runs. A function that two providers need is an ordinary function that both call.
 - A written header counts as a fact when another request is admitted. With the header `impl Size for Leaf with (CountP)` and a struct `Wrap<A: Size>`, a second header whose target contains `Wrap<Leaf>` is admitted, because the first header states that `Leaf: Size`. Without the first header the second is refused: ``trait bound is not satisfied; `Leaf` doesn't implement `Size` ``.
 
+## Packages and dependencies
+
+`fe check` and `fe test` prepare a package together with the packages that it depends on. A header may be written in any file of a package, and a provider may be written in a dependency. The dependency `lib` has this `src/lib.fe`:
+
+```fe
+use core::derive::{Derive, Inherent}
+use core::meta::{Record, Code, Item, field_count}
+
+pub struct Arity {}
+impl Derive<Inherent> for Arity {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote { pub const fn arity() -> usize { ${n} } }
+    }
+}
+
+// A type of this package that is given a generated method here.
+pub struct Version { pub major: u256, pub minor: u256, pub patch: u256 }
+impl Version with (Arity)
+```
+
+The package `app` lists `lib = { path = "../lib" }` under `[dependencies]` in its `fe.toml`, and has this `src/lib.fe`:
+
+```fe
+use lib::{Arity, Version}
+
+struct Pair { a: u256, b: u256 }
+impl Pair with (Arity)
+
+#[test]
+fn a_provider_of_a_dependency_generates_a_method_here() {
+    assert!(Pair::arity() == 2)
+}
+
+#[test]
+fn what_a_dependency_generates_is_an_ordinary_item_for_its_dependents() {
+    assert!(Version::arity() == 3)
+}
+```
+
+`fe test` in `app` reports `2 passed`.
+
+- What a dependency generates is part of that dependency for the packages that depend on it, as the second test shows.
+- A dependency is prepared before the packages that use it. A provider in `app` can therefore read what `lib` generated: it can call `Version::arity()` and splice the result.
+- A provider does not read what its own package generates. The refusal and its note are the ones of a single file.
+- Two files of a package may use each other's providers. A header in `left.fe` may name a provider that is written in `right.fe`, and the reverse.
+- A provider that fails in a dependency refuses the packages that depend on it. The error is reported at the dependency's file, for example `division by zero in const context` at the place in `lib/src/lib.fe` that divides.
+- The check that two implementations of a trait do not overlap covers every package that a package depends on, directly or not, with or without generated code. The package `base` has this `src/lib.fe`:
+
+  ```fe
+  pub trait T { const fn f() -> u256 }
+  impl<U> T for U { const fn f() -> u256 { 1 } }
+  ```
+
+  The package `mid` depends on `base` and contains `pub use base::T`. The package `app` depends on `mid` and has this `src/lib.fe`:
+
+  ```fe
+  use mid::T
+  pub struct X {}
+  impl T for X { const fn f() -> u256 { 2 } }
+  ```
+
+  `fe check` in `app` reports `error[5-0001]: conflicting trait implementations`.
+
 ## What is refused
 
-- A header in a package. Only a single source file that belongs to no package is prepared, so the header is reported as `derive header was not prepared`, with the label `a derive header is prepared only in a single source file that belongs to no package`. The same file outside a package is prepared.
-- A header or a block for a trait of another package: ``a derive header can implement only a trait of its own package; `Clone` is defined in another package`` and `a scoped derive supports only traits of its own package`.
+- A header or a block for a trait of another package, including a trait of a dependency: ``a derive header can implement only a trait of its own package; `Arity` is defined in another package`` and `a scoped derive supports only traits of its own package`.
 - A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
 - A header for a trait that has parameters besides its target type, or associated type bindings: ``a derive header can implement only a trait that has no parameters besides its target type and no associated type bindings; `Conv` has more``.
 - A generated member that an existing member hides: ``The generated method `size` of `Box1` would never be selected: `Box1` already has a written `size` ``. The existing member may be written in an inherent implementation or in a trait implementation. Where it belongs to a trait implementation the message is inexact: the generated inherent member would be selected in place of the written one, so the header is refused, but not because the generated member would never be selected.
@@ -245,6 +308,5 @@ A header under a `#[cfg(..)]` attribute that does not hold is not a request: its
 
 ## Limits
 
-- Only a single source file that belongs to no package is prepared.
 - Headers and blocks work for traits of the package that the request is in.
 - Only the hidden-member refusal and the list of twelve traits keep generated code from changing what written code does. A generated implementation of a trait that is not on the list, nested in a generated function, is accepted even where it changes which implementation an existing call selects: a call that returned 1 returns 2.

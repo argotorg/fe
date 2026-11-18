@@ -6495,7 +6495,7 @@ impl DiagnosticVoucher for ImplDiag<'_> {
             Self::UnfulfilledDeriveRequest { primary } => primary_diag(
                 severity,
                 "derive header was not prepared",
-                "a derive header is prepared only in a single source file that belongs to no package",
+                "a derive header is prepared only together with its file or package",
                 primary.resolve(db),
                 error_code,
             ),

@@ -817,6 +817,12 @@ fn build_directory(
                 eprintln!("Error: {mismatch}");
                 return true;
             }
+            if let Err(error) =
+                driver::generation::prepare_ingots_in_place(db, std::slice::from_ref(&url))
+            {
+                eprintln!("{error}");
+                return true;
+            }
             let default_out_dir = canonical.join("out");
             let out_dir = out_dir.cloned().unwrap_or(default_out_dir);
             let report_dir = report_scope_dir(
@@ -891,6 +897,17 @@ fn build_workspace(
         }
     };
     let selected_member_paths: HashSet<Utf8PathBuf> = selected_member_paths.into_iter().collect();
+
+    // One prepared view serves every selected member.
+    let roots = members
+        .iter()
+        .filter(|member| selected_member_paths.contains(&workspace_root.join(member.path.as_str())))
+        .map(|member| member.url.clone())
+        .collect::<Vec<_>>();
+    if let Err(error) = driver::generation::prepare_ingots_in_place(db, &roots) {
+        eprintln!("{error}");
+        return true;
+    }
 
     let out_dir = out_dir
         .cloned()

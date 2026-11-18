@@ -1936,6 +1936,23 @@ fn prepare_tests_ingot(
             single_jobs: Vec::new(),
         };
     }
+    // Test the program the ingot generates. The authored database can be
+    // shared with the workspace's other suites, so it stays unchanged.
+    let prepared = match driver::generation::prepare_ingots(db, std::slice::from_ref(&ingot_url)) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let msg = format!("{error}");
+            let _ = writeln!(output, "{msg}");
+            if let Some(report) = report {
+                write_report_error(report, "compilation_errors.txt", &msg);
+            }
+            return SuitePreparation {
+                results: suite_error_result(suite, "compile", msg),
+                single_jobs: Vec::new(),
+            };
+        }
+    };
+    let db: &DriverDataBase = prepared.as_ref().unwrap_or(db);
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         return SuitePreparation {

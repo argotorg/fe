@@ -1158,6 +1158,25 @@ fn call_generated() -> u256 { Pair::generated() }\n";
     );
 }
 
+/// The single location goto finds at a position, if any.
+async fn definition_location(
+    client: &mut MockLspClient,
+    uri: &Url,
+    line: u32,
+    character: u32,
+) -> Option<Location> {
+    match client
+        .goto_definition(uri, line, character)
+        .await
+        .expect("goto failed")?
+    {
+        GotoDefinitionResponse::Scalar(location) => Some(location),
+        GotoDefinitionResponse::Array(locations) if locations.len() == 1 => {
+            locations.into_iter().next()
+        }
+        response => panic!("expected one definition at {line}:{character}, got {response:?}"),
+    }
+}
 /// A file whose own provider generates members for its record, one of them
 /// naming the record through a splice: renaming the record edits its declaration,
 /// its header and its authored uses, never the provider's quotation.
@@ -1214,6 +1233,130 @@ pub const fn total() -> usize { Pair::score() }\n";
             ]
         )]
     );
+}
+
+/// Two files of one package that derive with each other's providers, and
+/// whose generated methods call each other: the editor prepares them in one
+/// view, navigates generated calls, and follows edits in either file.
+#[tokio::test]
+async fn mutually_deriving_files_share_one_prepared_view_in_the_editor() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+    let uri = |path: &str| Url::parse(&format!("file:///tmp/fe-lsp-mutual/{path}")).unwrap();
+    let alpha_source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+use ingot::score::Score
+use ingot::beta::ProviderB
+
+pub struct ProviderA {}
+impl Derive<Score> for ProviderA {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote { const fn score() -> usize { ${n} } }
+    }
+}
+pub struct Left { pub only: u8 }
+impl Score for Left with (ProviderB)
+pub const fn left_total() -> usize {
+    Left::score()
+}
+"#;
+    let beta_source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+use ingot::score::Score
+use ingot::alpha::ProviderA
+
+pub struct ProviderB {}
+impl Derive<Score> for ProviderB {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote { const fn score() -> usize { ${n} + Right::score() } }
+    }
+}
+pub struct Right { pub only: u8 }
+impl Score for Right with (ProviderA)
+pub const fn right_total() -> usize {
+    Right::score()
+}
+"#;
+    let files = [
+        (
+            "app/fe.toml",
+            "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n".to_string(),
+        ),
+        ("app/src/lib.fe", String::new()),
+        (
+            "app/src/score.fe",
+            "pub trait Score {\n    const fn score() -> usize\n}\n".to_string(),
+        ),
+        ("app/src/alpha.fe", alpha_source.to_string()),
+        ("app/src/beta.fe", beta_source.to_string()),
+    ];
+    for (path, text) in &files {
+        client.did_open(&uri(path), text);
+        client.wait_for_text(&uri(path), text).await;
+    }
+    let alpha = uri("app/src/alpha.fe");
+    let beta = uri("app/src/beta.fe");
+    let errors = |client: &MockLspClient, file: &Url| {
+        client
+            .diagnostics()
+            .into_iter()
+            .filter(|published| &published.uri == file)
+            .flat_map(|published| published.diagnostics)
+            .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR))
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>()
+    };
+
+    client.clear_diagnostics();
+    client.analyze(&alpha, alpha_source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == alpha).await);
+    assert!(
+        errors(&client, &alpha).is_empty(),
+        "{:?}",
+        client.diagnostics()
+    );
+    // `Left::score` is generated in alpha from beta's quote.
+    let hover = hover_at(&mut client, &alpha, 15, 10).await;
+    assert!(hover_text(&hover).contains("score"), "{hover:?}");
+    let declaration = definition_location(&mut client, &alpha, 15, 10)
+        .await
+        .expect("goto resolves the generated method");
+    assert_eq!(declaration.uri, uri("app/src/score.fe"));
+    assert_eq!(declaration.range.start.line, 1);
+
+    // A mistake in beta's quote is code generated into alpha, reported where
+    // it is written.
+    let faulting = beta_source.replace("{ ${n} + Right::score() }", "{ true }");
+    assert_ne!(faulting, beta_source);
+    client.clear_diagnostics();
+    client.did_change(&beta, 2, &faulting);
+    client.wait_for_text(&beta, &faulting).await;
+    client.analyze(&alpha, alpha_source).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == beta && d.diagnostics.iter().any(|d| d.message.contains("mismatch"))
+            })
+            .await,
+        "{:?}",
+        client.diagnostics()
+    );
+
+    // Restoring beta restores the program, as for a fresh editor.
+    client.clear_diagnostics();
+    client.did_change(&beta, 3, beta_source);
+    client.wait_for_text(&beta, beta_source).await;
+    client.analyze(&alpha, alpha_source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == alpha).await);
+    assert!(
+        errors(&client, &alpha).is_empty(),
+        "{:?}",
+        client.diagnostics()
+    );
+    let hover = hover_at(&mut client, &alpha, 15, 10).await;
+    assert!(hover_text(&hover).contains("score"), "{hover:?}");
 }
 
 async fn hover_at(client: &mut MockLspClient, uri: &Url, line: u32, character: u32) -> Hover {

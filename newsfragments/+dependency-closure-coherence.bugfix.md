@@ -1,0 +1,1 @@
+The coherence check of trait implementations now covers the whole dependency closure of a package instead of its direct dependencies. An implementation that overlaps a blanket implementation of a trait that another package re-exports is reported as a conflict, where it used to be accepted.

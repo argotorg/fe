@@ -1820,6 +1820,60 @@ fn test_cli_build_ingot_with_multiple_library_modules() {
     );
 }
 
+/// Two files that derive with each other's providers, `Left`'s generated
+/// method calling `Right`'s: `fe check` and `fe test` prepare both files in
+/// one program, and the test reads the generated value (1 + 1).
+#[test]
+fn test_cli_mutually_deriving_files_check_and_test() {
+    let write_package = |root: &Path, expected_total: u32| {
+        let write = |path: &str, text: &str| {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+            fs::write(path, text).expect("write file");
+        };
+        write(
+            "fe.toml",
+            "[ingot]\nname = \"mutual\"\nversion = \"0.1.0\"\n",
+        );
+        write(
+            "src/score.fe",
+            "pub trait Score {\n    const fn score() -> usize\n}\n",
+        );
+        write(
+            "src/alpha.fe",
+            "use core::derive::Derive\nuse core::meta::{Code, Item, Record, field_count}\nuse ingot::score::Score\nuse ingot::beta::ProviderB\n\npub struct ProviderA {}\nimpl Derive<Score> for ProviderA {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = field_count(record)\n        quote { const fn score() -> usize { ${n} } }\n    }\n}\npub struct Left { pub only: u8 }\nimpl Score for Left with (ProviderB)\npub const fn left_total() -> usize {\n    Left::score()\n}\n",
+        );
+        write(
+            "src/beta.fe",
+            "use core::derive::Derive\nuse core::meta::{Code, Item, Record, field_count}\nuse ingot::score::Score\nuse ingot::alpha::ProviderA\n\npub struct ProviderB {}\nimpl Derive<Score> for ProviderB {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = field_count(record)\n        quote { const fn score() -> usize { ${n} + Right::score() } }\n    }\n}\npub struct Right { pub only: u8 }\nimpl Score for Right with (ProviderA)\n",
+        );
+        write(
+            "src/lib.fe",
+            &format!(
+                "use std::evm::Evm\nuse ingot::alpha::left_total\n\n#[test]\nfn mutual_total_matches() uses (evm: mut Evm) {{\n    assert!(left_total() == {expected_total})\n}}\n"
+            ),
+        );
+    };
+    let temp = tempdir().expect("tempdir");
+    write_package(temp.path(), 2);
+    let project = temp.path().to_str().expect("utf8 path");
+    let (output, exit_code) = run_fe_check(project);
+    assert_eq!(exit_code, 0, "fe check failed:\n{output}");
+    let (output, exit_code) = run_fe_main(&["test", "--jobs", "1", project]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(output.contains("mutual_total_matches"), "{output}");
+
+    let wrong = tempdir().expect("tempdir");
+    write_package(wrong.path(), 3);
+    let (output, exit_code) = run_fe_main(&[
+        "test",
+        "--jobs",
+        "1",
+        wrong.path().to_str().expect("utf8 path"),
+    ]);
+    assert_ne!(exit_code, 0, "a wrong expectation must fail:\n{output}");
+}
+
 #[test]
 fn test_cli_build_ingot_contract_uses_effectful_library_helper() {
     // A contract that calls a helper defined in a non-contract child module, where
