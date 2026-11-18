@@ -5,7 +5,6 @@ use super::{
     FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, cfg_holds, report_unsupported_attr, validate_attr_rules,
-        validate_unknown_attrs_in_restricted_context,
     },
 };
 use crate::{
@@ -161,32 +160,21 @@ fn validate_mod_attrs<'db>(
     );
 }
 
-/// The inner attributes a module reads. Any other name, whether or not it is
-/// an attribute of some other item, is an error: an inner attribute that
-/// nothing reads would otherwise be accepted and ignored.
-const MODULE_INNER_ATTRS: &[&str] = &["arithmetic", "cfg"];
-const MODULE_INNER_EXPECTED: &str = "`#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`";
-
 pub(super) fn validate_module_inner_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
 ) {
-    validate_unknown_attrs_in_restricted_context(
-        ctxt,
-        attrs.clone(),
-        AttrTarget::inner("module"),
-        MODULE_INNER_ATTRS,
-        MODULE_INNER_EXPECTED,
-    );
     validate_attr_rules(
         ctxt,
         attrs,
-        AttrTarget::inner("module"),
-        &[AttrRule::supported(
-            "arithmetic",
-            ARITHMETIC_FORM,
-            MODULE_INNER_EXPECTED,
-        )],
+        target("module", None),
+        &[
+            AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
+            AttrRule::unsupported("must_use", MUST_USE_TARGETS),
+            AttrRule::unsupported("cold", COLD_TARGETS),
+            AttrRule::unsupported("payable", PAYABLE_TARGETS),
+            AttrRule::unsupported("abi", ABI_TARGETS),
+        ],
     );
 }
 

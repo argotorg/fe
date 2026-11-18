@@ -3,6 +3,12 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/cold_attr.fe
 ---
+error[12-0001]: unsupported `#[cold]` attribute on module
+  ┌─ cold_attr.fe:1:1
+  │
+1 │ #![cold]
+  │ ^^^^^^^^ `#[cold]` is only supported on functions
+
 error[12-0001]: unsupported `#[cold]` attribute on struct `Cold`
    ┌─ cold_attr.fe:47:1
    │
@@ -45,6 +51,12 @@ error[12-0001]: unsupported `#[cold]` attribute on type alias `ColdAlias`
 65 │ #[cold]
    │ ^^^^^^^ `#[cold]` is only supported on functions
 
+error[12-0001]: unsupported `#[cold]` attribute on module
+   ┌─ cold_attr.fe:69:5
+   │
+69 │     #![cold]
+   │     ^^^^^^^^ `#[cold]` is only supported on functions
+
 error[12-0002]: invalid `#[cold]` attribute form on fn `bad_form`
    ┌─ cold_attr.fe:37:1
    │
@@ -62,15 +74,3 @@ error[12-0003]: duplicate `#[cold]` attribute on fn `duplicate`
    │
 44 │ #[cold]
    │ ^^^^^^^ remove the extra `#[cold]` attribute
-
-error[12-0004]: unsupported `#![cold]` attribute on module
-  ┌─ cold_attr.fe:1:1
-  │
-1 │ #![cold]
-  │ ^^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`
-
-error[12-0004]: unsupported `#![cold]` attribute on module
-   ┌─ cold_attr.fe:69:5
-   │
-69 │     #![cold]
-   │     ^^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`

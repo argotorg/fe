@@ -15,8 +15,8 @@ error[12-0001]: unsupported `#[must_use]` attribute on contract `BadContract`
 4 │ #[must_use]
   │ ^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums
 
-error[12-0004]: unsupported `#![must_use]` attribute on module
+error[12-0001]: unsupported `#[must_use]` attribute on module
   ┌─ must_use_attr_unsupported.fe:8:5
   │
 8 │     #![must_use]
-  │     ^^^^^^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`
+  │     ^^^^^^^^^^^^ `#[must_use]` is only supported on functions, structs, and enums

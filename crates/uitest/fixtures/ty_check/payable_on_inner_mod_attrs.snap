@@ -3,14 +3,14 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/payable_on_inner_mod_attrs.fe
 ---
-error[12-0004]: unsupported `#![payable]` attribute on module
+error[12-0001]: unsupported `#[payable]` attribute on module
   ┌─ payable_on_inner_mod_attrs.fe:1:1
   │
 1 │ #![payable]
-  │ ^^^^^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`
+  │ ^^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms
 
-error[12-0004]: unsupported `#![payable]` attribute on module
+error[12-0001]: unsupported `#[payable]` attribute on module
   ┌─ payable_on_inner_mod_attrs.fe:6:5
   │
 6 │     #![payable]
-  │     ^^^^^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`
+  │     ^^^^^^^^^^^ `#[payable]` is only supported on init blocks and recv arms

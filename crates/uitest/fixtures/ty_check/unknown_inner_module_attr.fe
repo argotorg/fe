@@ -1,9 +1,0 @@
-#![with(Wholesale)]
-
-fn top_level() {}
-
-mod nested {
-    #![frobnicate]
-
-    fn inner() {}
-}

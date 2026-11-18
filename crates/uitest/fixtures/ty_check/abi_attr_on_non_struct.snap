@@ -27,8 +27,8 @@ error[12-0001]: unsupported `#[abi]` attribute on mod `m`
 12 │ #[abi]
    │ ^^^^^^ `#[abi]` is only supported on structs
 
-error[12-0004]: unsupported `#![abi]` attribute on module
+error[12-0001]: unsupported `#[abi]` attribute on module
    ┌─ abi_attr_on_non_struct.fe:16:5
    │
 16 │     #![abi]
-   │     ^^^^^^^ expected `#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`
+   │     ^^^^^^^ `#[abi]` is only supported on structs

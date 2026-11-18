@@ -533,11 +533,7 @@ impl DiagnosticVoucher for crate::AttrMisuseError {
         } else {
             self.target.to_string()
         };
-        let attr = if self.inner {
-            format!("#![{}]", self.attr_name)
-        } else {
-            format!("#[{}]", self.attr_name)
-        };
+        let attr = format!("#[{}]", self.attr_name);
         let (local_code, message, label) = match &self.kind {
             crate::AttrMisuseErrorKind::UnsupportedTarget { supported_targets } => (
                 1,
