@@ -5799,6 +5799,17 @@ fn deferred_argument_selects_the_codec() uses (evm: mut std::evm::Evm) {
 }
 
 #[test]
+fn named_storage_late_codec_uses_declared_bound_evidence() {
+    let source = include_str!("fixtures/named_storage_codec_bound_evidence.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("codec_bound_evidence.fe");
+    fs::write(&path, source).unwrap();
+    let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+    assert!(output.contains("2 passed; 0 failed"), "{output}");
+}
+
+#[test]
 fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("generic_codec.fe");

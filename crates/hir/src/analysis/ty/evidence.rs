@@ -11,6 +11,7 @@
 //! dispatches through a bound reaches its implementation without selecting
 //! it again.
 
+use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 
 use super::{
@@ -30,8 +31,9 @@ use super::{
         constraint::collect_candidate_constraints, normalize_trait_inst_preserving_validity,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
-    ty_def::{BorrowKind, TyFlags},
+    ty_def::{BorrowKind, TyFlags, TyId},
     ty_lower::CompleteSubst,
+    unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor, collect_flags, mentions_effect_provider},
 };
 use crate::{
@@ -308,6 +310,57 @@ pub struct EvidenceId<'db> {
     pub data: Evidence<'db>,
 }
 
+/// Declared slots in source order and their values at the current stage.
+/// Keep the source goal and predicates rigid when specializing their values:
+/// distinct source parameters can acquire the same concrete type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub struct DeferredProofBounds<'db> {
+    source_goal: TraitInstId<'db>,
+    source_slots: PredicateListId<'db>,
+    applied_slots: PredicateListId<'db>,
+    entries: EvidenceList<'db>,
+}
+
+impl<'db> DeferredProofBounds<'db> {
+    fn capture(
+        db: &'db dyn HirAnalysisDb,
+        source_goal: TraitInstId<'db>,
+        assumptions: PredicateListId<'db>,
+    ) -> Option<Self> {
+        let slots = assumptions.extend_all_bounds(db);
+        if slots.is_empty(db) {
+            return None;
+        }
+        let schema = BoundSchemaId::context(db, slots);
+        let entries = EvidenceList::of(
+            db,
+            (0..slots.list(db).len())
+                .map(|index| Some(schema.assumption(db, index)))
+                .collect(),
+        );
+        Some(Self {
+            source_goal,
+            source_slots: slots,
+            applied_slots: slots,
+            entries,
+        })
+    }
+
+    fn map_entries(self, entries: EvidenceList<'db>) -> Self {
+        Self { entries, ..self }
+    }
+
+    fn slot_for(self, db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> Option<usize> {
+        self.source_slots
+            .list(db)
+            .iter()
+            .zip(self.applied_slots.list(db))
+            .enumerate()
+            .find(|&(_, (&source, &applied))| source == self.source_goal && applied == goal)
+            .map(|(index, _)| index)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Evidence<'db> {
     /// An implementation, `selected` and as `instantiated` for the goal,
@@ -331,6 +384,7 @@ pub enum Evidence<'db> {
         goal: TraitInstId<'db>,
         scope: ScopeId<'db>,
         choices: Option<ChosenImpls<'db>>,
+        bounds: Option<DeferredProofBounds<'db>>,
     },
 }
 
@@ -357,7 +411,30 @@ impl<'db> EvidenceId<'db> {
     fn rebase(self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) -> Option<Self> {
         Some(match self.data(db) {
             Evidence::Assumption(index) => bound.get(db, *index)?,
-            Evidence::DeferredSolCodec { .. } => self,
+            Evidence::DeferredSolCodec {
+                goal,
+                scope,
+                choices,
+                bounds,
+            } => Self::new(
+                db,
+                Evidence::DeferredSolCodec {
+                    goal: *goal,
+                    scope: *scope,
+                    choices: *choices,
+                    bounds: bounds.map(|bounds| {
+                        bounds.map_entries(EvidenceList::of(
+                            db,
+                            bounds
+                                .entries
+                                .entries(db)
+                                .iter()
+                                .map(|entry| entry.and_then(|proof| proof.rebase(db, bound)))
+                                .collect(),
+                        ))
+                    }),
+                },
+            ),
             Evidence::Impl {
                 selected,
                 instantiated,
@@ -406,7 +483,22 @@ impl<'db> EvidenceId<'db> {
                     conds: conds.iter().map(|proof| proof.qualify(db, owner)).collect(),
                 },
             ),
-            Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => self,
+            Evidence::DeferredSolCodec {
+                goal,
+                scope,
+                choices,
+                bounds,
+            } => Self::new(
+                db,
+                Evidence::DeferredSolCodec {
+                    goal: *goal,
+                    scope: *scope,
+                    choices: *choices,
+                    bounds: bounds
+                        .map(|bounds| bounds.map_entries(bounds.entries.qualify(db, owner))),
+                },
+            ),
+            Evidence::Assumption(_) => self,
         }
     }
 
@@ -428,7 +520,20 @@ impl<'db> EvidenceId<'db> {
                     conds: conds.iter().map(|proof| proof.nominal(db)).collect(),
                 },
             ),
-            Evidence::DeferredSolCodec { .. } => self,
+            Evidence::DeferredSolCodec {
+                goal,
+                scope,
+                choices,
+                bounds,
+            } => Self::new(
+                db,
+                Evidence::DeferredSolCodec {
+                    goal: *goal,
+                    scope: *scope,
+                    choices: *choices,
+                    bounds: bounds.map(|bounds| bounds.map_entries(bounds.entries.nominal(db))),
+                },
+            ),
         }
     }
 
@@ -459,7 +564,20 @@ impl<'db> EvidenceId<'db> {
     pub fn bind(self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) -> Self {
         match self.data(db) {
             Evidence::Assumption(index) => bound.get(db, *index).unwrap_or(self),
-            Evidence::DeferredSolCodec { .. } => self,
+            Evidence::DeferredSolCodec {
+                goal,
+                scope,
+                choices,
+                bounds,
+            } => Self::new(
+                db,
+                Evidence::DeferredSolCodec {
+                    goal: *goal,
+                    scope: *scope,
+                    choices: *choices,
+                    bounds: bounds.map(|bounds| bounds.map_entries(bounds.entries.bind(db, bound))),
+                },
+            ),
             Evidence::Impl {
                 selected,
                 instantiated,
@@ -501,6 +619,7 @@ pub(crate) fn complete_deferred_evidence<'db>(
             goal,
             scope,
             choices,
+            bounds,
         } => {
             let open = TyFlags::HAS_PARAM
                 | TyFlags::HAS_VAR
@@ -511,11 +630,17 @@ pub(crate) fn complete_deferred_evidence<'db>(
             {
                 Some(proof)
             } else {
-                prove(
-                    db,
-                    TraitSolveCx::new(db, *scope).with_choices(*choices),
-                    *goal,
-                )
+                let cx = TraitSolveCx::new(db, *scope).with_choices(*choices);
+                match bounds {
+                    Some(bounds) => prove_in(
+                        db,
+                        cx.with_assumptions(bounds.applied_slots),
+                        *goal,
+                        Some(*bounds),
+                    )
+                    .evidence(),
+                    None => prove(db, cx, *goal),
+                }
             }
         }
         Evidence::Impl {
@@ -761,12 +886,18 @@ impl<'db> TyFoldable<'db> for EvidenceId<'db> {
                 goal,
                 scope,
                 choices,
+                bounds,
             } => EvidenceId::new(
                 db,
                 Evidence::DeferredSolCodec {
                     goal: goal.fold_with(db, folder),
                     scope: *scope,
                     choices: choices.map(|choices| choices.fold_with(db, folder)),
+                    bounds: bounds.map(|bounds| DeferredProofBounds {
+                        applied_slots: bounds.applied_slots.fold_with(db, folder),
+                        entries: bounds.entries.fold_with(db, folder),
+                        ..bounds
+                    }),
                 },
             ),
             Evidence::Assumption(slot) => EvidenceId::new(
@@ -796,10 +927,19 @@ impl<'db> TyVisitable<'db> for EvidenceId<'db> {
                     cond.visit_with(visitor);
                 }
             }
-            Evidence::DeferredSolCodec { goal, choices, .. } => {
+            Evidence::DeferredSolCodec {
+                goal,
+                choices,
+                bounds,
+                ..
+            } => {
                 goal.visit_with(visitor);
                 if let Some(choices) = choices {
                     choices.visit_with(visitor);
+                }
+                if let Some(bounds) = bounds {
+                    bounds.applied_slots.visit_with(visitor);
+                    bounds.entries.visit_with(visitor);
                 }
             }
             Evidence::Assumption(slot) => slot.applied.visit_with(visitor),
@@ -902,7 +1042,7 @@ pub(crate) fn prove_outcome<'db>(
     } else {
         solve_cx
     };
-    prove_in(db, solve_cx, goal)
+    prove_in(db, solve_cx, goal, None)
 }
 
 /// A use's proofs, in its body's context `solve_cx`, of the bounds a body it
@@ -1124,15 +1264,74 @@ fn expanded_condition_evidence<'db>(
     )
 }
 
+/// Recover each selected condition in the original goal's type coordinates.
+/// Only the selected header may specialize a source variable here. In
+/// particular, two source variables with equal runtime arguments stay apart.
+fn source_conditions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    selected: ImplementorId<'db>,
+    source: TraitInstId<'db>,
+) -> Option<PredicateListId<'db>> {
+    let mut table = UnificationTable::new(db);
+    let (source, origins) = table.freshen_with_origins(source);
+    let implementation = table.instantiate_with_fresh_vars(selected);
+    for (&selected, &source) in implementation
+        .trait_inst(db)
+        .args(db)
+        .iter()
+        .zip(source.args(db))
+    {
+        table.unify(selected, source).ok()?;
+    }
+    struct Restore<'db>(FxHashMap<TyId<'db>, Option<TyId<'db>>>);
+    impl<'db> TyFolder<'db> for Restore<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            self.0
+                .get(&ty)
+                .and_then(|&param| param)
+                .unwrap_or_else(|| ty.super_fold_with(db, self))
+        }
+    }
+    let mut restore = Restore(FxHashMap::default());
+    for (param, origin) in origins {
+        let origin = origin.fold_with(db, &mut table);
+        if origin.has_var(db) {
+            // A header that identifies two origins cannot give either sole
+            // ownership of the matched variable.
+            restore
+                .0
+                .entry(origin)
+                .and_modify(|entry| *entry = None)
+                .or_insert(Some(param));
+        }
+    }
+    Some(
+        implementation
+            .constraints(db)
+            .fold_with(db, &mut table)
+            .fold_with(db, &mut restore),
+    )
+}
+
 #[salsa::tracked(returns(copy), cycle_initial = prove_cycle_initial)]
 fn prove_in<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
+    bounds: Option<DeferredProofBounds<'db>>,
 ) -> ProofOutcome<'db> {
     let settled = |flags: TyFlags| !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID);
     if !settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
+    }
+    if let Some(bounds) = bounds
+        && !solve_cx.has_matching_choice(db, goal)
+        && let Some(index) = bounds.slot_for(db, goal)
+    {
+        return bounds
+            .entries
+            .get(db, index)
+            .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven);
     }
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, goal) else {
         return if collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
@@ -1157,11 +1356,13 @@ fn prove_in<'db>(
                 goal: resolved.trait_inst(),
                 scope: solve_cx.origin_scope(db),
                 choices: solve_cx.choices(),
+                bounds: DeferredProofBounds::capture(db, goal, solve_cx.assumptions()),
             },
         ));
     }
     let selected_proof = || -> Option<EvidenceId<'db>> {
         let evidence = match resolved.selected().origin(db) {
+            ImplementorOrigin::Assumption if bounds.is_some() => return None,
             ImplementorOrigin::Assumption => Evidence::Assumption(
                 BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
                     .slot(db, answering_assumption(db, solve_cx, goal)?)?,
@@ -1174,6 +1375,9 @@ fn prove_in<'db>(
                 } else {
                     BorrowKind::Ref
                 });
+                let conditions = bounds.and_then(|bounds| {
+                    source_conditions(db, resolved.selected(), bounds.source_goal)
+                });
                 Evidence::Impl {
                     selected: resolved.selected(),
                     instantiated: resolved.instantiated(),
@@ -1181,7 +1385,36 @@ fn prove_in<'db>(
                         .instantiated_constraints(db)
                         .list(db)
                         .iter()
-                        .map(|&cond| prove(db, solve_cx, cond.at_mode(db, mode)))
+                        .enumerate()
+                        .map(|(index, &cond)| {
+                            let cond = cond.at_mode(db, mode);
+                            if let Some(bounds) = bounds {
+                                let source = conditions
+                                    .and_then(|conditions| conditions.list(db).get(index))
+                                    .copied()
+                                    .map(|source| source.at_mode(db, mode));
+                                if let Some(source_goal) = source
+                                    && settled(collect_flags(db, source_goal))
+                                {
+                                    return prove_in(
+                                        db,
+                                        solve_cx,
+                                        cond,
+                                        Some(DeferredProofBounds {
+                                            source_goal,
+                                            ..bounds
+                                        }),
+                                    )
+                                    .evidence();
+                                }
+                                return prove(
+                                    db,
+                                    solve_cx.with_assumptions(PredicateListId::empty_list(db)),
+                                    cond,
+                                );
+                            }
+                            prove(db, solve_cx, cond)
+                        })
                         .collect::<Option<_>>()?,
                 }
             }
@@ -1531,6 +1764,7 @@ fn prove_cycle_initial<'db>(
     _: salsa::Id,
     _solve_cx: TraitSolveCx<'db>,
     _goal: TraitInstId<'db>,
+    _bounds: Option<DeferredProofBounds<'db>>,
 ) -> ProofOutcome<'db> {
     ProofOutcome::Unavailable
 }
