@@ -4660,11 +4660,14 @@ impl<'db> PlaceEntryCalls<'db> {
     /// Admission of an abstract body leaves a deferred codec obligation
     /// for the instance that supplies the remaining type arguments.
     pub(crate) fn deferred_codec_is_parametric(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.codec_choices.is_some()
-            && self.codec[0]
-                .trait_inst()
-                .is_some_and(|goal| collect_flags(db, goal).contains(TyFlags::HAS_PARAM))
+        self.codec_choices.is_some() && codec_goal_is_parametric(db, &self.codec[0])
     }
+}
+
+fn codec_goal_is_parametric<'db>(db: &'db dyn HirAnalysisDb, callable: &Callable<'db>) -> bool {
+    callable
+        .trait_inst()
+        .is_some_and(|goal| collect_flags(db, goal).contains(TyFlags::HAS_PARAM))
 }
 
 // A private module keeps the shared tables type out of the crate's public

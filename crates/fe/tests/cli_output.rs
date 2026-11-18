@@ -5698,12 +5698,6 @@ fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
             source.replace("BITS: u256 = 32", "BITS: u256 = 256"),
             true,
         ),
-        ("failed codec prerequisite", prerequisite.to_string(), false),
-        (
-            "satisfied codec prerequisite",
-            format!("{prerequisite}\nimpl Missing for u8 {{}}\n"),
-            true,
-        ),
     ] {
         fs::write(&path, source).unwrap();
         let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
@@ -5717,9 +5711,29 @@ fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
             );
         }
     }
-    let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
-    assert_eq!(exit, 0, "execute the satisfied specialization: {output}");
-    assert!(output.contains("1 passed; 0 failed"), "{output}");
+    for (choice, encoded) in [
+        ("Broken", "7"),
+        ("Chosen<T>, Broken", "6"),
+        ("Chosen, Broken", "6"),
+    ] {
+        let selected = prerequisite.replace("with (Broken)", &format!("with ({choice})"));
+        fs::write(&path, &selected).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "failed prerequisite for {choice}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{output}"
+        );
+
+        let runtime = selected.replace("raw == 7", &format!("raw == {encoded}"));
+        fs::write(&path, format!("{runtime}\nimpl Missing for u8 {{}}\n")).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "execute the satisfied specialization for {choice}: {output}"
+        );
+        assert!(output.contains("1 passed; 0 failed"), "{output}");
+    }
 }
 
 #[test]

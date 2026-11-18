@@ -11,6 +11,11 @@ impl<T> LaneCodec<u8> for Outer<T> where T: Gate {
     fn get(_ word: u256, offset: u256) -> u8 { ((word >> offset) & 255).downcast_truncate() }
     fn set(_ word: u256, offset: u256, value: own u8) -> u256 { (word & !(255 << offset)) | ((value as u256) << offset) }
 }
+impl<T> LaneCodec<u8> for Outer<T> as Chosen where T: Gate {
+    const BITS: u256 = 8
+    fn get(_ word: u256, offset: u256) -> u8 { (((word >> offset) & 255) ^ 1).downcast_truncate() }
+    fn set(_ word: u256, offset: u256, value: own u8) -> u256 { (word & !(255 << offset)) | (((value ^ 1) as u256) << offset) }
+}
 struct Coll<T> {}
 impl<T> Pinned for Coll<T> { type Space = Storage }
 unsafe impl<T> StateIndex for Coll<T> {

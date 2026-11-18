@@ -1763,11 +1763,23 @@ impl<'db> TyCheckEnv<'db> {
             for (index, callable) in calls.iter_mut().enumerate() {
                 *callable = callable.clone().fold_with(self.db, &mut prober);
                 let outcome = callable.record_evidence(self.db, solve_cx);
-                codec_choice_failed |= index > 0
-                    && solve_cx.choices().is_some()
-                    && matches!(outcome, super::super::evidence::ProofOutcome::Unavailable);
-                codec_deferred |=
-                    index > 0 && matches!(outcome, super::super::evidence::ProofOutcome::Deferred);
+                if index > 0 {
+                    use super::super::evidence::ProofOutcome;
+                    match outcome {
+                        ProofOutcome::Deferred => codec_deferred = true,
+                        ProofOutcome::Unavailable if solve_cx.choices().is_some() => {
+                            // An explicit header can already win while a
+                            // prerequisite of that codec still depends on
+                            // the entry's type arguments.
+                            if super::codec_goal_is_parametric(self.db, callable) {
+                                codec_deferred = true;
+                            } else {
+                                codec_choice_failed = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 // A storage entry's calls pass no effect arguments.
                 callable.record_bound_evidence(self.db, solve_cx, &[]);
                 callable.qualify_evidence(self.db, self.owner);
