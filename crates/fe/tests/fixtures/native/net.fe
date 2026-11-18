@@ -5,6 +5,7 @@ use std::time::Duration
 
 extern {
     fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
+    fn socketpair(_ domain: i32, _ kind: i32, _ protocol: i32, _ fds: *i32) -> i32
 }
 
 // `fcntl`'s command to read a descriptor's status flags, the same on Linux
@@ -117,6 +118,12 @@ fn broken_pipe() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
     var server = server
     core::mem::drop(other)
     failure("broken pipe: server writes", write_after_close(mut server))
+    // A pair of connected `AF_UNIX` stream sockets, made outside `std`.
+    let pair = MemBuffer::new(8)
+    core::assert(unsafe { socketpair(1, 1, 0, core::ptr::cast(pair.ptr())) } == 0)
+    var imported = unsafe { TcpStream::from_raw_fd(pair.read_le<i32>(0)) }
+    core::mem::drop(unsafe { TcpStream::from_raw_fd(pair.read_le<i32>(4)) })
+    failure("broken pipe: imported stream writes", write_after_close(mut imported))
     Result::Ok(())
 }
 

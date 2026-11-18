@@ -140,6 +140,12 @@ pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
 // connection from raising `SIGPIPE`.
 fn set_up(_ fd: i32) -> Result<Error, ()> {
     check_call(unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) })?
+    no_sigpipe(fd)
+}
+
+/// Keeps a write to the socket `fd` whose connection is closed from
+/// raising `SIGPIPE`, with `SO_NOSIGPIPE`.
+pub fn no_sigpipe(_ fd: i32) -> Result<Error, ()> {
     set_socket_option(fd, level: SOL_SOCKET, name: SO_NOSIGPIPE, value: 1)
 }
 

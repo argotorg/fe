@@ -129,6 +129,12 @@ pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
     Result::Ok(unsafe { Fd { fd: accepted.downcast_unchecked() } })
 }
 
+/// Keeps a write to the socket `fd` whose connection is closed from
+/// raising `SIGPIPE`: nothing to do, since each `send` has `MSG_NOSIGNAL`.
+pub fn no_sigpipe(_ fd: i32) -> Result<Error, ()> {
+    Result::Ok(())
+}
+
 extern {
     fn epoll_create1(_ flags: i32) -> i32
     fn epoll_ctl(_ epfd: i32, _ op: i32, _ fd: i32, _ event: *u8) -> i32

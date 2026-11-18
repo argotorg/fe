@@ -347,8 +347,11 @@ impl Socket {
         Result::Ok(Socket { fd: sys::new_socket(sys::address_domain(addr), kind)?, nonblocking: false })
     }
 
-    // The socket `fd`, which it takes over.
+    // The socket `fd`, made elsewhere, which it takes over.
     unsafe fn from_raw_fd(_ fd: i32) -> Self {
+        // This fails only for a descriptor that is no socket, whose writes
+        // raise no `SIGPIPE` here: they fail in `send`.
+        let _ = sys::no_sigpipe(fd)
         Socket { fd: Fd { fd }, nonblocking: sys::is_nonblocking(fd).unwrap_or(default: false) }
     }
 

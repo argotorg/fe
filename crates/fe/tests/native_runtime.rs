@@ -3577,6 +3577,7 @@ read timeout: 1 ns: ok
 read timeout: then read 1 byte
 broken pipe: client writes: BrokenPipe
 broken pipe: server writes: BrokenPipe
+broken pipe: imported stream writes: BrokenPipe
 nonblocking accept: nothing waiting: WouldBlock
 nonblocking accept: accepted stream blocks: true
 nonblocking accept: read y
