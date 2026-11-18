@@ -29,8 +29,8 @@ use super::{
     trait_lower::lower_impl_trait,
     trait_resolution::{
         ChoiceMatch, ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
-        constraint::collect_candidate_constraints, generation::GenerationRequest,
-        normalize_trait_inst_preserving_validity,
+        assumption_matcher, constraint::collect_candidate_constraints,
+        generation::GenerationRequest, normalize_trait_inst_preserving_validity,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
     ty_def::{BorrowKind, TyFlags, TyId},
@@ -357,6 +357,7 @@ impl<'db> DeferredProofBounds<'db> {
     fn proof_for(
         self,
         db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
         goal: TraitInstId<'db>,
     ) -> Result<Option<EvidenceId<'db>>, ()> {
         let matching = self
@@ -364,9 +365,12 @@ impl<'db> DeferredProofBounds<'db> {
             .list(db)
             .iter()
             .zip(self.applied_slots.list(db));
+        let source_answers =
+            assumption_matcher(db, cx.with_assumptions(self.source_slots), self.source_goal);
+        let applied_answers = assumption_matcher(db, cx, goal);
         let mut answer = None;
         for (index, (&source, &applied)) in matching.enumerate() {
-            if source == self.source_goal && applied == goal {
+            if source_answers(source) && applied_answers(applied) {
                 let proof = self.entries.get(db, index).ok_or(())?;
                 if answer.is_some_and(|other| other != proof) {
                     return Err(());
@@ -1362,7 +1366,7 @@ fn prove_in<'db>(
     if let Some(bounds) = bounds
         && chosen.is_none()
     {
-        match bounds.proof_for(db, goal) {
+        match bounds.proof_for(db, solve_cx, goal) {
             Ok(Some(proof)) => return ProofOutcome::Proven(proof),
             Ok(None) => {}
             Err(()) => return ProofOutcome::Unavailable,

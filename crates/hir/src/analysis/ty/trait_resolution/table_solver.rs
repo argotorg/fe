@@ -246,17 +246,17 @@ fn assumption_answers<'db>(
         .is_ok()
 }
 
-/// The position, in `solve_cx`'s extended assumption list, of the first
-/// assumption that answers `goal`, in the order the solver tries them.
-pub(crate) fn answering_assumption<'db>(
+/// Whether a declared bound can answer this use in its normalization context.
+/// Callers address the matching declaration slot in their own order.
+pub(crate) fn assumption_matcher<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
-) -> Option<usize> {
+) -> impl Fn(TraitInstId<'db>) -> bool + 'db {
     let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
     let goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
-    assumptions.list(db).iter().position(|&assumption| {
+    move |assumption| {
         assumption_answers(
             db,
             &mut PersistentUnificationTable::new(db),
@@ -265,7 +265,22 @@ pub(crate) fn answering_assumption<'db>(
             scope,
             assumptions,
         )
-    })
+    }
+}
+
+/// The first matching slot in the extended assumption list.
+pub(crate) fn answering_assumption<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<usize> {
+    solve_cx
+        .assumptions()
+        .extend_all_bounds(db)
+        .list(db)
+        .iter()
+        .copied()
+        .position(assumption_matcher(db, solve_cx, goal))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
