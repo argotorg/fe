@@ -1,0 +1,45 @@
+use core::abi::{ByteSource, Bytes, DynString}
+use core::num::IntDowncast
+use core::ptr::{MemBuffer, MemSpan}
+
+fn check_tail(_ tail: MemSpan, _ source: MemSpan) {
+    assert!(tail.word_at(0) == source.len() as u256)
+    let size = 32 + ((source.len() + 31) / 32) * 32
+    assert!(tail.len() == size)
+    for i in 0 .. source.len() {
+        assert!(tail.byte_at(32 + i) == source.byte_at(i))
+    }
+    for i in 32 + source.len() .. size {
+        assert!(tail.byte_at(i) == 0)
+    }
+}
+fn check_copy(_ n: usize) {
+    var input = MemBuffer::new(n + 37)
+    for i in 0 .. n + 37 {
+        input[i] = ((i % 251) + 1).downcast_unchecked()
+    }
+    let source = input.span().slice(offset: 3, len: n)
+    let bytes = Bytes::from_payload(source)
+    let text = DynString::from_payload(source)
+    check_tail(bytes.encoded_span(), source)
+    check_tail(text.encoded_span(), source)
+    check_tail(bytes.clone().encoded_span(), source)
+    check_tail(text.clone().encoded_span(), source)
+    if n != 0 {
+        input[3] = 0
+        assert!(bytes.byte_at(0) == 4)
+        assert!(text.byte_at(0) == 4)
+    }
+}
+#[test]
+fn every_padding_length() {
+    for n in 0 .. 98 {
+        check_copy(n)
+    }
+}
+#[test]
+fn large_payloads() {
+    for n in [1023, 1024, 1025, 4096] {
+        check_copy(n)
+    }
+}
