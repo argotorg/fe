@@ -1300,6 +1300,66 @@ fn qualified() -> u256 { with (m::Cheap) { read() } }
 }
 
 #[test]
+fn an_openings_condition_answered_by_an_operand_whose_conditions_fail_is_refused() {
+    let codes = diagnostics(
+        r#"
+struct Item {}
+struct Box<T> { v: T }
+trait Bad {}
+trait Gate { const fn g() -> u256 }
+impl Gate for Item { const fn g() -> u256 { 1 } }
+impl<T: Bad> Gate for T as G { const fn g() -> u256 { 5 } }
+trait Total { const fn total() -> u256 }
+impl<T: Gate> Total for Box<T> { const fn total() -> u256 { T::g() + 1 } }
+const fn opening_first() -> u256 { with (<Box<Item> as Total>, G) { 0 } }
+const fn gate_first() -> u256 { with (G, <Box<Item> as Total>) { 0 } }
+"#,
+    );
+    // No fallback to the ordinary `Gate`, in either order, although the block
+    // uses neither goal.
+    assert_eq!(codes, vec!["6-0003".to_string(), "6-0003".to_string()]);
+    values(
+        r#"
+struct Item {}
+struct Box<T> { v: T }
+trait Gate { const fn g() -> u256 }
+impl Gate for Item { const fn g() -> u256 { 1 } }
+trait Total { const fn total() -> u256 }
+impl<T: Gate> Total for Box<T> { const fn total() -> u256 { T::g() + 1 } }
+const fn alone() -> u256 { with (<Box<Item> as Total>) { <Box<Item> as Total>::total() } }
+"#,
+        &[("alone", 2)],
+    );
+}
+
+#[test]
+fn a_condition_written_through_a_projection_projects_its_associated_type_bound() {
+    values(
+        r#"
+trait Cur { type Cursor: Copy
+    const fn start() -> u256 }
+struct Item {}
+impl Cur for Item { type Cursor = u256
+    const fn start() -> u256 { 7 } }
+trait Wrap { type Inner }
+struct W {}
+impl Wrap for W { type Inner = Item }
+struct Box<T> { v: T }
+trait Total { const fn total() -> u256 }
+impl<T> Total for Box<T> where <T as Wrap>::Inner: Cur {
+    const fn total() -> u256 { <T as Wrap>::Inner::start() }
+}
+impl<T> Total for Box<T> as BT where <T as Wrap>::Inner: Cur {
+    const fn total() -> u256 { <T as Wrap>::Inner::start() + 100 }
+}
+const fn ordinary() -> u256 { <Box<W> as Total>::total() }
+const fn chosen() -> u256 { with (BT) { <Box<W> as Total>::total() } }
+"#,
+        &[("ordinary", 7), ("chosen", 107)],
+    );
+}
+
+#[test]
 fn named_implementations_of_traits_decided_by_presence_are_refused() {
     for source in [
         "use core::marker::Copy\nstruct Item { n: u256 }\nimpl Copy for Item as Copying {}",
