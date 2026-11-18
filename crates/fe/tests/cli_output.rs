@@ -6241,6 +6241,76 @@ fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
 }
 
 #[test]
+fn doc_includes_generated_public_methods() {
+    let temp = tempdir().unwrap();
+    let package = temp.path().join("sample");
+    let source_dir = package.join("src");
+    fs::create_dir_all(&source_dir).unwrap();
+    fs::write(
+        temp.path().join("fe.toml"),
+        "[workspace]\nname = \"sample_workspace\"\nversion = \"0.1.0\"\nmembers = [\"sample\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        package.join("fe.toml"),
+        "[ingot]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let source = source_dir.join("lib.fe");
+    fs::write(
+        &source,
+        r#"
+use core::derive::{Derive, Inherent}
+use core::meta::{Record, Code, Item, field_count}
+
+struct Arity {}
+impl Derive<Inherent> for Arity {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote { pub const fn arity() -> usize { ${n} } }
+    }
+}
+
+pub struct Version { pub major: u256, pub minor: u256 }
+impl Version with (Arity)
+"#,
+    )
+    .unwrap();
+
+    for (name, path) in [
+        ("file", source.as_path()),
+        ("package", package.as_path()),
+        ("workspace", temp.path()),
+    ] {
+        let docs = temp.path().join(name);
+        let (output, exit) = run_fe_main(&[
+            "doc",
+            path.to_str().unwrap(),
+            "-o",
+            docs.to_str().unwrap(),
+            "json",
+        ]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        let index: Value =
+            serde_json::from_slice(&fs::read(docs.join("docs.json")).unwrap()).unwrap();
+        let version = index["index"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["name"] == "Version")
+            .expect("generated type's authored declaration");
+        let has_method = version["trait_impls"].as_array().is_some_and(|impls| {
+            impls.iter().any(|item| {
+                item["methods"]
+                    .as_array()
+                    .is_some_and(|methods| methods.iter().any(|method| method["name"] == "arity"))
+            })
+        });
+        assert!(has_method, "{name} missing Version.arity: {version}");
+    }
+}
+
+#[test]
 fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
     let source = include_str!("fixtures/named_storage_codec_failure.fe");
     let prerequisite = include_str!("fixtures/named_storage_codec_prerequisite.fe");

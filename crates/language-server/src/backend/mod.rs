@@ -1,4 +1,4 @@
-use async_lsp::ClientSocket;
+use async_lsp::{ClientSocket, lsp_types::Diagnostic};
 use common::{InputDb, ingot::IngotKind};
 use driver::DriverDataBase;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -42,6 +42,7 @@ impl std::error::Error for WorkerError {}
 
 type PreparedViews =
     FxHashMap<Url, Result<Option<DriverDataBase>, driver::generation::GenerationError>>;
+type DiagnosticsByFile = FxHashMap<Url, Vec<Diagnostic>>;
 
 pub struct Backend {
     pub(super) client: ClientSocket,
@@ -50,6 +51,9 @@ pub struct Backend {
     /// The authored `db` continues to index every file in the workspace and
     /// receives edits; any edit clears every view.
     prepared_views: Mutex<PreparedViews>,
+    /// The most recent nonempty diagnostics from each analysis root. A
+    /// package can report a diagnostic in one of its dependencies.
+    diagnostics_by_root: Mutex<FxHashMap<Url, DiagnosticsByFile>>,
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
@@ -90,6 +94,7 @@ impl Backend {
             client,
             db,
             prepared_views: Mutex::new(FxHashMap::default()),
+            diagnostics_by_root: Mutex::new(FxHashMap::default()),
             workers,
             virtual_files,
             readonly_warnings: FxHashSet::default(),
@@ -196,6 +201,57 @@ impl Backend {
 
     pub fn invalidate_analysis_views(&self) {
         self.prepared_views.lock().unwrap().clear();
+    }
+
+    /// Replace the affected analysis roots' diagnostics and return one
+    /// publication per touched file. A dependency's own empty report must
+    /// leave diagnostics from its consumers in place.
+    pub(super) fn update_diagnostics(
+        &self,
+        mut affected_files: FxHashSet<Url>,
+        updates: Vec<(Url, DiagnosticsByFile)>,
+    ) -> DiagnosticsByFile {
+        let indexed = self.db.workspace().all_files(&self.db);
+        let mut saved = self.diagnostics_by_root.lock().unwrap();
+        saved.retain(|root, files| {
+            let still_indexed = if root.path().ends_with('/') {
+                root.join("fe.toml")
+                    .ok()
+                    .is_some_and(|config| indexed.get(&config).is_some())
+            } else {
+                indexed.get(root).is_some()
+            };
+            if !still_indexed {
+                affected_files.extend(files.keys().cloned());
+            }
+            still_indexed
+        });
+        for (root, mut files) in updates {
+            affected_files.extend(files.keys().cloned());
+            if let Some(previous) = saved.remove(&root) {
+                affected_files.extend(previous.into_keys());
+            }
+            files.retain(|_, diagnostics| !diagnostics.is_empty());
+            if !files.is_empty() {
+                saved.insert(root, files);
+            }
+        }
+        let mut batch: DiagnosticsByFile = affected_files
+            .into_iter()
+            .map(|url| (url, Vec::new()))
+            .collect();
+        for files in saved.values() {
+            for (url, diagnostics) in files {
+                if let Some(combined) = batch.get_mut(url) {
+                    for diagnostic in diagnostics {
+                        if !combined.contains(diagnostic) {
+                            combined.push(diagnostic.clone());
+                        }
+                    }
+                }
+            }
+        }
+        batch
     }
 
     pub fn supports_definition_link(&self) -> bool {

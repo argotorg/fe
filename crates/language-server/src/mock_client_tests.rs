@@ -1304,7 +1304,6 @@ impl Derive<Score> for FieldScore {
     client.clear_diagnostics();
     client.did_change(&lib, 2, &faulting);
     client.wait_for_text(&lib, &faulting).await;
-    client.analyze(&app, app_source).await;
     assert!(
         client
             .wait_for_diagnostics(|d| {
@@ -1322,8 +1321,12 @@ impl Derive<Score> for FieldScore {
     client.clear_diagnostics();
     client.did_change(&lib, 3, lib_source);
     client.wait_for_text(&lib, lib_source).await;
-    client.analyze(&app, app_source).await;
     assert!(client.wait_for_diagnostics(|d| d.uri == app).await);
+    assert!(
+        client
+            .wait_for_diagnostics(|d| d.uri == lib && d.diagnostics.is_empty())
+            .await
+    );
     assert!(
         errors(&client, &app).is_empty(),
         "{:?}",

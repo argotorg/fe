@@ -683,27 +683,29 @@ pub async fn handle_files_need_diagnostics(
     let FilesNeedDiagnostics(need_diagnostics) = message;
     let mut client = backend.client.clone();
 
-    // Track all requested URIs so we can clear stale diagnostics for any that
-    // don't appear in the computed diagnostics (e.g. deleted files, fixed errors)
-    let mut pending_clear: FxHashMap<Url, Url> = need_diagnostics
+    let affected_files: FxHashSet<Url> = need_diagnostics
         .iter()
-        .map(|NeedsDiagnostics(uri)| {
-            (
-                backend.map_client_uri_to_internal(uri.clone()),
-                backend.map_internal_uri_to_client(uri.clone()),
-            )
-        })
+        .map(|NeedsDiagnostics(uri)| backend.map_client_uri_to_internal(uri.clone()))
         .collect();
 
-    let ingots_need_diagnostics: FxHashSet<_> = pending_clear
-        .keys()
-        .filter_map(|url| {
-            backend
-                .db
-                .workspace()
-                .containing_ingot(&backend.db, url.clone())
-        })
+    let db = &backend.db;
+    let workspace = db.workspace();
+    let graph = db.dependency_graph();
+    let mut pending: Vec<_> = affected_files
+        .iter()
+        .filter_map(|url| workspace.containing_ingot(db, url.clone()))
         .collect();
+    let mut ingots_need_diagnostics = FxHashSet::default();
+    while let Some(ingot) = pending.pop() {
+        if ingots_need_diagnostics.insert(ingot) && ingot.kind(db) != IngotKind::StandAlone {
+            pending.extend(
+                graph
+                    .dependents(db, ingot.base(db))
+                    .into_iter()
+                    .filter_map(|(url, _)| workspace.containing_ingot(db, url)),
+            );
+        }
+    }
 
     tracing::debug!(
         "[fe:timing] handle_files_need_diagnostics: {} URIs -> {} ingots",
@@ -711,7 +713,19 @@ pub async fn handle_files_need_diagnostics(
         ingots_need_diagnostics.len()
     );
 
+    let mut updates = Vec::new();
     for ingot in ingots_need_diagnostics {
+        let source_url = ingot
+            .files(db)
+            .iter()
+            .find(|(_, file)| matches!(file.kind(db), Some(IngotFileKind::Source)))
+            .map(|(url, _)| url);
+        let standalone = ingot.kind(db) == IngotKind::StandAlone;
+        let root = if standalone {
+            source_url.clone()
+        } else {
+            Some(ingot.base(db).clone())
+        };
         // Test-only: trigger an induced panic to verify the catch_unwind
         // recovery path. This lives here (not in diagnostics_for_ingot) so
         // that unit tests calling diagnostics_for_ingot directly never
@@ -731,12 +745,6 @@ pub async fn handle_files_need_diagnostics(
         let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Diagnostics come from the same prepared view that hover, goto
             // and every other request of this revision use.
-            let standalone = ingot.kind(&backend.db) == IngotKind::StandAlone;
-            let source_url = ingot
-                .files(&backend.db)
-                .iter()
-                .find(|(_, file)| matches!(file.kind(&backend.db), Some(IngotFileKind::Source)))
-                .map(|(url, _)| url.clone());
             if let Some(url) = source_url {
                 return match backend.try_analysis_db_for_url(&url) {
                     Ok(db) => {
@@ -780,32 +788,22 @@ pub async fn handle_files_need_diagnostics(
             }
         };
 
-        for (internal_uri, diags) in diagnostics_map.iter() {
-            pending_clear.remove(internal_uri);
-            let uri = backend.map_internal_uri_to_client(internal_uri.clone());
-            let mut diagnostic = diags.clone();
-            map_related_info_uris(backend, &mut diagnostic);
-            let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
-                uri: uri.clone(),
-                diagnostics: diagnostic,
-                version: None,
-            };
-            if let Err(e) = client.publish_diagnostics(diagnostics_params) {
-                error!("Failed to publish diagnostics for {}: {:?}", uri, e);
-            }
+        if let Some(root) = root {
+            updates.push((root, diagnostics_map));
         }
     }
 
-    // Clear diagnostics for any requested URIs that weren't covered above
-    for uri in pending_clear.into_values() {
+    let diagnostics = backend.update_diagnostics(affected_files, updates);
+    for (internal_uri, mut diagnostics) in diagnostics {
+        let uri = backend.map_internal_uri_to_client(internal_uri);
+        map_related_info_uris(backend, &mut diagnostics);
         let diagnostics_params = async_lsp::lsp_types::PublishDiagnosticsParams {
             uri: uri.clone(),
-            diagnostics: Vec::new(),
+            diagnostics,
             version: None,
         };
-        debug!("Clearing stale diagnostics for {:?}", uri);
         if let Err(e) = client.publish_diagnostics(diagnostics_params) {
-            error!("Failed to clear diagnostics for {}: {:?}", uri, e);
+            error!("Failed to publish diagnostics for {}: {:?}", uri, e);
         }
     }
 
