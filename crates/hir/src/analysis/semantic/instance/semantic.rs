@@ -1827,6 +1827,12 @@ impl<'db> SemanticInstance<'db> {
                     return Err(failed_choice());
                 }
             }
+            if calls.codec_choices.is_some()
+                && callable.has_deferred_evidence(db)
+                && callable.complete_deferred_evidence(db).is_none()
+            {
+                return Err(failed_choice());
+            }
             let callee =
                 semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
                     .map_err(call_error)?

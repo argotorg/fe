@@ -97,9 +97,9 @@ use super::{
     instantiate_trait_self,
     trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitSolveCompletion, TraitSolveCx, WellFormedness,
-        check_trait_inst_wf_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
-        is_goal_query_satisfiable, is_goal_satisfiable,
+        ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCompletion, TraitSolveCx,
+        WellFormedness, check_trait_inst_wf_without_self, check_ty_wf,
+        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
@@ -4649,7 +4649,7 @@ pub struct PlaceEntryCalls<'db> {
     /// when only substitution later determines whether the layout needs it.
     pub codec_choice_failed: bool,
     /// The checked context needed if a packed codec proof is deferred.
-    pub codec_choices: Option<super::trait_resolution::ChosenImpls<'db>>,
+    pub codec_choices: Option<ChosenImpls<'db>>,
 }
 
 impl<'db> PlaceEntryCalls<'db> {
@@ -4660,14 +4660,20 @@ impl<'db> PlaceEntryCalls<'db> {
     /// Admission of an abstract body leaves a deferred codec obligation
     /// for the instance that supplies the remaining type arguments.
     pub(crate) fn deferred_codec_is_parametric(&self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.codec_choices.is_some() && codec_goal_is_parametric(db, &self.codec[0])
+        self.codec_choices
+            .is_some_and(|choices| codec_proof_is_parametric(db, &self.codec[0], choices))
     }
 }
 
-fn codec_goal_is_parametric<'db>(db: &'db dyn HirAnalysisDb, callable: &Callable<'db>) -> bool {
+fn codec_proof_is_parametric<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable: &Callable<'db>,
+    choices: ChosenImpls<'db>,
+) -> bool {
     callable
         .trait_inst()
         .is_some_and(|goal| collect_flags(db, goal).contains(TyFlags::HAS_PARAM))
+        || collect_flags(db, choices).contains(TyFlags::HAS_PARAM)
 }
 
 // A private module keeps the shared tables type out of the crate's public

@@ -1767,11 +1767,14 @@ impl<'db> TyCheckEnv<'db> {
                     use super::super::evidence::ProofOutcome;
                     match outcome {
                         ProofOutcome::Deferred => codec_deferred = true,
-                        ProofOutcome::Unavailable if solve_cx.choices().is_some() => {
+                        ProofOutcome::Proven(proof) if proof.has_deferred(self.db) => {
+                            codec_deferred = true;
+                        }
+                        ProofOutcome::Unavailable if let Some(choices) = solve_cx.choices() => {
                             // An explicit header can already win while a
-                            // prerequisite of that codec still depends on
-                            // the entry's type arguments.
-                            if super::codec_goal_is_parametric(self.db, callable) {
+                            // prerequisite still depends on an argument of
+                            // the entry or the applied lexical choice.
+                            if super::codec_proof_is_parametric(self.db, callable, choices) {
                                 codec_deferred = true;
                             } else {
                                 codec_choice_failed = true;
