@@ -942,6 +942,16 @@ impl RuntimeInstance {
         self.evm.ctx.cfg.tx_chain_id_check = false;
     }
 
+    /// Sets the block `TIMESTAMP` seen by subsequent calls.
+    pub fn set_block_timestamp(&mut self, timestamp: U256) {
+        self.evm.ctx.block.timestamp = timestamp;
+    }
+
+    /// Sets the block `NUMBER` seen by subsequent calls.
+    pub fn set_block_number(&mut self, number: U256) {
+        self.evm.ctx.block.number = number;
+    }
+
     /// Executes a strongly-typed function call using ABI encoding.
     pub fn call_function(
         &mut self,

@@ -16,6 +16,10 @@ pub struct TestMetadata {
     pub selector: u32,
     pub expected_revert: Option<ExpectedRevert>,
     pub initial_balance: Option<Vec<u8>>,
+    /// The block timestamp the test runs at, from `#[test(timestamp = ...)]`.
+    pub timestamp: Option<Vec<u8>>,
+    /// The block number the test runs at, from `#[test(block_number = ...)]`.
+    pub block_number: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +44,23 @@ pub(crate) struct TestRootMetadata {
     pub name: String,
     pub expected_revert: Option<ExpectedRevert>,
     pub initial_balance: Option<Vec<u8>>,
+    pub timestamp: Option<Vec<u8>>,
+    pub block_number: Option<Vec<u8>>,
+}
+
+impl TestRootMetadata {
+    /// The first `#[test]` argument the test uses that only has meaning on
+    /// the EVM.
+    #[cfg(any(feature = "cranelift", feature = "wasm"))]
+    pub(crate) fn evm_only_arg(&self) -> Option<&'static str> {
+        [
+            ("balance", &self.initial_balance),
+            ("timestamp", &self.timestamp),
+            ("block_number", &self.block_number),
+        ]
+        .into_iter()
+        .find_map(|(key, value)| value.is_some().then_some(key))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,30 +112,33 @@ pub(crate) fn runtime_test_root_metadata<'db>(
     })?;
     let expected_revert =
         parse_expected_revert(db, name, test_attr).map_err(TestRootMetadataError::Unsupported)?;
-    let initial_balance = parse_test_balance_arg(db, name, test_attr)?;
     Ok(TestRootMetadata {
         name: name.clone(),
         expected_revert,
-        initial_balance,
+        initial_balance: parse_test_u256_arg(db, name, test_attr, "balance")?,
+        timestamp: parse_test_u256_arg(db, name, test_attr, "timestamp")?,
+        block_number: parse_test_u256_arg(db, name, test_attr, "block_number")?,
     })
 }
 
-fn parse_test_balance_arg<'db>(
+/// The big-endian bytes of `#[test(key = ...)]`, a `u256` literal.
+fn parse_test_u256_arg<'db>(
     db: &'db dyn HirDb,
     test_name: &str,
     test_attr: &hir::hir_def::attr::NormalAttr<'db>,
+    key: &str,
 ) -> Result<Option<Vec<u8>>, TestRootMetadataError> {
-    let balance = parse_test_attr_int_arg(
+    let value = parse_test_attr_int_arg(
         db,
         test_name,
         test_attr,
-        "balance",
-        "balance = ...",
+        key,
+        &format!("{key} = ..."),
         "u256",
         32,
     )
     .map_err(TestRootMetadataError::Unsupported)?;
-    Ok(balance.map(|value| value.to_bytes_be()))
+    Ok(value.map(|value| value.to_bytes_be()))
 }
 
 pub fn parse_expected_revert<'db>(

@@ -2589,27 +2589,19 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(field) = fields.get(&name)
+            && let Some(key) = fields
+                .get(&name)
+                .map(|field| EffectRequirementKey::Type(field.declared))
+                .or_else(|| {
+                    contract_named_effects
+                        .get(&name)
+                        .map(|binding| binding.key.clone())
+                })
         {
             out.push(EffectRequirement {
                 binding_name: name,
-                key: EffectRequirementKey::Type(field.declared),
+                key,
                 is_mut: effect.is_mut(),
-                binding_site: list_site,
-                binding_idx: idx as u32,
-                binding_ty: key_syntax,
-            });
-            continue;
-        }
-
-        if key_path.len(db) == 1
-            && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(binding) = contract_named_effects.get(&name)
-        {
-            out.push(EffectRequirement {
-                binding_name: name,
-                key: binding.key.clone(),
-                is_mut: binding.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
                 binding_ty: key_syntax,

@@ -43,9 +43,9 @@ pub fn emit_test_suite_native(
     for &object in package.root_objects(db) {
         for section in object.sections(db) {
             let metadata = runtime_test_root_metadata(db, section.entry.owner(db))?;
-            if metadata.initial_balance.is_some() {
+            if let Some(arg) = metadata.evm_only_arg() {
                 return Err(LowerError::Unsupported(format!(
-                    "native test `{}` cannot use the EVM `balance` attribute",
+                    "native test `{}` cannot use the EVM `{arg}` attribute",
                     metadata.name
                 )));
             }

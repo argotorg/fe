@@ -3810,6 +3810,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "assoc_type_fields",
     "assoc_type_lanes",
     "associated_shape_forwarding",
+    "block_env",
     "bytes_view_overflow_revert",
     "call_with_default",
     "clear_place",
@@ -4135,6 +4136,75 @@ fn non_integer_balance_value() {}
         assert!(
             output.contains(expected),
             "expected malformed balance error, got:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_fe_test_rejects_bad_block_args() {
+    let temp = tempdir().expect("tempdir");
+    let cases = [
+        (
+            "missing_timestamp",
+            "#[test(timestamp)]
+fn missing_timestamp() {}
+",
+            "invalid #[test] function `missing_timestamp`: #[test(timestamp = ...)] expects an integer literal",
+        ),
+        (
+            "non_integer_timestamp",
+            "#[test(timestamp = \"1000\")]
+fn non_integer_timestamp() {}
+",
+            "invalid #[test] function `non_integer_timestamp`: #[test(timestamp = ...)] expects an integer literal",
+        ),
+        (
+            "negative_timestamp",
+            "#[test(timestamp = -1)]
+fn negative_timestamp() {}
+",
+            "attribute value must be an ident or literal value",
+        ),
+        (
+            "oversized_timestamp",
+            "#[test(timestamp = 0x10000000000000000000000000000000000000000000000000000000000000000)]
+fn oversized_timestamp() {}
+",
+            "invalid #[test] function `oversized_timestamp`: #[test(timestamp = ...)] must fit in u256",
+        ),
+        (
+            "non_integer_block_number",
+            "#[test(block_number = true)]
+fn non_integer_block_number() {}
+",
+            "invalid #[test] function `non_integer_block_number`: #[test(block_number = ...)] expects an integer literal",
+        ),
+        (
+            "oversized_block_number",
+            "#[test(block_number = 0x10000000000000000000000000000000000000000000000000000000000000000)]
+fn oversized_block_number() {}
+",
+            "invalid #[test] function `oversized_block_number`: #[test(block_number = ...)] must fit in u256",
+        ),
+    ];
+
+    for (filename, source, expected) in cases {
+        let path = temp.path().join(format!("{filename}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let path = path
+            .to_str()
+            .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
+
+        let (output, exit_code) = run_fe_main(&["test", path]);
+        assert_ne!(
+            exit_code, 0,
+            "expected fe test to reject {filename}:
+{output}"
+        );
+        assert!(
+            output.contains(expected),
+            "expected `{expected}` for {filename}, got:
+{output}"
         );
     }
 }
