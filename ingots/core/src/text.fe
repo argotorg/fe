@@ -852,10 +852,34 @@ fn find_word(_ text: MemSpan, word: u256, len: usize, from: usize) -> Option<usi
     Option::None
 }
 
+#[arithmetic(unchecked)]
 fn find_byte(_ text: MemSpan, _ byte: u8, from: usize) -> Option<usize> {
     let end = text.len()
     let base = text.ptr()
     var offset = from
+    if end >= 32 && from <= end - 32 {
+        // Preserve the common early match without constructing a word mask.
+        if unsafe { *ptr::offset_bytes(base, from) } == byte {
+            return Option::Some(from)
+        }
+        let ones: u256 = 0x0101010101010101010101010101010101010101010101010101010101010101
+        let low: u256 = 0x7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+        let repeated = (byte as u256) * ones
+        // stop - from is a multiple of 32. Every load ends at or before
+        // end, and advancing offset by 32 cannot overflow.
+        let stop = end - (end - from) % 32
+        while offset < stop {
+            let x = unsafe { text.read_be_unchecked<u256>(offset) } ^ repeated
+            // Each byte's addition stays below 256: no carry crosses a lane.
+            // The complement has a high bit exactly in lanes where x is zero;
+            // leading_zeros locates the first match in big-endian byte order.
+            let matches = ~(((x & low) + low) | x | low)
+            if matches != 0 {
+                return Option::Some(offset + (leading_zeros(matches) >> 3).downcast_unchecked())
+            }
+            offset += 32
+        }
+    }
     while offset < end {
         if unsafe { *ptr::offset_bytes(base, offset) } == byte {
             return Option::Some(offset)

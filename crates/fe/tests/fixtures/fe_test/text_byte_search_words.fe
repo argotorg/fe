@@ -1,0 +1,82 @@
+use core::hint::black_box
+use core::num::IntDowncast
+use core::ptr::{MemBuffer, MemSpan}
+use core::text::Pattern
+
+fn reference(_ input: MemSpan, _ byte: u8, from: usize) -> Option<usize> {
+    var i = from
+    while i < input.len() {
+        if input.byte_at(i) == byte {
+            return Some(i)
+        }
+        i += 1
+    }
+    None
+}
+fn check(_ input: MemSpan, _ byte: u8, from: usize) {
+    let byte = black_box(byte)
+    let from = black_box(from)
+    assert!(
+        byte.pattern_find(input, from).unwrap_or(default: usize::max())
+            == reference(input, byte, from).unwrap_or(default: usize::max()),
+    )
+}
+#[test]
+fn every_byte_value() {
+    var input = MemBuffer::new(67)
+    for n in 0 .. 256 {
+        let needle: u8 = n.downcast_unchecked()
+        for i in 0 .. 67 {
+            input[i] = needle ^ 0x80
+        }
+        check(input.span(), needle, from: 0)
+        for at in [0, 1, 15, 16, 30, 31, 32, 63, 64, 66] {
+            input[at] = needle
+            check(input.span(), needle, from: 0)
+            check(input.span(), needle, from: at)
+            check(input.span(), needle, from: at + 1)
+            input[at] = needle ^ 0x80
+        }
+    }
+}
+#[test]
+fn bounds_unaligned_and_padding() {
+    var backing = MemBuffer::new(160)
+    for i in 0 .. 160 {
+        backing[i] = 0xff
+    }
+    for len in 0 .. 98 {
+        for i in 0 .. len {
+            backing[i + 3] = 0x41
+        }
+        backing[len + 3] = 0xff
+        let view = backing.span().slice(offset: 3, len)
+        check(view, 0xff, from: 0)
+        check(view, 0xff, from: len)
+        check(view, 0xff, from: usize::max())
+        for from in 0 .. len + 1 {
+            check(view, 0x41, from)
+        }
+    }
+}
+#[test]
+fn first_match_and_adjacent_lanes() {
+    var input = MemBuffer::new(96)
+    for needle in [0 as u8, 1, 0x7f, 0x80, 0xff] {
+        for i in 0 .. 96 {
+            input[i] = needle ^ 1
+        }
+        for at in 0 .. 96 {
+            input[at] = needle
+            check(input.span(), needle, from: 0)
+            check(input.span(), needle, from: 1)
+            input[at] = needle ^ 1
+        }
+        input[31] = needle
+        input[32] = needle
+        input[63] = needle
+        check(input.span(), needle, from: 0)
+        check(input.span(), needle, from: 32)
+        check(input.span(), needle, from: 33)
+    }
+}
