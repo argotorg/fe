@@ -363,7 +363,11 @@ impl<'db> TraitSolveCx<'db> {
         let ordinary = choices
             .iter()
             .copied()
-            .filter(|choice| !is_named(db, choice.template))
+            .filter(|entry| {
+                !entry
+                    .implementation()
+                    .is_some_and(|choice| is_named(db, choice.template))
+            })
             .collect::<Vec<_>>();
         (ordinary.len() != choices.len()).then(|| {
             let retained = (!ordinary.is_empty()).then(|| ChosenImpls::new(db, ordinary));
