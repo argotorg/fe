@@ -3047,7 +3047,10 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
                     ..
                 } = &mut statement.kind
                 {
-                    *callee = SemanticCalleeRef { key: callee_key };
+                    *callee = SemanticCalleeRef {
+                        key: callee_key,
+                        pending_selection: None,
+                    };
                     replaced = true;
                 }
             }

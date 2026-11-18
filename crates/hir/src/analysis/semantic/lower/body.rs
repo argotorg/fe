@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use crate::{
     analysis::semantic::instance::{
         CallSiteLowering, ForLoopCallSites, SemanticInstance, provisional_semantic_callee_key,
-        resolve_semantic_const_ref, semantic_callee_key_with_effect_providers,
+        resolve_semantic_const_ref_with_policy, semantic_callee_key_with_effect_providers,
     },
     analysis::{
         HirAnalysisDb,
@@ -1556,9 +1556,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             ConstRef::Const(_) => const_ref,
         };
-        if let Some(const_ref) =
-            resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
-        {
+        let policy = self.instance.key(self.db).evidence_policy(self.db);
+        if let Some(const_ref) = resolve_semantic_const_ref_with_policy(
+            self.db,
+            const_ref,
+            ty,
+            SemOrigin::Expr(expr),
+            policy,
+        ) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 ty,

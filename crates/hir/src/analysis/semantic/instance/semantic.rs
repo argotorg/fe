@@ -81,7 +81,16 @@ use super::{
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
 
-#[salsa::interned]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SalsaValue)]
+pub(crate) enum InstanceEvidencePolicy {
+    #[default]
+    ReconstructOrdinary,
+    /// An output comparison runs with the two selections even when their
+    /// arguments still contain rigid parameters.
+    PreserveSelection,
+}
+
+#[salsa::interned(constructor = intern)]
 #[derive(Debug)]
 pub struct SemanticInstanceKey<'db> {
     #[returns(copy)]
@@ -97,9 +106,30 @@ pub struct SemanticInstanceKey<'db> {
     /// where the body needs it.
     #[returns(copy)]
     pub evidence: EvidenceList<'db>,
+    #[returns(copy)]
+    preserve_selection: bool,
 }
 
 impl<'db> SemanticInstanceKey<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        subst: GenericSubst<'db>,
+        effect_providers: EffectProviderSubst<'db>,
+        impl_env: ImplEnv<'db>,
+        evidence: EvidenceList<'db>,
+    ) -> Self {
+        Self::intern(
+            db,
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            evidence,
+            false,
+        )
+    }
+
     /// The key for `owner`'s instance with `subst`, given the proofs a use
     /// supplies of the assumptions its body is checked under. A key retains
     /// only non-ordinary proof trees, with remaining assumptions named only by
@@ -115,17 +145,56 @@ impl<'db> SemanticInstanceKey<'db> {
         impl_env: ImplEnv<'db>,
         supplied: EvidenceList<'db>,
     ) -> Self {
-        let evidence = EvidenceList::of(
+        Self::with_evidence_policy(
             db,
-            supplied
-                .entries(db)
-                .iter()
-                .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
-                .collect(),
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            supplied,
+            InstanceEvidencePolicy::ReconstructOrdinary,
         )
-        .with_rows(db, supplied.rows(db).clone())
+    }
+
+    pub(crate) fn with_evidence_policy(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        subst: GenericSubst<'db>,
+        effect_providers: EffectProviderSubst<'db>,
+        impl_env: ImplEnv<'db>,
+        supplied: EvidenceList<'db>,
+        policy: InstanceEvidencePolicy,
+    ) -> Self {
+        let evidence = match policy {
+            InstanceEvidencePolicy::ReconstructOrdinary => EvidenceList::of(
+                db,
+                supplied
+                    .entries(db)
+                    .iter()
+                    .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
+                    .collect(),
+            )
+            .with_rows(db, supplied.rows(db).clone()),
+            InstanceEvidencePolicy::PreserveSelection => supplied,
+        }
         .nominal(db);
-        Self::new(db, owner, subst, effect_providers, impl_env, evidence)
+        Self::intern(
+            db,
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            evidence,
+            policy == InstanceEvidencePolicy::PreserveSelection,
+        )
+    }
+
+    pub(crate) fn evidence_policy(self, db: &'db dyn HirAnalysisDb) -> InstanceEvidencePolicy {
+        if self.preserve_selection(db) {
+            InstanceEvidencePolicy::PreserveSelection
+        } else {
+            InstanceEvidencePolicy::ReconstructOrdinary
+        }
     }
 
     /// This key instantiated with its data parameters naming places in
@@ -139,13 +208,14 @@ impl<'db> SemanticInstanceKey<'db> {
             return self;
         }
         let providers = self.effect_providers(db).providers(db).clone();
-        Self::new(
+        Self::intern(
             db,
             self.owner(db),
             self.subst(db),
             EffectProviderSubst::new(db, providers, param_spaces),
             self.impl_env(db),
             self.evidence(db),
+            self.preserve_selection(db),
         )
     }
 
@@ -761,6 +831,38 @@ fn instance_effect_args<'db>(
     (expanded, providers, supplied)
 }
 
+/// The callee of a call site. A trait call whose implementation the caller's
+/// context does not select, such as a call through a bound on a type
+/// parameter, names the trait's declaration or default body; each instance
+/// selects its own implementation, so the reference records the self type
+/// that selects it.
+fn callee_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable: &Callable<'db>,
+    key: SemanticInstanceKey<'db>,
+    concrete_dispatch: bool,
+) -> SemanticCalleeRef<'db> {
+    let pending_selection = (!concrete_dispatch).then(|| {
+        // Only a trait call lacks a known body, and the self type is
+        // normalized as the key's evidence is.
+        let env = key.impl_env(db);
+        let self_ty = callable
+            .trait_inst()
+            .expect("a callee without a known body is a trait call")
+            .self_ty(db);
+        normalize_ty(
+            db,
+            self_ty,
+            env.normalization_scope(db),
+            env.assumptions(db),
+        )
+    });
+    SemanticCalleeRef {
+        key,
+        pending_selection,
+    }
+}
+
 /// Plans a call before provider refinement. The first argument-mapping
 /// failure is recorded in `diagnostic`; the site then keeps its nominal
 /// effect order.
@@ -801,7 +903,7 @@ fn provisional_call_site<'db>(
         });
     let (callee, effect_pairs, provider_pairs, drops_receiver) = match callee {
         Some(plan) => (
-            Some(SemanticCalleeRef { key: plan.key }),
+            Some(callee_ref(db, callable, plan.key, plan.concrete_dispatch)),
             plan.effect_pairs,
             plan.provider_pairs,
             plan.drops_receiver,
@@ -1241,9 +1343,12 @@ fn replan_call_site<'db>(
         site.effect_pairs = callee.effect_pairs.into_boxed_slice();
         site.provider_pairs = callee.provider_pairs.into_boxed_slice();
         site.drops_receiver = callee.drops_receiver;
-        site.callee = Some(SemanticCalleeRef {
-            key: callee.key.with_param_spaces(db, param_spaces),
-        });
+        site.callee = Some(callee_ref(
+            db,
+            callable,
+            callee.key.with_param_spaces(db, param_spaces),
+            callee.concrete_dispatch,
+        ));
     } else {
         site.callee = None;
         site.drops_receiver = false;

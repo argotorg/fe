@@ -1,17 +1,26 @@
 //! This module contains all trait related types definitions.
 
 use crate::{
+    analysis::semantic::{
+        EvalOutcome, SemOrigin, SemanticConstRef, SemanticInstance, canonicalize_semantic_consts,
+        eval_const_ref,
+        instance::{InstanceEvidencePolicy, resolve_semantic_const_ref_with_policy},
+    },
     analysis::ty::{
+        assoc_const::AssocConstUse,
+        const_ty::ConstTyData,
+        evidence::{UseEvidence, prove},
         method_cmp::{compare_impl_method, method_param_correspondence},
         trait_lower::{
             ImplSelfKey, collect_trait_impls, complete_impl_trait, complete_selected_impl,
             lower_impl_trait_header,
         },
-        trait_resolution::{GoalSatisfiability, PredicateListId, Selection},
-        ty_check::BodyOwner,
+        trait_resolution::{ChosenImpls, GoalSatisfiability, PredicateListId, Selection},
+        ty_check::{BodyOwner, ConstRef},
     },
     hir_def::{
         Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
+        scope_graph::ScopeId,
     },
 };
 use common::{
@@ -1144,19 +1153,15 @@ pub(crate) fn named_output_mismatch<'db>(
                 });
             }
         }
+        let assumptions = context
+            .assumptions()
+            .merge(db, own.instantiated_constraints(db))
+            .merge(db, other.instantiated_constraints(db));
         for constant in goal.def(db).assoc_consts(db) {
             let Some(name) = constant.name(db) else {
                 continue;
             };
-            let value = |resolved| {
-                super::const_ty::const_ty_from_resolved_trait_const(db, resolved, name)
-                    .map(|value| consts_evaluated(db, TyId::const_ty(db, value)))
-            };
-            let differs = match (value(own), value(other)) {
-                (Some(lhs), Some(rhs)) => !same_overlap_ty(db, lhs, rhs),
-                (lhs, rhs) => lhs != rhs,
-            };
-            if differs {
+            if !same_overlap_const(db, implementation.scope(), assumptions, name, own, other) {
                 return Some(NamedOutputMismatch::AssocConst { with, name });
             }
         }
@@ -1184,6 +1189,63 @@ pub(crate) fn named_output_mismatch<'db>(
         }
     }
     None
+}
+
+fn same_overlap_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    name: IdentId<'db>,
+    lhs: ResolvedImplInstance<'db>,
+    rhs: ResolvedImplInstance<'db>,
+) -> bool {
+    let build_ref = |resolved: ResolvedImplInstance<'db>| -> Option<SemanticConstRef<'db>> {
+        let inst = resolved.trait_inst();
+        let goal = TraitInstId::new_simple(db, inst.def(db), inst.args(db).clone());
+        let ty = inst
+            .def(db)
+            .const_(db, name)?
+            .ty_binder(db)?
+            .instantiate(db, goal.args(db));
+        let use_ = AssocConstUse::new(scope, assumptions, goal, name);
+        let choices =
+            ChosenImpls::push_applied(db, None, resolved.selected(), resolved.instantiated());
+        let proof = prove(db, use_.solve_cx(db).with_choices(Some(choices)), goal)?;
+        let mut evidence = UseEvidence::default();
+        evidence.record_dispatch(goal, Some(proof));
+        let mut const_ref = ConstRef::TraitConst { use_, evidence };
+        if !const_ref
+            .record_bound_evidence(db, Some(choices))
+            .is_empty()
+        {
+            return None;
+        }
+        resolve_semantic_const_ref_with_policy(
+            db,
+            const_ref,
+            ty,
+            SemOrigin::Synthetic,
+            InstanceEvidencePolicy::PreserveSelection,
+        )
+    };
+    // The same default source can read different methods of `Self`. Compare
+    // the instances with the dictionaries an associated-constant read uses.
+    let (Some(lhs), Some(rhs)) = (build_ref(lhs), build_ref(rhs)) else {
+        return false;
+    };
+    match (eval_const_ref(db, lhs), eval_const_ref(db, rhs)) {
+        (EvalOutcome::Ready(lhs), EvalOutcome::Ready(rhs)) => lhs == rhs,
+        (EvalOutcome::Blocked(_), EvalOutcome::Blocked(_)) => {
+            canonical_overlap_const_instance(db, lhs.instance(db), lhs.ty(db))
+                .zip(canonical_overlap_const_instance(
+                    db,
+                    rhs.instance(db),
+                    rhs.ty(db),
+                ))
+                .is_some_and(|(lhs, rhs)| lhs == rhs)
+        }
+        _ => false,
+    }
 }
 
 /// `value` with each constant in it evaluated, so two written forms of one
@@ -1252,10 +1314,16 @@ fn canonical_overlap_const_body<'db>(
         crate::analysis::semantic::ImplEnv::empty(db, owner.scope()),
         super::evidence::EvidenceList::none(db),
     );
-    let instance = crate::analysis::semantic::SemanticInstance::new(db, key);
-    let mut sem = crate::analysis::semantic::canonicalize_semantic_consts(db, instance)
-        .ok()?
-        .clone();
+    canonical_overlap_const_instance(db, key, expected)
+}
+
+fn canonical_overlap_const_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: crate::analysis::semantic::SemanticInstanceKey<'db>,
+    expected: TyId<'db>,
+) -> Option<CanonicalOverlapConstBody<'db>> {
+    let instance = SemanticInstance::new(db, key);
+    let mut sem = canonicalize_semantic_consts(db, instance).ok()?.clone();
     for local in &mut sem.locals {
         local.ty = consts_evaluated(db, local.ty);
         local.source = None;
@@ -1324,16 +1392,42 @@ fn at_overlap<'db>(
     {
         table.unify(a, b).ok()?;
     }
-    let resolved = |selected, fresh: ImplementorId<'db>, table: &mut UnificationTable<'db>| {
-        let instantiated = fresh.fold_with(db, table);
+    // The parameters left open by the overlap are rigid for output comparison.
+    // Reuse their declared identities so proof construction never receives a
+    // header's temporary inference variables.
+    struct RigidParams<'db>(FxHashMap<TyId<'db>, TyId<'db>>);
+    impl<'db> TyFolder<'db> for RigidParams<'db> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            self.0
+                .get(&ty)
+                .copied()
+                .unwrap_or_else(|| ty.super_fold_with(db, self))
+        }
+    }
+    let mut params = RigidParams(FxHashMap::default());
+    for (template, fresh) in [(own, own_fresh), (other, other_fresh)] {
+        for (&param, &arg) in template.params(db).iter().zip(fresh.params(db)) {
+            let arg = arg.fold_with(db, &mut table);
+            let free = match arg.data(db) {
+                TyData::TyVar(_) => true,
+                TyData::ConstTy(value) => matches!(value.data(db), ConstTyData::TyVar(..)),
+                _ => false,
+            };
+            if free {
+                params.0.entry(arg).or_insert(param);
+            }
+        }
+    }
+    let mut resolved = |selected, fresh: ImplementorId<'db>| {
+        let instantiated = fresh.fold_with(db, &mut table).fold_with(db, &mut params);
         ResolvedImplInstance {
             selected,
             instantiated,
             trait_inst: instantiated.trait_inst(db),
         }
     };
-    let own = resolved(own, own_fresh, &mut table);
-    let other = resolved(other, other_fresh, &mut table);
+    let own = resolved(own, own_fresh);
+    let other = resolved(other, other_fresh);
     Some((own, other))
 }
 

@@ -1,6 +1,6 @@
 use super::{
-    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
-    SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
+    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, InstanceEvidencePolicy,
+    SemanticInstance, SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
     resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
 use crate::{
@@ -1213,7 +1213,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     };
     Ok(Some(SemanticCallCallee {
         concrete_dispatch: callable.trait_inst().is_none() || selected_impl,
-        key: SemanticInstanceKey::of(
+        key: SemanticInstanceKey::with_evidence_policy(
             db,
             owner,
             subst,
@@ -1227,6 +1227,9 @@ fn semantic_callee_key_with_assumptions<'db>(
             ),
             impl_env,
             evidence,
+            caller.map_or_else(InstanceEvidencePolicy::default, |caller| {
+                caller.key(db).evidence_policy(db)
+            }),
         ),
         effect_pairs,
         provider_pairs,
@@ -1342,6 +1345,22 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Option<SemanticConstRef<'db>> {
+    resolve_semantic_const_ref_with_policy(
+        db,
+        const_ref,
+        ty,
+        origin,
+        InstanceEvidencePolicy::ReconstructOrdinary,
+    )
+}
+
+pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ref: ConstRef<'db>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+    policy: InstanceEvidencePolicy,
+) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst { use_, .. } => {
@@ -1352,7 +1371,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
                 evidence
             };
             let subst = GenericSubst::complete(db, subst);
-            Some(SemanticInstanceKey::of(
+            Some(SemanticInstanceKey::with_evidence_policy(
                 db,
                 BodyOwner::AnonConstBody { body, expected: ty },
                 subst,
@@ -1364,6 +1383,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
                     vec![use_.inst()],
                 ),
                 evidence,
+                policy,
             ))
         }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),

@@ -771,6 +771,86 @@ fn chosen() {{ with (Discount) {{ {statement} }} }}
 }
 
 #[test]
+fn associated_constant_default_waits_for_its_implementation() {
+    values(
+        r#"
+struct Item {}
+trait Price {
+    const fn price() -> u256
+    const N: u256 = Self::price()
+}
+impl Price for Item { const fn price() -> u256 { 100 } }
+const fn ordinary() -> u256 { Item::N }
+"#,
+        &[("ordinary", 100)],
+    );
+}
+
+#[test]
+fn inherited_associated_constant_compares_the_selected_methods() {
+    let source = r#"
+struct Item {}
+trait Price {
+    const fn price() -> u256 { 100 }
+    const N: u256 = Self::price()
+}
+impl Price for Item {}
+impl Price for Item as Alternate { const fn price() -> u256 { 100 } }
+const fn chosen() -> u256 { with (Alternate) { Item::N } }
+"#;
+    values(source, &[("chosen", 100)]);
+    let differing = source.replace("price() -> u256 { 100 } }", "price() -> u256 { 70 } }");
+    assert_eq!(diagnostics(&differing), vec!["5-0005"]);
+}
+
+#[test]
+fn generic_inherited_associated_constant_compares_selected_methods() {
+    let source = r#"
+struct Item<T> { value: T }
+trait Price {
+    const fn price() -> u256 { 100 }
+    const N: u256 = Self::price()
+}
+impl<T> Price for Item<T> {}
+impl<T> Price for Item<T> as Alternate { const fn price() -> u256 { 100 } }
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let differing = source.replace("price() -> u256 { 100 } }", "price() -> u256 { 70 } }");
+    assert_eq!(diagnostics(&differing), vec!["5-0005"]);
+}
+
+#[test]
+fn generic_associated_constant_comparison_keeps_selection_through_default_calls() {
+    let source = r#"
+struct Item<T> { value: T }
+trait Price {
+    const fn base() -> u256
+    const fn price() -> u256 { Self::base() + 1 }
+    const N: u256 = Self::price()
+}
+impl<T> Price for Item<T> { const fn base() -> u256 { 99 } }
+impl<T> Price for Item<T> as Alternate { const fn base() -> u256 { 100 - 1 } }
+"#;
+    assert_eq!(diagnostics(source), Vec::<String>::new());
+    let differing = source.replace("100 - 1", "100 - 2");
+    assert_eq!(diagnostics(&differing), vec!["5-0005"]);
+}
+
+#[test]
+fn associated_constant_compares_over_a_generic_overlap() {
+    let source = r#"
+struct Item<const N: usize> {}
+trait Size { const VALUE: usize }
+impl<const N: usize> Size for Item<N> { const VALUE: usize = N + 1 }
+impl<const M: usize> Size for Item<M> as Alternate { const VALUE: usize = M + 1 }
+const fn chosen() -> usize { with (Alternate<5>) { Item<5>::VALUE } }
+"#;
+    values(source, &[("chosen", 6)]);
+    let differing = source.replace("M + 1", "M + 2");
+    assert_eq!(diagnostics(&differing), vec!["5-0005"]);
+}
+
+#[test]
 fn named_outputs_require_an_ordinary_type_normalization_representative() {
     values(
         r#"
@@ -1643,10 +1723,8 @@ where
 
 #[test]
 fn wrapped_length_where_clause_consts_terminate_with_expected_outcomes() {
-    // The first three programs read `T::len()` of a type parameter, which is
-    // not an integer in `T::len() + 1`, so constant evaluation refuses them
-    // with 3-0052 before the instance key matters. The last two read `T::LEN`
-    // and lower through the instance key.
+    // A type constant cannot open a named implementation. A const helper can
+    // open its own implementation, and generic reads wait for their instance.
     let inline_choice_codes = diagnostics(
         r#"
 trait Len { const fn len() -> usize }
@@ -1660,25 +1738,26 @@ where
 { t: T }
 "#,
     );
-    assert!(
-        inline_choice_codes.contains(&"3-0052".to_string()),
-        "{inline_choice_codes:?}"
-    );
+    assert_eq!(inline_choice_codes, vec!["8-0138"]);
 
-    let helper_choice_codes = diagnostics(
+    values(
         r#"
+struct Item {}
 trait Len { const fn len() -> usize }
+impl Len for Item { const fn len() -> usize { 5 } }
 trait Indexed<const I: usize> {}
 struct Wrap<T> { t: T }
 impl<T: Len> Len for Wrap<T> as WrapLen { const fn len() -> usize { T::len() + 1 } }
 const fn read_len<T: Len>() -> usize { T::len() }
 const fn via_wrap<T: Len>() -> usize { with (WrapLen) { read_len<Wrap<T>>() } }
 struct S2<T> where T: Len + Indexed<{ via_wrap<T>() }> { t: T }
+type Slots = [u256; { via_wrap<Item>() }]
+const fn read_slot() -> u256 {
+    let slots: Slots = [9; 6]
+    slots[5]
+}
 "#,
-    );
-    assert!(
-        helper_choice_codes.contains(&"3-0052".to_string()),
-        "{helper_choice_codes:?}"
+        &[("read_slot", 9)],
     );
 
     let provider_len_codes = diagnostics(
@@ -1696,10 +1775,7 @@ where
 { t: T }
 "#,
     );
-    assert!(
-        provider_len_codes.contains(&"3-0052".to_string()),
-        "{provider_len_codes:?}"
-    );
+    assert!(provider_len_codes.is_empty(), "{provider_len_codes:?}");
 
     let generic_provider_codes = diagnostics(
         r#"

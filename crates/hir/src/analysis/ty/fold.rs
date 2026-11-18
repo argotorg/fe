@@ -304,7 +304,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
             owner => owner,
         };
         let env = self.impl_env(db);
-        Self::of(
+        Self::with_evidence_policy(
             db,
             owner,
             GenericSubst::new(
@@ -329,6 +329,7 @@ impl<'db> TyFoldable<'db> for SemanticInstanceKey<'db> {
                 env.witnesses(db).clone().fold_with(db, folder),
             ),
             self.evidence(db).fold_with(db, folder),
+            self.evidence_policy(db),
         )
     }
 }

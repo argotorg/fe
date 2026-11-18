@@ -157,7 +157,9 @@ be used there, and an unbounded concrete helper retains its ordinary behavior
 in a type constant. This restriction also covers const methods used to form
 types, even though their return values may differ between implementations,
 type aliases, and a constant argument of a written type that opens its own
-`with` block.
+`with` block. A const helper can select an implementation inside its own
+function body. A type constant can use that helper's result with ordinary
+arguments and bounds.
 
 ## Indexed storage
 

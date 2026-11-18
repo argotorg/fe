@@ -1,0 +1,2 @@
+A trait call in generic constant code, such as an array length that calls a method through a bound, now runs the implementation that each instance selects instead of the default body of the trait, and a constant of a generic implementation that calls a method through a bound is no longer refused with an internal error.
+Named implementations compare inherited associated constants using the methods their default bodies actually call.

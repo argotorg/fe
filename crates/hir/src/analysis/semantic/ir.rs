@@ -269,6 +269,10 @@ pub struct SBlock<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct SemanticCalleeRef<'db> {
     pub key: SemanticInstanceKey<'db>,
+    /// The self type of a trait call whose implementation the caller's context
+    /// does not select, so each instance selects it; `None` when the callee
+    /// body is known.
+    pub pending_selection: Option<TyId<'db>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
