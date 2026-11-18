@@ -29,7 +29,7 @@ use super::{
     diagnostics::ImportDiag,
     name_resolver::{
         NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind, NameResolutionError,
-        NameResolver, QueryDirective,
+        NameResolver, QueryDirective, Tier,
     },
     visibility_checker::is_use_visible,
 };
@@ -51,6 +51,11 @@ pub(crate) struct ImportResolver<'db> {
 
     /// The ingot that is being resolved.
     ingot: Ingot<'db>,
+
+    /// Whether the imports and the lookups they make see the items generated
+    /// in the ingot. In the authored tier a use that names such an item fails
+    /// and imports nothing; the diagnostics of the tier are not reported.
+    tier: Tier,
 
     /// The imports of the settled uses, which lookups see.
     imports: ResolvedImports<'db>,
@@ -131,10 +136,11 @@ impl<'db> From<SegmentError<'db>> for Stop<'db> {
 }
 
 impl<'db> ImportResolver<'db> {
-    pub(crate) fn new(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+    pub(crate) fn new(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>, tier: Tier) -> Self {
         Self {
             db,
             ingot,
+            tier,
             imports: ResolvedImports::default(),
             buckets: FxHashMap::default(),
             glob_targets: FxHashMap::default(),
@@ -409,7 +415,8 @@ impl<'db> ImportResolver<'db> {
     fn glob_names(&self, use_: Use<'db>, target: ScopeId<'db>) -> GlobNames<'db> {
         let db = self.db;
         let scope = use_scope(db, use_);
-        let mut names = NameResolver::new(db, self).collect_all_resolutions_for_glob(target, scope);
+        let mut names = NameResolver::new(db, self, self.tier.hides(self.ingot))
+            .collect_all_resolutions_for_glob(target, scope);
         names.retain(|&name, resolutions| {
             if self
                 .pending_named(target, name)
@@ -543,7 +550,8 @@ impl<'db> ImportResolver<'db> {
             QueryDirective::new().disallow_lex().disallow_external()
         };
         let query = EarlyNameQueryId::new(db, name, scope, directive);
-        let mut bucket = NameResolver::new(db, self).resolve_query(query);
+        let mut bucket =
+            NameResolver::new(db, self, self.tier.hides(self.ingot)).resolve_query(query);
 
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
@@ -786,16 +794,27 @@ pub(super) trait Importer<'db> {
     }
 }
 
+/// The imports of the ingot of each scope, as the settled imports of that
+/// ingot. `hide` is the ingot whose generated items the lookup does not see;
+/// every other ingot is seen whole, as its generated items are sealed.
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DefaultImporter;
+pub(super) struct DefaultImporter<'db> {
+    pub(super) hide: Option<Ingot<'db>>,
+}
 
-impl<'db> Importer<'db> for DefaultImporter {
+impl<'db> Importer<'db> for DefaultImporter<'db> {
     fn imports<'a>(
         &'a self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
     ) -> &'a ResolvedImports<'db> {
-        &super::resolve_imports(db, scope.ingot(db)).1
+        let ingot = scope.ingot(db);
+        let tier = if self.hide == Some(ingot) {
+            Tier::Authored
+        } else {
+            Tier::All
+        };
+        &super::resolve_imports(db, ingot, tier).1
     }
 }
 
@@ -809,7 +828,7 @@ impl<'db> Importer<'db> for ImportResolver<'db> {
             self.reads.borrow_mut().insert(scope);
             &self.imports
         } else {
-            DefaultImporter.imports(db, scope)
+            &super::resolve_imports(db, scope.ingot(db), Tier::All).1
         }
     }
 }

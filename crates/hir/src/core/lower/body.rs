@@ -4,8 +4,8 @@ use super::FileLowerCtxt;
 use crate::{
     hir_def::{
         BindingMarker, Body, BodyKind, BodySourceMap, Cond, CondId, Expr, ExprId, FuncParamName,
-        IdentId, NodeStore, Partial, Pat, PatId, PathId, RecordPatField, Stmt, StmtId,
-        TrackedItemId, TrackedItemVariant,
+        IdentId, NodeStore, Partial, Pat, PatId, PathId, QuoteOrigins, RecordPatField, Stmt,
+        StmtId, TopLevelMod, TrackedItemId, TrackedItemVariant,
     },
     span::HirOrigin,
 };
@@ -155,6 +155,11 @@ pub(super) struct BodyCtxt<'ctxt, 'db> {
     pub(super) source_map: BodySourceMap,
     pub(super) active_binder_groups: Vec<(common::generation::FrozenRecordRef, usize)>,
     pub(super) local_binders: Vec<LocalBinder<'db>>,
+    /// How many quotations were active where this body began.
+    base_frames: usize,
+    /// The quotations around each expression lowered inside a fragment that
+    /// the body splices, which the body's own quotations do not describe.
+    spliced: Vec<(ExprId, Vec<TopLevelMod<'db>>)>,
 }
 
 /// A name in scope, for checking the open names of the quotes spliced there.
@@ -326,12 +331,21 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         Some(idx)
     }
 
+    /// Notes the quotations around `expr` if they are not the body's own: it
+    /// is part of a fragment that the body splices.
+    fn note_quote_chain(&mut self, expr: ExprId) {
+        if self.f_ctxt.quote_frames.len() > self.base_frames {
+            self.spliced.push((expr, self.f_ctxt.quote_chain()));
+        }
+    }
+
     pub(super) fn push_expr(&mut self, expr: Expr<'db>, origin: HirOrigin<ast::Expr>) -> ExprId {
         let expr_id = self.exprs.push(Partial::Present(expr));
         let quote_mod = self.current_quote_mod_idx();
         self.source_map
             .expr_map
             .insert_with_quote_mod(expr_id, origin, quote_mod);
+        self.note_quote_chain(expr_id);
 
         expr_id
     }
@@ -342,6 +356,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         self.source_map
             .expr_map
             .insert_with_quote_mod(expr_id, origin, quote_mod);
+        self.note_quote_chain(expr_id);
 
         expr_id
     }
@@ -481,8 +496,18 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         pat_id
     }
 
+    /// The quotations that wrote and placed this body, for it to keep.
+    pub(super) fn take_quote_origins(&mut self) -> QuoteOrigins<'db> {
+        QuoteOrigins {
+            syntax_top_mod: self.f_ctxt.syntax_top_mod(),
+            frames: self.f_ctxt.quote_chain(),
+            spliced: std::mem::take(&mut self.spliced),
+        }
+    }
+
     pub(super) fn new(f_ctxt: &'ctxt mut FileLowerCtxt<'db>, id: TrackedItemId<'db>) -> Self {
         f_ctxt.enter_body_scope(id);
+        let base_frames = f_ctxt.quote_frames.len();
         Self {
             f_ctxt,
             id,
@@ -493,16 +518,19 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             source_map: BodySourceMap::default(),
             active_binder_groups: Vec::new(),
             local_binders: Vec::new(),
+            base_frames,
+            spliced: Vec::new(),
         }
     }
 
     pub(super) fn build(
-        self,
+        mut self,
         ast: Option<&ast::Expr>,
         body_expr: ExprId,
         body_kind: BodyKind,
     ) -> Body<'db> {
         let origin = ast.map_or(HirOrigin::None, HirOrigin::raw);
+        let quote_origins = self.take_quote_origins();
         let body = Body::new(
             self.f_ctxt.db(),
             self.id,
@@ -514,7 +542,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             self.pats,
             self.f_ctxt.top_mod(),
             self.f_ctxt.lazy_func(),
-            self.f_ctxt.syntax_top_mod(),
+            quote_origins,
             self.source_map,
             origin,
         );

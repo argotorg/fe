@@ -22,6 +22,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::Tier,
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
@@ -362,6 +363,7 @@ fn type_depth_growth_exceeded(initial_depth: usize, current_depth: usize) -> boo
 struct TraitResolutionContext<'db> {
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     prepared_queries: FxHashMap<Query<'db>, PreparedQuery<'db>>,
     target: Option<TargetAnswer<'db>>,
     type_depth_budget: TypeDepthBudget,
@@ -371,12 +373,14 @@ impl<'db> TraitResolutionContext<'db> {
     fn new(
         db: &'db dyn HirAnalysisDb,
         origin_ingot: crate::Ingot<'db>,
+        tier: Tier,
         root: TraitSolverQuery<'db>,
         target: Option<TargetAnswer<'db>>,
     ) -> Self {
         Self {
             db,
             origin_ingot,
+            tier,
             prepared_queries: FxHashMap::default(),
             target,
             type_depth_budget: TypeDepthBudget::new(db, root, target),
@@ -584,6 +588,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             primary,
             secondary,
             Canonical::new(self.db, prepared.normalized_goal),
+            self.tier,
+            self.origin_ingot,
         );
 
         let mut clauses =
@@ -958,11 +964,12 @@ fn map_completion(completion: Completion<StopReason<'_>>) -> TraitSolveCompletio
 pub(super) fn solve<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     query: Query<'db>,
 ) -> GoalSatisfiability<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, None);
+    let mut context = TraitResolutionContext::new(db, origin_ingot, tier, root_goal, None);
     let mut observer = UnresolvedGoalObserver::default();
     let config = Config {
         limits: Limits {
@@ -1006,6 +1013,7 @@ pub(super) fn solve<'db>(
 pub(super) fn has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     query: Query<'db>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
@@ -1017,7 +1025,7 @@ pub(super) fn has_solution<'db>(
         inst: target,
         relation,
     };
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, Some(target));
+    let mut context = TraitResolutionContext::new(db, origin_ingot, tier, root_goal, Some(target));
     let options = ReportOptions::default().with_answerless(AnswerlessMode::Omit);
     // A target can occur after a non-regular recursive clause. Fair scheduling
     // keeps that branch from starving later root clauses before the type-depth

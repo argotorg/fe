@@ -1,3 +1,4 @@
+use fe_hir::analysis::name_resolution::Tier;
 use fe_hir::{
     analysis::ty::{
         ty_check::GroundBoundAdmissionCause,
@@ -262,7 +263,7 @@ impl Score for Other with (Provider)
         if goal.def(&db) == score_trait {
             checked += 1;
             assert!(
-                prove(&db, TraitSolveCx::new(&db, module.scope()), goal).is_none(),
+                prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).is_none(),
                 "unprepared declarations supply no ordinary proof"
             );
         }

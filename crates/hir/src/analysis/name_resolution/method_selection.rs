@@ -5,7 +5,10 @@ use thin_vec::ThinVec;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{is_scope_visible_from, traits_in_scope::traits_available_for_selection},
+    name_resolution::{
+        Tier, authored_first_filling, is_scope_visible_from,
+        traits_in_scope::traits_available_for_selection,
+    },
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
         closure::{CallableTrait, callable_insts},
@@ -108,6 +111,10 @@ pub struct AmbiguousTraitMethods<'db> {
 pub(crate) struct MethodSelectionOutcome<'db> {
     pub(crate) result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>,
     pub(crate) pending: Vec<GenerationRequest<'db>>,
+    /// The result is a candidate whose bounds are proven not to hold, kept only
+    /// so that its unmet bound is reported. Nothing applies to the receiver,
+    /// so a lower tier may still supply a method.
+    pub(crate) unsatisfied: bool,
 }
 
 impl<'db> MethodSelectionOutcome<'db> {
@@ -115,7 +122,14 @@ impl<'db> MethodSelectionOutcome<'db> {
         Self {
             result,
             pending: Vec::new(),
+            unsatisfied: false,
         }
+    }
+
+    /// Whether a method applies to the receiver: one was found that is not
+    /// merely the diagnostic fallback of a proven unmet bound.
+    pub(crate) fn applies(&self) -> bool {
+        !matches!(self.result, Err(MethodSelectionError::NotFound)) && !self.unsatisfied
     }
 }
 
@@ -133,18 +147,9 @@ pub(crate) fn select_method_candidate<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    trait_: Option<Trait<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
-    select_method_candidate_with_choices(
-        db,
-        receiver,
-        method_name,
-        scope,
-        assumptions,
-        trait_,
-        None,
-    )
-    .result
+    select_method_candidate_with_choices(db, receiver, method_name, scope, assumptions, None, None)
+        .result
 }
 
 pub(crate) fn select_method_candidate_with_choices<'db>(
@@ -172,6 +177,11 @@ pub(crate) fn select_method_candidate_with_choices<'db>(
 /// of a core callable trait whose receiver is `self`, else `call_mut`
 /// of one whose receiver is `mut self`. Other methods named `call` do not
 /// make a type callable.
+///
+/// The order of the two is a preference between implementations. Every
+/// implementation counts: a generated implementation of `Fn` or `FnMut` is
+/// refused where it is requested (see `presence_decision`), so none competes
+/// with a written one.
 pub(crate) fn select_callable_value_method<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
@@ -180,7 +190,7 @@ pub(crate) fn select_callable_value_method<'db>(
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     let select = |name: &str| {
         let name = IdentId::new(db, name.to_string());
-        select_filtered_method(
+        select_filtered_method_in(
             db,
             receiver,
             name,
@@ -188,6 +198,7 @@ pub(crate) fn select_callable_value_method<'db>(
             assumptions,
             TraitFilter::CallableTraits,
             None,
+            Tier::All,
         )
         .result
     };
@@ -206,6 +217,76 @@ fn select_filtered_method<'db>(
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
 ) -> MethodSelectionOutcome<'db> {
+    // Which method a name selects, inherent or of some trait, is one
+    // procedure. Inside the ingot that generates them, generated items only
+    // fill gaps: the procedure runs without them first, and again with them
+    // only if it found no method at all. A selection limited to one trait, as
+    // for a unary operator, is the same procedure over fewer candidates.
+    let select = |tier: Tier| {
+        select_filtered_method_in(
+            db,
+            receiver,
+            method_name,
+            scope,
+            assumptions,
+            filter,
+            choices,
+            tier,
+        )
+    };
+    authored_first_filling(
+        db,
+        scope.ingot(db),
+        select,
+        MethodSelectionOutcome::applies,
+        // A candidate whose bound is proven unmet is what the authored tier
+        // found, and its diagnostics are the answer, unless the generated
+        // items supply a method that applies.
+        |authored, full| {
+            if full.applies() || matches!(authored.result, Err(MethodSelectionError::NotFound)) {
+                full
+            } else {
+                authored
+            }
+        },
+    )
+}
+
+/// Selects a method in one `tier`, without falling back to the other. A
+/// longer lookup procedure that selects a method as one of its steps, such as
+/// the members of a type path, runs this inside its own tiers.
+pub(crate) fn select_method_candidate_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    method_name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
+    tier: Tier,
+) -> MethodSelectionOutcome<'db> {
+    select_filtered_method_in(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        TraitFilter::Any,
+        choices,
+        tier,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn select_filtered_method_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver: &Canonicalized<'db, TyId<'db>>,
+    method_name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    filter: TraitFilter<'db>,
+    choices: Option<ChosenImpls<'db>>,
+    tier: Tier,
+) -> MethodSelectionOutcome<'db> {
     let receiver_ty = receiver.original();
     if receiver_ty.is_ty_var(db) {
         return MethodSelectionOutcome::of(Err(MethodSelectionError::ReceiverTypeMustBeKnown));
@@ -219,9 +300,9 @@ fn select_filtered_method<'db>(
         assumptions,
         filter,
         choices,
+        tier,
     );
-
-    let selector = MethodSelector {
+    MethodSelector {
         db,
         receiver,
         scope,
@@ -229,10 +310,11 @@ fn select_filtered_method<'db>(
         assumptions,
         filter,
         choices,
+        tier,
         pending: Default::default(),
-    };
-
-    selector.select()
+        unsatisfied: Default::default(),
+    }
+    .select()
 }
 
 /// The methods a selection considers.
@@ -240,65 +322,11 @@ fn select_filtered_method<'db>(
 enum TraitFilter<'db> {
     /// Inherent methods, then the methods of every trait.
     Any,
-    /// Only the methods of traits (no inherent methods).
-    TraitsOnly,
     /// The methods of one trait.
     Trait(Trait<'db>),
     /// The methods of the core callable traits, which are visible
     /// whether or not they are in scope.
     CallableTraits,
-}
-
-pub(crate) fn select_trait_method_for_type<'db>(
-    db: &'db dyn HirAnalysisDb,
-    receiver: &Canonicalized<'db, TyId<'db>>,
-    method_name: IdentId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<(Trait<'db>, Func<'db>)> {
-    if receiver.original().is_ty_var(db) {
-        return None;
-    }
-    let candidates = assemble_method_candidates(
-        db,
-        receiver,
-        method_name,
-        scope,
-        assumptions,
-        TraitFilter::TraitsOnly,
-        None,
-    );
-    let selector = MethodSelector {
-        db,
-        receiver,
-        scope,
-        candidates,
-        assumptions,
-        filter: TraitFilter::TraitsOnly,
-        choices: None,
-        pending: Default::default(),
-    };
-    let checked: Vec<_> = selector
-        .candidates
-        .traits
-        .iter()
-        .copied()
-        .filter_map(|cand| match selector.check_trait_cand(cand) {
-            TraitCandidateCheck::Confirmed(tm) | TraitCandidateCheck::NeedsConfirmation(tm) => {
-                Some((cand, tm))
-            }
-            TraitCandidateCheck::Unsatisfied(_) | TraitCandidateCheck::Rejected => None,
-        })
-        .collect();
-    if checked.len() == 1 {
-        let (cand, tm) = checked[0];
-        return Some((cand.trait_def(db), tm.method));
-    }
-    let available = selector.available_traits();
-    checked
-        .into_iter()
-        .find(|(cand, _)| available.contains(&cand.trait_def(db)))
-        .map(|(cand, tm)| (cand.trait_def(db), tm.method))
 }
 
 pub(crate) fn select_trait_method_candidates<'db>(
@@ -308,6 +336,7 @@ pub(crate) fn select_trait_method_candidates<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     trait_: Trait<'db>,
+    tier: Tier,
 ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
     let receiver_ty = receiver.original();
     if receiver_ty.is_ty_var(db) {
@@ -315,8 +344,17 @@ pub(crate) fn select_trait_method_candidates<'db>(
     }
 
     let filter = TraitFilter::Trait(trait_);
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter, None);
+    // The caller names the trait and decides which tier to ask.
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        filter,
+        None,
+        tier,
+    );
 
     let selector = MethodSelector {
         db,
@@ -326,7 +364,9 @@ pub(crate) fn select_trait_method_candidates<'db>(
         assumptions,
         filter,
         choices: None,
+        tier,
         pending: Default::default(),
+        unsatisfied: Default::default(),
     };
 
     // Every candidate implements `trait_`, which the caller picked directly
@@ -340,6 +380,7 @@ pub(crate) fn select_trait_method_candidates<'db>(
     Ok(selector.trait_method_candidates(traits.iter().copied()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn assemble_method_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
@@ -348,6 +389,7 @@ fn assemble_method_candidates<'db>(
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    tier: Tier,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
         db,
@@ -357,6 +399,7 @@ fn assemble_method_candidates<'db>(
         assumptions,
         filter,
         choices,
+        tier,
         candidates: AssembledCandidates::default(),
     }
     .assemble()
@@ -374,6 +417,9 @@ struct CandidateAssembler<'db, 'a> {
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    /// Whether the methods and implementations generated in the ingot of
+    /// `scope` are candidates.
+    tier: Tier,
     candidates: AssembledCandidates<'db>,
 }
 
@@ -403,6 +449,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
         for method in probe_method(
             self.db,
             ingot,
+            self.tier,
             MethodProbe {
                 receiver: self.receiver.original(),
                 assumptions: self.assumptions,
@@ -440,10 +487,17 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                     .filter(|&ingot| ingot != scope_ingot),
             ];
             for ingot in search_ingots.into_iter().flatten() {
+                let tier = self.tier.for_table(self.db, scope_ingot, ingot);
                 let implementors = if let TraitFilter::Trait(trait_def) = self.filter {
-                    impls_for_trait_and_ty(self.db, ingot, trait_def, self.receiver.canonical())
+                    impls_for_trait_and_ty(
+                        self.db,
+                        ingot,
+                        tier,
+                        trait_def,
+                        self.receiver.canonical(),
+                    )
                 } else {
-                    impls_for_ty(self.db, ingot, self.receiver.canonical())
+                    impls_for_ty(self.db, ingot, tier, self.receiver.canonical())
                 };
                 for &imp in implementors {
                     self.insert_impl_trait_method_cand(imp);
@@ -509,7 +563,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
 
     fn allow_trait(&self, trait_def: Trait<'db>) -> bool {
         match self.filter {
-            TraitFilter::Any | TraitFilter::TraitsOnly => true,
+            TraitFilter::Any => true,
             TraitFilter::Trait(trait_) => trait_ == trait_def,
             TraitFilter::CallableTraits => CallableTrait::of(self.db, trait_def).is_some(),
         }
@@ -583,8 +637,13 @@ struct MethodSelector<'db, 'a> {
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    /// Whether the candidates are checked with the implementations generated
+    /// in the ingot of `scope`.
+    tier: Tier,
     /// Requests that the probes of unconfirmed candidates stopped on.
     pending: std::cell::RefCell<Vec<GenerationRequest<'db>>>,
+    /// Set when the result is a candidate with a proven unmet bound.
+    unsatisfied: std::cell::Cell<bool>,
 }
 
 impl<'db, 'a> MethodSelector<'db, 'a> {
@@ -596,6 +655,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         MethodSelectionOutcome {
             result,
             pending: self.pending.into_inner(),
+            unsatisfied: self.unsatisfied.get(),
         }
     }
 
@@ -675,7 +735,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let checked = self.prune_inapplicable_trait_checks(checked);
 
         if checked.len() == 1 {
-            return Self::finalize_sole_check(checked[0].1);
+            return self.finalize_sole_check(checked[0].1);
         }
 
         let available_traits = self.available_traits();
@@ -703,7 +763,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 }
             }
 
-            1 => Self::finalize_sole_check(visible[0].1),
+            1 => self.finalize_sole_check(visible[0].1),
 
             _ => {
                 // Some candidates are equivalent after trait solving (e.g., an explicit
@@ -732,6 +792,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
                 if selected.is_empty() {
                     if unsatisfied.len() == 1 {
+                        self.unsatisfied.set(true);
                         return Ok(MethodCandidate::NeedsConfirmation(
                             *unsatisfied.iter().next().unwrap(),
                         ));
@@ -807,12 +868,16 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// candidate is still surfaced as `NeedsConfirmation` so the unmet bound is
     /// reported downstream rather than as a bare "method not found".
     fn finalize_sole_check(
+        &self,
         check: TraitCandidateCheck<'db>,
     ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
         match check {
             TraitCandidateCheck::Confirmed(cand) => Ok(MethodCandidate::TraitMethod(cand)),
-            TraitCandidateCheck::NeedsConfirmation(cand)
-            | TraitCandidateCheck::Unsatisfied(cand) => {
+            TraitCandidateCheck::NeedsConfirmation(cand) => {
+                Ok(MethodCandidate::NeedsConfirmation(cand))
+            }
+            TraitCandidateCheck::Unsatisfied(cand) => {
+                self.unsatisfied.set(true);
                 Ok(MethodCandidate::NeedsConfirmation(cand))
             }
             TraitCandidateCheck::Rejected => Err(MethodSelectionError::NotFound),
@@ -951,7 +1016,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             return false;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope)
+        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
             .with_assumptions(self.assumptions)
             .with_choices(self.choices);
         let query = solve_cx.query(self.db, candidate_inst);
@@ -1022,7 +1087,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             return TraitCandidateCheck::Rejected;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope)
+        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
             .with_assumptions(self.assumptions)
             .with_choices(self.choices);
         let mut needs_confirmation = false;
@@ -1094,7 +1159,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
         let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.original());
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope)
+        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
             .with_assumptions(self.assumptions)
             .with_choices(self.choices);
         let query = solve_cx.query(self.db, inst);
@@ -1201,6 +1266,7 @@ impl<'db> AssembledCandidates<'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::name_resolution::Tier;
     use camino::Utf8PathBuf;
 
     use crate::{
@@ -1259,7 +1325,7 @@ fn test_it() {
         };
 
         let std_ingot = address.ingot(&db).expect("Address should come from std");
-        let impls = impls_for_ty(&db, std_ingot, Canonical::new(&db, address));
+        let impls = impls_for_ty(&db, std_ingot, Tier::All, Canonical::new(&db, address));
         let impl_trait_names: Vec<_> = impls
             .iter()
             .map(|imp| imp.trait_(&db).pretty_print(&db, false))

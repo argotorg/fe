@@ -43,6 +43,7 @@ use super::panic::{PANIC_STORAGE_ENCODING, Panic}
 ///
 /// `to_packed` returns the low `BITS` bits of the stored field and
 /// `from_packed` rebuilds the value from them (sign-extending signed types).
+#[decides = "how a stored value is packed"]
 pub trait SolPacked {
     const BITS: u256
     fn to_packed(own self) -> u256

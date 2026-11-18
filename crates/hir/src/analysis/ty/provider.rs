@@ -1,10 +1,11 @@
+use crate::analysis::name_resolution::Tier;
 use salsa::SalsaValue;
 
 use crate::{
     analysis::{
         HirAnalysisDb,
         ty::{
-            corelib::{resolve_core_trait, resolve_lib_type_path},
+            corelib::{presence_trait, resolve_core_trait, resolve_lib_type_path},
             normalize::normalize_ty,
             trait_def::{TraitInstId, resolve_trait_impl_instance},
             trait_lower::lower_impl_trait,
@@ -223,11 +224,11 @@ pub fn pinned_space<'db>(
     assumptions: PredicateListId<'db>,
     ty: TyId<'db>,
 ) -> Option<AddressSpace> {
-    let pinned = resolve_core_trait(db, scope, &["marker", "Pinned"])?;
+    let pinned = presence_trait(db, scope, "core::marker::Pinned")?;
     let inst = TraitInstId::new_simple(db, pinned, vec![ty]);
     if !goal_holds(
         db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
         inst,
     ) {
         return None;
@@ -294,7 +295,7 @@ pub fn state_index_lanes<'db>(
     assumptions: PredicateListId<'db>,
     collection_ty: TyId<'db>,
 ) -> Option<StateIndexLanes<'db>> {
-    let state_index = resolve_core_trait(db, scope, &["ops", "StateIndex"])?;
+    let state_index = presence_trait(db, scope, "core::ops::StateIndex")?;
     let inst = TraitInstId::new_simple(db, state_index, vec![collection_ty]);
     let assoc = |name: &str| {
         let projected = inst
@@ -306,8 +307,8 @@ pub fn state_index_lanes<'db>(
     if codec == TyId::unit(db) {
         return None;
     }
-    let lane_codec = resolve_core_trait(db, scope, &["ops", "LaneCodec"])?;
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let lane_codec = presence_trait(db, scope, "core::ops::LaneCodec")?;
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     let Selection::Unique(resolved) = resolve_trait_impl_instance(
         db,
         solve_cx,

@@ -1,9 +1,10 @@
+use crate::analysis::name_resolution::Tier;
 use common::indexmap::IndexMap;
 use salsa::SalsaValue;
 
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::method_selection::{MethodCandidate, select_method_candidate},
+    name_resolution::method_selection::{MethodCandidate, select_method_candidate_with_choices},
 };
 use crate::core::hir_def::{
     BindingMarker, CondId, Expr, ExprId, FuncParamName, IdentId, ModeMarker, Partial, Pat, PatId,
@@ -20,7 +21,7 @@ use super::{
 };
 use crate::analysis::ty::{
     canonical::Canonicalized,
-    corelib::resolve_core_trait,
+    corelib::{presence_trait, resolve_core_trait},
     diagnostics::{BodyDiag, MarkerPosition},
     fold::{TyFoldable, TyFolder},
     shape::Shape,
@@ -229,7 +230,7 @@ impl<'db> TyChecker<'db> {
             let ascription = ascription.unwrap_or_else(|| self.fresh_ty());
             if let Some(diag) = ascription.emit_wf_diag(
                 self.db,
-                TraitSolveCx::new(self.db, self.env.scope()),
+                TraitSolveCx::new(self.db, self.env.scope(), Tier::All),
                 self.env.assumptions(),
                 span.ty().into(),
             ) {
@@ -618,13 +619,19 @@ impl<'db> TyChecker<'db> {
         plan
     }
 
+    /// `Driver` or `Producer`: the loop protocols whose presence decides which
+    /// one a `for` loop runs.
+    fn loop_family_trait(&self, name: &str) -> Option<Trait<'db>> {
+        presence_trait(self.db, self.env.scope(), &format!("core::iter::{name}"))
+    }
+
     /// The base `ty` drives if it is a driver or a producer.
     fn driver_base(&mut self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
+            .with_assumptions(self.env.assumptions());
         let base = IdentId::new(self.db, "Base".to_string());
         let projection = ["Driver", "Producer"].into_iter().find_map(|name| {
-            let trait_def = resolve_core_trait(self.db, self.env.scope(), &["iter", name])?;
+            let trait_def = self.loop_family_trait(name)?;
             let inst = TraitInstId::new(
                 self.db,
                 trait_def,
@@ -647,10 +654,9 @@ impl<'db> TyChecker<'db> {
     /// `buf.span().reversed()`. A driver or producer names its base's type,
     /// `Base`, which the receiver has.
     fn chain_base(&mut self, expr: ExprId, ty: TyId<'db>) -> Option<(ExprId, TyId<'db>)> {
-        let traits = ["Driver", "Producer"]
-            .map(|name| resolve_core_trait(self.db, self.env.scope(), &["iter", name]));
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let traits = ["Driver", "Producer"].map(|name| self.loop_family_trait(name));
+        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
+            .with_assumptions(self.env.assumptions());
         let base = AssocBinding::of(IdentId::new(self.db, "Base".to_string()));
         let mut receiver = expr;
         while let Partial::Present(Expr::MethodCall(next, ..)) = receiver.data(self.db, self.body())
@@ -693,8 +699,9 @@ impl<'db> TyChecker<'db> {
     ) -> Option<ForLoopPlan<'db>> {
         let (base, base_ty) = base;
         let span: DynLazySpan<'db> = base.span(self.body()).into();
-        let core_trait = |this: &Self, name: &str| {
-            resolve_core_trait(this.db, this.env.scope(), &["iter", name])
+        let core_trait = |this: &Self, name: &str| match name {
+            "Collection" => resolve_core_trait(this.db, this.env.scope(), &["iter", name]),
+            _ => this.loop_family_trait(name),
         };
         // The calls take the driver first, then the base.
         let (receiver_ty, inputs) = match driver {
@@ -713,7 +720,12 @@ impl<'db> TyChecker<'db> {
             Some(_) => {
                 let driver_trait = core_trait(self, "Driver")?;
                 let producer = core_trait(self, "Producer")?;
-                match select(self, producer, "produce").filter(|_| !mutates) {
+                // A loop that mutates its elements never runs a producer, so
+                // selecting one would only constrain the types of the loop.
+                match (!mutates)
+                    .then(|| select(self, producer, "produce"))
+                    .flatten()
+                {
                     Some(inst) => (producer, inst, "produce"),
                     None => (driver_trait, select(self, driver_trait, "start")?, "at"),
                 }
@@ -786,14 +798,17 @@ impl<'db> TyChecker<'db> {
         base_ty: Option<TyId<'db>>,
     ) -> Option<TraitInstId<'db>> {
         let canonical = Canonicalized::new(self.db, receiver_ty);
-        let (cand, confirm) = match select_method_candidate(
+        let (cand, confirm) = match select_method_candidate_with_choices(
             self.db,
             &canonical,
             IdentId::new(self.db, method.to_string()),
             self.env.scope(),
             self.env.assumptions(),
             Some(trait_def),
-        ) {
+            None,
+        )
+        .result
+        {
             Ok(MethodCandidate::TraitMethod(cand)) => (cand, false),
             Ok(MethodCandidate::NeedsConfirmation(cand)) => (cand, true),
             _ => return None,
@@ -816,7 +831,7 @@ impl<'db> TyChecker<'db> {
             inst.mode(self.db),
         );
         if base_ty.is_some() {
-            match self.trait_effect_goal_satisfiability(goal) {
+            match self.trait_effect_goal_satisfiability(Tier::All, goal) {
                 GoalSatisfiability::Satisfied(solution) => {
                     self.commit_trait_goal_solution(goal, solution);
                 }

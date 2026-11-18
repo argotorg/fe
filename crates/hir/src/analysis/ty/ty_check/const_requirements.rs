@@ -5,6 +5,7 @@
 //! resolved, typed expressions after substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::name_resolution::{
     method_selection::{MethodCandidate, select_method_candidate},
     resolve_path_with_minter,
@@ -809,7 +810,7 @@ fn admit_type_application<'db>(
     }
     // A header's target is proved under the header's own premises: its
     // binders and requirements, as a handwritten implementation's would be.
-    let context = TraitSolveCx::new(db, origin.scope());
+    let context = TraitSolveCx::new(db, origin.scope(), Tier::All);
     let context = match header.and_then(crate::hir_def::GenericParamOwner::from_item_opt) {
         Some(owner) => context.with_assumptions(
             crate::analysis::ty::trait_resolution::constraint::collect_constraints(db, owner)
@@ -1002,7 +1003,7 @@ pub(super) fn check_body_requirements<'db>(
                 body.scope(),
                 typed.assumptions(),
             );
-            let cx = TraitSolveCx::new(db, body.scope())
+            let cx = TraitSolveCx::new(db, body.scope(), Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(typed.expr_choices(expr));
             if let Some(goal) = type_choice_read(db, deferred, cx, &mut checker.check.demands) {
@@ -1037,7 +1038,7 @@ pub(super) fn check_body_requirements<'db>(
         if let WrittenEntry::ConstBodies(bodies) = entry {
             for &(nested, expected) in bodies {
                 if let Some(choices) = typed.choices_in_scope(db, nested.scope()) {
-                    let cx = TraitSolveCx::new(db, nested.scope())
+                    let cx = TraitSolveCx::new(db, nested.scope(), Tier::All)
                         .with_assumptions(typed.assumptions())
                         .with_choices(Some(choices));
                     let ty = TyId::const_ty(
@@ -1070,7 +1071,7 @@ pub(super) fn check_body_requirements<'db>(
                 written.scope,
                 typed.assumptions(),
             );
-            let cx = TraitSolveCx::new(db, written.scope)
+            let cx = TraitSolveCx::new(db, written.scope, Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
             if let Some(goal) = type_choice_read(db, deferred, cx, &mut check.demands) {
@@ -1089,7 +1090,7 @@ pub(super) fn check_body_requirements<'db>(
         if typed.has_chosen_impls()
             && let Some(choices) = typed.choices_in_scope(db, nested.scope())
         {
-            let cx = TraitSolveCx::new(db, nested.scope())
+            let cx = TraitSolveCx::new(db, nested.scope(), Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
             let ty = TyId::const_ty(
@@ -1491,7 +1492,8 @@ fn anon_const_position_check<'db>(
         let mut check = check_body_requirements(db, owner, typed);
         check.demands.extend(typed.generation_demands());
         if typed.has_chosen_impls() {
-            let cx = TraitSolveCx::new(db, body.scope()).with_assumptions(typed.assumptions());
+            let cx = TraitSolveCx::new(db, body.scope(), Tier::All)
+                .with_assumptions(typed.assumptions());
             let ty = TyId::const_ty(
                 db,
                 crate::analysis::ty::const_ty::ConstTyId::from_body(db, body, Some(expected), None),
@@ -1762,7 +1764,6 @@ pub(super) fn expression_const_bodies<'db>(
                         *name,
                         body.scope(),
                         typed.assumptions(),
-                        None,
                     )
                     .ok()?,
                 )
@@ -2720,7 +2721,7 @@ fn written_type_check_query<'db>(
                 if written.dropped && !ill_formed[written.nested_from..].contains(&true) =>
             {
                 written.lowered.is_some_and(|ty| {
-                    let solve_cx = TraitSolveCx::new(db, written.scope)
+                    let solve_cx = TraitSolveCx::new(db, written.scope, Tier::All)
                         .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
                     let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty)
                     else {
@@ -2798,7 +2799,8 @@ fn written_type_check_query<'db>(
                         written.scope,
                         assumptions,
                     );
-                    let cx = TraitSolveCx::new(db, written.scope).with_assumptions(assumptions);
+                    let cx = TraitSolveCx::new(db, written.scope, Tier::All)
+                        .with_assumptions(assumptions);
                     if let Some(goal) =
                         type_choice_read(db, deferred, cx, &mut GenerationDemands::default())
                     {

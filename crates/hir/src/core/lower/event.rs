@@ -396,6 +396,7 @@ fn create_topic0_const<'db>(
     );
     let call_id = body_ctxt.push_expr(call, origin.clone());
 
+    let quote_origins = body_ctxt.take_quote_origins();
     let body = Body::new(
         db,
         id,
@@ -407,7 +408,7 @@ fn create_topic0_const<'db>(
         body_ctxt.pats,
         body_ctxt.f_ctxt.top_mod(),
         body_ctxt.f_ctxt.lazy_func(),
-        body_ctxt.f_ctxt.syntax_top_mod(),
+        quote_origins,
         body_ctxt.source_map,
         origin,
     );

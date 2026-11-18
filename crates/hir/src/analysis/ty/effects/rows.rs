@@ -8,6 +8,7 @@
 //! A row that does not expand is matched by identity: a call forwards the
 //! caller's own. In an implementation's own methods, `uses E` is spliced
 //! into the method's effects (`Func::effects`).
+use crate::analysis::name_resolution::Tier;
 use salsa::SalsaValue;
 
 use crate::{
@@ -314,7 +315,7 @@ fn direct_row_components<'db>(
     {
         return Some(value.effects(db));
     }
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     let name = key.name(db)?;
     let row_effects = |impl_trait: ImplTrait<'db>| {
         impl_trait

@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use common::ingot::IngotKind;
 use num_traits::ToPrimitive;
 use rustc_hash::FxHashSet;
@@ -98,6 +99,77 @@ pub fn resolve_lib_trait_path<'db>(
 ) -> Option<Trait<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_trait(db, scope, path_id)
+}
+
+/// What a trait of core or std declares with `#[decides = "..."]`: the
+/// compiler chooses behaviour by whether a type implements it, and the phrase
+/// says what is chosen ("whether a value is copied or moved").
+///
+/// This is the one declaration of the traits whose presence matters. A
+/// generated implementation of such a trait changes what written code does
+/// without any name or member being in the way, so preparation refuses it (see
+/// `name_resolution::changed_choices`), and the compiler code that asks the
+/// fact reads the trait through [`presence_trait`]. Only core and std declare
+/// it.
+pub fn presence_decision<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> Option<String> {
+    use crate::hir_def::{AttrArgValue, LitKind};
+    if !matches!(trait_.ingot(db).kind(db), IngotKind::Core | IngotKind::Std) {
+        return None;
+    }
+    let attr = ItemKind::Trait(trait_).attrs(db)?.get_attr(db, "decides")?;
+    // A string value is kept as the source of an expression.
+    match &attr.value {
+        Some(AttrArgValue::Lit(LitKind::String(what))) => Some(what.data(db).clone()),
+        Some(AttrArgValue::Expr(source)) => source
+            .data(db)
+            .trim()
+            .strip_prefix('"')
+            .and_then(|text| text.strip_suffix('"'))
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+/// The trait at `path`, a fully-qualified `core::...` or `std::...` path,
+/// whose presence the compiler consults: the one way compiler code reaches a
+/// trait to ask whether a type implements it in order to choose behaviour.
+/// The trait must declare it (see [`presence_decision`]); asking about one
+/// that does not would let a generated implementation change written code
+/// unrefused.
+pub fn presence_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: &str,
+) -> Option<Trait<'db>> {
+    let trait_ = resolve_lib_trait_path(db, scope, path)?;
+    debug_assert!(
+        presence_decision(db, trait_).is_some(),
+        "`{path}` is consulted for its presence but does not declare `#[decides = \"...\"]`"
+    );
+    Some(trait_)
+}
+
+/// The traits of core and std that declare `#[decides = "..."]`, as seen from
+/// `scope`.
+pub fn presence_traits<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Vec<Trait<'db>> {
+    ["core", "std"]
+        .into_iter()
+        .filter_map(|root| library_root_scope(db, scope, root))
+        .flat_map(|root| presence_traits_of(db, root.ingot(db)).iter().copied())
+        .collect()
+}
+
+#[salsa::tracked(returns(ref))]
+fn presence_traits_of<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: common::ingot::Ingot<'db>,
+) -> Vec<Trait<'db>> {
+    ingot
+        .all_modules(db)
+        .iter()
+        .flat_map(|top_mod| top_mod.all_traits(db).iter().copied())
+        .filter(|&trait_| presence_decision(db, trait_).is_some())
+        .collect()
 }
 
 /// Field queries are evaluated without a lexical named opening. Their canonical
@@ -560,7 +632,7 @@ pub fn effect_key_state_access<'db>(
             EffectRequirementKey::Type(ty) => matches!(
                 is_goal_satisfiable(
                     db,
-                    TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                    TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
                     TraitInstId::new_simple(db, target, vec![ty]),
                 ),
                 GoalSatisfiability::Satisfied(_)
@@ -643,7 +715,7 @@ pub fn is_sealed_evm_capability<'db>(
     resolve_lib_trait_path(db, scope, EVM_CAPABILITY_SEAL).is_some_and(|seal| {
         goal_holds(
             db,
-            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
             TraitInstId::new_simple(db, seal, vec![ty]),
         )
     })

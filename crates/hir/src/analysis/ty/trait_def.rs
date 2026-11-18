@@ -46,12 +46,26 @@ use super::{
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
-use crate::analysis::HirAnalysisDb;
+use crate::analysis::{HirAnalysisDb, name_resolution::Tier};
 
-/// Returns [`TraitEnv`] for the given ingot.
+/// The trait environment of `ingot` in `tier`: in the authored tier, without
+/// the implementations generated in the ingot itself. The generated
+/// implementations of its dependencies are sealed and always count.
+pub(crate) fn ingot_trait_env<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    tier: Tier,
+) -> &'db TraitEnv<'db> {
+    ingot_trait_env_in_tier(db, ingot, tier.in_ingot(db, ingot))
+}
+
 #[salsa::tracked(cycle_initial=ingot_trait_env_cycle_initial)]
-pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> TraitEnv<'db> {
-    TraitEnv::collect(db, ingot)
+fn ingot_trait_env_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    tier: Tier,
+) -> TraitEnv<'db> {
+    TraitEnv::collect(db, ingot, tier)
 }
 
 /// Returns all implementors for the given trait definition.
@@ -66,13 +80,25 @@ pub(crate) fn ingot_trait_env<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>
 /// Lowering `type Space = Inner<P>::Space` proves the bounds of `Inner`'s
 /// impl, `P: Pinned`, which looks up this trait's impls again. Consumers lower
 /// the associated types they read, one binding at a time.
-#[salsa::tracked]
+/// The tier is a required argument: it says whether the implementations
+/// generated in `ingot` count.
 pub(crate) fn impls_for_trait_def<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
     trait_def: Trait<'db>,
+    tier: Tier,
+) -> &'db Vec<ImplementorId<'db>> {
+    impls_for_trait_def_in_tier(db, ingot, trait_def, tier.in_ingot(db, ingot))
+}
+
+#[salsa::tracked]
+fn impls_for_trait_def_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    trait_def: Trait<'db>,
+    tier: Tier,
 ) -> Vec<ImplementorId<'db>> {
-    let env = ingot_trait_env(db, ingot);
+    let env = ingot_trait_env(db, ingot, tier);
     let mut out = env.impls_for_trait(db, trait_def);
 
     if is_std_evm_contract_trait_def(db, trait_def) {
@@ -107,10 +133,21 @@ fn impl_self_ty_may_match<'db>(
 /// important: receiver-only lookup necessarily includes every blanket and
 /// otherwise unindexed impl, whose signatures may themselves require method
 /// lookup while being lowered.
-#[salsa::tracked]
 pub(crate) fn impls_for_trait_and_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
+    trait_def: Trait<'db>,
+    ty: Canonical<TyId<'db>>,
+) -> &'db Vec<ImplementorId<'db>> {
+    impls_for_trait_and_ty_in_tier(db, ingot, tier.in_ingot(db, ingot), trait_def, ty)
+}
+
+#[salsa::tracked]
+fn impls_for_trait_and_ty_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    tier: Tier,
     trait_def: Trait<'db>,
     ty: Canonical<TyId<'db>>,
 ) -> Vec<ImplementorId<'db>> {
@@ -121,7 +158,7 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
         return vec![];
     }
 
-    let env = ingot_trait_env(db, ingot);
+    let env = ingot_trait_env(db, ingot, tier);
     let mut implementors = env.impls_for_trait(db, trait_def);
 
     if is_std_evm_contract_trait_def(db, trait_def) && ty.as_contract(db).is_some() {
@@ -153,20 +190,48 @@ pub(crate) fn impls_for_trait_and_ty<'db>(
 /// the caller's current module ingot and can miss impls that live in either:
 /// - the trait's ingot, or
 /// - the implementor type's ingot.
-#[salsa::tracked]
+///
+/// For a search that starts in `origin` in `tier`: the ingot `origin`, if it is
+/// searched, does not offer the implementations generated in it in the
+/// authored tier.
 pub(crate) fn impls_for_trait_in_ingots<'db>(
     db: &'db dyn HirAnalysisDb,
     primary: Ingot<'db>,
     secondary: Option<Ingot<'db>>,
     trait_: Canonical<TraitInstId<'db>>,
+    tier: Tier,
+    origin: Ingot<'db>,
+) -> &'db Vec<ImplementorId<'db>> {
+    impls_for_trait_in_ingots_in_tier(
+        db,
+        primary,
+        tier.for_table(db, origin, primary),
+        secondary,
+        secondary.map_or(Tier::All, |secondary| tier.for_table(db, origin, secondary)),
+        trait_,
+    )
+}
+
+#[salsa::tracked]
+fn impls_for_trait_in_ingots_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    primary: Ingot<'db>,
+    primary_tier: Tier,
+    secondary: Option<Ingot<'db>>,
+    secondary_tier: Tier,
+    trait_: Canonical<TraitInstId<'db>>,
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let trait_def = trait_.extract_identity(&mut table).def(db);
     let mut dedup: IndexSet<ImplementorId<'db>> = IndexSet::default();
-    dedup.extend(impls_for_trait_def(db, primary, trait_def).iter().copied());
+    dedup.extend(
+        impls_for_trait_def(db, primary, trait_def, primary_tier)
+            .iter()
+            .copied(),
+    );
     if let Some(secondary) = secondary {
         dedup.extend(
-            impls_for_trait_def(db, secondary, trait_def)
+            impls_for_trait_def(db, secondary, trait_def, secondary_tier)
                 .iter()
                 .copied(),
         );
@@ -266,6 +331,7 @@ fn ingot_trait_env_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     ingot: Ingot<'db>,
+    _tier: Tier,
 ) -> TraitEnv<'db> {
     // Return an empty trait environment when we detect a cycle
     TraitEnv {
@@ -494,8 +560,15 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
     let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(db, inst);
-    let mut candidates =
-        impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, inst)).clone();
+    let mut candidates = impls_for_trait_in_ingots(
+        db,
+        primary,
+        secondary,
+        Canonical::new(db, inst),
+        solve_cx.tier(),
+        solve_cx.origin_ingot(),
+    )
+    .clone();
     if let Some(callable) = super::closure::callable_implementor(db, inst) {
         candidates.push(callable);
     }
@@ -805,17 +878,29 @@ impl<'db> ResolvedMethodInstance<'db> {
     }
 }
 
-/// Returns all implementors for the given `ty` whose constraints are fully proven.
+/// Returns all implementors for the given `ty` whose constraints are fully proven,
+/// in `tier` of the table of `ingot`; the constraints are proved in the same tier.
 pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
     ty: Canonical<TyId<'db>>,
     assumptions: PredicateListId<'db>,
     choices: Option<super::trait_resolution::ChosenImpls<'db>>,
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
     let ty = ty.extract_identity(&mut table);
-    impls_with_constraint_mode(db, ingot, &mut table, ty, None, assumptions, choices, false)
+    impls_with_constraint_mode(
+        db,
+        ingot,
+        tier,
+        &mut table,
+        ty,
+        None,
+        assumptions,
+        choices,
+        false,
+    )
 }
 
 /// Returns implementors of `inst`'s trait that can apply to `inst` and whose
@@ -823,6 +908,7 @@ pub(crate) fn impls_for_ty_with_satisfied_constraints<'db>(
 pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
     inst: Canonical<TraitInstId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<ImplementorId<'db>> {
@@ -832,6 +918,7 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     impls_with_constraint_mode(
         db,
         ingot,
+        tier,
         &mut table,
         ty,
         Some(inst),
@@ -845,6 +932,7 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
 fn impls_with_constraint_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
     table: &mut UnificationTable<'db>,
     ty: TyId<'db>,
     trait_inst: Option<TraitInstId<'db>>,
@@ -852,14 +940,15 @@ fn impls_with_constraint_mode<'db>(
     choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     allow_needs_confirmation: bool,
 ) -> Vec<ImplementorId<'db>> {
-    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope())
+    let tier = tier.in_ingot(db, ingot);
+    let solve_cx = TraitSolveCx::new(db, ingot.root_mod(db).scope(), tier)
         .with_assumptions(assumptions)
         .with_choices(choices);
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
     let trait_def = trait_inst.map(|inst| inst.def(db));
-    let env = ingot_trait_env(db, ingot);
+    let env = ingot_trait_env(db, ingot, tier);
     let mut raw_impls = match trait_def {
         Some(trait_def) => env.impls_for_trait(db, trait_def),
         None => env.impls_for_self_key(db, ty.base_ty(db)),
@@ -925,11 +1014,21 @@ fn impls_with_constraint_mode<'db>(
         .collect()
 }
 
-/// Returns all implementors for the given `ty`.
-#[salsa::tracked]
+/// Returns all implementors for the given `ty`, in `tier` of the table of `ingot`.
 pub(crate) fn impls_for_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
+    ty: Canonical<TyId<'db>>,
+) -> &'db Vec<ImplementorId<'db>> {
+    impls_for_ty_in_tier(db, ingot, tier.in_ingot(db, ingot), ty)
+}
+
+#[salsa::tracked]
+fn impls_for_ty_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    tier: Tier,
     ty: Canonical<TyId<'db>>,
 ) -> Vec<ImplementorId<'db>> {
     let mut table = UnificationTable::new(db);
@@ -938,7 +1037,7 @@ pub(crate) fn impls_for_ty<'db>(
     if ty.has_invalid(db) || ty.base_ty(db).is_never(db) {
         return vec![];
     }
-    let env = ingot_trait_env(db, ingot);
+    let env = ingot_trait_env(db, ingot, tier);
     let mut raw_impls = env.impls_for_self_key(db, ty.base_ty(db));
 
     if ty.as_contract(db).is_some() {
@@ -1102,7 +1201,7 @@ pub(crate) fn named_output_mismatch<'db>(
     implementation: ImplTrait<'db>,
     candidate: ImplementorId<'db>,
 ) -> Option<NamedOutputMismatch<'db>> {
-    let context = TraitSolveCx::new(db, implementation.scope())
+    let context = TraitSolveCx::new(db, implementation.scope(), Tier::All)
         .with_assumptions(crate::semantic::param_env(db, implementation.into()));
     let header = candidate.trait_inst(db);
     let goal = TraitInstId::new_simple(db, header.def(db), header.args(db).clone());
@@ -1124,7 +1223,7 @@ pub(crate) fn named_output_mismatch<'db>(
         .collect::<Vec<_>>();
     let ordinary = ingots
         .iter()
-        .flat_map(|ingot| impls_for_trait_def(db, *ingot, goal.def(db)).to_vec())
+        .flat_map(|ingot| impls_for_trait_def(db, *ingot, goal.def(db), Tier::All).to_vec())
         .filter(|other| matches!(other.origin(db), ImplementorOrigin::Hir(_)))
         .map(|other| (other, true));
     // Every admitted named header has an ordinary output representative.
@@ -1474,7 +1573,7 @@ pub fn declared_only_projection<'db>(
         TyData::AssocTy(assoc) => {
             let Selection::Unique(resolved) = resolve_trait_impl_instance(
                 db,
-                TraitSolveCx::new(db, scope),
+                TraitSolveCx::new(db, scope, Tier::All),
                 assoc.trait_.as_predicate(db),
             ) else {
                 return None;
@@ -1534,7 +1633,7 @@ pub(crate) struct TraitEnv<'db> {
 }
 
 impl<'db> TraitEnv<'db> {
-    fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+    fn collect(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>, tier: Tier) -> Self {
         let mut impls: FxHashMap<Trait<'db>, Vec<ImplTrait<'db>>> = FxHashMap::default();
         let mut impls_by_self: FxHashMap<ImplSelfKey<'db>, Vec<ImplTrait<'db>>> =
             FxHashMap::default();
@@ -1542,8 +1641,8 @@ impl<'db> TraitEnv<'db> {
 
         for impl_map in transitive_dependencies(db, ingot)
             .into_iter()
-            .map(|external| collect_trait_impls(db, external))
-            .chain(std::iter::once(collect_trait_impls(db, ingot)))
+            .map(|external| collect_trait_impls(db, external, Tier::All))
+            .chain(std::iter::once(collect_trait_impls(db, ingot, tier)))
         {
             // Raw collection is syntax-only. Candidate lookup performs semantic
             // lowering after this environment has been fully assembled.
@@ -1897,7 +1996,7 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified.
     let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope())
+    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope(), Tier::All)
         .with_assumptions(PredicateListId::empty_list(db));
 
     for &constraint in merged_constraints.list(db) {
@@ -2237,6 +2336,7 @@ impl<'db> TraitInstId<'db> {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::name_resolution::Tier;
     use camino::Utf8PathBuf;
     use common::indexmap::IndexMap;
 
@@ -2274,7 +2374,7 @@ impl<T> Foo for T where T: Marker {}
             })
             .expect("missing `Foo` trait");
 
-        let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_);
+        let impls = impls_for_trait_def(&db, top_mod.ingot(&db), trait_, Tier::All);
         assert_eq!(impls.len(), 2);
     }
 
@@ -2327,7 +2427,7 @@ fn probe(value: own Wrapper<u16>) {}
             crate::hir_def::ModeMarker::None,
         );
         let Selection::Unique(resolved) =
-            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, func.scope()), inst)
+            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, func.scope(), Tier::All), inst)
         else {
             panic!("expected one concrete Projects implementation");
         };

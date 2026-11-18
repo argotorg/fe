@@ -186,12 +186,15 @@ pub(crate) fn resolve_authored_scope<'db>(
             let written_at = |origin: Option<ast::SyntaxNodePtr>| {
                 origin.is_some_and(|ptr| ptr.text_range() == range)
             };
+            let root = top_mod_ast(db, top_mod);
             graph
                 .scopes
                 .keys()
                 .copied()
                 .find(|scope| match *scope {
-                    ScopeId::Item(ItemKind::Struct(s)) => written_at(raw_origin(s.origin(db))),
+                    ScopeId::Item(ItemKind::Struct(s)) => {
+                        s.origin(db).authored_range(root.syntax()) == Some(range)
+                    }
                     ScopeId::Item(ItemKind::Enum(e)) => written_at(raw_origin(e.origin(db))),
                     ScopeId::Item(ItemKind::Trait(t)) => written_at(raw_origin(t.origin(db))),
                     _ => false,
@@ -430,6 +433,8 @@ pub(super) struct AuthoredRecord<'db> {
 pub(super) enum RecordSyntax {
     Struct(ast::Struct),
     Enum(ast::Enum),
+    /// A `msg` variant, whose struct has the variant's parameters as fields.
+    MsgVariant(ast::MsgVariant),
 }
 
 /// The fields of a struct or of one enum variant, named as lowering names
@@ -445,6 +450,7 @@ impl<'db> AuthoredRecord<'db> {
         let name = match &self.syntax {
             RecordSyntax::Struct(s) => s.name(),
             RecordSyntax::Enum(e) => e.name(),
+            RecordSyntax::MsgVariant(v) => v.name(),
         };
         name.map(|name| IdentId::new(db, name.text().to_string()))
             .into()
@@ -454,6 +460,7 @@ impl<'db> AuthoredRecord<'db> {
         match &self.syntax {
             RecordSyntax::Struct(s) => s.generic_params(),
             RecordSyntax::Enum(e) => e.generic_params(),
+            RecordSyntax::MsgVariant(_) => None,
         }
     }
 
@@ -471,13 +478,10 @@ impl<'db> AuthoredRecord<'db> {
         db: &'db dyn HirDb,
         variant: Option<usize>,
     ) -> Option<AuthoredFields<'db>> {
-        let named = |list: Option<ast::RecordFieldDefList>| {
-            let Some(list) = list else {
-                return AuthoredFields::Named(Vec::new());
-            };
-            let is_tuple = list.is_tuple();
+        let labels = |fields: Vec<ast::RecordFieldDef>, is_tuple: bool| {
             AuthoredFields::Named(
-                list.into_iter()
+                fields
+                    .into_iter()
                     .enumerate()
                     .map(|(index, field)| {
                         if is_tuple {
@@ -492,8 +496,18 @@ impl<'db> AuthoredRecord<'db> {
                     .collect(),
             )
         };
+        let named = |list: Option<ast::RecordFieldDefList>| {
+            let Some(list) = list else {
+                return AuthoredFields::Named(Vec::new());
+            };
+            let is_tuple = list.is_tuple();
+            labels(list.into_iter().collect(), is_tuple)
+        };
         match (&self.syntax, variant) {
             (RecordSyntax::Struct(s), None) => Some(named(s.fields())),
+            (RecordSyntax::MsgVariant(v), None) => {
+                Some(labels(v.params().into_iter().flatten().collect(), false))
+            }
             (RecordSyntax::Enum(_), Some(index)) => Some(match self.variant(index)?.kind() {
                 ast::VariantKind::Unit => AuthoredFields::Unit,
                 ast::VariantKind::Tuple(tuple) => AuthoredFields::Tuple(tuple.into_iter().count()),
@@ -510,6 +524,10 @@ impl<'db> AuthoredRecord<'db> {
             (RecordSyntax::Struct(s), None) => s
                 .fields()
                 .and_then(|fields| fields.into_iter().nth(index))
+                .is_some_and(|field| field.ty().is_some()),
+            (RecordSyntax::MsgVariant(v), None) => v
+                .params()
+                .and_then(|params| params.into_iter().nth(index))
                 .is_some_and(|field| field.ty().is_some()),
             (RecordSyntax::Enum(_), Some(v)) => match self.variant(v).map(|v| v.kind()) {
                 Some(ast::VariantKind::Tuple(tuple)) => tuple.into_iter().nth(index).is_some(),
@@ -663,6 +681,17 @@ impl<'db> FileLowerCtxt<'db> {
             .map_or_else(|| self.top_mod(), |frame| frame.quote_top_mod)
     }
 
+    /// The modules of the active quotations, innermost first: the one that
+    /// wrote the code being lowered, then each one that spliced a fragment
+    /// around it, the outermost last. Empty outside generation.
+    pub(super) fn quote_chain(&self) -> Vec<TopLevelMod<'db>> {
+        self.quote_frames
+            .iter()
+            .rev()
+            .map(|frame| frame.quote_top_mod)
+            .collect()
+    }
+
     /// Where a member spliced from the active quotation was written.
     pub(super) fn generated_member_syntax(
         &self,
@@ -768,7 +797,8 @@ impl<'db> FileLowerCtxt<'db> {
             .find_map(|node| {
                 ast::Struct::cast(node.clone())
                     .map(RecordSyntax::Struct)
-                    .or_else(|| ast::Enum::cast(node).map(RecordSyntax::Enum))
+                    .or_else(|| ast::Enum::cast(node.clone()).map(RecordSyntax::Enum))
+                    .or_else(|| ast::MsgVariant::cast(node).map(RecordSyntax::MsgVariant))
             })
             .expect("validated authored record item exists in target module");
         AuthoredRecord {

@@ -1462,6 +1462,26 @@ pub enum BodyDiag<'db> {
     DropCalledDirectly {
         primary: DynLazySpan<'db>,
     },
+
+    /// A decision that prefers one implementation to another, or that depends
+    /// on an implementation being absent, would come out differently with the
+    /// implementations generated in the package. Written code keeps its
+    /// answer; preparation refuses the generated implementations where they
+    /// are requested.
+    GenerationChangesChoice {
+        primary: DynLazySpan<'db>,
+        decision: crate::analysis::name_resolution::Decision,
+        /// The trait whose generated implementations make the difference, if
+        /// the decision names one.
+        trait_: Option<Trait<'db>>,
+        /// The type the decision is about, which `trait_` is implemented for.
+        ty: Option<TyId<'db>>,
+        /// What the decision is about, for the message: a type, or a name.
+        subject: String,
+        /// The scope of the generated item, when the decision names it
+        /// directly.
+        generated: Option<crate::hir_def::scope_graph::ScopeId<'db>>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
@@ -1656,6 +1676,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpaqueShapeBound { .. } => 147,
             Self::ParamBindsTwice { .. } => 134,
             Self::DropCalledDirectly { .. } => 152,
+            Self::GenerationChangesChoice { .. } => 162,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
@@ -1848,6 +1869,18 @@ impl TraitConstraintDiag<'_> {
 pub enum ImplDiag<'db> {
     UnfulfilledDeriveRequest {
         primary: DynLazySpan<'db>,
+    },
+
+    /// A generated implementation of `trait_` gives `self_ty` a member named
+    /// `member` although the type already has one under that name, through
+    /// the trait `existing` or an inherent member (`None`). A call that names
+    /// the member keeps selecting the existing one. This is a warning.
+    GeneratedMemberNameShared {
+        primary: DynLazySpan<'db>,
+        trait_: Trait<'db>,
+        member: IdentId<'db>,
+        self_ty: TyId<'db>,
+        existing: Option<Trait<'db>>,
     },
     ConflictMethodImpl {
         primary: CallableDef<'db>,
@@ -2136,6 +2169,7 @@ impl ImplDiag<'_> {
     pub fn local_code(&self) -> u16 {
         match self {
             Self::UnfulfilledDeriveRequest { .. } => 42,
+            Self::GeneratedMemberNameShared { .. } => 41,
             Self::ConflictMethodImpl { .. } => 0,
             Self::MethodNotDefinedInTrait { .. } => 1,
             Self::NotAllTraitItemsImplemented { .. } => 2,

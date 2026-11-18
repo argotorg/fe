@@ -1177,6 +1177,162 @@ async fn definition_location(
         response => panic!("expected one definition at {line}:{character}, got {response:?}"),
     }
 }
+
+/// A package whose record has an implementation that a dependency's provider
+/// supplies through a header: the editor's diagnostics, hover and goto all read
+/// one prepared view of the package, and edits to the dependency reach the app.
+#[tokio::test]
+async fn package_generation_shares_one_view_for_diagnostics_hover_and_goto() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+    let uri = |path: &str| Url::parse(&format!("file:///tmp/fe-lsp-package/{path}")).unwrap();
+    let lib_source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+pub trait Score {
+    const fn score() -> usize
+}
+
+pub struct FieldScore {}
+impl Derive<Score> for FieldScore {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote {
+            const fn score() -> usize { ${n} }
+        }
+    }
+}
+"#;
+    let model_source = "use lib::Score\npub struct Pair {\n    pub a: u256,\n    pub b: u256,\n}\nimpl Score for Pair with (lib::FieldScore)\n";
+    let app_source = "use ingot::model::Pair\nuse lib::Score\n\npub const fn total() -> usize {\n    Pair::score()\n}\n";
+    let files = [
+        (
+            "lib/fe.toml",
+            "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n".to_string(),
+        ),
+        ("lib/src/lib.fe", lib_source.to_string()),
+        (
+            "app/fe.toml",
+            "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nlib = { path = \"../lib\" }\n"
+                .to_string(),
+        ),
+        ("app/src/model.fe", model_source.to_string()),
+        ("app/src/lib.fe", app_source.to_string()),
+    ];
+    for (path, text) in &files {
+        client.did_open(&uri(path), text);
+        client.wait_for_text(&uri(path), text).await;
+    }
+    let app = uri("app/src/lib.fe");
+    let lib = uri("lib/src/lib.fe");
+    let errors = |client: &MockLspClient, file: &Url| {
+        client
+            .diagnostics()
+            .into_iter()
+            .filter(|published| &published.uri == file)
+            .flat_map(|published| published.diagnostics)
+            .filter(|diagnostic| diagnostic.severity == Some(DiagnosticSeverity::ERROR))
+            .map(|diagnostic| diagnostic.message)
+            .collect::<Vec<_>>()
+    };
+
+    client.clear_diagnostics();
+    client.analyze(&app, app_source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == app).await);
+    assert!(
+        errors(&client, &app).is_empty(),
+        "{:?}",
+        client.diagnostics()
+    );
+    // `Pair::score` is generated into the app from the dependency's quote.
+    let hover = hover_at(&mut client, &app, 4, 11).await;
+    assert!(hover_text(&hover).contains("score"), "{hover:?}");
+    // Goto from an implementation method lands on the trait's declaration,
+    // `const fn score()` on line 3 of the dependency.
+    let generated = definition_location(&mut client, &app, 4, 11)
+        .await
+        .expect("goto resolves the generated method");
+    assert_eq!(generated.uri, lib);
+    assert_eq!(generated.range.start.line, 3);
+    let record = definition_location(&mut client, &app, 4, 5)
+        .await
+        .expect("goto finds the authored record");
+    assert_eq!(record.uri, uri("app/src/model.fe"));
+    assert_eq!(record.range.start.line, 1);
+    // Renaming the record through the prepared view edits authored text only:
+    // its declaration, its header and the two app references, never the
+    // provider's quote.
+    let rename = client
+        .rename(&app, 4, 5, "Couple")
+        .await
+        .expect("rename failed")
+        .expect("rename produces edits");
+    let mut edits = rename
+        .changes
+        .expect("rename edits by file")
+        .into_iter()
+        .map(|(file, edits)| {
+            let mut lines = edits
+                .into_iter()
+                .map(|edit| (edit.range.start.line, edit.new_text))
+                .collect::<Vec<_>>();
+            lines.sort();
+            (file, lines)
+        })
+        .collect::<Vec<_>>();
+    edits.sort();
+    assert_eq!(
+        edits,
+        vec![
+            (
+                app.clone(),
+                vec![(0, "Couple".to_string()), (4, "Couple".to_string())]
+            ),
+            (
+                uri("app/src/model.fe"),
+                vec![(1, "Couple".to_string()), (5, "Couple".to_string())]
+            ),
+        ]
+    );
+
+    // A provider fault in the dependency refuses the app's preparation and is
+    // reported where it happens.
+    let faulting = lib_source.replace(
+        "    let n = field_count(record)\n",
+        "    let zero: usize = 0\n    let n = field_count(record) / zero\n",
+    );
+    assert_ne!(faulting, lib_source);
+    client.clear_diagnostics();
+    client.did_change(&lib, 2, &faulting);
+    client.wait_for_text(&lib, &faulting).await;
+    client.analyze(&app, app_source).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == lib
+                    && d.diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("division by zero"))
+            })
+            .await,
+        "{:?}",
+        client.diagnostics()
+    );
+
+    // Restoring the dependency restores the generated program.
+    client.clear_diagnostics();
+    client.did_change(&lib, 3, lib_source);
+    client.wait_for_text(&lib, lib_source).await;
+    client.analyze(&app, app_source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == app).await);
+    assert!(
+        errors(&client, &app).is_empty(),
+        "{:?}",
+        client.diagnostics()
+    );
+    let hover = hover_at(&mut client, &app, 4, 11).await;
+    assert!(hover_text(&hover).contains("score"), "{hover:?}");
+}
+
 /// A file whose own provider generates members for its record, one of them
 /// naming the record through a splice: renaming the record edits its declaration,
 /// its header and its authored uses, never the provider's quotation.

@@ -6,6 +6,7 @@ use ingot::abi::{Abi, AbiSize, Encode}
 /// pairing a 4-byte selector with ABI encoding capability.
 /// The selector is computed at compile time from the struct name and
 /// field types, matching the Solidity custom error ABI.
+#[decides = "what data a revert with a value carries"]
 pub trait ErrorVariant<A: Abi>: Encode<A> + AbiSize {
     const SELECTOR: A::Selector
 }

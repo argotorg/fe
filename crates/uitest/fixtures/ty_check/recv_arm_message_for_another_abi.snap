@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_message_for_another_abi.fe
+---
+error[8-0049]: type does not implement MsgVariant trait
+   ┌─ recv_arm_message_for_another_abi.fe:93:9
+   │
+93 │         OnlyAlt { x } -> u256 { x + 1 }
+   │         ^^^^^^^^^^^^^ `OnlyAlt` does not implement `MsgVariant<Sol>`, the trait that a recv arm needs

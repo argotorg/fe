@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::ty::diagnostics::BodyDiag;
 use crate::analysis::ty::effects::{ResolvedEffectKey, resolve_effect_key};
 use crate::analysis::ty::trait_resolution::{
@@ -95,6 +96,11 @@ pub fn ty_is_borrow<'db>(
     }
 }
 
+/// Whether a value of `ty` is copied. Every implementation counts: a
+/// generated implementation of `Copy`, or one that would make a written
+/// implementation apply to more types, is refused where it is requested (see
+/// `presence_decision`), so none changes the answer for a type written in the
+/// package.
 pub fn ty_is_copy<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -136,10 +142,10 @@ pub fn ty_is_snapshot<'db>(
     {
         return true;
     }
-    corelib::resolve_core_trait(db, scope, &["marker", "Snapshot"]).is_some_and(|snapshot| {
+    corelib::presence_trait(db, scope, "core::marker::Snapshot").is_some_and(|snapshot| {
         goal_holds(
             db,
-            TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+            TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
             trait_def::TraitInstId::new_simple(db, snapshot, vec![ty]),
         )
     })
@@ -155,11 +161,11 @@ pub fn state_index_tys<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<(TyId<'db>, TyId<'db>)> {
     let ty = normalize::normalize_ty(db, ty, scope, assumptions);
-    let state_index = corelib::resolve_core_trait(db, scope, &["ops", "StateIndex"])?;
+    let state_index = corelib::presence_trait(db, scope, "core::ops::StateIndex")?;
     let inst = trait_def::TraitInstId::new_simple(db, state_index, vec![ty]);
     if !goal_holds(
         db,
-        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
         inst,
     ) {
         return None;
@@ -180,7 +186,7 @@ fn ty_is_copy_query<'db>(
     ty: TyId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
-    let Some(copy_trait) = corelib::resolve_core_trait(db, scope, &["marker", "Copy"]) else {
+    let Some(copy_trait) = corelib::presence_trait(db, scope, "core::marker::Copy") else {
         return false;
     };
     let inst = trait_def::TraitInstId::new_simple(db, copy_trait, vec![ty]);
@@ -193,7 +199,7 @@ fn ty_is_copy_query<'db>(
     {
         return true;
     }
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     if !copy_goal_has_possible_impl(db, solve_cx, inst) {
         return false;
     }
@@ -215,7 +221,7 @@ fn copy_goal_has_possible_impl<'db>(
         .into_iter()
         .flatten()
         .any(|ingot| {
-            impls_for_trait_def(db, ingot, trait_def)
+            impls_for_trait_def(db, ingot, trait_def, solve_cx.table_tier(db, ingot))
                 .iter()
                 .any(|implementor| {
                     let impl_self = implementor.self_ty(db);
@@ -543,7 +549,7 @@ pub(crate) fn abi_struct_field_checks<'db>(
         else {
             continue;
         };
-        let solve_cx = TraitSolveCx::new(db, scope);
+        let solve_cx = TraitSolveCx::new(db, scope, Tier::All);
         let unsat = |trait_, args| {
             matches!(
                 is_goal_satisfiable(
@@ -815,7 +821,8 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     EffectParamOwner::Contract(contract),
                     idx,
                     &key,
-                    TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(db, contract.scope(), Tier::All)
+                        .with_assumptions(assumptions),
                 ) {
                     diags.push(diag.to_voucher());
                     continue;
@@ -831,7 +838,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                         if matches!(
                             is_goal_satisfiable(
                                 db,
-                                TraitSolveCx::new(db, contract.scope())
+                                TraitSolveCx::new(db, contract.scope(), Tier::All)
                                     .with_assumptions(assumptions),
                                 trait_req
                             ),
@@ -1228,6 +1235,7 @@ impl ModuleAnalysisPass for TypeAliasAnalysisPass {
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::name_resolution::Tier;
     use camino::Utf8PathBuf;
     use common::indexmap::IndexMap;
 
@@ -1282,7 +1290,8 @@ struct Plain {
             crate::hir_def::ModeMarker::None,
         );
         let assumptions = PredicateListId::empty_list(&db);
-        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let solve_cx =
+            TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions);
 
         assert!(!copy_goal_has_possible_impl(&db, solve_cx, copy_plain));
         assert!(!ty_is_copy(&db, top_mod.scope(), plain, assumptions));
@@ -1313,7 +1322,8 @@ impl Copy for Explicit {}
             crate::hir_def::ModeMarker::None,
         );
         let assumptions = PredicateListId::empty_list(&db);
-        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let solve_cx =
+            TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions);
 
         assert!(copy_goal_has_possible_impl(&db, solve_cx, copy_explicit));
         assert!(ty_is_copy(&db, top_mod.scope(), explicit, assumptions));

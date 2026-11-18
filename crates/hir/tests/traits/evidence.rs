@@ -1,4 +1,5 @@
 use camino::Utf8PathBuf;
+use fe_hir::analysis::name_resolution::Tier;
 use fe_hir::analysis::semantic::{
     GenericSubst, SemConstScalar, SemConstValue, SemanticInstance, eval_body_owner_const,
     identity_semantic_instance_key, root_semantic_instance_key, typed_body_template,
@@ -190,13 +191,15 @@ fn grow_call_bodies<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> (Option
     let without_assumptions = callable
         .selected_method(
             db,
-            TraitSolveCx::new(db, func.scope()).with_assumptions(PredicateListId::empty_list(db)),
+            TraitSolveCx::new(db, func.scope(), Tier::All)
+                .with_assumptions(PredicateListId::empty_list(db)),
         )
         .and_then(|method| method.body());
     let with_assumptions = callable
         .selected_method(
             db,
-            TraitSolveCx::new(db, func.scope()).with_assumptions(typed_body.assumptions()),
+            TraitSolveCx::new(db, func.scope(), Tier::All)
+                .with_assumptions(typed_body.assumptions()),
         )
         .is_some_and(|method| method.body().is_some());
     (without_assumptions, with_assumptions)
@@ -500,7 +503,7 @@ fn a_generic_instance_dispatches_through_the_bound_its_caller_proved() {
         .expect("missing callable")
         .selected_method(
             &db,
-            TraitSolveCx::new(&db, relay_fn.scope()).with_assumptions(relay_assumptions),
+            TraitSolveCx::new(&db, relay_fn.scope(), Tier::All).with_assumptions(relay_assumptions),
         )
         .expect("the bound answers the call");
     assert_eq!(method.body(), None);

@@ -676,8 +676,9 @@ fn bind_body_to_scope<'db>(
         pats,
         ctxt.top_mod(),
         ctxt.lazy_func(),
-        // The copy keeps the original's source map and origin.
-        body.syntax_top_mod(db),
+        // The copy keeps the original's source map, origin and quotations; its
+        // expressions keep their ids.
+        body.quote_origins(db).clone(),
         body.source_map(db).clone(),
         body.origin(db).clone(),
     );

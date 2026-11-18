@@ -251,6 +251,7 @@ pub trait Decode<A: Abi>: AbiSize {
     }
 }
 
+#[decides = "whether a panic off the EVM reverts with its value or traps"]
 pub trait Encode<A: Abi>: AbiSize {
     /// Writes the ABI payload of `self` into `out`, which holds
     /// `self.payload_size()` bytes.

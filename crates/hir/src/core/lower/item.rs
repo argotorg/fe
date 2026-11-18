@@ -5,13 +5,14 @@ use super::{
     FileLowerCtxt,
     attr::{
         AttrForm, AttrRule, AttrTarget, cfg_holds, report_unsupported_attr, validate_attr_rules,
+        validate_unknown_attrs_in_restricted_context,
     },
 };
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId, GenericArg,
-        GenericArgListId, GenericParamListId, IdentId, ModeMarker, Partial, PathId, TraitRefId,
-        TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*, params::KindBound,
+        GenericArgListId, GenericParamListId, IdentId, ModeMarker, Partial, PathId, QuoteChain,
+        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*, params::KindBound,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -160,21 +161,32 @@ fn validate_mod_attrs<'db>(
     );
 }
 
+/// The inner attributes a module reads. Any other name, whether or not it is
+/// an attribute of some other item, is an error: an inner attribute that
+/// nothing reads would otherwise be accepted and ignored.
+const MODULE_INNER_ATTRS: &[&str] = &["arithmetic", "cfg"];
+const MODULE_INNER_EXPECTED: &str = "`#![arithmetic(checked)]` or `#![arithmetic(unchecked)]`";
+
 pub(super) fn validate_module_inner_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
 ) {
+    validate_unknown_attrs_in_restricted_context(
+        ctxt,
+        attrs.clone(),
+        AttrTarget::inner("module"),
+        MODULE_INNER_ATTRS,
+        MODULE_INNER_EXPECTED,
+    );
     validate_attr_rules(
         ctxt,
         attrs,
-        target("module", None),
-        &[
-            AttrRule::supported("arithmetic", ARITHMETIC_FORM, ARITHMETIC_EXPECTED),
-            AttrRule::unsupported("must_use", MUST_USE_TARGETS),
-            AttrRule::unsupported("cold", COLD_TARGETS),
-            AttrRule::unsupported("payable", PAYABLE_TARGETS),
-            AttrRule::unsupported("abi", ABI_TARGETS),
-        ],
+        AttrTarget::inner("module"),
+        &[AttrRule::supported(
+            "arithmetic",
+            ARITHMETIC_FORM,
+            MODULE_INNER_EXPECTED,
+        )],
     );
 }
 
@@ -1443,6 +1455,9 @@ impl<'db> ImplTrait<'db> {
         let derive_provider = ast
             .derive_provider()
             .map(|path| PathId::lower_ast(ctxt, path));
+        let is_unsafe = ast.unsafe_kw().is_some();
+        let quote_chain = (is_unsafe && !ctxt.quote_frames.is_empty())
+            .then(|| QuoteChain::new(ctxt.db(), ctxt.quote_chain()));
         let impl_trait = Self::new(
             ctxt.db(),
             id,
@@ -1455,10 +1470,11 @@ impl<'db> ImplTrait<'db> {
             consts,
             rows,
             ImplTraitModifiers {
-                is_unsafe: ast.unsafe_kw().is_some(),
+                is_unsafe,
                 selection_name: IdentId::lower_token_partial(ctxt, ast.selection_name()).to_opt(),
                 vis: super::lower_visibility(&ast),
                 derive_provider,
+                quote_chain,
             },
             ctxt.top_mod(),
             origin,

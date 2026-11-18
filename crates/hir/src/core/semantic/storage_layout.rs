@@ -8,6 +8,7 @@ use ruint::aliases::U256;
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 
+use crate::analysis::name_resolution::Tier;
 use crate::{
     HirDb,
     analysis::{
@@ -22,7 +23,7 @@ use crate::{
                 ConcreteArrayLengthError, ConstTyData, const_ty_from_resolved_trait_const,
                 demand_concrete_array_length, demand_concrete_specialized_const_ty,
             },
-            corelib::resolve_lib_trait_path,
+            corelib::{presence_trait, resolve_lib_trait_path},
             normalize::normalize_ty,
             provider::pinned_space,
             state_index_tys,
@@ -499,8 +500,8 @@ fn sol_packed_bits<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<u64
         return None;
     }
     let scope = ty.adt_def(db)?.scope(db);
-    let solve_cx = TraitSolveCx::new(db, scope);
-    let sol_packed = resolve_lib_trait_path(db, scope, "std::evm::SolPacked")?;
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All);
+    let sol_packed = presence_trait(db, scope, "std::evm::SolPacked")?;
     // The marker is `pub(ingot)`, so it resolves only from within std.
     let value_type =
         resolve_lib_trait_path(db, sol_packed.scope(), "std::evm::sol_slot::SolValueType")?;

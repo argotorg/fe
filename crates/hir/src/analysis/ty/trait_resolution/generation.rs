@@ -1,5 +1,6 @@
 //! A lexical offer and the preparation dependency it can introduce. Neither
 //! is evidence: only an admitted generated implementation can produce proof.
+use crate::analysis::name_resolution::Tier;
 use common::generation::{ScopedDeriveDemand, ScopedDeriveOpeningKey};
 use salsa::SalsaValue;
 
@@ -194,12 +195,17 @@ fn provider_headers<'db>(
     };
     // Only the trait definition and ingots are used by the inventory query.
     let inventory_goal = TraitInstId::new_simple(db, derive, vec![provider_ty, TyId::unit(db)]);
-    let (primary, secondary) =
-        super::TraitSolveCx::new(db, scope).search_ingots_for_trait_inst(db, inventory_goal);
+    let (primary, secondary) = super::TraitSolveCx::new(db, scope, Tier::All)
+        .search_ingots_for_trait_inst(db, inventory_goal);
     let mut headers = Vec::new();
-    for &header in
-        impls_for_trait_in_ingots(db, primary, secondary, Canonical::new(db, inventory_goal))
-    {
+    for &header in impls_for_trait_in_ingots(
+        db,
+        primary,
+        secondary,
+        Canonical::new(db, inventory_goal),
+        Tier::All,
+        scope.ingot(db),
+    ) {
         let mut table = UnificationTable::new(db);
         let candidate = table.instantiate_with_fresh_vars(header);
         if table

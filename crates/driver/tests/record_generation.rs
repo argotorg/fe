@@ -1002,6 +1002,62 @@ const fn check_summary() -> u256 {
 }
 
 #[test]
+fn a_hidden_member_refusal_names_its_own_header_when_headers_share_a_provider() {
+    // Both headers run the same provider, so the text of the hidden member
+    // lies in a quotation that both requests hold. The refusal names the
+    // header of the record whose member is hidden, not the first one.
+    let source = r#"use core::derive::{Derive, Inherent}
+use core::meta::{Code, Item, Record, empty, field, field_count}
+
+pub struct Keys {}
+impl Derive<Inherent> for Keys {
+    const fn derive(_ record: Record) -> Code<Item> {
+        var items = empty<Item>()
+        var i: usize = 0
+        while i < field_count(record) {
+            let f = field(record, i)
+            items = quote {
+                ${items}
+                pub const ${f}: u256 = 0
+            }
+            i += 1
+        }
+        items
+    }
+}
+
+pub struct Scal { pub id: u256 }
+impl Scal with (Keys)
+
+pub struct Acct { pub owner: u256, pub amount: u256 }
+impl Acct {
+    pub fn amount(self) -> u256 { self.amount }
+}
+impl Acct with (Keys)
+"#;
+    let (db, file) = input(source);
+    let err = prepare_file(&db, file)
+        .err()
+        .expect("a generated key hidden by a written method must fail");
+    let header = "impl Acct with (Keys)";
+    let start = source.find(header).unwrap();
+    let end = start + header.len();
+    assert_eq!(
+        (usize::from(err.range.start()), usize::from(err.range.end())),
+        (start, end),
+        "{}",
+        err.cause
+    );
+    assert!(
+        err.cause.contains(&format!(
+            "the generated `amount` requested at file:///tmp/explicit-record-provider.fe:{start}..{end} would be hidden: `Acct` already has an inherent method `amount` of `Acct`"
+        )),
+        "{}",
+        err.cause
+    );
+}
+
+#[test]
 fn quote_binder_hygiene_rejects_sibling_arm_after_match_nested_group_and_foreign_field() {
     let sibling_arm = r#"use core::derive::{Derive, Inherent}
 use core::meta::{Code, Item, Record, binders, field, variant}
@@ -2653,7 +2709,9 @@ impl Pair with (Make)
         .err()
         .expect("helper body error must refuse generation");
     assert!(
-        error.cause.contains("authored const helper diagnostics")
+        error
+            .cause
+            .contains("whose body does not check without errors")
             && error.cause.contains("undefined variable `missing_var`")
             && !error
                 .cause
@@ -2935,7 +2993,7 @@ impl<T> Missing<T> with (P)
 }
 
 #[test]
-fn inherent_header_refuses_hidden_members() {
+fn inherent_header_refuses_hidden_members_invalid_member_items_and_missing_derive_inherent() {
     let written_method_source = r#"use core::derive::{Derive, Inherent}
 use core::meta::{Code, Item, Record}
 
@@ -2968,7 +3026,7 @@ impl<T> Box2<T> {
     assert_eq!(usize::from(err.range.start()), header_offset);
     assert!(
         err.cause.contains(
-            "The generated method `within` of `Box2<T>` would never be selected: `Box2<T>` already has a written `within` (explicit-record-provider.fe:18)"
+            "would be hidden: `Box2<T>` already has an inherent method `within` of `Box2<T>`, `within` declared at file:///tmp/explicit-record-provider.fe:399..405"
         ),
         "{}",
         err.cause
@@ -2998,7 +3056,7 @@ impl Packet {
         .expect("generated constant hidden by written inherent constant must fail");
     assert!(
         err.cause.contains(
-            "The generated constant `TAG` of `Packet` would never be selected: `Packet` already has a written `TAG` (explicit-record-provider.fe:16)"
+            "would be hidden: `Packet` already has an inherent constant `TAG` of `Packet`"
         ),
         "{}",
         err.cause
@@ -3031,9 +3089,8 @@ impl Token with (MakeSeed)
         .err()
         .expect("generated method hidden by trait method must fail");
     assert!(
-        err.cause.contains(
-            "The generated method `seed` of `Token` would never be selected: `Token` already has the method `seed` of the trait `Seed`"
-        ),
+        err.cause
+            .contains("would be hidden: `Token` already has the method `seed` of the trait `Seed`"),
         "{}",
         err.cause
     );
@@ -3065,72 +3122,12 @@ impl X with (MakeConst)
         .err()
         .expect("generated constant hidden by trait constant must fail");
     assert!(
-        err.cause.contains(
-            "The generated constant `N` of `X` would never be selected: `X` already has the constant `N` of the trait `Tr`"
-        ),
+        err.cause
+            .contains("would be hidden: `X` already has the constant `N` of the trait `Tr`"),
         "{}",
         err.cause
     );
-}
 
-#[test]
-fn a_hidden_member_refusal_names_its_own_header_when_headers_share_a_provider() {
-    // Both headers run the same provider, so the text of the hidden member
-    // lies in a quotation that both requests hold. The refusal names the
-    // header of the record whose member is hidden, not the first one.
-    let source = r#"use core::derive::{Derive, Inherent}
-use core::meta::{Code, Item, Record, empty, field, field_count}
-
-pub struct Keys {}
-impl Derive<Inherent> for Keys {
-    const fn derive(_ record: Record) -> Code<Item> {
-        var items = empty<Item>()
-        var i: usize = 0
-        while i < field_count(record) {
-            let f = field(record, i)
-            items = quote {
-                ${items}
-                pub const ${f}: u256 = 0
-            }
-            i += 1
-        }
-        items
-    }
-}
-
-pub struct Scal { pub id: u256 }
-impl Scal with (Keys)
-
-pub struct Acct { pub owner: u256, pub amount: u256 }
-impl Acct {
-    pub fn amount(self) -> u256 { self.amount }
-}
-impl Acct with (Keys)
-"#;
-    let (db, file) = input(source);
-    let err = prepare_file(&db, file)
-        .err()
-        .expect("a generated key hidden by a written method must fail");
-    let header = "impl Acct with (Keys)";
-    let start = source.find(header).unwrap();
-    let end = start + header.len();
-    assert_eq!(
-        (usize::from(err.range.start()), usize::from(err.range.end())),
-        (start, end),
-        "{}",
-        err.cause
-    );
-    assert!(
-        err.cause.contains(
-            "The generated constant `amount` of `Acct` would never be selected: `Acct` already has a written `amount`"
-        ),
-        "{}",
-        err.cause
-    );
-}
-
-#[test]
-fn inherent_header_refuses_invalid_member_items_and_missing_derive_inherent() {
     let bad_impl_source = "use core::derive::{Derive, Inherent}\nuse core::meta::{Code, Item, Record}\nstruct Bad {}\nimpl Derive<Inherent> for Bad {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote {\n            impl Packet { fn bad() -> u256 { 1 } }\n        }\n    }\n}\nstruct Packet { id: u256 }\nimpl Packet with (Bad)\n";
     let (db, file) = input(bad_impl_source);
     let err = prepare_file(&db, file)
@@ -4213,4 +4210,28 @@ impl S with (P)
         Partial::Present(_) | Partial::Absent => None,
     });
     assert_eq!(hint, Some(Some(true)));
+}
+
+#[test]
+fn a_provider_that_recurses_polymorphically_is_refused_without_hanging() {
+    const RECURSIVE_PROVIDER: &str = r#"use core::derive::{Derive, Inherent}
+use core::meta::{Record, Code, Item}
+
+const fn deep<T>(_ n: usize) -> bool {
+    if n == 0 { true } else { deep<(T,)>(n - 1) }
+}
+
+struct P {}
+impl Derive<Inherent> for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let ok = deep<u256>(2)
+        quote { pub const fn marker() -> u256 { 7 } }
+    }
+}
+
+struct S { a: u256 }
+impl S with (P)
+"#;
+    let (db, file) = input(RECURSIVE_PROVIDER);
+    assert!(prepare_file(&db, file).is_err());
 }

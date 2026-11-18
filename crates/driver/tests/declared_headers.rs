@@ -371,7 +371,9 @@ impl Leaf with (SelfP)
 #[test]
 fn a_package_that_only_derives_headers_publishes_no_item() {
     use hir::{
-        analysis::name_resolution::{NameDomain, resolve_ident_to_bucket},
+        analysis::name_resolution::{
+            NameDomain, ingot_has_generated_items, ingot_publishes_items, resolve_ident_to_bucket,
+        },
         hir_def::{IdentId, PathId, scope_graph::ScopeId},
     };
 
@@ -404,6 +406,9 @@ pub const fn run() -> u256 { <S as Tr>::v() + S::INHERENT_C + S::inherent_v() }
         .get(&output, &Url::parse(URL).unwrap())
         .expect("prepared file");
     let top_mod = output.top_mod(file);
+    let ingot = top_mod.ingot(&output);
+    assert!(*ingot_has_generated_items(&output, ingot));
+    assert!(!*ingot_publishes_items(&output, ingot));
     assert_eq!(value_of(&output, "run"), "60");
 
     let mod_scope = ScopeId::from_item(top_mod.into());

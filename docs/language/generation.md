@@ -35,7 +35,7 @@ fn the_header_and_the_block() {
 
 `fe test` on this file reports `1 passed`. `Pair::arity()` returns 2: the compiler runs `CountFields::derive` for `Pair` and uses the returned function as the body of `impl Arity for Pair`. The block `with (CountFields) { .. }` uses the provider for the `Arity` goals that are proved inside it. `scoped()` returns 3, the number of fields of `Line`, while `plain()` still returns 100.
 
-A header and a block are both called a request. Before a program is checked, the compiler prepares it: it runs the provider of every request and adds the returned code to a copy of the program. Generated code is then checked and used like code that was written.
+A header and a block are both called a request. Before a program is checked, the compiler prepares it: it runs the provider of every request and adds the returned code to a copy of the program. Generated code is then checked like code that was written; where it is used is described under "Generated code only fills gaps".
 
 ## Providers
 
@@ -214,8 +214,8 @@ fn variants_and_payloads_are_compared() {
 ## Requests
 
 - `impl Type with (Provider)` adds inherent members. The provider implements `Derive<Inherent>`.
-- `impl Trait for Type with (Provider)` implements a trait of the same package, including its associated constants and types. The provider implements `Derive<Trait>`.
-- `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<Trait>`.
+- `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<Trait>`.
+- `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<Trait>`. The trait must be one of the package that the block is in.
 
 A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
@@ -295,18 +295,141 @@ fn what_a_dependency_generates_is_an_ordinary_item_for_its_dependents() {
 
   `fe check` in `app` reports `error[5-0001]: conflicting trait implementations`.
 
+## Generated code only fills gaps
+
+In the package that asks for generated code, written code keeps its meaning: a generated item is used only where nothing written answers. A block `with (Provider) { .. }` is the exception, because it asks for the change in the text: inside the block its provider answers the goals of its trait in place of a written implementation, as `scoped()` in the first example shows. Written code is the package's own text, its dependencies, its imports and the prelude, and the headers that the package wrote.
+
+Generated code may contain further items, such as an implementation inside a generated function. The provider `Gen` below writes one for `Tr2`. The call `X { a: 0 }.m()` is already answered by the written implementation of `Tr1`, so it keeps calling that:
+
+```fe
+use core::derive::{Derive, Inherent}
+use core::meta::{Record, Code, Item}
+
+mod a {
+    pub trait Tr1 { fn m(self) -> u256 }
+}
+trait Tr2 { fn m(self) -> u256 }
+
+struct X { a: u256 }
+impl a::Tr1 for X { fn m(self) -> u256 { 1 } }
+
+struct Gen {}
+impl Derive<Inherent> for Gen {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn carrier() -> u256 {
+                impl Tr2 for X { fn m(self) -> u256 { 2 } }
+                0
+            }
+        }
+    }
+}
+
+struct G { a: u256 }
+impl G with (Gen)
+
+#[test]
+fn the_written_implementation_answers_the_call() {
+    assert!(X { a: 0 }.m() == 1)
+}
+```
+
+`fe test` passes and prints a warning that names the trait to use for the generated method:
+
+```
+warning[6-0041]: the generated implementation of `Tr2` adds `m`, which `X` already has
+```
+
+```
+`X::m` keeps selecting `Tr1`; name the trait to use the generated one: `Tr2::m`
+```
+
+Where nothing written answers, the generated implementation answers: with the line `impl a::Tr1 for X { .. }` removed, `X { a: 0 }.m()` returns 2.
+
+A generated item that written code hides is refused at its request, because it could never be selected. A generated inherent method `size` is refused when the type already has an inherent method `size`: ``the generated `size` requested at .. would be hidden: `Box1` already has an inherent method `size` of `Box1` ..``, where `..` stands for places that the message names.
+
+### Deciding traits
+
+A trait that the compiler consults to choose behaviour declares `#[decides = "reason"]`: for example whether a value is copied or moved, what runs where a value goes out of use, or how a stored value is packed. A generated implementation of a deciding trait is refused at its request, because it would change what written code does without any change to that code. So is a generated implementation of a trait that a bound of a written implementation of a deciding trait names, directly or through further bounds. With the written implementation `impl<T: Marker + Copy> Copy for W<T> {}`, a generated implementation of `Marker` is refused: ``the generated implementation of `Marker` for `X` requested at .. is refused: it could change whether a value is copied or moved for `W<T>` ..``. The message ends with the ways out: write the implementation, request it with a header, or leave it out.
+
+The deciding traits of `core` and `std` are `Copy`, `Snapshot`, `Pinned`, `Drop`, `StateIndex`, `LaneCodec`, `Encode`, `ErrorVariant`, `Fn`, `FnMut`, `Driver`, `Producer`, `WrappingAdd`, `WrappingSub`, `WrappingMul`, `WrappingPow`, `WrappingNeg` and `SolPacked`. Only the traits of `core` and `std` count: `#[decides]` on a trait of any other package is accepted and has no effect.
+
+### Headers for traits of other packages
+
+A header counts as written code, so it is the way to ask a provider for an implementation of a deciding trait, or of any trait of `core`, `std` or a dependency. This header makes drop glue run the member that the provider wrote:
+
+```fe
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+use core::ops::Drop
+use core::ptr
+
+struct CountDrops {}
+impl Derive<Drop> for CountDrops {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn drop(own self) {
+                unsafe { *self.counter += 1 }
+            }
+        }
+    }
+}
+
+struct Counted { counter: *u256 }
+impl Drop for Counted with (CountDrops)
+
+#[test]
+fn drop_glue_runs_the_member_a_provider_wrote() {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    {
+        let _a = Counted { counter }
+        let _b = Counted { counter }
+    }
+    assert(unsafe { *counter } == 2)
+}
+```
+
+`fe test` reports `1 passed`: the counter is 2 after the two `Counted` values go out of scope.
+
+A trait with parameters besides its target type is named with its arguments in the header, as in `impl Conv<u8> for Pair with (Provider)`. The provider implements `Derive` for the trait without them, `Derive<Conv>`. A provider that is written for `Derive<Conv<u8>>` is refused with ``a provider is keyed by the bare trait``. A marker trait takes an empty provider output, `empty<Item>()`. A callable trait takes the call method that its provider writes, as in `impl Fn(u256) -> u256 for Triple with (Calls)`. The target may also be a struct that `#[abi]`, `#[error]` or `#[event]` expands, or the struct of a `msg` variant.
+
+### Unsafe code in generated code
+
+Unsafe code that a provider generates is accepted only if every package that contributed to it is trusted: the package whose text contains the `unsafe` block, and each package whose quotation spliced that text into the code that runs. The package that asked for the code is not a contributor. A package is trusted when it is a package being checked, `core` or `std`, or a dependency that a trusted package lists with `allow_unsafe = true`. The package `dep` has this `src/lib.fe`:
+
+```fe
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+pub trait Reading { fn read(self) -> u256 }
+
+pub struct ReadsCell {}
+impl Derive<Reading> for ReadsCell {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn read(self) -> u256 { unsafe { *self.cell } } }
+    }
+}
+```
+
+The package `app` depends on `dep`, implements `Reading` for a type `Cell` with `impl Reading for Cell with (ReadsCell)` and calls `read()` in a test. `fe test` in `app` is refused with ``error[16-0015]: call reaches unsafe code in `dep`, which is not allowed to use it``. The error labels the call and the `unsafe` block that `dep` wrote, and names `allow_unsafe = true` as the way to trust `dep`. With `dep = { path = "../dep", allow_unsafe = true }` in the `fe.toml` of `app` the test passes.
+
+The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to.
+
 ## What is refused
 
-- A header or a block for a trait of another package, including a trait of a dependency: ``a derive header can implement only a trait of its own package; `Arity` is defined in another package`` and `a scoped derive supports only traits of its own package`.
+- A block for a trait of another package: ``a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)` ``.
 - A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
-- A header for a trait that has parameters besides its target type, or associated type bindings: ``a derive header can implement only a trait that has no parameters besides its target type and no associated type bindings; `Conv` has more``.
-- A generated member that an existing member hides: ``The generated method `size` of `Box1` would never be selected: `Box1` already has a written `size` ``. The existing member may be written in an inherent implementation or in a trait implementation. Where it belongs to a trait implementation the message is inexact: the generated inherent member would be selected in place of the written one, so the header is refused, but not because the generated member would never be selected.
-- A generated function that contains an implementation of a trait that the compiler consults to choose behaviour. The list is fixed: `Drop`, `Copy`, `Snapshot`, `Pinned`, `StateIndex`, `LaneCodec`, `ErrorVariant`, `Fn`, `FnMut`, `Producer`, `Driver` and `SolPacked`. The message begins ``the generated implementation of `Drop` for `Counted` is refused: it could change what runs where a value goes out of use``.
+- A provider keyed by the trait with its arguments, as in `Derive<Conv<u8>>`: ``a provider is keyed by the bare trait``.
+- A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that a bound of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
 - A header inside a function body: `a derive header inside a function body is not supported; declare the header in a module`.
 - A glob import, such as `use m::*`, in a block of a quotation: ``a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}` ``. An import that lists its names declares them in the quotation's block, as in a function body. Quotation content is checked when a request runs the provider. A quotation that no request reaches is never lowered.
+- A provider that reads what another provider generated, or that does not end.
 - A named implementation of `FieldQuery` is refused because `query_field` evaluates it outside every `with`.
 
 ## Limits
 
-- Headers and blocks work for traits of the package that the request is in.
-- Only the hidden-member refusal and the list of twelve traits keep generated code from changing what written code does. A generated implementation of a trait that is not on the list, nested in a generated function, is accepted even where it changes which implementation an existing call selects: a call that returned 1 returns 2.
+- Only `core` and `std` declare deciding traits.
+- The bound rule follows bounds by trait identity and does not ask whether the program would otherwise work, so it can refuse more than needed. The message names the written implementation whose bound applies; a header is the way to ask for such an implementation.
+- An `unsafe impl` without functions is judged where it is declared, so an untrusted package cannot generate one even where nothing uses it.
+- A block accepts only a trait of its own package.

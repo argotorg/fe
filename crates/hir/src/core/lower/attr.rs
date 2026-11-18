@@ -86,6 +86,8 @@ pub struct AttrMisuseError {
     pub attr_name: String,
     pub target: &'static str,
     pub item_name: Option<String>,
+    /// The attribute is written `#![name]`, inside the item it applies to.
+    pub inner: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -167,6 +169,8 @@ pub(super) struct AttrRule {
 pub(super) struct AttrTarget {
     pub kind: &'static str,
     pub name: Option<String>,
+    /// The attributes checked are inner attributes, `#![name]`.
+    pub inner: bool,
 }
 
 impl AttrRule {
@@ -212,7 +216,20 @@ impl AttrRule {
 
 impl AttrTarget {
     pub(super) fn new(kind: &'static str, name: Option<String>) -> Self {
-        Self { kind, name }
+        Self {
+            kind,
+            name,
+            inner: false,
+        }
+    }
+
+    /// The target of the inner attributes `#![name]` of an item.
+    pub(super) fn inner(kind: &'static str) -> Self {
+        Self {
+            kind,
+            name: None,
+            inner: true,
+        }
     }
 }
 
@@ -437,6 +454,7 @@ fn report_attr_misuse<'db>(
         attr_name,
         target: target.kind,
         item_name: target.name,
+        inner: target.inner,
     });
 }
 

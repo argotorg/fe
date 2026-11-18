@@ -1,0 +1,6 @@
+[ingot]
+name = "hdr"
+version = "0.1.0"
+
+[dependencies]
+dep = { path = "../dep" }

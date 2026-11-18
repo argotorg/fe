@@ -1061,6 +1061,26 @@ pub fn walk_impl_trait<'db, V>(
     );
 }
 
+/// Walks the bounds of an implementation of a trait: its generic parameters
+/// and its `where` clause, and nothing else of it.
+pub fn walk_impl_trait_bounds<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>,
+    impl_trait: ImplTrait<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    ctxt.with_new_ctxt(
+        |span| span.generic_params(),
+        |ctxt| visitor.visit_generic_param_list(ctxt, impl_trait.generic_params(ctxt.db)),
+    );
+
+    ctxt.with_new_ctxt(
+        |span| span.where_clause(),
+        |ctxt| visitor.visit_where_clause(ctxt, impl_trait.where_clause(ctxt.db)),
+    );
+}
+
 pub fn walk_const<'db, V>(
     visitor: &mut V,
     ctxt: &mut VisitorCtxt<'db, LazyConstSpan<'db>>,

@@ -6,12 +6,13 @@
 //! cannot compute. A codec that wide packs nothing, so the compiler never
 //! calls its `get` or `set`.
 
+use crate::analysis::name_resolution::Tier;
 use common::indexmap::IndexMap;
 use num_bigint::BigInt;
 
 use super::{
     const_ty::{ConstTyId, const_ty_from_sem_const},
-    corelib::{resolve_core_trait, resolve_lib_trait_path, resolve_lib_type_path},
+    corelib::{presence_trait, resolve_lib_type_path},
     trait_def::{ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId},
     trait_resolution::{GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable},
     ty_def::{TyFlags, TyId},
@@ -39,6 +40,11 @@ pub(crate) fn sol_codec_proof_is_deferred<'db>(
 /// The implementation proving `goal` when it is `SolLanes: LaneCodec<T>`
 /// for a `T` that is not `SolPacked` under `assumptions`. A `T` still to be
 /// inferred, or one whose encoding is undecided, has none.
+///
+/// Whether `T` is `SolPacked` decides the storage layout. A generated
+/// `SolPacked` implementation, or one that would make a written implementation
+/// apply to more types, is refused where it is requested (see
+/// `presence_decision`), so every implementation counts here.
 pub(crate) fn sol_codec_implementor<'db>(
     db: &'db dyn HirAnalysisDb,
     goal: TraitInstId<'db>,
@@ -49,14 +55,7 @@ pub(crate) fn sol_codec_implementor<'db>(
     if elem.has_var(db) || elem.has_invalid(db) {
         return None;
     }
-    let sol_packed = resolve_lib_trait_path(db, std_scope, "std::evm::SolPacked")?;
-    let packed = TraitInstId::new_simple(db, sol_packed, vec![elem]);
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
-    matches!(
-        is_goal_satisfiable(db, solve_cx, packed),
-        GoalSatisfiability::UnSat(_)
-    )
-    .then(|| {
+    sol_packed_is_unsatisfiable(db, std_scope, scope, elem, assumptions)?.then(|| {
         ImplementorId::new(
             db,
             goal,
@@ -65,6 +64,24 @@ pub(crate) fn sol_codec_implementor<'db>(
             ImplementorOrigin::Structural,
         )
     })
+}
+
+/// Whether `elem` is proven not to be `SolPacked`; `None` if std's `SolPacked`
+/// is not reachable from `std_scope`.
+pub(crate) fn sol_packed_is_unsatisfiable<'db>(
+    db: &'db dyn HirAnalysisDb,
+    std_scope: ScopeId<'db>,
+    scope: ScopeId<'db>,
+    elem: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<bool> {
+    let sol_packed = presence_trait(db, std_scope, "std::evm::SolPacked")?;
+    let packed = TraitInstId::new_simple(db, sol_packed, vec![elem]);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
+    Some(matches!(
+        is_goal_satisfiable(db, solve_cx, packed),
+        GoalSatisfiability::UnSat(_)
+    ))
 }
 
 /// `BITS` of the compiler's `SolLanes: LaneCodec<T>` that `resolved` selects:
@@ -103,7 +120,7 @@ fn sol_codec_elem<'db>(
         return None;
     }
     let scope = adt.scope(db);
-    let lane_codec = resolve_core_trait(db, scope, &["ops", "LaneCodec"])?;
+    let lane_codec = presence_trait(db, scope, "core::ops::LaneCodec")?;
     if inst.def(db) != lane_codec
         || resolve_lib_type_path(db, scope, "std::evm::SolLanes") != Some(self_ty)
     {

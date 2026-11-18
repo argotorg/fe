@@ -1,0 +1,4 @@
+pub struct VType {}
+
+/// Written in `v` for a type of `v`, with no function.
+unsafe impl t::Pod for VType {}

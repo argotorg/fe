@@ -3,6 +3,7 @@ use super::{
     SemanticInstance, SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
     resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
+use crate::analysis::name_resolution::Tier;
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -480,7 +481,7 @@ pub fn generated_callee<'db>(
     );
     // The call proves its goal and its callee's bounds where it is made, as
     // the checker proves a written call's.
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     callable.record_evidence(db, solve_cx);
     // A generated call carries no effect arguments.
     callable.record_bound_evidence(db, solve_cx, &[]);
@@ -809,7 +810,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         && callable
             .selected_method(
                 db,
-                TraitSolveCx::new(db, impl_env.normalization_scope(db))
+                TraitSolveCx::new(db, impl_env.normalization_scope(db), Tier::All)
                     .with_assumptions(assumptions),
             )
             .is_some_and(|method| method.is_declared_only())
@@ -819,7 +820,8 @@ fn semantic_callee_key_with_assumptions<'db>(
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(method) = callable.selected_method(
             db,
-            TraitSolveCx::new(db, impl_env.normalization_scope(db)).with_assumptions(assumptions),
+            TraitSolveCx::new(db, impl_env.normalization_scope(db), Tier::All)
+                .with_assumptions(assumptions),
         )
         && let Some(impl_func) = method.body()
     {
@@ -1080,7 +1082,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         let independent = bounds.list(db).iter().copied().all(|bound| {
             collect_flags(db, bound).contains(TyFlags::HAS_PARAM)
                 || matches!(
-                    is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
+                    is_goal_satisfiable(db, TraitSolveCx::new(db, scope, Tier::All), bound),
                     GoalSatisfiability::Satisfied(_)
                 )
         }) && subst_args.iter().all(|&arg| same_without_caller(arg))

@@ -1,4 +1,5 @@
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::trait_resolution::TraitSolveCx;
 use crate::analysis::ty::ty_check::{Callable, EffectParamSite, TypedBody};
@@ -137,7 +138,7 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
         };
         if let Some(method) = callable.selected_method(
             self.db,
-            TraitSolveCx::new(self.db, self.body.scope())
+            TraitSolveCx::new(self.db, self.body.scope(), Tier::All)
                 .with_assumptions(self.typed_body.assumptions()),
         ) && let Some(impl_func) = method.body()
         {

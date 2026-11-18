@@ -418,7 +418,7 @@ impl<'db> TopLevelMod<'db> {
             Target::Scope(scope) => {
                 let mut results = Vec::new();
                 for &item in self.all_items(db) {
-                    if ScopeId::from_item(item).is_generated(db) {
+                    if ScopeId::from_item(item).is_in_published_item(db) {
                         continue;
                     }
                     for resolved in resolved_item_scope_targets(db, item) {

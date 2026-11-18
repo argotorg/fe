@@ -18,6 +18,9 @@ mod pat;
 mod path;
 mod projection;
 pub(crate) use projection::constructed_variant;
+mod use_target;
+pub(crate) use use_target::target_at;
+pub use use_target::{UseTarget, item_target};
 mod stmt;
 
 pub use self::contract::{
@@ -30,6 +33,7 @@ pub use self::contract::{
 pub(crate) use self::contract::{contract_field_slot, eval_msg_variant_selector};
 pub(crate) use self::env::{func_declared_bounds, func_signature};
 pub use self::path::RecordLike;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::adt_def::AdtRef;
@@ -1266,6 +1270,34 @@ fn body_demands_cycle_initial<'db>(
     GenerationDemands::default()
 }
 
+/// The diagnostics of `owner`'s checked body, requirement checks included. A
+/// closure is checked inline in its parent's body.
+pub(crate) fn checked_body_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    match owner {
+        BodyOwner::Func(func, _) => check_func_body(db, func).0.clone(),
+        BodyOwner::Const(const_) => check_const_body(db, const_).0.clone(),
+        BodyOwner::AnonConstBody { body, expected } => {
+            check_anon_const_body(db, body, expected).0.clone()
+        }
+        BodyOwner::ContractInit { contract } => {
+            contract::check_contract_init_body(db, contract).0.clone()
+        }
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } => contract::check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
+            .0
+            .clone(),
+        BodyOwner::Closure { def, .. } => BodyOwner::closure_parent(db, def)
+            .map(|parent| checked_body_diags(db, parent))
+            .unwrap_or_default(),
+    }
+}
+
 /// How the bindings of a pattern take what its source grants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AccessBinding {
@@ -1806,6 +1838,7 @@ fn typed_body_for_bodyless_func<'db>(
         generation_demands: Default::default(),
         expr_choices: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
+        pat_const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
@@ -2163,7 +2196,8 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 idx,
                 &key,
-                TraitSolveCx::new(self.db, func.scope()).with_assumptions(self.env.assumptions()),
+                TraitSolveCx::new(self.db, func.scope(), Tier::All)
+                    .with_assumptions(self.env.assumptions()),
             ) {
                 self.push_diag(diag);
             } else if let Some(root_ty) = root_ty {
@@ -2174,7 +2208,7 @@ impl<'db> TyChecker<'db> {
                     ResolvedEffectKey::Trait(schema) => !matches!(
                         is_goal_satisfiable(
                             self.db,
-                            TraitSolveCx::new(self.db, func.scope()),
+                            TraitSolveCx::new(self.db, func.scope(), Tier::All),
                             instantiate_trait_self(
                                 self.db,
                                 schema.into_trait_inst(self.db),
@@ -2271,7 +2305,8 @@ impl<'db> TyChecker<'db> {
                     owner,
                     idx,
                     &key,
-                    TraitSolveCx::new(self.db, contract.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(self.db, contract.scope(), Tier::All)
+                        .with_assumptions(assumptions),
                 ) {
                     self.push_diag(diag);
                     continue;
@@ -2289,7 +2324,7 @@ impl<'db> TyChecker<'db> {
                         if matches!(
                             is_goal_satisfiable(
                                 self.db,
-                                TraitSolveCx::new(self.db, contract.scope()),
+                                TraitSolveCx::new(self.db, contract.scope(), Tier::All),
                                 trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -2780,7 +2815,7 @@ impl<'db> TyChecker<'db> {
             return TraitObligationOutcome::Discharged;
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope)
+        let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
             .with_assumptions(assumptions)
             .with_choices(obligation.choices);
         let query = solve_cx.query(db, goal);
@@ -3559,7 +3594,14 @@ impl<'db> TyChecker<'db> {
         let annotated = arm
             .ret_ty
             .map(|hir_ty| self.lower_ty(hir_ty, arm_ret_span.clone(), true));
-        let variant_ret = contract::get_msg_variant_return_type(self.db, pat_ty, self.env.scope());
+        let variant_ret = crate::semantic::resolve_sol_abi_ty(
+            self.db,
+            self.env.scope(),
+            PredicateListId::empty_list(self.db),
+        )
+        .and_then(|abi| {
+            contract::get_msg_variant_return_type(self.db, pat_ty, abi, self.env.scope())
+        });
 
         let ret_ty = match (variant_ret, annotated) {
             (Some(var_ty), Some(annot_ty)) => {
@@ -5115,6 +5157,7 @@ mod typed_body_tables {
         pub(super) expr_choices:
             SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        pub(super) pat_const_refs: SecondaryMap<PatId, Option<ConstRef<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
         pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
@@ -5511,6 +5554,9 @@ impl<'db> TypedBody<'db> {
         for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
+        for cref in self.tables.pat_const_refs.values().flatten() {
+            cref.visit_with(visitor);
+        }
         for value_path in self.tables.value_path_refs.values().flatten() {
             value_path.visit_with(visitor);
         }
@@ -5580,6 +5626,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .flatten()
             .for_each(|shape| *shape = shape.clone().fold_with(db, folder));
         this.const_refs
+            .values_mut()
+            .flatten()
+            .for_each(|cref| *cref = (*cref).fold_with(db, folder));
+        this.pat_const_refs
             .values_mut()
             .flatten()
             .for_each(|cref| *cref = (*cref).fold_with(db, folder));
@@ -5680,7 +5730,12 @@ impl<'db> TypedBody<'db> {
                 call.callable.bind_evidence(db, bound);
             }
         }
-        for const_ref in tables.const_refs.values_mut().flatten() {
+        for const_ref in tables
+            .const_refs
+            .values_mut()
+            .chain(tables.pat_const_refs.values_mut())
+            .flatten()
+        {
             if let ConstRef::TraitConst { evidence, .. } = const_ref {
                 evidence.bind(db, bound);
             }
@@ -6080,6 +6135,14 @@ impl<'db> TypedBody<'db> {
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
         self.tables.const_refs[expr]
+    }
+
+    /// The constant that the pattern `pat` names, as `Y::N` in
+    /// `match x { Y::N => .. }`. The pattern holds the constant's value, which
+    /// is evaluated where the pattern is checked; the reference is kept apart
+    /// from [`Self::const_refs`], which belong to expressions.
+    pub fn pat_const_ref(&self, pat: PatId) -> Option<ConstRef<'db>> {
+        self.tables.pat_const_refs[pat]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
@@ -6821,7 +6884,7 @@ impl<'db> TypedBody<'db> {
         };
         if let Some(method) = callable.selected_method(
             db,
-            TraitSolveCx::new(db, body.scope()).with_assumptions(self.assumptions()),
+            TraitSolveCx::new(db, body.scope(), Tier::All).with_assumptions(self.assumptions()),
         ) && let Some(body_func) = method.body()
         {
             func = body_func;
@@ -7685,6 +7748,7 @@ impl<'db> TypedBody<'db> {
             generation_demands: Default::default(),
             expr_choices: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
+            pat_const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
@@ -8442,7 +8506,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope(), Tier::All);
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }

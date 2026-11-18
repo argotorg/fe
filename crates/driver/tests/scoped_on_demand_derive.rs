@@ -467,7 +467,7 @@ fn forbidden() -> Pair {
 "#;
     let rendered3 = prepare_err(protected_scoped);
     assert!(
-        rendered3.contains("a scoped derive supports only traits of its own package")
+        rendered3.contains("a scoped derive supports traits of the same package; for a trait of another package, write a header")
             && !rendered3.contains("division by zero"),
         "{rendered3}"
     );

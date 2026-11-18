@@ -2,11 +2,12 @@
 
 use super::{
     adt_def::AdtRef,
-    corelib::resolve_core_trait,
+    corelib::{presence_trait, resolve_core_trait},
     trait_def::{ImplementorId, impls_for_trait_def},
     trait_lower::lower_impl_trait,
     ty_def::{PrimTy, ShapeCon, TyBase, TyData, TyId},
 };
+use crate::analysis::name_resolution::Tier;
 use crate::{analysis::HirAnalysisDb, hir_def::Func};
 
 /// Whether `func` is an implementation's `Drop::drop`.
@@ -19,15 +20,17 @@ pub fn implements_drop<'db>(db: &'db dyn HirAnalysisDb, func: Func<'db>) -> bool
     })
 }
 
-/// The `Drop` implementation of a struct or enum. It covers every value of
-/// the type, so it lies in the type's own ingot.
+/// The `Drop` implementation of a struct or enum. It covers every value of the
+/// type, so it lies in the type's own ingot. A generated `Drop` implementation
+/// is refused where it is requested (see `presence_decision`), so the
+/// implementation found is one that the package or a dependency wrote.
 #[salsa::tracked(returns(copy))]
 pub fn adt_drop_impl<'db>(
     db: &'db dyn HirAnalysisDb,
     adt: AdtRef<'db>,
 ) -> Option<ImplementorId<'db>> {
-    let drop = resolve_core_trait(db, adt.scope(), &["ops", "Drop"])?;
-    impls_for_trait_def(db, adt.scope().ingot(db), drop)
+    let drop = presence_trait(db, adt.scope(), "core::ops::Drop")?;
+    impls_for_trait_def(db, adt.scope().ingot(db), drop, Tier::All)
         .iter()
         .copied()
         .find(|implementor| {

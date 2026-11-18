@@ -214,16 +214,19 @@ pub enum RecordInputError {
 
 impl<'db> RecordInput<'db> {
     /// Identify the annotation's actual declaration in its owning source module.
+    /// The declaration is the struct written at `syntax`, including the struct
+    /// that `#[abi]`, `#[error]` or `#[event]` expands from it.
     pub fn for_authored_syntax(
         db: &'db dyn HirAnalysisDb,
         module: crate::hir_def::TopLevelMod<'db>,
         syntax: &ast::Struct,
     ) -> Result<Self, RecordInputError> {
-        let origin = HirOrigin::raw(syntax);
+        let root = crate::lower::top_mod_ast(db, module);
+        let range = syntax.syntax().text_range();
         let declaration = module
             .all_structs(db)
             .iter()
-            .find(|decl| *decl.origin(db) == origin)
+            .find(|decl| decl.origin(db).authored_range(root.syntax()) == Some(range))
             .ok_or(RecordInputError::NotAuthored)?;
         let adt = crate::analysis::ty::adt_def::AdtRef::Struct(*declaration).as_adt(db);
         let ty = TyId::foldl(db, TyId::adt(db, adt), adt.params(db));
@@ -349,7 +352,10 @@ impl<'db> RecordInput<'db> {
         let adt = ty.adt_def(db).ok_or(RecordInputError::NotRecord)?;
         let owner = match adt.adt_ref(db) {
             crate::analysis::ty::adt_def::AdtRef::Struct(declaration) => {
-                if !matches!(declaration.origin(db), HirOrigin::Raw(_)) {
+                // The struct that `#[abi]`, `#[error]` or `#[event]` expands,
+                // and the struct of a `msg` variant, are authored declarations
+                // with the fields as written.
+                if !declaration.origin(db).is_authored() {
                     return Err(RecordInputError::NotAuthored);
                 }
                 RecordOwner::Struct(declaration)
@@ -513,14 +519,10 @@ impl<'db> RecordInput<'db> {
             RecordOwner::Struct(s) => {
                 let top_mod = s.top_mod(db);
                 let root = crate::lower::top_mod_ast(db, top_mod);
-                let HirOrigin::Raw(ptr) = s.origin(db) else {
+                let Some(range) = s.origin(db).authored_range(root.syntax()) else {
                     return Err("record input is not authored");
                 };
-                (
-                    FrozenRecordOwnerKind::Struct,
-                    top_mod,
-                    ptr.to_node(root.syntax()).syntax().text_range(),
-                )
+                (FrozenRecordOwnerKind::Struct, top_mod, range)
             }
             RecordOwner::Enum(e) => {
                 let top_mod = e.top_mod(db);
@@ -768,14 +770,20 @@ fn freeze_decl<'db>(
     declaration: crate::analysis::ty::adt_def::AdtRef<'db>,
 ) -> Result<common::generation::FrozenDeclRef, &'static str> {
     use crate::analysis::ty::adt_def::AdtRef;
-    let (top_mod, pointer) = match declaration {
-        AdtRef::Struct(s) => match s.origin(db) {
-            HirOrigin::Raw(pointer) => (s.top_mod(db), pointer.syntax_node_ptr()),
-            _ => return Err("a spliced type names a declaration that is not authored"),
-        },
+    let not_authored = "a spliced type names a declaration that is not authored";
+    let (top_mod, range) = match declaration {
+        AdtRef::Struct(s) => {
+            let top_mod = s.top_mod(db);
+            let root = crate::lower::top_mod_ast(db, top_mod);
+            let range = s
+                .origin(db)
+                .authored_range(root.syntax())
+                .ok_or(not_authored)?;
+            (top_mod, range)
+        }
         AdtRef::Enum(e) => match e.origin(db) {
-            HirOrigin::Raw(pointer) => (e.top_mod(db), pointer.syntax_node_ptr()),
-            _ => return Err("a spliced type names a declaration that is not authored"),
+            HirOrigin::Raw(pointer) => (e.top_mod(db), pointer.syntax_node_ptr().text_range()),
+            _ => return Err(not_authored),
         },
     };
     Ok(common::generation::FrozenDeclRef {
@@ -783,7 +791,7 @@ fn freeze_decl<'db>(
             .file(db)
             .url(db)
             .ok_or("a spliced type's declaration has no source URL")?,
-        range: pointer.text_range(),
+        range,
     })
 }
 
@@ -1590,11 +1598,9 @@ impl<'db> ItemCode<'db> {
                 if block.stmts().next().is_some() {
                     return Err("item quotation requires item declarations");
                 }
-                let items = block.items().collect::<Vec<_>>();
-                if items.is_empty() {
-                    return Err("item quotation requires item declarations");
-                }
-                for item in items {
+                // An empty quotation is no declarations at all: the output of
+                // a provider for a marker trait, which has no members.
+                for item in block.items() {
                     if !matches!(
                         item.kind(),
                         Some(
@@ -1674,9 +1680,16 @@ pub fn native_derive_provider<'db>(
 > {
     // A header may declare binders and requirements, as a handwritten one
     // does; its target is then admitted under the header's own premises.
-    let goal = request
-        .candidate_trait_inst_result(db)
-        .map_err(|_| "cannot resolve requested trait and target")?;
+    let goal = request.candidate_trait_inst_result(db).map_err(|_| {
+        if matches!(
+            request.ty(db).data(db),
+            crate::analysis::ty::ty_def::TyData::TyParam(_)
+        ) {
+            "a derive header cannot implement a trait for a bare type parameter: `impl<T> Trait for T` applies to every type that meets its bounds, and a provider derives members from one record; write this implementation by hand"
+        } else {
+            "cannot resolve the requested trait and target: the trait must be in scope, and a header cannot implement a trait of another package for a type of another package"
+        }
+    })?;
     finalized_derive_provider(
         db,
         DeriveKey::Trait(goal),
@@ -1732,9 +1745,15 @@ fn finalized_derive_provider<'db>(
         ty_def::{TyBase, TyData},
     };
     // Associated items are supplied as members and admitted by ordinary impl
-    // conformance. Scoped requests reach here only after
-    // `freeze_generation_request`, which still refuses trait arguments.
+    // conformance. The provider is keyed by the bare trait (`Derive<Eq>`) and
+    // is not shown the header's other trait arguments, which may be defaulted
+    // (`Eq` is `Eq<Self>`) or written (`Decode<Sol>`), nor a callable's
+    // parameters (`Fn<shape A>`) or its `Out`; what it returns is checked
+    // against the header's actual arguments by the same conformance rules as a
+    // handwritten body. Scoped requests reach here only after
+    // `freeze_generation_request`, which still refuses all trait arguments.
     let target = key.target(db);
+    let requested_by_header = header.is_some();
     // A target over the header's own binders is issued and admitted under
     // the header's premises; every other target must be ground.
     let header = header.filter(|_| !crate::analysis::ty::const_ty::ty_is_fully_ground(db, target));
@@ -1747,6 +1766,15 @@ fn finalized_derive_provider<'db>(
             "a derive header requires every field of its target to be visible where the header is written"
                 .to_string()
         }
+        RecordInputError::NotAuthored => format!(
+            "{} cannot be provided for `{}`: it is not a struct or enum written in source, so a provider has no record to read; write the implementation by hand",
+            if requested_by_header {
+                "a derive header"
+            } else {
+                "a derived implementation"
+            },
+            target.pretty_print(db),
+        ),
         _ => format!("a derive header requires a concrete record: {cause:?}"),
     })?;
     match header {
@@ -1764,28 +1792,6 @@ fn finalized_derive_provider<'db>(
         ),
     }
     .map_err(NativeDeriveProviderError::Target)?;
-    // The provider is keyed by the bare trait (`Derive<Eq>`), so a header
-    // names a trait of its own package whose one parameter is the target, with
-    // no associated type bindings.
-    if let DeriveKey::Trait(goal) = key {
-        let trait_name = goal
-            .def(db)
-            .name(db)
-            .to_opt()
-            .map_or_else(|| "the trait".to_string(), |name| name.data(db).to_string());
-        if goal.def(db).ingot(db) != scope.top_mod(db).ingot(db) {
-            return Err(format!(
-                "a derive header can implement only a trait of its own package; `{trait_name}` is defined in another package"
-            )
-            .into());
-        }
-        if goal.args(db).len() != 1 || !goal.assoc_type_bindings(db).is_empty() {
-            return Err(format!(
-                "a derive header can implement only a trait that has no parameters besides its target type and no associated type bindings; `{trait_name}` has more"
-            )
-            .into());
-        }
-    }
     if provider_ty.has_param(db) || provider_ty.has_invalid(db) || !provider_ty.is_star_kind(db) {
         return Err("a derive header requires a concrete provider type".into());
     }
@@ -1835,9 +1841,26 @@ fn finalized_derive_provider<'db>(
                 provider_ty.pretty_print(db),
             )
         }
+        // A provider is keyed by the bare trait: `impl Derive<Eq> for P`
+        // serves the headers `Eq` and `Eq<u8>` alike, and `Derive<Eq<u8>>`
+        // names no provider. A trait with no other argument has no such
+        // mistake to make, and keeps the general message.
+        (
+            DeriveKey::Trait(goal),
+            crate::analysis::ty::trait_def::MethodArgMapError::MissingBody,
+        ) if goal.args(db).len() > 1 => {
+            let trait_name = goal.def(db).name(db).to_opt().map_or_else(
+                || "the trait".to_string(),
+                |name| name.data(db).to_string(),
+            );
+            format!(
+                "`{provider}` has no `impl Derive<{trait_name}>` that applies: a provider is keyed by the bare trait, so it needs `impl Derive<{trait_name}> for {provider}` with no trait arguments, whatever arguments the header gives the trait (`Derive<{trait_name}<A>>` names no provider)",
+                provider = provider_ty.pretty_print(db),
+            )
+        }
         (_, cause) => format!(
             "no ordinary Derive<requested goal> provider implementation was admitted: {cause:?}"
-        )
+        ),
     })?;
     let proof = finalized
         .evidence
@@ -1891,7 +1914,10 @@ pub fn freeze_generation_request<'db>(
         );
     }
     if goal.def(db).ingot(db) != opening.scope(db).top_mod(db).ingot(db) {
-        return Err("a scoped derive supports only traits of its own package".into());
+        return Err(
+            "a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)`"
+                .into(),
+        );
     }
     // Solver discovery freezes declarations only. RecordInput validates and
     // instantiates fields, so it belongs to admission outside solver queries.
@@ -1914,13 +1940,10 @@ pub fn freeze_generation_request<'db>(
     let target_root = crate::lower::top_mod_ast(db, target_module);
     let (owner_kind, target_range) = match adt.adt_ref(db) {
         crate::analysis::ty::adt_def::AdtRef::Struct(record) => {
-            let HirOrigin::Raw(pointer) = record.origin(db) else {
+            let Some(range) = record.origin(db).authored_range(target_root.syntax()) else {
                 return Err("scoped target is not authored".into());
             };
-            (
-                common::generation::FrozenRecordOwnerKind::Struct,
-                pointer.to_node(target_root.syntax()).syntax().text_range(),
-            )
+            (common::generation::FrozenRecordOwnerKind::Struct, range)
         }
         crate::analysis::ty::adt_def::AdtRef::Enum(record) => {
             let HirOrigin::Raw(pointer) = record.origin(db) else {
@@ -2097,16 +2120,12 @@ fn thaw_decl<'db>(
     let written_at = |origin: Option<ast::SyntaxNodePtr>| {
         origin.is_some_and(|pointer| pointer.text_range() == decl.range)
     };
+    let root = crate::lower::top_mod_ast(db, module);
     let declaration = module
         .all_structs(db)
         .iter()
         .copied()
-        .find(|s| {
-            written_at(match s.origin(db) {
-                HirOrigin::Raw(pointer) => Some(pointer.syntax_node_ptr()),
-                _ => None,
-            })
-        })
+        .find(|s| s.origin(db).authored_range(root.syntax()) == Some(decl.range))
         .map(AdtRef::Struct)
         .or_else(|| {
             module
@@ -2165,11 +2184,8 @@ pub fn rebind_generation_request<'db>(
             .iter()
             .copied()
             .find(|target| {
-                let HirOrigin::Raw(pointer) = target.origin(db) else {
-                    return false;
-                };
-                pointer.to_node(target_root.syntax()).syntax().text_range()
-                    == demand.target.target_range
+                target.origin(db).authored_range(target_root.syntax())
+                    == Some(demand.target.target_range)
             })
             .map(AdtRef::Struct),
         common::generation::FrozenRecordOwnerKind::Enum => target_module

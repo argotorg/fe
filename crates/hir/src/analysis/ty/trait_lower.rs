@@ -30,7 +30,7 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        NameResKind, PathRes, PathResError, PathResErrorKind,
+        NameResKind, PathRes, PathResError, PathResErrorKind, Tier,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
     },
     ty::ty_def::{Kind, TyData},
@@ -116,13 +116,20 @@ fn raw_impl_self_key<'db>(
 /// of semantic type lowering is therefore the boundary that prevents query
 /// cycles. Visible candidates are semantically lowered only after this index
 /// has been assembled by [`TraitEnv`](super::trait_def::TraitEnv).
+///
+/// In `tier`: in the authored tier, without the implementations generated in
+/// the ingot.
 #[salsa::tracked]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
 ) -> TraitImplTable<'db> {
     let mut impl_table = TraitImplTable::default();
     for &impl_ in ingot.all_impl_traits(db).iter() {
+        if tier == Tier::Authored && impl_.scope().is_within_generated(db, ingot) {
+            continue;
+        }
         if let Some(trait_def) = raw_impl_trait_def(db, impl_) {
             impl_table
                 .by_trait

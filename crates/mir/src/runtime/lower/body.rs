@@ -1,4 +1,5 @@
 use common::compilation::Target;
+use hir::analysis::name_resolution::Tier;
 use hir::analysis::ty::AddressSpace;
 use std::mem::size_of;
 
@@ -21,7 +22,7 @@ use hir::analysis::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            RuntimeBuiltinFuncKind, concrete_usize, resolve_core_trait, resolve_lib_func_path,
+            RuntimeBuiltinFuncKind, concrete_usize, presence_trait, resolve_lib_func_path,
             resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
@@ -348,12 +349,14 @@ fn panic_payload_is_error_variant<'db>(
     let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
         return false;
     };
-    let Some(error_variant_trait) = resolve_core_trait(db, scope, &["error", "ErrorVariant"])
-    else {
+    // A type has an error variant only by an implementation written in the
+    // package or a dependency: a generated one is refused where it is
+    // requested, since it would change what a revert of the value carries.
+    let Some(error_variant_trait) = presence_trait(db, scope, "core::error::ErrorVariant") else {
         return false;
     };
     let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     matches!(
         is_goal_satisfiable(db, solve_cx, error_variant),
         GoalSatisfiability::Satisfied(_)

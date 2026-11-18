@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
+use crate::analysis::name_resolution::Tier;
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -192,7 +193,7 @@ pub(crate) fn keys_may_share<'db>(
         | (EffectRequirementKey::Trait(inst), EffectRequirementKey::Type(ty)) => !matches!(
             is_goal_satisfiable(
                 db,
-                TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+                TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
                 instantiate_trait_self(db, *inst, *ty),
             ),
             GoalSatisfiability::UnSat(_)

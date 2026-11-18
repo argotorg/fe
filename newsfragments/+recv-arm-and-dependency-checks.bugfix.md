@@ -1,0 +1,1 @@
+A `recv` arm requires the `MsgVariant` implementation of its own ABI, so a message that implements `MsgVariant` only for another ABI is refused. An unsupported inner attribute such as `#![name]` is reported at the attribute. A warning in a dependency no longer stops the packages that depend on it; only an error does.

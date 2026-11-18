@@ -1,0 +1,39 @@
+// The same contract with `u` trusted: the dispatcher runs its code.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use std::abi::Sol
+use std::evm::{Call, Evm}
+use u::WR
+
+pub struct Generated { pub v: u256 }
+impl Encode<Sol> for Generated with (u::EncodesUnsafely)
+impl AbiSize for Generated {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Decode<Sol> for Generated {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Generated { v: 0 }
+    }
+}
+
+msg Messages {
+    #[selector = 0x11111111]
+    FromGenerated -> Generated,
+    #[selector = 0x22222222]
+    FromDependency -> WR,
+}
+
+pub contract Returning {
+    recv Messages {
+        FromGenerated -> Generated { Generated { v: 1 } }
+        FromDependency -> WR { WR { v: 1 } }
+    }
+}
+
+#[test]
+fn dispatcher_encodes_with_trusted_code() uses (evm: mut Evm) {
+    let c = evm.create2<Returning>(value: Wei::zero(), args: (), salt: 0)
+    let g: Generated = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: Messages::FromGenerated {})
+    let w: WR = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: Messages::FromDependency {})
+    assert(g.v == 0 && w.v == 0)
+}

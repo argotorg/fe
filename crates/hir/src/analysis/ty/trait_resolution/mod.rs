@@ -11,6 +11,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::Tier,
     semantic::{ConstRepr, SemConstId, SemConstValue, sem_const_ty},
     ty::{
         trait_resolution::{
@@ -278,15 +279,36 @@ pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
     choices: Option<ChosenImpls<'db>>,
+    /// Whether the implementations generated in the origin ingot count. A
+    /// bound only gains solutions as implementations are added, so goals are
+    /// solved with every implementation; a selection among alternatives that
+    /// asks whether a candidate applies solves in the authored tier first.
+    tier: Tier,
 }
 
 impl<'db> TraitSolveCx<'db> {
-    pub fn new(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
+    /// A solver context for goals that start in `scope`, solving in `tier` of
+    /// the origin ingot. The tier is required: there is no default, so that a
+    /// new site has to decide whether the implementations generated in the
+    /// ingot may answer it.
+    pub fn new(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>, tier: Tier) -> Self {
         Self {
             origin_ingot: scope.ingot(db),
             assumptions: PredicateListId::empty_list(db),
             choices: None,
+            tier,
         }
+    }
+
+    /// The tier in which the implementations of `ingot` count for this
+    /// context: only the origin ingot's own generated implementations are
+    /// hidden, because those of any other ingot are sealed.
+    pub(crate) fn table_tier(self, db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Tier {
+        self.tier.for_table(db, self.origin_ingot, ingot)
+    }
+
+    pub(crate) fn tier(self) -> Tier {
+        self.tier
     }
 
     pub fn with_assumptions(self, assumptions: PredicateListId<'db>) -> Self {
@@ -480,19 +502,21 @@ pub(crate) fn normalize_trait_inst_preserving_validity<'db>(
 fn is_query_satisfiable<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
+    tier: Tier,
     query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return GoalSatisfiability::ContainsInvalid;
     };
 
-    solve(db, origin_ingot, query)
+    solve(db, origin_ingot, tier, query)
 }
 
 fn is_query_satisfiable_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     _origin_ingot: Ingot<'db>,
+    _tier: Tier,
     _query: Canonical<TraitSolverQuery<'db>>,
 ) -> GoalSatisfiability<'db> {
     // A cycle can arise while collecting an impl whose constraints contain an associated-type
@@ -509,6 +533,7 @@ fn is_query_satisfiable_cycle_initial<'db>(
 fn query_has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: Ingot<'db>,
+    tier: Tier,
     query: Canonical<TraitSolverQuery<'db>>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
@@ -516,13 +541,14 @@ fn query_has_solution<'db>(
     if query.flags(db).contains(TyFlags::HAS_INVALID) {
         return TargetSolutionStatus::NotFound;
     }
-    has_solution(db, origin_ingot, query, target, relation)
+    has_solution(db, origin_ingot, tier, query, target, relation)
 }
 
 fn query_has_solution_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     _origin_ingot: Ingot<'db>,
+    _tier: Tier,
     _query: Canonical<TraitSolverQuery<'db>>,
     _target: Canonical<TraitInstId<'db>>,
     _relation: TargetSolutionMatch,
@@ -543,6 +569,7 @@ pub(crate) fn goal_query_has_solution<'db>(
     match query_has_solution(
         db,
         solve_cx.origin_ingot(),
+        solve_cx.tier(),
         query.canonical(),
         target,
         TargetSolutionMatch::Equal,
@@ -569,6 +596,7 @@ pub(crate) fn goal_query_has_no_distinct_solution<'db>(
     match query_has_solution(
         db,
         solve_cx.origin_ingot(),
+        solve_cx.tier(),
         query.canonical(),
         target,
         TargetSolutionMatch::NotEqual,
@@ -587,7 +615,13 @@ pub fn is_goal_query_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     query: &CanonicalGoalQuery<'db>,
 ) -> GoalSatisfiability<'db> {
-    is_query_satisfiable(db, solve_cx.origin_ingot(), query.canonical()).clone()
+    is_query_satisfiable(
+        db,
+        solve_cx.origin_ingot(),
+        solve_cx.tier(),
+        query.canonical(),
+    )
+    .clone()
 }
 
 pub fn is_goal_satisfiable<'db>(
@@ -1326,6 +1360,7 @@ fn ty_has_recursive_assoc_projection<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::name_resolution::Tier;
     use common::indexmap::{IndexMap, IndexSet};
 
     use super::{
@@ -1411,7 +1446,7 @@ mod tests {
         let (module, _) = db.top_mod(file);
         let trait_ = named_trait(&db, module, "Tag");
         let goal = TraitInstId::new_simple(&db, trait_, vec![named_struct_ty(&db, module, "Item")]);
-        let ordinary = TraitSolveCx::new(&db, module.scope());
+        let ordinary = TraitSolveCx::new(&db, module.scope(), Tier::All);
         assert!(matches!(
             is_goal_satisfiable(&db, ordinary, goal),
             GoalSatisfiability::Satisfied(_)
@@ -1453,7 +1488,7 @@ mod tests {
         let tag = named_trait(&db, module, "Tag");
         let item = named_struct_ty(&db, module, "Item");
         let goal = TraitInstId::new_simple(&db, named_trait(&db, module, "Outer"), vec![item]);
-        let solve = TraitSolveCx::new(&db, module.scope()).with_choices(Some(
+        let solve = TraitSolveCx::new(&db, module.scope(), Tier::All).with_choices(Some(
             super::ChosenImpls::push_provider(&db, None, pending_opening(&db, module, tag)),
         ));
         let GoalSatisfiability::NeedsGeneration(request) = is_goal_satisfiable(&db, solve, goal)
@@ -1469,6 +1504,7 @@ mod tests {
             super::query_has_solution(
                 &db,
                 solve.origin_ingot(),
+                solve.tier(),
                 query.canonical(),
                 Canonical::new(&db, goal),
                 super::table_solver::TargetSolutionMatch::Equal,
@@ -1519,7 +1555,7 @@ impl Tag for Item as Broken where Item: Missing {}
         let outer = super::ChosenImpls::push_provider(&db, None, provider);
         let named = implementation("Named");
         let inner = super::ChosenImpls::push(&db, Some(outer), named);
-        let solve = TraitSolveCx::new(&db, module.scope());
+        let solve = TraitSolveCx::new(&db, module.scope(), Tier::All);
         let GoalSatisfiability::Satisfied(solution) =
             is_goal_satisfiable(&db, solve.with_choices(Some(inner)), goal)
         else {
@@ -1551,7 +1587,7 @@ impl Tag for Item as Broken where Item: Missing {}
         );
         let (module, _) = db.top_mod(file);
         let trait_ = named_trait(&db, module, "Tag");
-        let solve = TraitSolveCx::new(&db, module.scope()).with_choices(Some(
+        let solve = TraitSolveCx::new(&db, module.scope(), Tier::All).with_choices(Some(
             super::ChosenImpls::push_provider(&db, None, pending_opening(&db, module, trait_)),
         ));
         let mut table = UnificationTable::new(&db);
@@ -1627,7 +1663,8 @@ impl Tag for Item as Broken where Item: Missing {}
                 crate::hir_def::ModeMarker::None,
             );
             let query = CanonicalGoalQuery::new(db, goal, assumptions);
-            let solve_cx = TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions);
+            let solve_cx =
+                TraitSolveCx::new(db, func.scope(), Tier::All).with_assumptions(assumptions);
             (query, solve_cx)
         }
 
@@ -1737,7 +1774,11 @@ impl Foo for Ambiguous {}
                 IndexMap::new(),
                 crate::hir_def::ModeMarker::None,
             );
-            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal)
+            is_goal_satisfiable(
+                &db,
+                TraitSolveCx::new(&db, top_mod.scope(), Tier::All),
+                goal,
+            )
         };
 
         assert!(matches!(
@@ -1781,7 +1822,7 @@ impl<T> Foo for T where Wrap<T>: Foo {}
                 crate::hir_def::ModeMarker::None,
             );
             assert!(matches!(
-                is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), goal),
+                is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope(), Tier::All), goal),
                 GoalSatisfiability::NeedsConfirmation {
                     solutions,
                     completion: TraitSolveCompletion::MaximumTypeDepth,
@@ -1823,7 +1864,11 @@ impl Foo for Subject {}
             crate::hir_def::ModeMarker::None,
         );
         assert!(matches!(
-            is_goal_satisfiable(&db, TraitSolveCx::new(&db, top_mod.scope()), deep_goal,),
+            is_goal_satisfiable(
+                &db,
+                TraitSolveCx::new(&db, top_mod.scope(), Tier::All),
+                deep_goal,
+            ),
             GoalSatisfiability::Satisfied(_)
         ));
 
@@ -1845,7 +1890,7 @@ impl Foo for Subject {}
         assert!(matches!(
             is_goal_satisfiable(
                 &db,
-                TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
+                TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions),
                 shallow_goal,
             ),
             GoalSatisfiability::Satisfied(_)
@@ -1895,7 +1940,7 @@ fn probe<T: Seed>() {}
         assert!(matches!(
             is_goal_satisfiable(
                 &db,
-                TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions),
+                TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions),
                 goal,
             ),
             GoalSatisfiability::NeedsConfirmation {
@@ -1930,7 +1975,8 @@ impl<SelfT, T> Goal<T> for SelfT where SelfT: Accept<T>, SelfT: Choose<T> {}
         let subject = named_struct_ty(&db, top_mod, "Subject");
         let a = named_struct_ty(&db, top_mod, "A");
         let assumptions = PredicateListId::empty_list(&db);
-        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let solve_cx =
+            TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions);
         let mut table = UnificationTable::new(&db);
         let selected = table.new_var(TyVarSort::General, &Kind::Star);
         let goal = TraitInstId::new(
@@ -1979,7 +2025,8 @@ impl Foo for Third {}
         let (top_mod, _) = db.top_mod(file);
         let foo = named_trait(&db, top_mod, "Foo");
         let assumptions = PredicateListId::empty_list(&db);
-        let solve_cx = TraitSolveCx::new(&db, top_mod.scope()).with_assumptions(assumptions);
+        let solve_cx =
+            TraitSolveCx::new(&db, top_mod.scope(), Tier::All).with_assumptions(assumptions);
         let mut table = UnificationTable::new(&db);
         let self_ty = table.new_var(TyVarSort::General, &Kind::Star);
         let goal = TraitInstId::new(
@@ -2074,7 +2121,8 @@ fn unsupported<T>() {}
                     .chain([goal])
                     .collect::<Vec<_>>(),
             );
-            let solve = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
+            let solve =
+                TraitSolveCx::new(&db, func.scope(), Tier::All).with_assumptions(assumptions);
             let Selection::Unique(resolved) = resolve_trait_impl_instance(&db, solve, goal) else {
                 panic!("{name}: expected unique evidence");
             };
@@ -2118,7 +2166,7 @@ fn probe<T>() {}
             IndexMap::new(),
             crate::hir_def::ModeMarker::None,
         );
-        let solve = TraitSolveCx::new(&db, func.scope())
+        let solve = TraitSolveCx::new(&db, func.scope(), Tier::All)
             .with_assumptions(PredicateListId::new(&db, vec![goal]));
         assert!(
             matches!(solve.select_impl(&db, goal), Selection::Ambiguous(implementors) if implementors.len() == 2)
@@ -2151,7 +2199,7 @@ fn probe<T: Picks>() {}
             IndexMap::new(),
             crate::hir_def::ModeMarker::None,
         );
-        let solve = TraitSolveCx::new(&db, func.scope()).with_assumptions(assumptions);
+        let solve = TraitSolveCx::new(&db, func.scope(), Tier::All).with_assumptions(assumptions);
         assert!(matches!(
             solve.select_impl(&db, goal),
             Selection::Ambiguous(_)

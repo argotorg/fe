@@ -533,7 +533,11 @@ impl DiagnosticVoucher for crate::AttrMisuseError {
         } else {
             self.target.to_string()
         };
-        let attr = format!("#[{}]", self.attr_name);
+        let attr = if self.inner {
+            format!("#![{}]", self.attr_name)
+        } else {
+            format!("#[{}]", self.attr_name)
+        };
         let (local_code, message, label) = match &self.kind {
             crate::AttrMisuseErrorKind::UnsupportedTarget { supported_targets } => (
                 1,
@@ -5799,7 +5803,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let sub_diagnostics = vec![SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: format!(
-                        "`{}` does not implement `MsgVariant`",
+                        "`{}` does not implement `MsgVariant<Sol>`, the trait that a recv arm needs",
                         given_ty.pretty_print(db)
                     ),
                     span: primary.resolve(db),
@@ -6051,6 +6055,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: primary.resolve(db),
                 }],
                 notes: vec!["call `core::mem::drop` to destroy a value early".to_string()],
+                error_code,
+            },
+
+            BodyDiag::GenerationChangesChoice {
+                primary,
+                decision,
+                subject,
+                ..
+            } => CompleteDiagnostic {
+                severity,
+                message: format!(
+                    "items generated in the package would change {} for `{subject}`",
+                    decision.what(),
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!(
+                        "the implementations written in the package decide this: {}",
+                        decision.rule()
+                    ),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![format!(
+                    "inside the package that generates them, generated items only fill gaps; {}",
+                    decision.remedy()
+                )],
                 error_code,
             },
 
@@ -6492,6 +6522,55 @@ impl DiagnosticVoucher for ImplDiag<'_> {
         let severity = Severity::Error;
 
         match self {
+            Self::GeneratedMemberNameShared {
+                primary,
+                trait_,
+                member,
+                self_ty,
+                existing,
+            } => {
+                let trait_name = trait_
+                    .name(db)
+                    .to_opt()
+                    .map_or_else(|| "the trait".to_string(), |name| name.data(db).to_string());
+                let ty = self_ty.pretty_print(db);
+                let (existing_text, call) =
+                    match existing.and_then(|trait_| trait_.name(db).to_opt()) {
+                        Some(name) => (
+                            format!("through the trait `{}`", name.data(db)),
+                            format!(
+                                "`{ty}::{}` keeps selecting `{}`",
+                                member.data(db),
+                                name.data(db)
+                            ),
+                        ),
+                        None => (
+                            "as a member of its own".to_string(),
+                            format!(
+                                "`{ty}::{}` keeps selecting the existing member",
+                                member.data(db)
+                            ),
+                        ),
+                    };
+                CompleteDiagnostic {
+                    severity: Severity::Warning,
+                    message: format!(
+                        "the generated implementation of `{trait_name}` adds `{}`, which `{ty}` already has",
+                        member.data(db)
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{ty}` has a `{}` {existing_text}", member.data(db)),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "{call}; name the trait to use the generated one: `{trait_name}::{}`",
+                        member.data(db)
+                    )],
+                    error_code,
+                }
+            }
+
             Self::UnfulfilledDeriveRequest { primary } => primary_diag(
                 severity,
                 "derive header was not prepared",

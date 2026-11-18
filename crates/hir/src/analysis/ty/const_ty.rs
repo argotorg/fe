@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use std::cell::OnceCell;
 
 use num_bigint::{BigInt, BigUint, Sign};
@@ -145,6 +146,10 @@ pub(crate) struct LoweringContext<'db> {
     /// preparation (`take_generation_requests`).
     generation_requests:
         std::cell::RefCell<Vec<super::trait_resolution::generation::GenerationRequest<'db>>>,
+    /// Names are found in the authored tier only, with no fallback to the items
+    /// generated in the ingot. A bare identifier in a pattern is classified
+    /// this way: it is a constant only if authored items say so.
+    authored_names_only: bool,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -169,7 +174,19 @@ impl<'db> LoweringContext<'db> {
             recording_paused: std::cell::Cell::new(false),
             spliced_record: std::cell::Cell::new(None),
             generation_requests: Default::default(),
+            authored_names_only: false,
         }
+    }
+
+    /// Makes name lookups use the authored tier only (see
+    /// `authored_names_only`).
+    pub(crate) fn authored_names_only(mut self) -> Self {
+        self.authored_names_only = true;
+        self
+    }
+
+    pub(crate) fn names_are_authored_only(&self) -> bool {
+        self.authored_names_only
     }
 
     pub(crate) fn with_method_choices(
@@ -1824,8 +1841,8 @@ fn eval_int_expr<'db>(
                     ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
                 }
                 PathRes::TraitConst(_, inst, name) => {
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = TraitSolveCx::new(db, body.scope(), Tier::All)
+                        .with_assumptions(assumptions);
                     const_ty_from_trait_const(db, solve_cx, inst, name)
                         .ok_or(ConstIntError::NotIntExpr)?
                 }
@@ -2091,7 +2108,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx = TraitSolveCx::new(db, use_scope).with_assumptions(assumptions);
+                    let solve_cx =
+                        TraitSolveCx::new(db, use_scope, Tier::All).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2507,6 +2525,18 @@ fn evaluate_const_ty_cycle_initial<'db>(
     _expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
     const_ty
+}
+
+/// Whether the implementation that supplies `assoc` is only declared by a
+/// written header: its constants are produced by generation and unknown.
+pub(crate) fn assoc_const_use_is_declared_only<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+) -> bool {
+    matches!(
+        resolve_trait_impl_instance(db, assoc.solve_cx(db), assoc.inst()),
+        Selection::Unique(resolved) if resolved.selected().members_unknown(db)
+    )
 }
 
 pub(crate) fn const_ty_from_assoc_const_use<'db>(

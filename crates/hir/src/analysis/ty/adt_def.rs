@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::hir_def::{
     Enum, EnumVariant, FieldParent, GenericParamOwner, IdentId, ItemKind, Partial, Struct,
     TypeId as HirTyId, VariantKind, scope_graph::ScopeId,
@@ -9,7 +10,7 @@ use salsa::SalsaValue;
 use super::{
     binder::Binder,
     const_ty::ConstBodyLowering,
-    corelib::resolve_core_trait,
+    corelib::presence_trait,
     fold::TyFoldable,
     normalize::normalize_ty,
     provider::{AddressSpace, is_state_pin, pinned_space},
@@ -60,6 +61,12 @@ pub enum Pin {
 /// no implementation is selected for is undecided while one could still
 /// apply to an instance of it (its parameters, or bounds they leave open),
 /// and unpinned otherwise.
+///
+/// The query has no origin: it is asked about a type from any package, and
+/// every implementation counts. A generated implementation of `Pinned`, or one
+/// that would make a written implementation of it apply to more types, is
+/// refused where it is requested (see `presence_decision`), so this answers
+/// the same from every package.
 #[salsa::tracked(returns(copy), cycle_initial = ty_pin_cycle_initial)]
 pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
     let Some(adt) = ty.adt_def(db) else {
@@ -72,14 +79,15 @@ pub(crate) fn ty_pin<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Pin {
         ty
     };
     let scope = adt.scope(db);
-    let Some(pinned) = resolve_core_trait(db, scope, &["marker", "Pinned"]) else {
+    let Some(pinned) = presence_trait(db, scope, "core::marker::Pinned") else {
         return Pin::Unpinned;
     };
     if let Some(space) = pinned_space(db, scope, PredicateListId::empty_list(db), ty) {
         return Pin::Pinned(space);
     }
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(PredicateListId::empty_list(db));
-    let may_apply = impls_for_trait_def(db, adt.ingot(db), pinned)
+    let solve_cx =
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(PredicateListId::empty_list(db));
+    let may_apply = impls_for_trait_def(db, adt.ingot(db), pinned, Tier::All)
         .iter()
         .any(|implementor| {
             // A pin to another space is an error at the implementation.

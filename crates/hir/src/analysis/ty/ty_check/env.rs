@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::{
     analysis::place::{Place, is_grant_place_expr, is_pointer_place_expr},
     hir_def::{
@@ -147,6 +148,8 @@ pub(crate) struct TyCheckEnv<'db> {
     pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
     expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
     const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+    /// The constant that a pattern names, as `Y::N` in `match x { Y::N => .. }`.
+    pat_const_refs: SecondaryMap<PatId, Option<ConstRef<'db>>>,
     value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
     callables: SecondaryMap<ExprId, Option<Callable<'db>>>,
     semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
@@ -331,6 +334,7 @@ impl<'db> TyCheckEnv<'db> {
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
+            pat_const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             callables: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
@@ -765,6 +769,12 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    /// Records the constant that the pattern `pat` names. Analyzing a pattern
+    /// again replaces the record.
+    pub(super) fn register_pat_const_ref(&mut self, pat: PatId, const_ref: ConstRef<'db>) {
+        self.pat_const_refs[pat] = Some(const_ref);
+    }
+
     pub(super) fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
         self.value_path_refs[expr]
     }
@@ -910,7 +920,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn solve_cx(&self) -> TraitSolveCx<'db> {
-        TraitSolveCx::new(self.db, self.scope())
+        TraitSolveCx::new(self.db, self.scope(), Tier::All)
             .with_assumptions(self.assumptions())
             .with_choices(self.choices)
     }
@@ -1719,6 +1729,11 @@ impl<'db> TyCheckEnv<'db> {
             .flatten()
             .for_each(|cref| *cref = (*cref).fold_with(self.db, &mut prober));
 
+        self.pat_const_refs
+            .values_mut()
+            .flatten()
+            .for_each(|cref| *cref = (*cref).fold_with(self.db, &mut prober));
+
         self.call_effect_args
             .values_mut()
             .flatten()
@@ -1772,7 +1787,8 @@ impl<'db> TyCheckEnv<'db> {
         };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
-        let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
+        let solve_cx =
+            TraitSolveCx::new(self.db, prober.scope, Tier::All).with_assumptions(assumptions);
         for (&expr, calls) in &mut self.place_entries {
             let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
             let mut codec_choice_failed = false;
@@ -1971,6 +1987,7 @@ impl<'db> TyCheckEnv<'db> {
             generation_demands: self.generation_demands,
             expr_choices: self.expr_choices,
             const_refs: self.const_refs,
+            pat_const_refs: self.pat_const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
             record_init_lowering: self.record_init_lowering,

@@ -158,6 +158,59 @@ fn explicit_derive_uses_a_provider_imported_from_another_file() {
     );
 }
 
+const LIB_GENERATE: &str = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+
+pub trait Score {
+    const fn score() -> usize
+}
+
+pub struct FieldScore {}
+
+impl Derive<Score> for FieldScore {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        quote {
+            const fn score() -> usize { ${n} }
+        }
+    }
+}
+"#;
+const APP_GENERATE_MODEL: &str = r#"pub struct Pair {
+    pub a: u256,
+    pub b: u256,
+}
+impl lib::Score for Pair with (lib::FieldScore)
+"#;
+const APP_GENERATE_LIB: &str = r#"use ingot::model::Pair
+use lib::Score
+
+pub const fn total() -> usize {
+    Pair::score()
+}
+"#;
+
+#[test]
+fn dependency_provider_generates_an_impl_of_its_trait_for_an_app_record() {
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", LIB_GENERATE),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let db = project(&files);
+    let prepared = prepare(&db, "app/");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "total"), "2");
+    // The header in `model.fe` names the dependency's trait and provider by
+    // path; `model.fe` imports nothing.
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_authored_unchanged(&db, &files);
+    // Without preparation the header has no members, so the authored view
+    // still reports an error.
+    assert!(!ingot_errors(&db, "app/").is_empty());
+}
+
 const LIB_OWN_DERIVE: &str = r#"use core::derive::Derive
 use core::meta::{Code, Item, Record, field_count}
 
@@ -196,6 +249,44 @@ pub const fn direct() -> usize {
     Unit::score()
 }
 "#;
+
+/// An error inside generated code is reported where that code was written,
+/// the dependency's quotation, not at an unrelated place in the target file.
+#[test]
+fn errors_in_code_generated_from_a_dependency_point_into_its_quote() {
+    let mistyped = LIB_GENERATE.replace(
+        "const fn score() -> usize { ${n} }",
+        "const fn score() -> usize { true }",
+    );
+    assert_ne!(mistyped, LIB_GENERATE);
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", mistyped.as_str()),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let db = project(&files);
+    let prepared = prepare(&db, "app/");
+    let errors = ingot_errors(&prepared, "app/");
+    // Paths render relative to their ingot; the quoted line in the snippet is
+    // read from the file the span resolved into, which only `lib` contains.
+    let quote_line = mistyped
+        .lines()
+        .position(|line| line.contains("{ true }"))
+        .unwrap()
+        + 1;
+    assert!(errors.contains("type mismatch"), "{errors}");
+    assert!(
+        errors.contains(&format!("src/lib.fe:{quote_line}:")),
+        "expected line {quote_line}: {errors}"
+    );
+    assert!(
+        errors.contains("const fn score() -> usize { true }"),
+        "{errors}"
+    );
+    assert!(!errors.contains("src/model.fe"), "{errors}");
+}
 
 #[test]
 fn a_dependency_s_own_generation_is_prepared_with_the_app() {
@@ -242,6 +333,28 @@ fn several_selected_packages_share_one_preparation_of_a_common_dependency() {
     assert_eq!(prepared.generation_inputs().requests(&prepared).len(), 1);
     assert_eq!(ingot_errors(&prepared, "first/"), "");
     assert_eq!(ingot_errors(&prepared, "second/"), "");
+    assert_authored_unchanged(&db, &files);
+}
+
+#[test]
+fn a_faulting_dependency_provider_refuses_the_package_without_publishing() {
+    let faulting = LIB_GENERATE.replace(
+        "    let n = field_count(record)\n",
+        "    let zero: usize = 0\n    let n = field_count(record) / zero\n",
+    );
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", faulting.as_str()),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let db = project(&files);
+    let error = prepare_ingots(&db, &[url("app/")])
+        .err()
+        .expect("a provider fault refuses preparation");
+    assert!(error.cause.contains("division by zero"), "{error}");
+    assert_eq!(error.file, url("lib/src/lib.fe"), "{error}");
     assert_authored_unchanged(&db, &files);
 }
 
@@ -1228,11 +1341,11 @@ pub const fn crate8() -> u256 { <Crate<u8> as Report>::weight() }
     assert_eq!(eval(&prepared, "app/src/beta.fe", "crate8"), "100");
 }
 
-/// Two headers of one file generate the same member of one type. The check of
-/// the first header names the member as hidden, whichever other files the
-/// package holds.
+/// Two headers of one file generate the same member of one type. The program
+/// is refused with a conflict between the two generated methods, whichever
+/// other files the package holds.
 #[test]
-fn a_member_two_headers_generate_in_a_later_file_is_reported_as_hidden() {
+fn two_headers_that_generate_one_member_conflict_whichever_other_files_the_package_holds() {
     const LIB: &str = "
 struct A1 {}
 impl A1 { fn f1() -> u256 { 1 } }
@@ -1269,12 +1382,10 @@ impl X with (P2)
         ("app/src/z.fe", Z),
     ];
     let db = project(&files);
-    let error = prepare_ingots(&db, &[url("app/")])
-        .err()
-        .expect("the second header's member is hidden");
+    let prepared = prepare(&db, "app/");
+    let errors = ingot_errors(&prepared, "app/");
     assert!(
-        error.cause.contains("would never be selected"),
-        "{}",
-        error.cause
+        errors.contains("conflicting method implementations"),
+        "{errors}"
     );
 }

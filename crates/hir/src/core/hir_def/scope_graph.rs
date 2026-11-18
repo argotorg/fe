@@ -135,20 +135,51 @@ impl<'db> ScopeId<'db> {
         }
     }
 
-    /// Whether this scope is a generated item or inside one. Generated code is
-    /// published into a module but written in its producer's quotation, so
-    /// the module's own text holds nothing of it.
-    pub fn is_generated(self, db: &'db dyn HirDb) -> bool {
-        let mut scope = self;
-        loop {
-            if scope.data(db).publication_parent.is_some() {
+    /// Whether preparation published this scope's item into a declaration it
+    /// was not written in: it is generated code, even where it joined an
+    /// authored declaration, such as a derive header. This is the one test of
+    /// "published"; the questions below build on it.
+    pub fn is_published(self, db: &'db dyn HirDb) -> bool {
+        self.data(db).publication_parent.is_some()
+    }
+
+    /// Whether this scope is, or lies inside, a published item: generated code
+    /// of whichever package asked for it.
+    pub fn is_in_published_item(self, db: &'db dyn HirDb) -> bool {
+        let mut scope = Some(self);
+        while let Some(current) = scope {
+            if current.is_published(db) {
                 return true;
             }
-            match scope.parent(db) {
-                Some(parent) => scope = parent,
-                None => return false,
-            }
+            scope = current.parent(db);
         }
+        false
+    }
+
+    /// Whether this scope is an item that generation added to a module of
+    /// `ingot`: a function, constant or implementation that a provider's output
+    /// put among the module's items. This is the question a name lookup asks,
+    /// because only such an item is bound by its name in a module. Generated
+    /// items of a dependency are ordinary items of that dependency, so they are
+    /// generated in the dependency's ingot only.
+    pub fn is_generated_in(self, db: &'db dyn HirDb, ingot: Ingot<'db>) -> bool {
+        matches!(
+            self.data(db).publication_parent,
+            Some(ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_)))
+        ) && self.ingot(db) == ingot
+    }
+
+    /// Whether this scope is generated code of `ingot`: an item that generation
+    /// added to a module of it, a member that a provider gave to an authored
+    /// derive header, or anything written inside either, such as an
+    /// implementation in the body of a generated function. This is the
+    /// question the tables of implementations, methods and constants ask,
+    /// because they list an implementation wherever it is written. For a name
+    /// lookup only the item itself is hidden ([`Self::is_generated_in`]): a
+    /// local item inside generated code is lexically inner and shadows, as it
+    /// does anywhere.
+    pub fn is_within_generated(self, db: &'db dyn HirDb, ingot: Ingot<'db>) -> bool {
+        self.ingot(db) == ingot && self.is_in_published_item(db)
     }
 
     /// The module whose syntax this scope was lowered from. A generated item
@@ -164,7 +195,7 @@ impl<'db> ScopeId<'db> {
                 ScopeId::Item(ItemKind::TopMod(top_mod)) => return top_mod,
                 _ => {}
             }
-            if scope.data(db).publication_parent.is_some() {
+            if scope.is_published(db) {
                 return scope
                     .lex_parent(db)
                     .map_or_else(|| scope.top_mod(db), |producer| producer.top_mod(db));

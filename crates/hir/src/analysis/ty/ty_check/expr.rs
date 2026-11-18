@@ -37,7 +37,8 @@ use crate::analysis::ty::{
     canonical::{Canonicalized, Solution},
     const_ty::{LoweringContext, instantiate_inherent_const_decl_ty},
     corelib::{
-        resolve_core_range_types, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
+        presence_trait, resolve_core_range_types, resolve_core_trait, resolve_lib_func_path,
+        resolve_lib_type_path,
     },
     diagnostics::{
         BodyDiag, FuncBodyDiag, MarkerPosition, MustUseSubject, MutabilityFix, ReadOnlyProvider,
@@ -90,16 +91,16 @@ use crate::analysis::ty::{
 use crate::analysis::{
     HirAnalysisDb, Spanned,
     name_resolution::{
-        EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket, NameResolutionError,
-        PathRes, QueryDirective,
+        Decision, EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket,
+        NameResolutionError, PathRes, QueryDirective, Tier, authored_first, choose_in_tiers,
         diagnostics::PathResDiag,
         is_scope_visible_from,
         method_selection::{
-            AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
-            select_callable_value_method, select_method_candidate_with_choices,
-            select_trait_method_candidates,
+            AmbiguousTraitMethodCand, AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
+            TraitMethodCand, select_callable_value_method, select_method_candidate_in,
+            select_method_candidate_with_choices, select_trait_method_candidates,
         },
-        resolve_name_res_with_minter, resolve_query,
+        resolve_name_res_with_minter, resolve_query_in,
     },
     place::resolve_place_field,
     semantic::{
@@ -157,6 +158,46 @@ enum AssignLhsStatus {
 pub(super) struct EffectCommitPlan<'db> {
     key_match: Option<KeyMatchCommit<'db>>,
     trait_solutions: SmallVec<[(TraitInstId<'db>, Solution<TraitGoalSolution<'db>>); 2]>,
+}
+
+/// A candidate implementation of an operator trait for a binary use, with the
+/// receiver type it was found for.
+type OpsCandidate<'db> = (
+    TyId<'db>,
+    Canonicalized<'db, TyId<'db>>,
+    AmbiguousTraitMethodCand<'db>,
+);
+
+/// The candidates of an operator trait for a binary use, selected in one tier.
+struct OpsSelection<'db> {
+    /// The candidates of every receiver type the left-hand side can be.
+    candidates: Vec<OpsCandidate<'db>>,
+    /// The first error of a receiver type, if one had an error.
+    error: Option<MethodSelectionError<'db>>,
+    /// The right-hand side, typed once the candidates are known.
+    rhs: Option<ExprProp<'db>>,
+    /// The candidates the use goes on with.
+    viable: Vec<OpsCandidate<'db>>,
+    /// Whether the right-hand side can be an argument of some candidate.
+    unifies: bool,
+}
+
+impl OpsSelection<'_> {
+    /// Whether this tier answers the use: it has a candidate that the
+    /// right-hand side fits, or it fails in a way other than having no
+    /// implementation at all.
+    fn answers(&self) -> bool {
+        if self.candidates.is_empty() {
+            !matches!(
+                self.error,
+                None | Some(
+                    MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown
+                )
+            )
+        } else {
+            self.unifies
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1323,9 +1364,13 @@ impl<'db> TyChecker<'db> {
         if !mode_op.wraps() {
             return mode_op;
         }
-        let Some(trait_def) =
-            resolve_core_trait(self.db, self.env.scope(), &mode_op.trait_path_segments())
-        else {
+        // Whether the operand's type implements the wrapping trait decides
+        // which trait the operator calls, so the trait declares `#[decides]`.
+        let Some(trait_def) = presence_trait(
+            self.db,
+            self.env.scope(),
+            &format!("core::{}", mode_op.trait_path_segments().join("::")),
+        ) else {
             return mode_op;
         };
         let ty = ty.fold_with(self.db, &mut self.table);
@@ -1343,8 +1388,8 @@ impl<'db> TyChecker<'db> {
         let mut args = vec![ty];
         args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
         let goal = TraitInstId::new_simple(self.db, trait_def, args);
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
+            .with_assumptions(self.env.assumptions());
         let implemented = !matches!(
             is_goal_satisfiable(self.db, solve_cx, goal),
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1817,9 +1862,8 @@ impl<'db> TyChecker<'db> {
                 // An entry of a collection whose elements are places is a
                 // place, mutable through a mutable base, like an array element.
                 self.check_expr(rhs_expr, key_ty);
-                let trait_def =
-                    resolve_core_trait(self.db, self.env.scope(), &["ops", "StateIndex"])
-                        .expect("StateIndex was resolved for this entry");
+                let trait_def = presence_trait(self.db, self.env.scope(), "core::ops::StateIndex")
+                    .expect("StateIndex was resolved for this entry");
                 let func = trait_def.method_defs(self.db)[&IdentId::new(self.db, "locate")];
                 let goal = TraitInstId::new_simple(self.db, trait_def, vec![base_ty]);
                 let callable = Callable::from_item(
@@ -1833,9 +1877,8 @@ impl<'db> TyChecker<'db> {
                     .project_assoc_ty(self.db, IdentId::new(self.db, "Lanes"))
                     .expect("StateIndex declares Lanes");
                 let codec_ty = self.normalize_ty(lanes);
-                let codec_trait =
-                    resolve_core_trait(self.db, self.env.scope(), &["ops", "LaneCodec"])
-                        .expect("core declares LaneCodec");
+                let codec_trait = presence_trait(self.db, self.env.scope(), "core::ops::LaneCodec")
+                    .expect("core declares LaneCodec");
                 let codec_goal =
                     TraitInstId::new_simple(self.db, codec_trait, vec![codec_ty, output_ty]);
                 let codec = ["get", "set"].map(|name| {
@@ -2110,7 +2153,7 @@ impl<'db> TyChecker<'db> {
         while let Some(scope) = owner_scope {
             // Members under an explicit derive header, such as its generated
             // constants, are generated even though the header is authored.
-            generated_owner |= scope.data(self.db).publication_parent.is_some()
+            generated_owner |= scope.is_published(self.db)
                 || matches!(
                     scope,
                     ScopeId::Item(ItemKind::ImplTrait(header))
@@ -2261,6 +2304,32 @@ impl<'db> TyChecker<'db> {
                             };
                             if let Some(value_span) = value_span {
                                 ambiguous_opening = true;
+                                // A generated implementation only fills gaps:
+                                // a name that written code binds keeps its
+                                // meaning, and the implementation is refused
+                                // where it is requested.
+                                if implementation
+                                    .scope()
+                                    .is_generated_in(self.db, self.env.scope().ingot(self.db))
+                                {
+                                    self.push_changed_choice(BodyDiag::GenerationChangesChoice {
+                                        primary: binding.value.span(self.body()).into(),
+                                        decision: Decision::WithOperand,
+                                        trait_: None,
+                                        ty: None,
+                                        subject: implementation
+                                            .ty(self.db)
+                                            .pretty_print(self.db)
+                                            .to_string(),
+                                        generated: Some(implementation.scope()),
+                                    });
+                                    self.env.named_impl_operands.insert(binding.value);
+                                    self.env.type_expr(
+                                        binding.value,
+                                        ExprProp::new(TyId::unit(self.db), false),
+                                    );
+                                    continue;
+                                }
                                 self.push_diag(PathResDiag::Ambiguous(
                                     binding.value.span(self.body()).into(),
                                     name,
@@ -2286,6 +2355,32 @@ impl<'db> TyChecker<'db> {
                             && value.is_visible_from(self.db, self.env.scope())
                         {
                             ambiguous_opening = true;
+                            // A generated implementation only fills gaps:
+                            // a name that written code binds keeps its
+                            // meaning, and the implementation is refused
+                            // where it is requested.
+                            if implementation
+                                .scope()
+                                .is_generated_in(self.db, self.env.scope().ingot(self.db))
+                            {
+                                self.push_changed_choice(BodyDiag::GenerationChangesChoice {
+                                    primary: binding.value.span(self.body()).into(),
+                                    decision: Decision::WithOperand,
+                                    trait_: None,
+                                    ty: None,
+                                    subject: implementation
+                                        .ty(self.db)
+                                        .pretty_print(self.db)
+                                        .to_string(),
+                                    generated: Some(implementation.scope()),
+                                });
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
                             // A qualified path is classified like a bare name:
                             // a value of the same path is a second meaning,
                             // and neither is chosen silently.
@@ -3419,11 +3514,11 @@ impl<'db> TyChecker<'db> {
                 .copied()
                 .flatten();
 
-            let mut resolution = self.resolve_effect_query(query.clone());
+            let mut resolution = self.resolve_effect_query(query.clone(), call_span.clone());
             if matches!(resolution, EffectResolution::Missing)
                 && self.provide_closure_effect(req, &query)
             {
-                resolution = self.resolve_effect_query(query.clone());
+                resolution = self.resolve_effect_query(query.clone(), call_span.clone());
             }
             match resolution {
                 EffectResolution::Chosen(evidence) => {
@@ -3604,7 +3699,7 @@ impl<'db> TyChecker<'db> {
                 None if matches!(
                     is_goal_satisfiable(
                         self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
+                        TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
                             .with_assumptions(self.env.assumptions()),
                         row.inst,
                     ),
@@ -3742,7 +3837,75 @@ impl<'db> TyChecker<'db> {
         })
     }
 
-    fn resolve_effect_query(&mut self, query: EffectQuery<'db>) -> EffectResolution<'db> {
+    /// Resolves the requirement `query` at the call `span`. Which provider
+    /// answers it is a preference between implementations: the innermost
+    /// `with` frame with a provider that implements the required trait. It is
+    /// decided among the implementations written in the package and its
+    /// dependencies, and in the full tier only where those answer nothing. A
+    /// generated implementation that would make another provider answer is
+    /// refused where it is requested.
+    fn resolve_effect_query(
+        &mut self,
+        query: EffectQuery<'db>,
+        span: DynLazySpan<'db>,
+    ) -> EffectResolution<'db> {
+        let ingot = self.env.scope().ingot(self.db);
+        let choice = choose_in_tiers(
+            self.db,
+            ingot,
+            |tier, comparing| {
+                // An answer that is only compared must leave no trace.
+                let snapshot = comparing.then(|| self.snapshot_state());
+                let resolution = self.resolve_effect_query_in(query.clone(), tier);
+                if let Some(snapshot) = snapshot {
+                    self.rollback_state(snapshot);
+                }
+                resolution
+            },
+            |resolution| !matches!(resolution, EffectResolution::Missing),
+            |a, b| match (a, b) {
+                (EffectResolution::Chosen(a), EffectResolution::Chosen(b)) => {
+                    a.provider == b.provider
+                }
+                (EffectResolution::BlockedByBarrier, EffectResolution::BlockedByBarrier)
+                | (EffectResolution::Missing, EffectResolution::Missing)
+                | (EffectResolution::Ambiguous, EffectResolution::Ambiguous) => true,
+                _ => false,
+            },
+        );
+        if let Some(changed) = &choice.changed_to {
+            let (trait_, ty) = match (&query.key, changed) {
+                (EffectPatternKey::Trait(pattern), EffectResolution::Chosen(evidence)) => {
+                    (Some(pattern.def), evidence.provider.ty)
+                }
+                (EffectPatternKey::Trait(pattern), _) => {
+                    let provider = match &choice.chosen {
+                        EffectResolution::Chosen(evidence) => evidence.provider.ty,
+                        _ => TyId::invalid(self.db, InvalidCause::Other),
+                    };
+                    (Some(pattern.def), provider)
+                }
+                (EffectPatternKey::Type(_), _) => {
+                    (None, TyId::invalid(self.db, InvalidCause::Other))
+                }
+            };
+            self.push_changed_choice(BodyDiag::GenerationChangesChoice {
+                primary: span,
+                decision: Decision::EffectProvider,
+                trait_,
+                subject: ty.pretty_print(self.db).to_string(),
+                ty: Some(ty),
+                generated: None,
+            });
+        }
+        choice.chosen
+    }
+
+    fn resolve_effect_query_in(
+        &mut self,
+        query: EffectQuery<'db>,
+        tier: Tier,
+    ) -> EffectResolution<'db> {
         let mut viable: SmallVec<[EffectEvidence<'db>; 2]> = SmallVec::new();
         let effect_env = self.env.effect_env().clone();
         for frame in effect_env.lookup_effect_frames(&query, self) {
@@ -3770,7 +3933,7 @@ impl<'db> TyChecker<'db> {
                                 self.evaluate_unkeyed_type_provider(type_query, provider)
                             }
                             EffectPatternKey::Trait(trait_query) => {
-                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
+                                self.evaluate_unkeyed_trait_provider(trait_query, provider, tier)
                             }
                         };
                         if let Some(evidence) = evidence {
@@ -3788,7 +3951,7 @@ impl<'db> TyChecker<'db> {
                                 self.evaluate_unkeyed_type_provider(type_query, provider)
                             }
                             EffectPatternKey::Trait(trait_query) => {
-                                self.evaluate_unkeyed_trait_provider(trait_query, provider)
+                                self.evaluate_unkeyed_trait_provider(trait_query, provider, tier)
                             }
                         };
                         if let Some(evidence) = evidence {
@@ -3830,6 +3993,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         query: TraitPatternKey<'db>,
         provider: ProvidedEffect<'db>,
+        tier: Tier,
     ) -> Option<EffectEvidence<'db>> {
         let provider_ty = self.table.fold_ty(self.db, provider.ty);
         if provider_ty.has_var(self.db) {
@@ -3838,7 +4002,7 @@ impl<'db> TyChecker<'db> {
         let instantiated = instantiate_trait_pattern_in(self.db, &mut self.table, query);
         let trait_goal = instantiate_trait_self(self.db, instantiated, provider_ty);
         let GoalSatisfiability::Satisfied(solution) =
-            self.trait_effect_goal_satisfiability(trait_goal)
+            self.trait_effect_goal_satisfiability(tier, trait_goal)
         else {
             return None;
         };
@@ -4004,11 +4168,23 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Records a decision that generated implementations would change. Only a
+    /// decision that written code makes is reported: a body that generation
+    /// produced may use generated implementations, and nothing written changes.
+    pub(super) fn push_changed_choice(&mut self, diag: BodyDiag<'db>) {
+        let ingot = self.env.scope().ingot(self.db);
+        if !self.env.owner().scope().is_within_generated(self.db, ingot) {
+            self.push_diag(diag);
+        }
+    }
+
     pub(super) fn trait_effect_goal_satisfiability(
         &self,
+        tier: Tier,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
         self.trait_effect_goal_satisfiability_in_scope(
+            tier,
             self.env.scope(),
             self.env.assumptions(),
             trait_goal,
@@ -4017,11 +4193,12 @@ impl<'db> TyChecker<'db> {
 
     pub(super) fn trait_effect_goal_satisfiability_in_scope(
         &self,
+        tier: Tier,
         scope: crate::hir_def::scope_graph::ScopeId<'db>,
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
-        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
+        let solve_cx = TraitSolveCx::new(self.db, scope, tier).with_assumptions(assumptions);
         let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
             self.db,
             trait_goal,
@@ -4257,8 +4434,13 @@ impl<'db> TyChecker<'db> {
                     pattern.clone(),
                 );
                 let trait_goal = instantiate_trait_self(self.db, instantiated, provider.ty);
-                let GoalSatisfiability::Satisfied(solution) =
-                    self.trait_effect_goal_satisfiability_in_scope(scope, assumptions, trait_goal)
+                let GoalSatisfiability::Satisfied(solution) = self
+                    .trait_effect_goal_satisfiability_in_scope(
+                        Tier::All,
+                        scope,
+                        assumptions,
+                        trait_goal,
+                    )
                 else {
                     if emit_diag {
                         self.push_diag(BodyDiag::WithEffectTraitUnsatisfied {
@@ -4489,6 +4671,14 @@ impl<'db> TyChecker<'db> {
             }
         };
 
+        let (candidate, args_typed) = self.trait_method_for_arguments(
+            candidate,
+            &canonical_r_ty,
+            selected_receiver_ty,
+            method_name,
+            args,
+        );
+
         let (func_ty, trait_inst) = self.selected_method_ty(
             candidate,
             &canonical_r_ty,
@@ -4538,6 +4728,7 @@ impl<'db> TyChecker<'db> {
             .code_region_intrinsic_kind(callable.callable_def())
             .or_else(|| self.code_region_method_kind(selected_receiver_ty, method_name))
             && args.len() == 1
+            && !args_typed
             && let Some(result) = self.check_code_region_intrinsic(
                 expr,
                 &mut callable,
@@ -4555,12 +4746,152 @@ impl<'db> TyChecker<'db> {
             args,
             call_span.clone().args(),
             Some((*receiver, receiver_prop)),
-            false,
+            args_typed,
         );
 
         callable.process_constraints(self, expr, call_span.method_name().into());
         self.check_callable_effects(expr, &mut callable);
         self.finish_call(expr, callable)
+    }
+
+    /// The trait method that a call `x.m(args)` runs when the package generates
+    /// implementations: the method that the implementations written in the
+    /// package and its dependencies select, unless its parameters do not
+    /// accept the arguments and exactly one other candidate, supplied by a
+    /// generated implementation, does. A generated implementation fills a gap
+    /// here as it does for the operator `x == y`, which takes the right-hand
+    /// side into account the same way. The arguments are typed before the
+    /// choice then, and the result says so.
+    fn trait_method_for_arguments(
+        &mut self,
+        candidate: MethodCandidate<'db>,
+        canonical: &Canonicalized<'db, TyId<'db>>,
+        receiver_ty: TyId<'db>,
+        method_name: IdentId<'db>,
+        args: &[HirCallArg<'db>],
+    ) -> (MethodCandidate<'db>, bool) {
+        let ingot = self.env.scope().ingot(self.db);
+        let written = match candidate {
+            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => cand,
+            MethodCandidate::InherentMethod(_) => return (candidate, false),
+        };
+        // A closure argument takes its types from the parameter it is passed
+        // to, and so does a string literal (a byte array where the parameter
+        // is one), so neither can be typed before the choice.
+        if args.is_empty()
+            || Tier::Authored.in_ingot(self.db, ingot) == Tier::All
+            || args.iter().any(|arg| {
+                matches!(
+                    arg.expr.data(self.db, self.body()),
+                    Partial::Present(
+                        Expr::Closure { .. } | Expr::Lit(LitKind::String(_)) | Expr::Tuple(_)
+                    )
+                )
+            })
+        {
+            return (candidate, false);
+        }
+        let others: Vec<MethodCandidate<'db>> = match select_method_candidate_in(
+            self.db,
+            canonical,
+            method_name,
+            self.env.scope(),
+            self.env.assumptions(),
+            self.env.choices,
+            Tier::All,
+        )
+        .result
+        {
+            Ok(only) => vec![only],
+            Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => ambiguous
+                .candidates
+                .iter()
+                .map(|cand| {
+                    if cand.needs_confirmation {
+                        MethodCandidate::NeedsConfirmation(cand.cand)
+                    } else {
+                        MethodCandidate::TraitMethod(cand.cand)
+                    }
+                })
+                .collect(),
+            Err(_) => return (candidate, false),
+        };
+        // The other trait candidates, each as selected: one that needs its
+        // trait bound confirmed keeps that, so the call still obliges it.
+        let others: Vec<(MethodCandidate<'db>, TraitMethodCand<'db>)> = others
+            .into_iter()
+            .filter_map(|other| match other {
+                MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
+                    (cand != written).then_some((other, cand))
+                }
+                MethodCandidate::InherentMethod(_) => None,
+            })
+            .collect();
+        if others.is_empty() {
+            return (candidate, false);
+        }
+        for arg in args {
+            if self.env.typed_expr(arg.expr).is_none() {
+                self.check_expr_unknown(arg.expr);
+            }
+        }
+        if self.trait_method_accepts(written, canonical, receiver_ty, args) {
+            return (candidate, true);
+        }
+        let accepting: Vec<_> = others
+            .into_iter()
+            .filter(|&(_, other)| self.trait_method_accepts(other, canonical, receiver_ty, args))
+            .collect();
+        match accepting.as_slice() {
+            [(only, _)] => (*only, true),
+            _ => (candidate, true),
+        }
+    }
+
+    /// Whether the arguments, already typed, unify with the parameters of the
+    /// trait method `cand` called on `receiver_ty`. Leaves no trace.
+    fn trait_method_accepts(
+        &mut self,
+        cand: TraitMethodCand<'db>,
+        canonical: &Canonicalized<'db, TyId<'db>>,
+        receiver_ty: TyId<'db>,
+        args: &[HirCallArg<'db>],
+    ) -> bool {
+        let snapshot = self.snapshot_state();
+        let accepted = (|| {
+            let inst = canonical.extract_solution(&mut self.table, cand.inst);
+            let func_ty = super::try_instantiate_trait_method(
+                self.db,
+                cand.method,
+                &mut self.table,
+                receiver_ty,
+                inst,
+            )
+            .ok()?;
+            let func_ty = self.table.instantiate_to_term(func_ty);
+            let (base, gen_args) = func_ty.decompose_ty_app(self.db);
+            let TyData::TyBase(TyBase::Func(func_def)) = base.data(self.db) else {
+                return None;
+            };
+            let params = func_def.arg_tys(self.db);
+            if params.len() != args.len() + 1 {
+                return None;
+            }
+            for (arg, param) in args.iter().zip(params.iter().skip(1)) {
+                let expected = self.normalize_ty(normalize_with_trait_evidence(
+                    self.db,
+                    param.instantiate(self.db, gen_args),
+                    self.env.scope(),
+                    inst,
+                ));
+                let given = self.env.typed_expr(arg.expr)?.ty;
+                self.table.unify(given, expected).ok()?;
+            }
+            Some(())
+        })()
+        .is_some();
+        self.rollback_state(snapshot);
+        accepted
     }
 
     /// Registers a checked call and types its result. A projection's result
@@ -5812,6 +6143,107 @@ impl<'db> TyChecker<'db> {
         unit
     }
 
+    /// Selects the candidates of the operator trait `trait_def` for a binary
+    /// use of `lhs_ty` with the right-hand side `rhs_expr`, in `tier`: the
+    /// implementations for every receiver type in `lhs_candidates`, and, among
+    /// them, those whose right-hand side the use's can be, preferring those
+    /// under which an open literal takes its default type.
+    fn select_ops_candidates(
+        &mut self,
+        lhs_ty: TyId<'db>,
+        lhs_candidates: &[TyId<'db>],
+        op: &dyn TraitOps,
+        trait_def: Trait<'db>,
+        rhs_expr: ExprId,
+        tier: Tier,
+    ) -> OpsSelection<'db> {
+        let method_assumptions = self.env.assumptions();
+        let mut candidates = Vec::new();
+        let mut error = None;
+        for &candidate_ty in lhs_candidates {
+            let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
+            match select_trait_method_candidates(
+                self.db,
+                &c_candidate_ty,
+                op.trait_method(self.db),
+                self.env.scope(),
+                method_assumptions,
+                trait_def,
+                tier,
+            ) {
+                Ok(methods) => candidates.extend(
+                    methods
+                        .candidates
+                        .into_iter()
+                        .map(|method| (candidate_ty, c_candidate_ty.clone(), method)),
+                ),
+                Err(err) => {
+                    error.get_or_insert(err);
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return OpsSelection {
+                candidates,
+                error,
+                rhs: None,
+                viable: Vec::new(),
+                unifies: false,
+            };
+        }
+        let rhs = self
+            .env
+            .typed_expr(rhs_expr)
+            .unwrap_or_else(|| self.check_expr_unknown(rhs_expr));
+        // The candidates the right-hand side can be an argument of, each with
+        // whether an open literal keeps its default type under it.
+        let mut unifying = Vec::new();
+        if !rhs.ty.has_invalid(self.db) {
+            for candidate in &candidates {
+                let (candidate_ty, c_candidate_ty, method) = candidate;
+                let snapshot = self.snapshot_state();
+                let keeps_defaults = (|| {
+                    self.table.unify(lhs_ty, *candidate_ty).ok()?;
+                    let inst = c_candidate_ty.extract_solution(&mut self.table, method.cand.inst);
+                    let func_ty = super::try_instantiate_trait_method(
+                        self.db,
+                        method.cand.method,
+                        &mut self.table,
+                        *candidate_ty,
+                        inst,
+                    )
+                    .ok()?;
+                    let func_ty = self.table.instantiate_to_term(func_ty);
+                    let expected_rhs = self.instantiated_ops_rhs_ty(func_ty, inst)?;
+                    self.table.unify(rhs.ty, expected_rhs).ok()?;
+                    Some(self.keeps_literal_defaults([lhs_ty, rhs.ty]))
+                })();
+                self.rollback_state(snapshot);
+                if let Some(keeps_defaults) = keeps_defaults {
+                    unifying.push((candidate.clone(), keeps_defaults));
+                }
+            }
+        }
+        let unifies = !unifying.is_empty();
+        // A single candidate of a single receiver type is used as it is, so
+        // that a right-hand side of another type is reported as a mismatch of
+        // that candidate. Otherwise an open string literal takes its default
+        // type when that settles the impl: `span == "x"` compares with a
+        // `String<1>`.
+        let viable = if lhs_candidates.len() == 1 && candidates.len() == 1 {
+            candidates.clone()
+        } else {
+            super::prefer_literal_defaults(unifying)
+        };
+        OpsSelection {
+            candidates,
+            error,
+            rhs: Some(rhs),
+            viable,
+            unifies,
+        }
+    }
+
     /// Resolve a core::ops trait method for an operator on a given LHS type and
     /// optionally check the RHS against the inferred method parameter type.
     /// Returns the fully-instantiated function type and concrete trait instance.
@@ -5860,29 +6292,32 @@ impl<'db> TyChecker<'db> {
                 }
                 _ => vec![lhs_ty],
             };
-            let mut candidates = Vec::new();
-            let mut selection_err = None;
-            for &candidate_ty in &lhs_candidates {
-                let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                match select_trait_method_candidates(
-                    self.db,
-                    &c_candidate_ty,
-                    op.trait_method(self.db),
-                    self.env.scope(),
-                    method_assumptions,
-                    trait_def,
-                ) {
-                    Ok(methods) => candidates.extend(
-                        methods
-                            .candidates
-                            .into_iter()
-                            .map(|method| (candidate_ty, c_candidate_ty.clone(), method)),
-                    ),
-                    Err(err) => {
-                        selection_err.get_or_insert(err);
-                    }
-                }
-            }
+            // Which implementation of an operator trait a use selects is a
+            // selection among candidates, as for a method call: the candidates
+            // that the package writes (and its dependencies) answer it, and
+            // generated implementations answer only where those leave the use
+            // without a viable candidate.
+            let OpsSelection {
+                candidates,
+                error: selection_err,
+                rhs,
+                viable,
+                ..
+            } = authored_first(
+                self.db,
+                self.env.scope().ingot(self.db),
+                |tier| {
+                    self.select_ops_candidates(
+                        lhs_ty,
+                        &lhs_candidates,
+                        op,
+                        trait_def,
+                        rhs_expr,
+                        tier,
+                    )
+                },
+                |selection| selection.answers(),
+            );
 
             match selection_err {
                 Some(MethodSelectionError::NotFound) | None if candidates.is_empty() => {
@@ -5909,47 +6344,13 @@ impl<'db> TyChecker<'db> {
                 }
                 _ => {}
             }
-            let rhs = self
-                .env
-                .typed_expr(rhs_expr)
-                .unwrap_or_else(|| self.check_expr_unknown(rhs_expr));
+            let Some(rhs) = rhs else {
+                return ExprProp::invalid(self.db);
+            };
             if rhs.ty.has_invalid(self.db) {
                 return ExprProp::invalid(self.db);
             }
-
-            let mut viable = if lhs_candidates.len() == 1 && candidates.len() == 1 {
-                candidates
-            } else {
-                let mut viable = Vec::new();
-                for candidate in candidates {
-                    let (candidate_ty, c_candidate_ty, method) = &candidate;
-                    let snapshot = self.snapshot_state();
-                    let keeps_defaults = (|| {
-                        self.table.unify(lhs_ty, *candidate_ty).ok()?;
-                        let inst =
-                            c_candidate_ty.extract_solution(&mut self.table, method.cand.inst);
-                        let func_ty = super::try_instantiate_trait_method(
-                            self.db,
-                            method.cand.method,
-                            &mut self.table,
-                            *candidate_ty,
-                            inst,
-                        )
-                        .ok()?;
-                        let func_ty = self.table.instantiate_to_term(func_ty);
-                        let expected_rhs = self.instantiated_ops_rhs_ty(func_ty, inst)?;
-                        self.table.unify(rhs.ty, expected_rhs).ok()?;
-                        Some(self.keeps_literal_defaults([lhs_ty, rhs.ty]))
-                    })();
-                    self.rollback_state(snapshot);
-                    if let Some(keeps_defaults) = keeps_defaults {
-                        viable.push((candidate, keeps_defaults));
-                    }
-                }
-                // An open string literal takes its default type when that
-                // settles the impl: `span == "x"` compares with a `String<1>`.
-                super::prefer_literal_defaults(viable)
-            };
+            let mut viable = viable;
 
             match viable.len() {
                 0 => {
@@ -6524,40 +6925,48 @@ fn resolve_ident_expr<'db>(
         ResolvedPathInBody::Reso(reso)
     };
 
-    let mut current_idx = env.current_block_idx();
-
-    loop {
-        let block = env.get_block(current_idx);
-        if let Some(binding) = block.lookup_var(local_ident) {
-            return ResolvedPathInBody::Binding(binding);
-        }
-
-        // A spliced quote keeps its producer's free names. Only its hygienic
-        // local binders may resolve in the enclosing generated body.
-        if hygiene_scope.is_none() {
-            let scope = block.scope;
-            let directive = QueryDirective::for_scope(db, scope).disallow_lex();
-            let query = EarlyNameQueryId::new(db, ident, scope, directive);
-            let bucket = resolve_query(db, query);
-            let resolved = resolve_bucket(bucket, scope);
-            if !matches!(resolved, ResolvedPathInBody::Invalid) {
-                return resolved;
-            }
-        }
-        if current_idx == 0 {
-            break;
-        }
-        current_idx -= 1;
-    }
-
+    // The walk over the blocks and then the module is one lookup procedure:
+    // it runs in the authored tier from the innermost block to the module, and
+    // only if it finds nothing there does it run again with the generated
+    // items. A generated item thus never wins a step of the walk that an
+    // authored item further out would have won.
     let body_scope = hygiene_scope.unwrap_or_else(|| env.body().scope());
-    let directive = QueryDirective::for_scope(db, body_scope);
-    let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
-    let bucket = resolve_query(db, query);
-    match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {
-        ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),
-        r => r,
-    }
+    let search = |tier: Tier| {
+        let mut current_idx = env.current_block_idx();
+        loop {
+            let block = env.get_block(current_idx);
+            if let Some(binding) = block.lookup_var(local_ident) {
+                return Some(ResolvedPathInBody::Binding(binding));
+            }
+
+            // A spliced quote keeps its producer's free names. Only its hygienic
+            // local binders may resolve in the enclosing generated body.
+            if hygiene_scope.is_none() {
+                let scope = block.scope;
+                let directive = QueryDirective::for_scope(db, scope).disallow_lex();
+                let query = EarlyNameQueryId::new(db, ident, scope, directive);
+                let bucket = resolve_query_in(db, query, tier);
+                let resolved = resolve_bucket(bucket, scope);
+                if !matches!(resolved, ResolvedPathInBody::Invalid) {
+                    return Some(resolved);
+                }
+            }
+            if current_idx == 0 {
+                break;
+            }
+            current_idx -= 1;
+        }
+
+        let directive = QueryDirective::for_scope(db, body_scope);
+        let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
+        let bucket = resolve_query_in(db, query, tier);
+        match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {
+            ResolvedPathInBody::Invalid => None,
+            r => Some(r),
+        }
+    };
+    authored_first(db, body_scope.ingot(db), search, Option::is_some)
+        .unwrap_or(ResolvedPathInBody::NewBinding(ident))
 }
 
 /// If `ident` names a function of the `impl`, `impl trait` or `trait` that

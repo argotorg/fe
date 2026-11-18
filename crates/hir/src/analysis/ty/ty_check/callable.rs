@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::{
     hir_def::{
         BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
@@ -1499,7 +1500,7 @@ impl<'db> Callable<'db> {
             CallableDef::Func(func) => param_env(db, func.into()),
             CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => declared,
         };
-        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
+        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope(), Tier::All)
             .with_assumptions(definition_assumptions);
 
         let mut pending_obligations = Vec::new();

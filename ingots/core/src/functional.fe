@@ -15,6 +15,7 @@
 /// its `FnMut` `call_mut`. Closures and function items implement both traits
 /// at the shape of their own parameters. `uses E` is the row of effects a
 /// call runs: those a closure's body uses, or a function's own.
+#[decides = "which implementation a call of a value runs"]
 pub trait Fn<shape A> {
     uses E
     type Out
@@ -24,6 +25,7 @@ pub trait Fn<shape A> {
 
 /// A callable value whose call may mutate it: `FnMut(own T, U) -> R` is
 /// `FnMut<(own T, U), Out = R>`.
+#[decides = "which implementation a call of a value runs"]
 pub trait FnMut<shape A> {
     uses E
     type Out

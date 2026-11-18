@@ -43,8 +43,13 @@ impl std::fmt::Display for GenerationError {
 /// The one view every provider runs in, whatever channel requested it.
 const PROVIDER_VIEW_RULE: &str = "a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it. Share an ordinary helper function between the two providers instead";
 
-/// Provider diagnostics that may come from reading something generation has
-/// not produced in the input view carry the rule that fixes the view.
+/// The rule in a phrase short enough for the first line of a diagnostic.
+const PROVIDER_VIEW_BRIEF: &str =
+    "a provider cannot see what generation produces in its own package";
+
+/// A provider diagnostic about something generation produces in the provider's
+/// own package carries the rule that fixes the view. Other errors of a provider
+/// body, such as a type mismatch, are not about the view and carry no note.
 fn with_view_note(mut error: GenerationError) -> GenerationError {
     error.cause = format!("{}\nnote: {PROVIDER_VIEW_RULE}", error.cause);
     error
@@ -67,6 +72,98 @@ fn in_written_code(
         .descendants()
         .filter_map(ast::QuoteExpr::cast)
         .any(|quote| quote.syntax().text_range().contains_range(span.range))
+}
+
+/// The names that the quotations of `ingot` write as functions, constants or
+/// implemented traits: what generation of that package can add to it.
+fn quoted_names(
+    db: &DriverDataBase,
+    ingot: common::ingot::Ingot<'_>,
+) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for (_, file) in ingot.files(db).iter() {
+        if !matches!(file.kind(db), Some(common::file::IngotFileKind::Source)) {
+            continue;
+        }
+        let (green, _) = parser::parse_source_file(file.text(db), parser::RecoveryMode::Recover);
+        let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
+        for quote in root.syntax().descendants().filter_map(ast::QuoteExpr::cast) {
+            for node in quote.syntax().descendants() {
+                if let Some(function) = ast::Func::cast(node.clone()) {
+                    names.extend(function.sig().name().map(|name| name.text().to_string()));
+                } else if let Some(constant) = ast::Const::cast(node.clone()) {
+                    names.extend(constant.name().map(|name| name.text().to_string()));
+                } else if let Some(implementation) = ast::ImplTrait::cast(node) {
+                    for token in implementation
+                        .trait_ref()
+                        .iter()
+                        .flat_map(|trait_ref| trait_ref.syntax().descendants_with_tokens())
+                        .filter_map(|element| element.into_token())
+                        .filter(|token| token.kind() == parser::SyntaxKind::Ident)
+                    {
+                        names.insert(token.text().to_string());
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Whether a diagnostic of a provider body is about a name or an
+/// implementation that generation of the provider's package supplies: a name
+/// that some quotation writes, or an implementation of a trait whose name some
+/// quotation writes. A type mismatch, or a name no quotation writes, is an
+/// ordinary error of the provider.
+fn about_generated(
+    db: &DriverDataBase,
+    diagnostic: &hir::analysis::ty::diagnostics::FuncBodyDiag<'_>,
+    quoted: &std::collections::HashSet<String>,
+) -> bool {
+    use hir::analysis::{
+        name_resolution::diagnostics::PathResDiag,
+        ty::diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
+    };
+    let written = |name: &hir::hir_def::IdentId<'_>| quoted.contains(name.data(db).as_str());
+    let path_diag = |diagnostic: &PathResDiag<'_>| match diagnostic {
+        PathResDiag::NotFound(_, name) => written(name),
+        PathResDiag::MethodNotFound { method_name, .. } => written(method_name),
+        _ => false,
+    };
+    match diagnostic {
+        FuncBodyDiag::Body(BodyDiag::UndefinedVariable(_, name, _)) => written(name),
+        FuncBodyDiag::NameRes(diagnostic)
+        | FuncBodyDiag::Ty(TyDiagCollection::PathRes(diagnostic)) => path_diag(diagnostic),
+        FuncBodyDiag::Ty(TyDiagCollection::Satisfiability(
+            TraitConstraintDiag::TraitBoundNotSat { primary_goal, .. },
+        )) => primary_goal
+            .def(db)
+            .name(db)
+            .to_opt()
+            .is_some_and(|name| written(&name)),
+        _ => false,
+    }
+}
+
+/// Whether an error of the body of `function` is about something generation of
+/// its package supplies.
+fn body_about_generated(db: &DriverDataBase, function: hir::hir_def::Func<'_>) -> bool {
+    let quoted = quoted_names(db, function.scope().ingot(db));
+    check_func_body(db, function)
+        .0
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == common::diagnostics::Severity::Error)
+        .any(|diagnostic| about_generated(db, diagnostic, &quoted))
+}
+
+/// The first line of a provider diagnostic says what the provider cannot see
+/// only when the error is about something generation supplies.
+fn view_brief(generated: bool) -> String {
+    if generated {
+        format!(" ({PROVIDER_VIEW_BRIEF})")
+    } else {
+        String::new()
+    }
 }
 
 fn diagnostic_error(
@@ -133,14 +230,20 @@ fn evaluation_error<'db>(
     if let BodyOwner::Func(function, _) = owner {
         let complete = body_errors(db, function);
         if !complete.is_empty() {
-            return with_view_note(diagnostic_error(
+            let generated = body_about_generated(db, function);
+            let error = diagnostic_error(
                 db,
                 &complete,
                 GenerationError {
-                    cause: "authored const helper diagnostics".into(),
+                    cause: format!("authored const helper diagnostics{}", view_brief(generated)),
                     ..fallback
                 },
-            ));
+            );
+            return if generated {
+                with_view_note(error)
+            } else {
+                error
+            };
         }
     }
     let (origin, cause) = match error {
@@ -891,17 +994,27 @@ fn admit_requests(
     // prepared. Their output is part of the first view, so a written header
     // is a fact when the code that a scoped request generates is checked, as
     // a written implementation is.
+    // `own` holds the places of the modules' own derive headers in `requests`,
+    // and `sites` where each one was written, in the same order.
+    let mut sites = Vec::new();
     for request in &admitted {
         let mut plan = evaluate_provider_instance(
             db,
             request.file,
             request.provider,
             request.input,
-            request.range,
+            request.site.range,
         )?;
-        plan.request_impl = Some(request.range);
+        plan.request_impl = Some(request.site.range);
         requests.push(plan);
+        sites.push(request.site.clone());
     }
+    debug_assert_eq!(
+        requests.len() - sealed_len,
+        sites.len(),
+        "every request has a site"
+    );
+    let own = sealed_len..requests.len();
     // The first request of the last round, for the limit's message.
     let mut last_round_first = None;
     // Every retry starts from unchanged authored text and the cumulative plan.
@@ -927,8 +1040,6 @@ fn admit_requests(
                 });
             }
             analyze_type_definitions_first(&output, module);
-            check_no_hidden_generated_members(&output, module)?;
-            check_no_nested_deciding_impls(&output, module)?;
         }
         // A generated header is not eligible merely because it was lowered.
         // Validate conformance before retrying any goal against the new plan.
@@ -1078,6 +1189,11 @@ fn admit_requests(
             requests.extend(new_requests);
             continue;
         }
+        let requested = Requested {
+            requests: &requests[own.clone()],
+            sites: &sites,
+        };
+        check_conservative_extension(&output, modules, &requested)?;
         if let ViewBasis::Standalone(_) = basis {
             let (_, module) = output_module(fallback_file);
             let diagnostics = output.run_on_top_mod(module);
@@ -1119,8 +1235,7 @@ fn admit_requests(
 /// request is written.
 struct AdmittedRequest<'db> {
     file: File,
-    /// The range of the derive header.
-    range: parser::TextRange,
+    site: RequestSite,
     input: RecordInput<'db>,
     provider: hir::analysis::semantic::SemanticInstanceKey<'db>,
 }
@@ -1138,6 +1253,10 @@ fn admit_authored_requests<'db>(
             file: found.url.clone(),
             range,
             cause,
+        };
+        let site = |range| RequestSite {
+            file: found.url.clone(),
+            range,
         };
         let authored_file = db
             .workspace()
@@ -1173,7 +1292,7 @@ fn admit_authored_requests<'db>(
                 )?;
             admitted.push(AdmittedRequest {
                 file: authored_file,
-                range: *range,
+                site: site(*range),
                 input,
                 provider,
             });
@@ -1206,7 +1325,7 @@ fn admit_authored_requests<'db>(
                     })?;
             admitted.push(AdmittedRequest {
                 file: authored_file,
-                range: *range,
+                site: site(*range),
                 input,
                 provider,
             });
@@ -1215,42 +1334,371 @@ fn admit_authored_requests<'db>(
     Ok(admitted)
 }
 
-/// Refuses a generated member of an inherent header that its type already has
-/// under that name, through a written inherent member or a trait member. An
-/// inherent member outranks a trait member, so the generated one would
-/// otherwise silently win or never be selected.
-fn check_no_hidden_generated_members<'db>(
-    output: &'db DriverDataBase,
-    output_module: hir::hir_def::TopLevelMod<'db>,
-) -> Result<(), GenerationError> {
-    match hir::core::hidden_items::hidden_generated_members(output, output_module)
-        .into_iter()
-        .next()
-    {
-        Some(hidden) => Err(GenerationError {
-            file: hidden.file.clone(),
-            range: hidden.range,
-            cause: hidden.diagnostic_message(),
-        }),
-        None => Ok(()),
+/// Where an author wrote a request: the derive header.
+#[derive(Clone, Debug)]
+struct RequestSite {
+    file: url::Url,
+    range: parser::TextRange,
+}
+
+/// The requests of the modules being prepared, with the place each one was
+/// written, in the same order.
+struct Requested<'a> {
+    requests: &'a [common::generation::FrozenGenerationRequest],
+    sites: &'a [RequestSite],
+}
+
+impl Requested<'_> {
+    /// The request whose output holds the text written at `source`, a place in
+    /// a quotation.
+    fn site_of(&self, source: &(url::Url, parser::TextRange)) -> Option<&RequestSite> {
+        fn holds(
+            code: &common::generation::FrozenCode,
+            source: &(url::Url, parser::TextRange),
+        ) -> bool {
+            use common::generation::{FrozenCode, FrozenHoleValue};
+            let FrozenCode::Template {
+                quote_file,
+                quote_range,
+                holes,
+                ..
+            } = code
+            else {
+                return false;
+            };
+            (quote_file == &source.0 && quote_range.contains_range(source.1))
+                || holes.iter().any(|hole| match hole {
+                    FrozenHoleValue::Code(nested) => holds(nested, source),
+                    _ => false,
+                })
+        }
+        self.requests
+            .iter()
+            .position(|request| holds(&request.code, source))
+            .and_then(|index| self.sites.get(index))
+    }
+
+    /// The request written at `at`, the place of its header.
+    fn site_written_at(&self, at: &(url::Url, parser::TextRange)) -> Option<&RequestSite> {
+        self.sites
+            .iter()
+            .find(|site| site.file == at.0 && site.range == at.1)
     }
 }
 
-/// Refuses an implementation of a deciding trait, such as `Drop`, that a
-/// provider wrote nested inside a generated function: the compiler decides
-/// what runs where a value goes out of use by whether the type implements the
-/// trait, so only an implementation of authored code may change that.
-fn check_no_nested_deciding_impls<'db>(
-    output: &'db DriverDataBase,
-    output_module: hir::hir_def::TopLevelMod<'db>,
+/// Inside the package that generates them, generated items only fill gaps. A
+/// name, member or implementation that the package's own code or a dependency
+/// already answers keeps that answer, and generated items are consulted only
+/// where nothing else resolves. Resolution applies that rule itself (see
+/// `Tier` in the name resolver). What it cannot do is make a generated item
+/// that is hidden in the module it is published into useful, so such an item
+/// is refused at its request, naming the item, what hides it, the request and
+/// how to resolve it. `output` is the prepared view and `modules` the authored
+/// files being prepared.
+///
+/// A generated member of an inherent implementation that its type already has
+/// under that name is refused the same way, since an inherent member would
+/// otherwise outrank a trait member without any name being involved.
+fn check_conservative_extension(
+    output: &DriverDataBase,
+    modules: &[url::Url],
+    requested: &Requested<'_>,
 ) -> Result<(), GenerationError> {
-    match hir::core::hidden_items::nested_generated_deciding_impl_errors(output, output_module)
-        .into_iter()
-        .next()
-    {
-        Some((file, range, cause)) => Err(GenerationError { file, range, cause }),
-        None => Ok(()),
+    check_no_hidden_generated_items(output, modules, requested)?;
+    check_no_hidden_generated_members(output, modules, requested)?;
+    check_no_changed_choices(output, modules, requested)
+}
+
+/// Refuses a generated implementation that would change a decision the
+/// package's written code already answers: which of several implementations is
+/// preferred, or whether one exists. The program keeps the written answer, so
+/// the generated implementation would never be the one that runs; the error is
+/// at the request, naming the decision and the implementation.
+fn check_no_changed_choices(
+    output: &DriverDataBase,
+    modules: &[url::Url],
+    requested: &Requested<'_>,
+) -> Result<(), GenerationError> {
+    use hir::analysis::name_resolution::changed_choices;
+    for url in modules {
+        let Some(output_file) = output.workspace().get(output, url) else {
+            continue;
+        };
+        let Some(changed) = changed_choices(output, output.top_mod(output_file))
+            .into_iter()
+            .next()
+        else {
+            continue;
+        };
+        let generated = changed.generated.first();
+        let site = generated.and_then(|generated| match &generated.target {
+            hir::analysis::ty::ty_check::UseTarget::Generated { source, .. } => {
+                source.as_ref().and_then(|source| requested.site_of(source))
+            }
+            _ => None,
+        });
+        let requested_at = site.map_or_else(String::new, |site| {
+            format!(
+                " requested at {}:{}..{}",
+                site.file,
+                u32::from(site.range.start()),
+                u32::from(site.range.end())
+            )
+        });
+        let what = generated.map_or_else(
+            || "a generated item".to_string(),
+            |generated| format!("the generated {}", generated.description),
+        );
+        let decided_at = changed.site.as_ref().map_or_else(String::new, |site| {
+            format!(
+                ", decided at `{}` ({}:{}..{})",
+                site.text,
+                site.file,
+                u32::from(site.range.start()),
+                u32::from(site.range.end())
+            )
+        });
+        return Err(GenerationError {
+            file: site.map_or_else(|| changed.file.clone(), |site| site.file.clone()),
+            range: site.map_or_else(|| parser::TextRange::empty(0.into()), |site| site.range),
+            cause: format!(
+                "{what}{requested_at} is refused: it {verb} change {decision} for `{subject}`{decided_at}. {explanation} Inside the package that generates them, generated items only fill gaps that nothing written in the package answers. To resolve it, {remedy}",
+                verb = if changed.by_definition {
+                    "could"
+                } else {
+                    "would"
+                },
+                decision = changed.what,
+                subject = changed.subject,
+                explanation = changed.explanation,
+                remedy = changed.remedy,
+            ),
+        });
     }
+    Ok(())
+}
+
+fn describe_target(target: &hir::analysis::ty::ty_check::UseTarget) -> String {
+    use hir::analysis::ty::ty_check::UseTarget;
+    match target {
+        UseTarget::Declared { file, range, name } => format!(
+            "`{name}` declared at {file}:{}..{}",
+            u32::from(range.start()),
+            u32::from(range.end())
+        ),
+        UseTarget::Generated { name, ingot, .. } => {
+            format!("the generated `{name}` of the ingot {ingot}")
+        }
+    }
+}
+
+fn describe_via(via: &hir::analysis::name_resolution::Via) -> String {
+    use hir::analysis::name_resolution::{Located, Via};
+    let place = |located: &Option<Located>| {
+        located.as_ref().map_or(String::new(), |located| {
+            format!(
+                " `{}` at {}:{}..{}",
+                located.text,
+                located.file,
+                u32::from(located.range.start()),
+                u32::from(located.range.end())
+            )
+        })
+    };
+    match via {
+        Via::Item => "a declaration of the module".to_string(),
+        Via::NamedImport(located) => format!("the import{}", place(located)),
+        Via::GlobImport(located) => format!("the glob import{}", place(located)),
+        Via::Prelude => "the prelude".to_string(),
+        Via::Ingot => "the name of an ingot".to_string(),
+        Via::Builtin => "a builtin type".to_string(),
+        Via::Enclosing(inner) => format!("the enclosing module, through {}", describe_via(inner)),
+    }
+}
+
+/// Refuses a generated item that its module binds another item to the name
+/// of: it would never be found there. The error is at the request that
+/// generated the item.
+fn check_no_hidden_generated_items(
+    output: &DriverDataBase,
+    modules: &[url::Url],
+    requested: &Requested<'_>,
+) -> Result<(), GenerationError> {
+    use hir::analysis::name_resolution::{Via, hidden_generated_items};
+    for url in modules {
+        let Some(output_file) = output.workspace().get(output, url) else {
+            continue;
+        };
+        if let Some(hidden) = hidden_generated_items(output, output.top_mod(output_file))
+            .into_iter()
+            .next()
+        {
+            let site = match &hidden.generated {
+                hir::analysis::ty::ty_check::UseTarget::Generated { source, .. } => {
+                    source.as_ref().and_then(|source| requested.site_of(source))
+                }
+                _ => None,
+            };
+            let requested_at = site.map_or_else(String::new, |site| {
+                format!(
+                    " requested at {}:{}..{}",
+                    site.file,
+                    u32::from(site.range.start()),
+                    u32::from(site.range.end())
+                )
+            });
+            let place = hidden.module.map_or_else(
+                || format!("the root module of {}", hidden.file),
+                |range| {
+                    format!(
+                        "the module at {}:{}..{}",
+                        hidden.file,
+                        u32::from(range.start()),
+                        u32::from(range.end())
+                    )
+                },
+            );
+            let binding = &hidden.hidden_by;
+            let hidden_by = binding.target.as_ref().map_or_else(
+                || describe_via(&binding.via),
+                |target| {
+                    format!(
+                        "{} through {}",
+                        describe_target(target),
+                        describe_via(&binding.via)
+                    )
+                },
+            );
+            let ambiguous = if binding.ambiguous {
+                " (it is ambiguous there, and one candidate is described)"
+            } else {
+                ""
+            };
+            let imported = hidden.imported_by.as_ref().map_or_else(String::new, |import| {
+                format!(
+                    " The import `{}` at {}:{}..{} names the generated item, but imports nothing while a binding written in the package answers the name.",
+                    import.text,
+                    import.file,
+                    u32::from(import.range.start()),
+                    u32::from(import.range.end())
+                )
+            });
+            let remedy = match &binding.via {
+                Via::GlobImport(_) | Via::NamedImport(_) => format!(
+                    "rename the generated item, or narrow the import so that it no longer binds `{}`",
+                    hidden.name
+                ),
+                Via::Prelude => "rename the generated item".to_string(),
+                _ => "rename the generated item or the item that hides it".to_string(),
+            };
+            return Err(GenerationError {
+                file: site.map_or_else(|| hidden.file.clone(), |site| site.file.clone()),
+                range: site.map_or_else(|| parser::TextRange::empty(0.into()), |site| site.range),
+                cause: format!(
+                    "the generated `{name}`{requested_at} would be hidden in {place}: the {domain} name `{name}` is already bound there to {hidden_by}{ambiguous}. Inside the package that generates them, generated items only fill gaps, so the existing binding keeps the name and the generated {generated_domain} `{name}` would never be found.{imported} To resolve it, {remedy}",
+                    name = hidden.name,
+                    domain = binding.domain,
+                    generated_domain = hidden.domain,
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a generated member of an inherent implementation that its type
+/// already has under that name. A path or call that names it would find the
+/// existing member, so the generated one would never be selected.
+fn check_no_hidden_generated_members(
+    output: &DriverDataBase,
+    modules: &[url::Url],
+    requested: &Requested<'_>,
+) -> Result<(), GenerationError> {
+    use hir::analysis::name_resolution::hidden_generated_members;
+    for url in modules {
+        let Some(output_file) = output.workspace().get(output, url) else {
+            continue;
+        };
+        if let Some(hidden) = hidden_generated_members(output, output.top_mod(output_file))
+            .into_iter()
+            .next()
+        {
+            let site = match (&hidden.header, &hidden.generated) {
+                (Some(header), _) => requested.site_written_at(header),
+                (None, hir::analysis::ty::ty_check::UseTarget::Generated { source, .. }) => {
+                    source.as_ref().and_then(|source| requested.site_of(source))
+                }
+                (None, _) => None,
+            };
+            let requested_at = site.map_or_else(String::new, |site| {
+                format!(
+                    " requested at {}:{}..{}",
+                    site.file,
+                    u32::from(site.range.start()),
+                    u32::from(site.range.end())
+                )
+            });
+            let existing = match &hidden.hidden_by.target {
+                Some(target) => format!(
+                    "{}, {}",
+                    hidden.hidden_by.description,
+                    describe_target(target)
+                ),
+                None => hidden.hidden_by.description.clone(),
+            };
+            return Err(GenerationError {
+                file: site.map_or_else(|| hidden.file.clone(), |site| site.file.clone()),
+                range: site.map_or_else(|| parser::TextRange::empty(0.into()), |site| site.range),
+                cause: format!(
+                    "the generated `{name}`{requested_at} would be hidden: `{ty}` already has {existing}, so `{ty}::{name}` keeps meaning that member. Inside the package that generates them, generated items only fill gaps, so the generated {kind} would never be selected; rename the generated {kind} or the existing member",
+                    name = hidden.name,
+                    ty = hidden.self_ty,
+                    kind = hidden.kind,
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The first body that the evaluation of the provider instance `key` runs and
+/// that does not check without errors, with its errors. Evaluation runs the
+/// bodies of the calls the instance makes and of the constants it reads, so a
+/// body that is ill-typed in the view the provider runs in, for instance
+/// because it needs an implementation that only another provider's output
+/// supplies, would be run for a value that the prepared program does not have.
+fn first_ill_typed_body<'db>(
+    db: &'db DriverDataBase,
+    key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+) -> Option<(BodyOwner<'db>, Vec<common::diagnostics::CompleteDiagnostic>)> {
+    let mut pending = std::collections::VecDeque::from([key]);
+    let mut seen = std::collections::HashSet::new();
+    while let Some(key) = pending.pop_front() {
+        if !seen.insert(key) {
+            continue;
+        }
+        let owner = key.owner(db);
+        let errors = hir::analysis::ty::ty_check::check_body(db, owner)
+            .0
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(db))
+            .filter(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
+            .collect::<Vec<_>>();
+        if !errors.is_empty() {
+            return Some((owner, errors));
+        }
+        let instance = hir::analysis::semantic::SemanticInstance::new(db, key);
+        // An instance past the instance limits is rejected as itself where
+        // it is checked; its calls need not end, so they are not followed.
+        if hir::analysis::semantic::exceeds_instance_limits(db, instance) {
+            continue;
+        }
+        for callee in instance.callees(db) {
+            pending.push_back(callee.key);
+        }
+        pending.extend(instance.implicit_dependencies(db));
+    }
+    None
 }
 
 /// Whether the provider instance `key`, or anything its evaluation runs, waits
@@ -1449,10 +1897,12 @@ fn evaluate_provider_instance<'db>(
     }
     let diagnostics = &check_func_body(db, provider).0;
     if !body_errors(db, provider).is_empty() {
+        let quoted = quoted_names(db, provider.scope().ingot(db));
         for diagnostic in diagnostics {
             if let hir::analysis::ty::diagnostics::FuncBodyDiag::Body(
                 hir::analysis::ty::diagnostics::BodyDiag::UndefinedVariable(span, name, _),
             ) = diagnostic
+                && quoted.contains(name.data(db).as_str())
                 && let Some(span) = span.resolve(db)
             {
                 return Err(GenerationError {
@@ -1465,21 +1915,56 @@ fn evaluate_provider_instance<'db>(
                 });
             }
         }
+        let generated = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity() == common::diagnostics::Severity::Error)
+            .any(|diagnostic| about_generated(db, diagnostic, &quoted));
         let complete = diagnostics
             .iter()
             .map(|diagnostic| diagnostic.to_complete(db))
             .collect::<Vec<_>>();
-        return Err(with_view_note(diagnostic_error(
+        let failure = diagnostic_error(
             db,
             &complete,
-            error(range, "authored provider body diagnostics".into()),
-        )));
+            error(
+                range,
+                format!(
+                    "authored provider body diagnostics{}",
+                    view_brief(generated)
+                ),
+            ),
+        );
+        return Err(if generated {
+            with_view_note(failure)
+        } else {
+            failure
+        });
     }
     if provider_needs_generation(db, provider_key) {
         return Err(error(
             range,
             format!(
                 "the provider runs code that opens an implementation only generation can supply; {PROVIDER_VIEW_RULE}"
+            ),
+        ));
+    }
+    if let Some((callee, errors)) = first_ill_typed_body(db, provider_key) {
+        let name = match callee {
+            BodyOwner::Func(function, _) => function
+                .name(db)
+                .to_opt()
+                .map(|name| format!("`{}`", name.data(db))),
+            _ => None,
+        };
+        return Err(diagnostic_error(
+            db,
+            &errors,
+            error(
+                range,
+                format!(
+                    "the provider evaluates {}, whose body does not check without errors in the view the provider runs in; a provider may only evaluate bodies that check there, since a body that needs what generation produces would give a value that the prepared program does not have; {PROVIDER_VIEW_RULE}",
+                    name.unwrap_or_else(|| "a constant".to_string())
+                ),
             ),
         ));
     }

@@ -17,14 +17,12 @@ use std::iter::successors;
 use thin_vec::ThinVec;
 
 use super::{
-    EarlyNameQueryId, ExpectedPathKind, NameDomain,
+    EarlyNameQueryId, ExpectedPathKind, NameDomain, Tier, authored_first,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{
-        MethodCandidate, MethodSelectionError, select_method_candidate_with_choices,
-    },
+    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate_in},
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
-    resolve_query,
+    resolve_query, resolve_query_in,
     traits_in_scope::traits_available_for_selection,
     visibility_checker::is_ty_visible_from,
 };
@@ -592,6 +590,18 @@ pub fn resolve_ident_to_bucket<'db>(
 ) -> &'db NameResBucket<'db> {
     assert!(path.parent(db).is_none());
     resolve_query(db, make_query(db, path, scope))
+}
+
+/// [`resolve_ident_to_bucket`] in `tier` alone, with no fallback to another
+/// tier. Panics if `path` has more than one segment.
+pub(crate) fn resolve_ident_to_bucket_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    tier: Tier,
+) -> &'db NameResBucket<'db> {
+    assert!(path.parent(db).is_none());
+    resolve_query_in(db, make_query(db, path, scope), tier)
 }
 
 /// Resolves only the definition named by a type-domain path, without lowering
@@ -1601,121 +1611,199 @@ fn resolve_segment<'db>(
                 }
             }
 
-            // Try to resolve as an associated const on the receiver type
-            if is_tail && resolve_tail_as_value {
-                // Inherent impl consts take precedence over trait impl consts.
-                // Conflicting inherent impls are rejected at their definition,
-                // so resolve to the first applicable impl here.
-                if let Some(impl_) =
-                    select_inherent_const_candidate(db, ty, ident, scope, assumptions)
-                {
-                    *decided_by_value = true;
-                    reject_generic_args(db, path)?;
-                    return Ok(PathRes::InherentConst(ty, impl_, ident));
-                }
-
-                // Probe impls across both the call-site scope and the receiver type's ingot so
-                // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
-                match select_assoc_const_candidate(
-                    db,
-                    ty,
-                    ident,
-                    scope,
-                    assumptions,
-                    lowering_cx.choices(),
-                ) {
-                    AssocConstSelection::Found(inst) => {
+            // Everything the type's member name can mean beyond a variant is one
+            // lookup procedure: an inherent constant, a trait constant, a
+            // method, an associated type. It runs in the authored tier, and
+            // only if that finds nothing does it run again with the items
+            // generated in the ingot, so that a generated member never wins a
+            // step that a member written in the package would have won.
+            let member = |tier: Tier| -> Result<PathRes<'db>, PathResError<'db>> {
+                // Try to resolve as an associated const on the receiver type
+                if is_tail && resolve_tail_as_value {
+                    // Inherent impl consts take precedence over trait impl consts.
+                    // Conflicting inherent impls are rejected at their definition,
+                    // so resolve to the first applicable impl here.
+                    if let Some(impl_) =
+                        select_inherent_const_candidate(db, ty, ident, scope, assumptions, tier)
+                    {
                         *decided_by_value = true;
                         reject_generic_args(db, path)?;
-                        return Ok(PathRes::TraitConst(ty, inst, ident));
+                        return Ok(PathRes::InherentConst(ty, impl_, ident));
                     }
-                    AssocConstSelection::Ambiguous(traits) => {
-                        *decided_by_value = true;
+
+                    // Probe impls across both the call-site scope and the receiver type's ingot so
+                    // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
+                    match select_assoc_const_candidate(
+                        db,
+                        ty,
+                        ident,
+                        scope,
+                        assumptions,
+                        lowering_cx.choices(),
+                        tier,
+                    ) {
+                        AssocConstSelection::Found(inst) => {
+                            *decided_by_value = true;
+                            reject_generic_args(db, path)?;
+                            return Ok(PathRes::TraitConst(ty, inst, ident));
+                        }
+                        AssocConstSelection::Ambiguous(traits) => {
+                            *decided_by_value = true;
+                            return Err(PathResError::new(
+                                PathResErrorKind::AmbiguousAssociatedConst {
+                                    name: ident,
+                                    trait_insts: traits,
+                                },
+                                path,
+                            ));
+                        }
+                        AssocConstSelection::NotFound => {}
+                    }
+                }
+
+                // Deferred signature lowering resolves type/const shapes, not callable
+                // values. Method discovery checks signatures and their hidden parameters,
+                // so entering it here would make shape discovery depend on validation.
+                if is_tail
+                    && resolve_tail_as_value
+                    && lowering_cx.const_bodies() == ConstBodyLowering::Eager
+                {
+                    let receiver_ty = Canonicalized::new(db, ty);
+                    // The selection runs in the scope of the parent segment,
+                    // which may belong to a dependency, whose generated items
+                    // are sealed. The caller's tier applies only where the
+                    // selection's scope is the caller's own ingot.
+                    let method_tier = tier.for_table(db, scope.ingot(db), parent_scope.ingot(db));
+                    let selection = select_method_candidate_in(
+                        db,
+                        &receiver_ty,
+                        ident,
+                        parent_scope,
+                        assumptions,
+                        lowering_cx.method_choices(),
+                        method_tier,
+                    );
+                    lowering_cx.record_generation_requests(selection.pending);
+                    // In the authored tier a candidate with a proven unmet bound
+                    // is no method that applies: the lookup goes on, and the
+                    // full tier selects it again if nothing else applies.
+                    let selection_result = if method_tier == Tier::Authored && selection.unsatisfied
+                    {
+                        Err(MethodSelectionError::NotFound)
+                    } else {
+                        selection.result
+                    };
+                    match selection_result {
+                        Ok(cand) => {
+                            *decided_by_value = true;
+                            return Ok(PathRes::Method(ty, cand));
+                        }
+                        Err(MethodSelectionError::NotFound) => {}
+                        Err(err) => {
+                            *decided_by_value = true;
+                            return Err(PathResError::method_selection(err, path));
+                        }
+                    }
+                }
+
+                // `Self::Assoc` inside an impl is always selected lexically from
+                // the owning trait. Signatures preserve that projection until
+                // comparison or instantiation. An associated-type definition is
+                // different: its unique anchor asks us to resolve the owning
+                // impl's sibling binding through the per-binding cycle query.
+                let impl_self_assoc = if path.parent(db).is_some_and(|path| path.is_self_ty(db)) {
+                    let impl_trait = match scope {
+                        ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+                        _ => match scope.parent_item(db) {
+                            Some(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
+                            _ => None,
+                        },
+                    };
+                    impl_trait.and_then(|impl_trait| {
+                        let trait_inst = match lowering_cx.const_bodies() {
+                            ConstBodyLowering::Eager => impl_trait.trait_inst_result(db).ok()?,
+                            ConstBodyLowering::Deferred => {
+                                impl_trait.candidate_trait_inst_result(db).ok()?
+                            }
+                        };
+                        if lowering_cx.impl_assoc_type() == Some(impl_trait) {
+                            match lowering_cx.const_bodies() {
+                                ConstBodyLowering::Eager => {
+                                    lower_checked_impl_assoc_ty(db, impl_trait, ident)
+                                }
+                                ConstBodyLowering::Deferred => {
+                                    lower_candidate_impl_assoc_ty(db, impl_trait, ident)
+                                }
+                            }
+                            .or_else(|| trait_inst.project_assoc_ty(db, ident))
+                        } else {
+                            trait_inst.project_assoc_ty(db, ident)
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                if let Some(assoc_ty) = impl_self_assoc {
+                    if let Some(res) = assoc_at_mode_arg(db, assoc_ty, path) {
+                        return Ok(PathRes::Ty(res?));
+                    }
+                    let seg_args = lower_generic_arg_list(
+                        db,
+                        path.generic_args(db),
+                        scope,
+                        assumptions,
+                        lowering_cx,
+                    );
+                    let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
+                    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                        assoc_ty.data(db)
+                    {
                         return Err(PathResError::new(
-                            PathResErrorKind::AmbiguousAssociatedConst {
-                                name: ident,
-                                trait_insts: traits,
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: *expected,
+                                given: *given,
                             },
                             path,
                         ));
                     }
-                    AssocConstSelection::NotFound => {}
+                    return Ok(PathRes::Ty(assoc_ty));
                 }
-            }
 
-            // Deferred signature lowering resolves type/const shapes, not callable
-            // values. Method discovery checks signatures and their hidden parameters,
-            // so entering it here would make shape discovery depend on validation.
-            if is_tail
-                && resolve_tail_as_value
-                && lowering_cx.const_bodies() == ConstBodyLowering::Eager
-            {
-                let receiver_ty = Canonicalized::new(db, ty);
-                let selection = select_method_candidate_with_choices(
+                // Find raw associated types, then dedup by normalized result here.
+                let assoc_tys = match find_associated_type_in_mode(
                     db,
-                    &receiver_ty,
+                    scope,
+                    Canonicalized::new(db, ty),
                     ident,
-                    parent_scope,
                     assumptions,
-                    None,
-                    lowering_cx.method_choices(),
-                );
-                lowering_cx.record_generation_requests(selection.pending);
-                match selection.result {
-                    Ok(cand) => {
-                        *decided_by_value = true;
-                        return Ok(PathRes::Method(ty, cand));
+                    lowering_cx.const_bodies(),
+                    tier,
+                ) {
+                    Ok(assoc_tys) => assoc_tys,
+                    Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
+                        return Err(PathResError::new(
+                            PathResErrorKind::InfiniteBoundRecursion {
+                                context: "associated type",
+                            },
+                            path,
+                        ));
                     }
-                    Err(MethodSelectionError::NotFound) => {}
-                    Err(err) => {
-                        *decided_by_value = true;
-                        return Err(PathResError::method_selection(err, path));
-                    }
-                }
-            }
-
-            // `Self::Assoc` inside an impl is always selected lexically from
-            // the owning trait. Signatures preserve that projection until
-            // comparison or instantiation. An associated-type definition is
-            // different: its unique anchor asks us to resolve the owning
-            // impl's sibling binding through the per-binding cycle query.
-            let impl_self_assoc = if path.parent(db).is_some_and(|path| path.is_self_ty(db)) {
-                let impl_trait = match scope {
-                    ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
-                    _ => match scope.parent_item(db) {
-                        Some(ItemKind::ImplTrait(impl_trait)) => Some(impl_trait),
-                        _ => None,
-                    },
                 };
-                impl_trait.and_then(|impl_trait| {
-                    let trait_inst = match lowering_cx.const_bodies() {
-                        ConstBodyLowering::Eager => impl_trait.trait_inst_result(db).ok()?,
-                        ConstBodyLowering::Deferred => {
-                            impl_trait.candidate_trait_inst_result(db).ok()?
-                        }
-                    };
-                    if lowering_cx.impl_assoc_type() == Some(impl_trait) {
-                        match lowering_cx.const_bodies() {
-                            ConstBodyLowering::Eager => {
-                                lower_checked_impl_assoc_ty(db, impl_trait, ident)
-                            }
-                            ConstBodyLowering::Deferred => {
-                                lower_candidate_impl_assoc_ty(db, impl_trait, ident)
-                            }
-                        }
-                        .or_else(|| trait_inst.project_assoc_ty(db, ident))
-                    } else {
-                        trait_inst.project_assoc_ty(db, ident)
-                    }
-                })
-            } else {
-                None
-            };
 
-            if let Some(assoc_ty) = impl_self_assoc {
-                if let Some(res) = assoc_at_mode_arg(db, assoc_ty, path) {
-                    return Ok(PathRes::Ty(res?));
+                if assoc_tys.is_empty() {
+                    return Err(PathResError::new(
+                        PathResErrorKind::NotFound {
+                            parent: parent_res.clone(),
+                            bucket: NameResBucket::default(),
+                        },
+                        path,
+                    ));
                 }
+
+                // Deduplicate by normalized type, but preserve and return the original
+                // (unnormalized) candidate to avoid prematurely collapsing projections
+                // like `T::IntoIter::Item` into `T::Item`.
                 let seg_args = lower_generic_arg_list(
                     db,
                     path.generic_args(db),
@@ -1723,129 +1811,86 @@ fn resolve_segment<'db>(
                     assumptions,
                     lowering_cx,
                 );
-                let assoc_ty = TyId::foldl(db, assoc_ty, &seg_args);
-                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                    assoc_ty.data(db)
-                {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
-                            expected: *expected,
-                            given: *given,
-                        },
-                        path,
-                    ));
-                }
-                return Ok(PathRes::Ty(assoc_ty));
-            }
+                let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
+                let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
+                    IndexMap::new();
+                for (inst, ty_candidate) in assoc_tys.iter().copied() {
+                    // A concrete type's associated shape is its projection, as
+                    // `<T as Tr>::Step`'s is, which its mode applies to; the
+                    // impl's value it normalizes to has none.
+                    let ty_candidate = match inst.project_assoc_ty(db, ident) {
+                        Some(projection)
+                            if *ty_candidate.kind(db) == Kind::Shape
+                                && !matches!(ty_candidate.data(db), TyData::AssocTy(_)) =>
+                        {
+                            projection
+                        }
+                        _ => ty_candidate,
+                    };
+                    let applied = match assoc_at_mode_arg(db, ty_candidate, path) {
+                        Some(res) => res?,
+                        None if seg_args.is_empty() => ty_candidate,
+                        None => TyId::foldl(db, ty_candidate, &seg_args),
+                    };
+                    if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
+                        applied.data(db)
+                    {
+                        return Err(PathResError::new(
+                            PathResErrorKind::ArgNumMismatch {
+                                expected: *expected,
+                                given: *given,
+                            },
+                            path,
+                        ));
+                    }
 
-            // Find raw associated types, then dedup by normalized result here.
-            let assoc_tys = match find_associated_type_in_mode(
-                db,
-                scope,
-                Canonicalized::new(db, ty),
-                ident,
-                assumptions,
-                lowering_cx.const_bodies(),
-            ) {
-                Ok(assoc_tys) => assoc_tys,
-                Err(FindAssociatedTypeError::InfiniteBoundRecursion) => {
-                    return Err(PathResError::new(
-                        PathResErrorKind::InfiniteBoundRecursion {
-                            context: "associated type",
-                        },
-                        path,
-                    ));
+                    // Interpret each candidate's own equality when comparing it
+                    // with other candidates. Normalizing the binding-free
+                    // projection under all assumptions can leave conflicting
+                    // equalities unresolved and incorrectly merge them.
+                    // A shape named at a mode takes the equality at that mode.
+                    let mode = match applied.data(db) {
+                        TyData::AssocTy(assoc) => assoc.mode,
+                        _ => None,
+                    };
+                    let candidate_ty =
+                        match inst.bound_assoc_ty(db, AssocBinding { name: ident, mode }) {
+                            Some(bound) if mode.is_some() => bound,
+                            Some(bound) => TyId::foldl(db, bound, &seg_args),
+                            None => applied,
+                        };
+                    let norm = normalize_ty(db, candidate_ty, scope, evidence);
+                    dedup.entry(norm).or_insert((inst, applied, norm));
+                }
+
+                match dedup.len() {
+                    0 => unreachable!(),
+                    1 => {
+                        let (_, (_, original_ty, _)) = dedup.first().unwrap();
+                        Ok(PathRes::Ty(*original_ty))
+                    }
+                    _ => {
+                        // Build candidate list from deduped set for diagnostics
+                        let candidates = dedup
+                            .into_iter()
+                            .map(|(_norm, (inst, _, candidate_ty))| (inst, candidate_ty))
+                            .collect();
+                        Err(PathResError::new(
+                            PathResErrorKind::AmbiguousAssociatedType {
+                                name: ident,
+                                candidates,
+                            },
+                            path,
+                        ))
+                    }
                 }
             };
-
-            if assoc_tys.is_empty() {
-                return Err(PathResError::new(
-                    PathResErrorKind::NotFound {
-                        parent: parent_res,
-                        bucket: NameResBucket::default(),
-                    },
-                    path,
-                ));
-            }
-
-            // Deduplicate by normalized type, but preserve and return the original
-            // (unnormalized) candidate to avoid prematurely collapsing projections
-            // like `T::IntoIter::Item` into `T::Item`.
-            let seg_args =
-                lower_generic_arg_list(db, path.generic_args(db), scope, assumptions, lowering_cx);
-            let evidence = assoc_ty_candidate_evidence(db, ty, assumptions);
-            let mut dedup: IndexMap<TyId<'db>, (TraitInstId<'db>, TyId<'db>, TyId<'db>)> =
-                IndexMap::new();
-            for (inst, ty_candidate) in assoc_tys.iter().copied() {
-                // A concrete type's associated shape is its projection, as
-                // `<T as Tr>::Step`'s is, which its mode applies to; the
-                // impl's value it normalizes to has none.
-                let ty_candidate = match inst.project_assoc_ty(db, ident) {
-                    Some(projection)
-                        if *ty_candidate.kind(db) == Kind::Shape
-                            && !matches!(ty_candidate.data(db), TyData::AssocTy(_)) =>
-                    {
-                        projection
-                    }
-                    _ => ty_candidate,
-                };
-                let applied = match assoc_at_mode_arg(db, ty_candidate, path) {
-                    Some(res) => res?,
-                    None if seg_args.is_empty() => ty_candidate,
-                    None => TyId::foldl(db, ty_candidate, &seg_args),
-                };
-                if let TyData::Invalid(InvalidCause::TooManyGenericArgs { expected, given }) =
-                    applied.data(db)
-                {
-                    return Err(PathResError::new(
-                        PathResErrorKind::ArgNumMismatch {
-                            expected: *expected,
-                            given: *given,
-                        },
-                        path,
-                    ));
-                }
-
-                // Interpret each candidate's own equality when comparing it
-                // with other candidates. Normalizing the binding-free
-                // projection under all assumptions can leave conflicting
-                // equalities unresolved and incorrectly merge them.
-                // A shape named at a mode takes the equality at that mode.
-                let mode = match applied.data(db) {
-                    TyData::AssocTy(assoc) => assoc.mode,
-                    _ => None,
-                };
-                let candidate_ty = match inst.bound_assoc_ty(db, AssocBinding { name: ident, mode })
-                {
-                    Some(bound) if mode.is_some() => bound,
-                    Some(bound) => TyId::foldl(db, bound, &seg_args),
-                    None => applied,
-                };
-                let norm = normalize_ty(db, candidate_ty, scope, evidence);
-                dedup.entry(norm).or_insert((inst, applied, norm));
-            }
-
-            match dedup.len() {
-                0 => unreachable!(),
-                1 => {
-                    let (_, (_, original_ty, _)) = dedup.first().unwrap();
-                    return Ok(PathRes::Ty(*original_ty));
-                }
-                _ => {
-                    // Build candidate list from deduped set for diagnostics
-                    let candidates = dedup
-                        .into_iter()
-                        .map(|(_norm, (inst, _, candidate_ty))| (inst, candidate_ty))
-                        .collect();
-                    return Err(PathResError::new(
-                        PathResErrorKind::AmbiguousAssociatedType {
-                            name: ident,
-                            candidates,
-                        },
-                        path,
-                    ));
-                }
-            }
+            return authored_first(
+                db,
+                scope.ingot(db),
+                member,
+                |res| !matches!(res, Err(err) if matches!(err.kind, PathResErrorKind::NotFound { .. })),
+            );
         }
 
         Some(
@@ -1873,7 +1918,18 @@ fn resolve_segment<'db>(
         Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
-    let bucket = resolve_query(db, make_query(db, path, parent_scope));
+    let query = make_query(db, path, parent_scope);
+    let bucket = if lowering_cx.names_are_authored_only() {
+        resolve_query_in(db, query, Tier::Authored)
+    } else if parent_res.is_some() && parent_scope.ingot(db) != scope.ingot(db) {
+        // A name inside another ingot's module is read as that ingot's
+        // dependents read it: its generated items are sealed, ordinary items
+        // there, so no tier demotes them. This is the meaning a glob import of
+        // the module gives the same name.
+        resolve_query_in(db, query, Tier::All)
+    } else {
+        resolve_query(db, query)
+    };
 
     // A path bound to a scope never names a parameter of a function.
     let is_disallowed_hygiene_res = |res: &NameRes<'db>| {
@@ -1922,6 +1978,58 @@ fn resolve_segment<'db>(
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }
 
+/// The member of a type that a lookup in the authored tier finds for a name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AuthoredMember<'db> {
+    InherentConst(Impl<'db>),
+    TraitConst(TraitInstId<'db>),
+    Method(MethodCandidate<'db>),
+    /// Several members answer the name, or the selection fails for another
+    /// reason than finding nothing.
+    Unclear,
+}
+
+/// What `ty` already has under `name` without the items generated in its
+/// ingot: the lookup of `ty::name` in the authored tier, in the order a path
+/// tries an inherent constant, a trait constant and a method. A generated
+/// member that this finds would be hidden by it.
+pub(crate) fn authored_member<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<AuthoredMember<'db>> {
+    let tier = Tier::Authored.in_ingot(db, scope.ingot(db));
+    if let Some(impl_) = select_inherent_const_candidate(db, ty, name, scope, assumptions, tier) {
+        return Some(AuthoredMember::InherentConst(impl_));
+    }
+    match select_assoc_const_candidate(db, ty, name, scope, assumptions, None, tier) {
+        AssocConstSelection::Found(inst) => return Some(AuthoredMember::TraitConst(inst)),
+        AssocConstSelection::Ambiguous(_) => return Some(AuthoredMember::Unclear),
+        AssocConstSelection::NotFound => {}
+    }
+    let receiver = Canonicalized::new(db, ty);
+    let selection = select_method_candidate_in(
+        db,
+        &receiver,
+        name,
+        scope,
+        assumptions,
+        None,
+        Tier::Authored.in_ingot(db, scope.ingot(db)),
+    );
+    if selection.unsatisfied {
+        // A candidate with a proven unmet bound is no member of the type.
+        return None;
+    }
+    match selection.result {
+        Ok(cand) => Some(AuthoredMember::Method(cand)),
+        Err(MethodSelectionError::NotFound) => None,
+        Err(_) => Some(AuthoredMember::Unclear),
+    }
+}
+
 enum AssocConstSelection<'db> {
     Found(TraitInstId<'db>),
     Ambiguous(ThinVec<TraitInstId<'db>>),
@@ -1936,14 +2044,28 @@ pub(crate) enum FindAssociatedTypeError {
 /// Maps `(impl target base type, const name)` to the inherent impls of this
 /// ingot that define an associated const with that name, so const path
 /// resolution doesn't have to scan every impl.
-#[salsa::tracked]
+///
+/// In `tier`: without the impls generated in the ingot in the authored tier.
 pub(crate) fn ingot_impl_const_map<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: common::ingot::Ingot<'db>,
+    tier: Tier,
+) -> &'db FxHashMap<(TyBase<'db>, IdentId<'db>), Vec<Impl<'db>>> {
+    ingot_impl_const_map_in_tier(db, ingot, tier.in_ingot(db, ingot))
+}
+
+#[salsa::tracked]
+fn ingot_impl_const_map_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: common::ingot::Ingot<'db>,
+    tier: Tier,
 ) -> FxHashMap<(TyBase<'db>, IdentId<'db>), Vec<Impl<'db>>> {
     let mut map: FxHashMap<(TyBase<'db>, IdentId<'db>), Vec<Impl<'db>>> = FxHashMap::default();
     for &impl_ in ingot.all_impls(db) {
         if impl_.hir_consts(db).is_empty() {
+            continue;
+        }
+        if tier == Tier::Authored && impl_.members_generated_in(db, ingot) {
             continue;
         }
         let Some(impl_ty) = impl_.admissible_inherent_impl_ty(db) else {
@@ -1993,6 +2115,7 @@ fn select_inherent_const_candidate<'db>(
     name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    tier: Tier,
 ) -> Option<Impl<'db>> {
     // Inherent impls can only be probed for concrete receiver types.
     let TyData::TyBase(receiver_base) = receiver_ty.base_ty(db).data(db) else {
@@ -2021,7 +2144,7 @@ fn select_inherent_const_candidate<'db>(
     let candidates: Vec<(common::ingot::Ingot<'db>, &Vec<Impl<'db>>)> = search_ingots
         .into_iter()
         .filter_map(|ingot| {
-            ingot_impl_const_map(db, ingot)
+            ingot_impl_const_map(db, ingot, tier.for_table(db, scope_ingot, ingot))
                 .get(&(*receiver_base, name))
                 .map(|impls| (ingot, impls))
         })
@@ -2033,8 +2156,12 @@ fn select_inherent_const_candidate<'db>(
     let canonical_receiver = Canonicalized::new(db, receiver_ty).canonical();
 
     for (ingot, impls) in candidates {
-        let solve_cx =
-            TraitSolveCx::new(db, ingot.root_mod(db).scope()).with_assumptions(assumptions);
+        let solve_cx = TraitSolveCx::new(
+            db,
+            ingot.root_mod(db).scope(),
+            tier.for_table(db, scope_ingot, ingot),
+        )
+        .with_assumptions(assumptions);
         for &impl_ in impls {
             let Some(impl_ty) = impl_.admissible_inherent_impl_ty(db) else {
                 continue;
@@ -2109,7 +2236,7 @@ pub(crate) fn earliest_conflicting_inherent_const_impl<'db>(
     // while preserving the stable order used for anchoring.
     let mut ordered: IndexSet<Impl<'db>> = IndexSet::default();
     for ingot in search_ingots {
-        if let Some(cands) = ingot_impl_const_map(db, ingot).get(&(*base, name)) {
+        if let Some(cands) = ingot_impl_const_map(db, ingot, Tier::All).get(&(*base, name)) {
             ordered.extend(cands.iter().copied());
         }
     }
@@ -2138,6 +2265,7 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
     for cand in probe_method(
         db,
         ingot,
+        Tier::All,
         MethodProbe {
             receiver: self_ty,
             assumptions: collect_constraints(db, impl_.into()).instantiate_identity(),
@@ -2161,7 +2289,7 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
 /// `true` if the two inherent impls' self types unify (with each impl's params
 /// instantiated as fresh inference vars). This is the structural conflict
 /// notion used for inherent methods, applied to consts.
-pub(crate) fn inherent_impl_self_types_unify<'db>(
+fn inherent_impl_self_types_unify<'db>(
     db: &'db dyn HirAnalysisDb,
     a: Impl<'db>,
     b: Impl<'db>,
@@ -2185,20 +2313,6 @@ pub(crate) fn inherent_impl_self_types_unify<'db>(
     table.unify(a_self, b_self).is_ok()
 }
 
-pub(crate) fn select_trait_const_for_type<'db>(
-    db: &'db dyn HirAnalysisDb,
-    receiver_ty: TyId<'db>,
-    name: IdentId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<Trait<'db>> {
-    match select_assoc_const_candidate(db, receiver_ty, name, scope, assumptions, None) {
-        AssocConstSelection::Found(inst) => Some(inst.def(db)),
-        AssocConstSelection::Ambiguous(insts) => insts.first().map(|inst| inst.def(db)),
-        AssocConstSelection::NotFound => None,
-    }
-}
-
 fn select_assoc_const_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver_ty: TyId<'db>,
@@ -2206,6 +2320,7 @@ fn select_assoc_const_candidate<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
+    tier: Tier,
 ) -> AssocConstSelection<'db> {
     // Qualified type: `<A as T>::C` must resolve against the explicit trait instance.
     if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
@@ -2328,6 +2443,7 @@ fn select_assoc_const_candidate<'db>(
             for candidate in impls_for_ty_with_satisfied_constraints(
                 db,
                 ingot,
+                tier.for_table(db, scope_ingot, ingot),
                 receiver.canonical(),
                 assumptions,
                 choices,
@@ -2434,7 +2550,25 @@ pub(crate) fn find_associated_type<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
-    find_associated_type_in_mode(db, scope, ty, name, assumptions, ConstBodyLowering::Eager)
+    // The associated type a name selects is found in the authored tier first,
+    // and with the implementations generated in the ingot only if that finds
+    // none.
+    authored_first(
+        db,
+        scope.ingot(db),
+        |tier| {
+            find_associated_type_in_mode(
+                db,
+                scope,
+                ty.clone(),
+                name,
+                assumptions,
+                ConstBodyLowering::Eager,
+                tier,
+            )
+        },
+        |found| !matches!(found, Ok(found) if found.is_empty()),
+    )
 }
 
 /// The bounds implied by a trait's own `Self: Trait` predicate.
@@ -2521,6 +2655,7 @@ fn find_associated_type_in_mode<'db>(
     name: IdentId<'db>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    tier: Tier,
 ) -> Result<SmallVec<(TraitInstId<'db>, TyId<'db>), 4>, FindAssociatedTypeError> {
     let canonical_ty = ty.canonical();
     let original_ty = ty.original();
@@ -2618,9 +2753,11 @@ fn find_associated_type_in_mode<'db>(
         // traits on external types and external traits on local types are both visible.
         if !matches!(original_ty.data(db), TyData::TyParam(_)) {
             for ingot in search_ingots.into_iter().flatten() {
+                let tier = tier.for_table(db, scope_ingot, ingot);
                 for impl_ in impls_for_ty_with_satisfied_constraints(
                     db,
                     ingot,
+                    tier,
                     canonical_ty,
                     assumptions,
                     None,

@@ -1,0 +1,3 @@
+fn first() {}
+#![with(X)]
+fn second() {}

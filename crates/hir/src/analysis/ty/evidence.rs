@@ -11,6 +11,7 @@
 //! dispatches through a bound reaches its implementation without selecting
 //! it again.
 
+use crate::analysis::name_resolution::Tier;
 use salsa::SalsaValue;
 
 use super::{
@@ -506,7 +507,7 @@ pub(crate) fn complete_deferred_evidence<'db>(
             ) {
                 Some(proof)
             } else {
-                prove(db, TraitSolveCx::new(db, *scope), *goal)
+                prove(db, TraitSolveCx::new(db, *scope, Tier::All), *goal)
             }
         }
         Evidence::Impl {
@@ -1344,7 +1345,7 @@ fn basis_proofs<'db>(
                 .collect::<Vec<_>>(),
         )
     };
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(basis);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(basis);
     let proofs = signature
         .list(db)
         .iter()

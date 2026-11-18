@@ -1,0 +1,17 @@
+// The layout of `unsafe_trust_pod_written` with `v` trusted, and an
+// `unsafe impl` written in this ingot: both are accepted.
+use t::{Pod, peek}
+use v::VType
+
+pub struct Mine {}
+unsafe impl Pod for Mine {}
+
+#[test]
+fn peeks_at_a_type_of_v() {
+    assert(peek(VType {}) == 7)
+}
+
+#[test]
+fn peeks_at_a_type_with_an_unsafe_impl_written_here() {
+    assert(peek(Mine {}) == 7)
+}

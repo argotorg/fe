@@ -371,10 +371,7 @@ impl<'db> ScopeGraphBuilder<'db> {
             .values()
             .find_map(|(scope, _)| match *scope {
                 ScopeId::Item(item @ ItemKind::Struct(s)) => {
-                    let crate::span::HirOrigin::Raw(ptr) = s.origin(self.db) else {
-                        return None;
-                    };
-                    (ptr.to_node(root.syntax()).syntax().text_range() == range).then_some(item)
+                    (s.origin(self.db).authored_range(root.syntax()) == Some(range)).then_some(item)
                 }
                 ScopeId::Item(item @ ItemKind::Enum(e)) => {
                     let crate::span::HirOrigin::Raw(ptr) = e.origin(self.db) else {

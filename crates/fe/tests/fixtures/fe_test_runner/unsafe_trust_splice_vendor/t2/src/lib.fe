@@ -1,0 +1,24 @@
+use core::meta::{Code, Expr, Item}
+use core::abi::{load_word, store_word}
+use core::ptr
+
+/// A fragment with an `unsafe` block that `t2` wrote. The root trusts `t2`.
+pub const fn frag() -> Code<Expr> {
+    quote {
+        {
+            let p = ptr::alloc_bytes(32)
+            unsafe {
+                store_word(ptr: p, value: 8)
+                load_word(p)
+            }
+        }
+    }
+}
+
+/// A member `unsafe fn` that `t2` wrote, for an inherent header whose
+/// provider splices it. The root trusts `t2`.
+pub const fn item() -> Code<Item> {
+    quote {
+        pub unsafe fn unsafe_fn(self) -> u256 { 8 }
+    }
+}

@@ -721,3 +721,1050 @@ fn a_header_may_precede_its_record_and_provider() {
     assert_eq!(eval(&output, "area"), "9");
     assert_eq!(eval(&output, "rows"), "21");
 }
+
+// ---- Headers for traits of core and std ----------------------------------------
+//
+// A header is a written implementation whose members a provider supplies, so
+// it asks for what a handwritten `impl Drop for T { ... }` has. The trait need
+// not belong to the package.
+
+/// The diagnostics of `source` after preparation, errors and warnings, without
+/// requiring that there be none.
+fn prepared_diagnostics(source: &str) -> Result<String, String> {
+    let mut db = DriverDataBase::default();
+    let file = db
+        .workspace()
+        .touch(&mut db, Url::parse(URL).unwrap(), Some(source.into()));
+    let output = match prepare_file(&db, file).map_err(|error| error.cause)? {
+        Some(output) => output,
+        None => return Err("no request to prepare".to_string()),
+    };
+    let output_file = output
+        .workspace()
+        .get(&output, &Url::parse(URL).unwrap())
+        .unwrap();
+    let diagnostics = output.run_on_top_mod(output.top_mod(output_file));
+    Ok(diagnostics.format_diags(&output))
+}
+
+/// The diagnostics of `source` as written, with no generation.
+fn written_diagnostics(source: &str) -> String {
+    let mut db = DriverDataBase::default();
+    let file = db
+        .workspace()
+        .touch(&mut db, Url::parse(URL).unwrap(), Some(source.into()));
+    db.run_on_top_mod(db.top_mod(file)).format_diags(&db)
+}
+
+const MARKER_HEADERS: &str = r#"use core::derive::Derive
+use core::marker::{Copy, Snapshot}
+use core::meta::{Code, Item, Record}
+
+struct Marks {}
+impl Derive<Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+impl Derive<Snapshot> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+
+struct P { v: u256 }
+impl Copy for P with (Marks)
+impl Snapshot for P with (Marks)
+
+const fn twice(_ p: own P) -> u256 {
+    let a = p
+    let b = p
+    a.v + b.v
+}
+const fn copied() -> u256 { twice(P { v: 3 }) }
+fn needs_copy<T: Copy>(_ t: T) -> u256 { 1 }
+fn copy_bound() -> u256 { needs_copy(P { v: 1 }) }
+fn needs_snapshot<T: Snapshot>(_ t: T) -> u256 { 1 }
+fn snapshot_bound() -> u256 { needs_snapshot(P { v: 1 }) }
+"#;
+
+/// A marker trait has no members, so its provider returns an empty quotation.
+/// `Copy` and `Snapshot` are the traits of core that change what the compiler
+/// does by being implemented.
+#[test]
+fn a_header_implements_a_marker_trait_of_core_with_no_members() {
+    let output = prepare(MARKER_HEADERS).unwrap();
+    assert_eq!(eval(&output, "copied"), "6");
+    // Control: without the headers neither bound holds.
+    let written = MARKER_HEADERS
+        .replace("impl Copy for P with (Marks)\n", "")
+        .replace("impl Snapshot for P with (Marks)\n", "");
+    let diagnostics = written_diagnostics(&written);
+    assert!(
+        diagnostics.contains("`P` doesn't implement `Copy`"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("`P` doesn't implement `Snapshot`"),
+        "{diagnostics}"
+    );
+}
+
+const DROP_HEADER: &str = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use core::ops::Drop
+
+struct Releases {}
+impl Derive<Drop> for Releases {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn drop(own self) {} }
+    }
+}
+
+struct Res { v: u256 }
+impl Drop for Res with (Releases)
+
+fn run() -> u256 {
+    let r = Res { v: 3 }
+    r.v
+}
+"#;
+
+#[test]
+fn a_header_implements_drop_for_a_type_of_the_package() {
+    prepare(DROP_HEADER).unwrap();
+}
+
+#[test]
+fn a_header_implements_pinned_and_state_index() {
+    let source = r#"use core::derive::Derive
+use core::marker::{Pinned, Storage}
+use core::meta::{Code, Item, Record}
+use core::ops::{Location, StateIndex}
+
+struct Pin {}
+impl Derive<Pinned> for Pin {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { type Space = Storage }
+    }
+}
+
+struct Index {}
+impl Derive<StateIndex> for Index {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Key = u256
+            type Entry = u256
+            fn locate(self, _ root: u256, _ key: u256) -> Location {
+                Location { slot: root + key, offset: 0 }
+            }
+        }
+    }
+}
+
+struct Cells { len: u256 }
+impl Pinned for Cells with (Pin)
+unsafe impl StateIndex for Cells with (Index)
+
+impl Cells {
+    fn bump(mut self, _ key: u256) {
+        let cell = mut self[key]
+        cell += 1
+    }
+}
+"#;
+    prepare(source).unwrap();
+}
+
+#[test]
+fn a_header_implements_default_and_clone() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+struct Fill {}
+impl Derive<Default> for Fill {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn default() -> Self { P { v: 7 } } }
+    }
+}
+impl Derive<Clone> for Fill {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn clone(self) -> Self { P { v: self.v } } }
+    }
+}
+
+struct P { v: u256 }
+impl Default for P with (Fill)
+impl Clone for P with (Fill)
+
+fn run() -> u256 {
+    let p = P::default()
+    p.clone().v
+}
+"#;
+    prepare(source).unwrap();
+}
+
+#[test]
+fn a_header_for_std_sol_packed_supplies_its_members() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::SolPacked
+
+struct Pack {}
+impl Derive<SolPacked> for Pack {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const BITS: u256 = 8
+            fn to_packed(own self) -> u256 { self.a }
+            fn from_packed(_ bits: u256) -> X { X { a: bits } }
+        }
+    }
+}
+
+struct X { a: u256 }
+impl SolPacked for X with (Pack)
+"#;
+    prepare(source).unwrap();
+}
+
+/// A header is a written implementation: a second one for the same trait and
+/// type conflicts with it, as two handwritten ones do.
+#[test]
+fn a_header_and_a_written_implementation_conflict() {
+    let source = DROP_HEADER.replace(
+        "fn run()",
+        "impl Drop for Res { fn drop(own self) {} }\nfn run()",
+    );
+    let cause = prepared_diagnostics(&source).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("conflicting trait implementations"),
+        "{cause}"
+    );
+}
+
+/// The orphan rule is unchanged: a header cannot implement a trait of another
+/// ingot for a type of another ingot either.
+#[test]
+fn a_header_cannot_implement_a_core_trait_for_a_foreign_type() {
+    let source = DROP_HEADER.replace("impl Drop for Res with", "impl Drop for Option<u8> with");
+    let cause = match prepared_diagnostics(&source) {
+        Ok(diagnostics) => diagnostics,
+        Err(cause) => cause,
+    };
+    assert!(
+        cause.contains(
+            "a header cannot implement a trait of another package for a type of another package"
+        ),
+        "{cause}"
+    );
+}
+
+// ---- Headers for traits with further parameters ---------------------------------
+//
+// The provider is keyed by the bare trait (`Derive<Eq>`) and is not shown the
+// header's other arguments, which are defaulted (`Eq` is `Eq<Self>`) or
+// written (`Decode<Sol>`). What it returns is checked against the header's
+// actual arguments by the same conformance rules as a handwritten body.
+
+const PARAMETERIZED_HEADERS: &str = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use core::ops::{Add, Eq, Ord}
+
+struct Same {}
+impl Derive<Eq> for Same {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: P) -> bool { self.v == other.v } }
+    }
+}
+impl Derive<Ord> for Same {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn lt(self, _ other: P) -> bool { self.v < other.v }
+            fn le(self, _ other: P) -> bool { self.v <= other.v }
+            fn gt(self, _ other: P) -> bool { self.v > other.v }
+            fn ge(self, _ other: P) -> bool { self.v >= other.v }
+        }
+    }
+}
+impl Derive<Add> for Same {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn add(own self, _ other: own P) -> P { P { v: self.v + other.v } } }
+    }
+}
+
+struct P { v: u256 }
+impl Eq for P with (Same)
+impl Ord for P with (Same)
+impl Add for P with (Same)
+
+fn compared(a: P, b: P) -> bool { a == b || a < b }
+fn summed(a: P, b: P) -> u256 { (a + b).v }
+"#;
+
+/// `Eq`, `Ord` and the operator traits have a defaulted parameter, so the
+/// header names none; the operators then run the provider's members.
+#[test]
+fn a_header_implements_a_trait_whose_parameter_is_defaulted() {
+    prepare(PARAMETERIZED_HEADERS).unwrap();
+    // Control: without the headers the operators are not defined.
+    let written = PARAMETERIZED_HEADERS
+        .replace("impl Eq for P with (Same)\n", "")
+        .replace("impl Ord for P with (Same)\n", "")
+        .replace("impl Add for P with (Same)\n", "");
+    let diagnostics = written_diagnostics(&written);
+    assert!(diagnostics.contains("`P`"), "{diagnostics}");
+}
+
+/// A parameter written in the header is part of the goal; the provider's
+/// members are checked against it.
+#[test]
+fn a_header_implements_a_trait_whose_parameter_is_written() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use core::abi::{AbiSize, AbiFrame, Decode, AbiDecoder, ByteInput, Encode}
+use core::error::ErrorVariant
+use std::abi::Sol
+
+struct Impl {}
+impl Derive<Decode> for Impl {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+                let _ = input
+                P { v: 0 }
+            }
+        }
+    }
+}
+impl Derive<ErrorVariant> for Impl {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const SELECTOR: u32 = 0x12345678 }
+    }
+}
+
+struct P { v: u256 }
+impl AbiSize for P {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Decode<Sol> for P with (Impl)
+
+struct E { code: u256 }
+impl AbiSize for E {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for E {
+    fn encode(self, _ out: AbiFrame) { out.store_word(at: 0, value: self.code) }
+}
+impl ErrorVariant<Sol> for E with (Impl)
+"#;
+    prepare(source).unwrap();
+    // The bounds of the header's trait are checked as for a written one:
+    // `ErrorVariant<Sol>` needs `Encode<Sol>`.
+    let diagnostics = prepared_diagnostics(&source.replace(
+        "impl Encode<Sol> for E {\n    fn encode(self, _ out: AbiFrame) { out.store_word(at: 0, value: self.code) }\n}\n",
+        "",
+    ))
+    .unwrap_or_else(|cause| cause);
+    assert!(
+        diagnostics.contains("doesn't implement `Encode<Sol>`"),
+        "{diagnostics}"
+    );
+}
+
+/// The provider's output is checked against the header's arguments: a method
+/// with the wrong parameter type is an ordinary conformance error.
+#[test]
+fn a_provider_output_that_does_not_fit_the_headers_arguments_is_a_conformance_error() {
+    let source = PARAMETERIZED_HEADERS.replace(
+        "impl Eq for P with (Same)",
+        "impl Eq<u256> for P with (Same)",
+    );
+    let cause = prepared_diagnostics(&source).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("mismatch")
+            || cause.contains("incompatible")
+            || cause.contains("does not match"),
+        "{cause}"
+    );
+}
+
+/// A header is a written implementation: a second one conflicts with it.
+#[test]
+fn a_header_with_a_parameter_and_a_written_implementation_conflict() {
+    let source = PARAMETERIZED_HEADERS.replace(
+        "fn compared",
+        "impl Eq for P { fn eq(self, _ other: P) -> bool { true } }\nfn compared",
+    );
+    let cause = prepared_diagnostics(&source).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("conflicting trait implementations"),
+        "{cause}"
+    );
+}
+
+/// The orphan rule is unchanged: both trait and type belong to core.
+#[test]
+fn a_header_with_a_parameter_cannot_implement_a_core_trait_for_a_foreign_type() {
+    let source = PARAMETERIZED_HEADERS.replace(
+        "impl Eq for P with (Same)",
+        "impl Eq for Option<u8> with (Same)",
+    );
+    let cause = prepared_diagnostics(&source).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains(
+            "a header cannot implement a trait of another package for a type of another package"
+        ),
+        "{cause}"
+    );
+}
+
+/// A header for a callable trait is the request form of the callable decision.
+/// The provider is keyed by the bare trait and is not shown the parameters or
+/// the `Out` of `Fn(A) -> R`; what it returns is checked against them like a
+/// handwritten body, so it writes the signature the header asks for.
+const CALLABLE_HEADERS: &str = r#"use core::derive::Derive
+use core::functional::{Fn, FnMut}
+use core::meta::{Code, Item, Record}
+
+struct Calls {}
+impl Derive<Fn> for Calls {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn call(self, _ x: u256) -> u256 { x * 3 } }
+    }
+}
+struct CallsMut {}
+impl Derive<FnMut> for CallsMut {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn call_mut(mut self, _ x: u256) -> u256 { x * 2 } }
+    }
+}
+struct Triple {}
+impl Fn(u256) -> u256 for Triple with (Calls)
+struct Double {}
+impl FnMut(u256) -> u256 for Double with (CallsMut)
+
+const fn tripled() -> u256 {
+    let t = Triple {}
+    t(5)
+}
+const fn doubled() -> u256 {
+    var d = Double {}
+    d(5)
+}
+"#;
+
+#[test]
+fn a_header_requests_a_callable_trait() {
+    let output = prepare(CALLABLE_HEADERS).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval(&output, "tripled"), "15");
+    assert_eq!(eval(&output, "doubled"), "10");
+    // The `Out` may be left open in the header and supplied by the provider.
+    let open = CALLABLE_HEADERS
+        .replace(
+            "quote { const fn call(self",
+            "quote { type Out = u256\n const fn call(self",
+        )
+        .replace(
+            "impl Fn(u256) -> u256 for Triple",
+            "impl Fn(u256) -> _ for Triple",
+        );
+    let output = prepare(&open).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval(&output, "tripled"), "15");
+}
+
+/// What a provider returns for a callable is checked against the header's
+/// parameters and `Out` like any written implementation.
+#[test]
+fn a_callable_header_is_checked_against_its_parameters_and_out() {
+    let wrong_parameter =
+        CALLABLE_HEADERS.replace("_ x: u256) -> u256 { x * 3 }", "_ x: u8) -> u256 { 3 }");
+    let cause = prepared_diagnostics(&wrong_parameter).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("method `call` has incompatible argument type"),
+        "{cause}"
+    );
+    let wrong_out =
+        CALLABLE_HEADERS.replace("_ x: u256) -> u256 { x * 3 }", "_ x: u256) -> u8 { 3 }");
+    let cause = prepared_diagnostics(&wrong_out).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("method `call` has incompatible return type"),
+        "{cause}"
+    );
+    // Control: the provider that matches is accepted.
+    prepare(CALLABLE_HEADERS).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+/// A bare type parameter is no record: the refusal says so.
+#[test]
+fn a_header_for_a_bare_type_parameter_names_its_cause() {
+    let diagnostics = prepared_diagnostics(
+        r#"use core::derive::Derive
+use core::marker::Copy
+use core::meta::{Code, Item, Record}
+
+struct Marks {}
+impl Derive<Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+impl<T> Copy for T with (Marks)
+"#,
+    )
+    .unwrap_or_else(|cause| cause);
+    assert!(diagnostics.contains("bare type parameter"), "{diagnostics}");
+    assert!(!diagnostics.contains("another package"), "{diagnostics}");
+}
+
+// ---- A header's members are checked as a written implementation's are -----------
+//
+// Each case below has the same error with the implementation written by hand;
+// the header and its provider add no way around the checks.
+
+const SOUNDNESS_HEAD: &str = r#"use core::derive::Derive
+use core::marker::{Copy, Pinned, Snapshot, Storage}
+use core::meta::{Code, Item, Record}
+use core::ops::{Default, Drop, Location, StateIndex}
+
+struct Marks {}
+impl Derive<Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+impl Derive<Snapshot> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+impl Derive<Drop> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote { fn drop(own self) {} } }
+}
+"#;
+
+fn soundness(body: &str) -> String {
+    prepared_diagnostics(&format!("{SOUNDNESS_HEAD}{body}")).unwrap_or_else(|cause| cause)
+}
+
+#[test]
+fn a_copy_header_on_a_type_with_a_drop_field_is_an_error() {
+    let diagnostics = soundness(
+        "struct Res { v: u256 }
+impl Drop for Res { fn drop(own self) {} }
+struct S { r: Res }
+impl Copy for S with (Marks)
+",
+    );
+    assert!(
+        diagnostics.contains("`S` cannot be `Copy`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_copy_header_beside_a_drop_implementation_is_an_error() {
+    let diagnostics = soundness(
+        "struct S { v: u256 }
+impl Drop for S with (Marks)
+impl Copy for S with (Marks)
+",
+    );
+    assert!(
+        diagnostics.contains("`S` cannot implement both `Copy` and `Drop`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_snapshot_header_without_copy_is_an_error() {
+    let diagnostics = soundness(
+        "struct S { v: u256 }
+impl Snapshot for S with (Marks)
+",
+    );
+    assert!(
+        diagnostics.contains("trait bound is not satisfied"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_state_index_header_without_unsafe_is_an_error() {
+    let diagnostics = soundness(
+        "struct PinStorage {}
+impl Derive<Pinned> for PinStorage {
+    const fn derive(_ record: Record) -> Code<Item> { quote { type Space = Storage } }
+}
+struct Spread {}
+impl Derive<StateIndex> for Spread {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Key = u256
+            type Entry = u256
+            fn locate(self, _ root: u256, _ key: u256) -> Location {
+                Location { slot: root + key, offset: 0 }
+            }
+        }
+    }
+}
+struct Cells { len: u256 }
+impl Pinned for Cells with (PinStorage)
+impl StateIndex for Cells with (Spread)
+",
+    );
+    assert!(
+        diagnostics.contains("implementing `StateIndex` requires `unsafe impl`"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_pinned_header_with_a_space_that_is_not_one_is_an_error() {
+    let diagnostics = soundness(
+        "struct BadSpace {}
+impl Derive<Pinned> for BadSpace {
+    const fn derive(_ record: Record) -> Code<Item> { quote { type Space = u256 } }
+}
+struct S { v: u256 }
+impl Pinned for S with (BadSpace)
+",
+    );
+    assert!(
+        diagnostics.contains("a type is pinned to a state space"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_member_the_trait_does_not_have_is_an_error() {
+    let diagnostics = soundness(
+        "struct Fill {}
+impl Derive<Default> for Fill {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn default() -> Self { S { v: 7 } }
+            fn sneaky(self) -> u256 { 99 }
+        }
+    }
+}
+struct S { v: u256 }
+impl Default for S with (Fill)
+",
+    );
+    assert!(
+        diagnostics.contains("method not defined in trait"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_header_beside_a_written_marker_implementation_conflicts() {
+    let diagnostics = soundness(
+        "struct S { v: u256 }
+impl Copy for S {}
+impl Copy for S with (Marks)
+",
+    );
+    assert!(
+        diagnostics.contains("conflicting trait implementations"),
+        "{diagnostics}"
+    );
+}
+
+// ---- A header requests what a generated implementation may not provide ------------
+//
+// A provider cannot generate an implementation of a trait that a written
+// implementation of a deciding trait is bounded on, directly or through a chain
+// of bounds (see `package_boundary`). The request form is a header, which
+// counts as written code. Each case below is such a trait, and each header
+// works: the provider supplies the members, which conform as a written body's
+// do.
+
+fn header_case(
+    imports: &str,
+    written: &str,
+    trait_name: &str,
+    goal: &str,
+    members: &str,
+) -> String {
+    format!(
+        "use core::derive::Derive
+use core::meta::{{Code, Item, Record}}
+{imports}
+pub struct P {{ pub v: u256 }}
+{written}
+struct D {{}}
+impl Derive<{trait_name}> for D {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{
+{members}
+        }}
+    }}
+}}
+impl {goal} for P with (D)
+"
+    )
+}
+
+const WRITTEN_COLLECTION: &str = "impl Collection for P {
+    type Cursor = usize
+    type Item = u256
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < 3 }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(mut? self, _ c: usize) -> mut? u256 { mut? self.v }
+}";
+
+const WRITTEN_ABI_SIZE: &str = "impl AbiSize for P {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}";
+
+#[test]
+fn a_header_requests_collection() {
+    let source = header_case(
+        "use core::iter::Collection",
+        "",
+        "Collection",
+        "Collection",
+        "type Cursor = usize
+type Item = u256
+fn start(self) -> usize { 0 }
+fn has(self, _ c: usize) -> bool { c < 3 }
+fn next(self, _ c: usize) -> usize { c + 1 }
+fn at(mut? self, _ c: usize) -> mut? u256 { mut? self.v }",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_bidirectional() {
+    let source = header_case(
+        "use core::iter::{Bidirectional, Collection}",
+        WRITTEN_COLLECTION,
+        "Bidirectional",
+        "Bidirectional",
+        "fn last(self) -> usize { 2 }
+fn prev(self, _ c: usize) -> usize { c.wrapping_sub(1) }",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_abi_size() {
+    let source = header_case(
+        "use core::abi::AbiSize",
+        "",
+        "AbiSize",
+        "AbiSize",
+        "const HEAD_SIZE: u256 = 32
+const IS_DYNAMIC: bool = false",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_decode_and_abi_span() {
+    let decode = header_case(
+        "use core::abi::{AbiDecoder, AbiSize, ByteInput, Decode}\nuse std::abi::Sol",
+        WRITTEN_ABI_SIZE,
+        "Decode",
+        "Decode<Sol>",
+        "fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+    let _ = input
+    P { v: 0 }
+}",
+    );
+    prepare(&decode).unwrap_or_else(|cause| panic!("{cause}"));
+    let span = header_case(
+        "use core::abi::{AbiSize, AbiSpan, ByteInput}\nuse std::abi::Sol",
+        WRITTEN_ABI_SIZE,
+        "AbiSpan",
+        "AbiSpan<Sol>",
+        "fn payload_end<I: ByteInput>(_: I, base: u256, pos: u256) -> u256 { pos + 32 }",
+    );
+    prepare(&span).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_storage_key() {
+    let source = header_case(
+        "use std::evm::StorageKey",
+        "",
+        "StorageKey",
+        "StorageKey",
+        "fn encoded_len(self) -> u256 { 32 }
+unsafe fn write_key(ptr: *u8, self) { let _ = ptr }",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_sol_word_repr() {
+    let source = header_case(
+        "use std::abi::sol::SolWordRepr",
+        "",
+        "SolWordRepr",
+        "SolWordRepr",
+        "const BITS: u256 = 8
+fn canonical_word(self) -> u256 { self.v }",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_lane_codec() {
+    let source = header_case(
+        "use core::ops::LaneCodec",
+        "",
+        "LaneCodec",
+        "LaneCodec<u8>",
+        "const BITS: u256 = 8
+fn get(_ word: u256, offset: u256) -> u8 { 0 }
+fn set(_ word: u256, offset: u256, value: own u8) -> u256 { word }",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_requests_msg_variant() {
+    let source = header_case(
+        "use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}\nuse core::message::MsgVariant\nuse std::abi::Sol",
+        &format!(
+            "{WRITTEN_ABI_SIZE}
+impl Encode<Sol> for P {{ fn encode(self, _ out: AbiFrame) {{ let _ = out }} }}
+impl Decode<Sol> for P {{
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {{
+        let _ = input
+        P {{ v: 0 }}
+    }}
+}}"
+        ),
+        "MsgVariant",
+        "MsgVariant<Sol>",
+        "const SELECTOR: u32 = 0x12345678
+type Return = u256",
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+// ---- Plain refusals of a header ---------------------------------------------------
+
+/// A struct that `#[abi]`, `#[error]` or `#[event]` expands, and the struct of
+/// a `msg` variant, are declarations written in source: the expansion adds
+/// implementations and leaves the fields as written. A header for them reads
+/// the record like a header for a plain struct.
+const EXPANDED_TYPE_HEADERS: &str = r#"use core::derive::Derive
+use core::marker::Copy
+use core::meta::{Code, Item, Record}
+use core::ops::Eq
+
+struct Marks {}
+impl Derive<Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+struct Same {}
+impl Derive<Eq> for Same {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: P) -> bool { self.v == other.v } }
+    }
+}
+
+#[abi]
+struct P { v: u256 }
+impl Copy for P with (Marks)
+impl Eq for P with (Same)
+
+const fn twice(_ p: own P) -> u256 {
+    let a = p
+    let b = p
+    a.v + b.v
+}
+const fn copied() -> u256 { twice(P { v: 3 }) }
+fn needs_copy<T: Copy>(_ t: T) -> u256 { 1 }
+fn copy_bound() -> u256 { needs_copy(P { v: 1 }) }
+"#;
+
+#[test]
+fn a_header_on_a_type_that_an_attribute_expands_reads_its_fields() {
+    for attribute in ["#[abi]", "#[error]", "#[event]"] {
+        let source = EXPANDED_TYPE_HEADERS.replace("#[abi]", attribute);
+        let output = prepare(&source).unwrap_or_else(|cause| panic!("{attribute}: {cause}"));
+        assert_eq!(eval(&output, "copied"), "6", "{attribute}");
+        // Control: without the header the type is not `Copy`.
+        let written = source.replace("impl Copy for P with (Marks)\n", "");
+        let diagnostics = written_diagnostics(&written);
+        assert!(
+            diagnostics.contains("`P` doesn't implement `Copy`"),
+            "{attribute}: {diagnostics}"
+        );
+    }
+}
+
+/// An inherent header on the struct that `#[abi]`, `#[error]` or `#[event]`
+/// expands requests the provider for that struct as it does for a plain
+/// struct, and the provider reads the fields as written.
+#[test]
+fn an_inherent_header_on_a_type_that_an_attribute_expands_reads_its_fields() {
+    for attribute in ["#[abi]", "#[error]", "#[event]"] {
+        let source = format!(
+            "use core::derive::{{Derive, Inherent}}
+use core::meta::{{Code, Item, Record, field_count}}
+
+struct Count {{}}
+impl Derive<Inherent> for Count {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        let n = field_count(record)
+        quote {{ const fn fields() -> usize {{ ${{n}} }} }}
+    }}
+}}
+
+{attribute}
+struct P {{ a: u256, b: u256 }}
+impl P with (Count)
+
+const fn fields() -> usize {{ P::fields() }}
+"
+        );
+        let output = prepare(&source).unwrap_or_else(|cause| panic!("{attribute}: {cause}"));
+        assert_eq!(eval(&output, "fields"), "2", "{attribute}");
+    }
+}
+
+/// A header's provider supplies the members of an implementation for the
+/// expanded struct, and the implementation applies.
+#[test]
+fn a_generated_implementation_for_a_type_that_an_attribute_expands_applies() {
+    for attribute in ["#[abi]", "#[error]", "#[event]"] {
+        let source = format!(
+            "use core::derive::Derive
+use core::meta::{{Code, Item, Record}}
+use core::ops::Eq
+
+struct Same {{}}
+impl Derive<Eq> for Same {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ fn eq(self, _ other: Self) -> bool {{ self.a == other.a }} }}
+    }}
+}}
+
+{attribute}
+struct P {{ a: u256, b: u256 }}
+impl Eq for P with (Same)
+
+fn needs_eq<T: Eq>(_ t: T) -> u256 {{ 1 }}
+fn eq_bound() -> u256 {{ needs_eq(P {{ a: 1, b: 2 }}) }}
+"
+        );
+        // The bound holds only through the header.
+        prepare(&source).unwrap_or_else(|cause| panic!("{attribute}: {cause}"));
+        let written = source.replace("impl Eq for P with (Same)\n", "");
+        let diagnostics = written_diagnostics(&written);
+        assert!(
+            diagnostics.contains("`P` doesn't implement `Eq<P>`"),
+            "{attribute}: {diagnostics}"
+        );
+    }
+}
+
+/// The struct of a `msg` variant is named by its path, and its fields are the
+/// variant's parameters.
+#[test]
+fn a_header_on_a_msg_variant_reads_the_parameters() {
+    let source = r#"use core::derive::Derive
+use core::marker::Copy
+use core::meta::{Code, Item, Record}
+use core::ops::Eq
+
+struct Marks {}
+impl Derive<Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+struct Same {}
+impl Derive<Eq> for Same {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: M::Ping) -> bool { self.v == other.v } }
+    }
+}
+
+msg M {
+    #[selector = 0x11111111]
+    Ping { v: u256 } -> u256,
+}
+impl Copy for M::Ping with (Marks)
+impl Eq for M::Ping with (Same)
+
+const fn twice(_ p: own M::Ping) -> u256 {
+    let a = p
+    let b = p
+    a.v + b.v
+}
+const fn copied() -> u256 { twice(M::Ping { v: 3 }) }
+fn needs_copy<T: Copy>(_ t: T) -> u256 { 1 }
+fn copy_bound() -> u256 { needs_copy(M::Ping { v: 1 }) }
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval(&output, "copied"), "6");
+    // Control: without the header the type is not `Copy`.
+    let written = source.replace("impl Copy for M::Ping with (Marks)\n", "");
+    let diagnostics = written_diagnostics(&written);
+    assert!(
+        diagnostics.contains("`Ping` doesn't implement `Copy`"),
+        "{diagnostics}"
+    );
+}
+
+/// A header can request `MsgVariant` for an `#[abi]` struct, which has the
+/// codecs it needs from the attribute. (For a `msg` variant the header is for
+/// another ABI; the fixture `msg_variant_by_abi` runs that.)
+#[test]
+fn a_header_requests_msg_variant_for_an_abi_struct() {
+    let source = r#"use core::derive::Derive
+use core::message::MsgVariant
+use core::meta::{Code, Item, Record}
+use std::abi::Sol
+
+struct Provide {}
+impl Derive<MsgVariant> for Provide {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const SELECTOR: u32 = 0x12345678
+            type Return = u256
+        }
+    }
+}
+
+#[abi]
+pub struct Ping { pub v: u256 }
+impl MsgVariant<Sol> for Ping with (Provide)
+
+const fn selector() -> u256 { <Ping as MsgVariant<Sol>>::SELECTOR as u256 }
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval(&output, "selector"), "305419896");
+}
+
+/// A provider is keyed by the bare trait: `impl Derive<Eq<u8>>` names none,
+/// and the refusal says what to write instead.
+#[test]
+fn a_provider_keyed_with_trait_arguments_names_the_bare_trait() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use core::ops::Eq
+
+struct ByKey {}
+impl Derive<Eq<u8>> for ByKey {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: u8) -> bool { true } }
+    }
+}
+struct P { v: u256 }
+impl Eq<u8> for P with (ByKey)
+"#;
+    let cause = prepared_diagnostics(source).unwrap_or_else(|cause| cause);
+    assert!(
+        cause.contains("a provider is keyed by the bare trait"),
+        "{cause}"
+    );
+    assert!(
+        cause.contains("needs `impl Derive<Eq> for ByKey` with no trait arguments"),
+        "{cause}"
+    );
+    assert!(!cause.contains("MissingBody"), "{cause}");
+    // Written with the bare trait, the same provider serves the header.
+    let fixed = source.replace("impl Derive<Eq<u8>> for ByKey", "impl Derive<Eq> for ByKey");
+    prepare(&fixed).unwrap_or_else(|cause| panic!("{cause}"));
+}

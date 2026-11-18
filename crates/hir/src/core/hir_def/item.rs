@@ -11,8 +11,8 @@ use parser::ast;
 use super::{
     AttrListId, Body, CompBinOp, EffectParamListId, FuncParamListId, FuncParamName,
     GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, KindBound,
-    ManualContractRootAttr, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
-    WhereClauseId,
+    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, TupleTypeId, TypeBound, TypeId,
+    UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -1320,6 +1320,17 @@ impl<'db> Impl<'db> {
         ScopeId::from_item(self.into())
     }
 
+    /// Whether every member of this implementation is generated code of
+    /// `ingot`: the implementation is itself generated there, or it is an
+    /// inherent header `impl Type with (Provider)` written there, whose
+    /// provider wrote all of its members. The header names no trait, so it is
+    /// a written fact for nothing, and the authored tier of `ingot` hides its
+    /// members as it hides those of a generated implementation.
+    pub fn members_generated_in(self, db: &'db dyn HirDb, ingot: Ingot<'db>) -> bool {
+        self.scope().is_within_generated(db, ingot)
+            || (self.derive_provider(db).is_some() && self.top_mod(db).ingot(db) == ingot)
+    }
+
     // raw type_ref access kept; shim exposes public ___tmp method.
 
     // Semantic `ty` lives in `crate::semantic`.
@@ -1493,6 +1504,9 @@ pub struct ImplTraitModifiers<'db> {
     /// `impl T for S with (P)`: the provider of an explicit derive request,
     /// as written, with its arguments.
     pub derive_provider: Option<PathId<'db>>,
+    /// For an `unsafe impl` written in a quotation, the quotations that wrote
+    /// and placed it, innermost first.
+    pub quote_chain: Option<QuoteChain<'db>>,
 }
 
 impl<'db> ImplTrait<'db> {
@@ -1515,6 +1529,16 @@ impl<'db> ImplTrait<'db> {
     /// `impl T for S with (P)`.
     pub fn derive_provider(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
         self.modifiers(db).derive_provider
+    }
+
+    /// The modules of the quotations that wrote and placed this implementation,
+    /// writer first and the outermost placer last. Empty for hand-written code,
+    /// and for any implementation that is not an `unsafe impl`: only those keep
+    /// their chain.
+    pub fn quote_chain(self, db: &'db dyn HirDb) -> Vec<TopLevelMod<'db>> {
+        self.modifiers(db)
+            .quote_chain
+            .map_or_else(Vec::new, |chain| chain.modules(db).clone())
     }
 
     pub fn span(self) -> LazyImplTraitSpan<'db> {
