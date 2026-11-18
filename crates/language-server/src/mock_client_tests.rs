@@ -1183,9 +1183,9 @@ async fn definition_location(
 /// one prepared view of the package, and edits to the dependency reach the app.
 #[tokio::test]
 async fn package_generation_shares_one_view_for_diagnostics_hover_and_goto() {
-    let mut client = MockLspClient::start().await;
-    client.initialize().await;
-    let uri = |path: &str| Url::parse(&format!("file:///tmp/fe-lsp-package/{path}")).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let uri = |path: &str| Url::from_file_path(root.join(path)).unwrap();
     let lib_source = r#"use core::derive::Derive
 use core::meta::{Code, Item, Record, field_count}
 pub trait Score {
@@ -1206,6 +1206,11 @@ impl Derive<Score> for FieldScore {
     let app_source = "use ingot::model::Pair\nuse lib::Score\n\npub const fn total() -> usize {\n    Pair::score()\n}\n";
     let files = [
         (
+            "fe.toml",
+            "[workspace]\nname = \"derive_test\"\nversion = \"0.1.0\"\nmembers = [\"app\", \"lib\"]\n"
+                .to_string(),
+        ),
+        (
             "lib/fe.toml",
             "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n".to_string(),
         ),
@@ -1219,8 +1224,19 @@ impl Derive<Score> for FieldScore {
         ("app/src/lib.fe", app_source.to_string()),
     ];
     for (path, text) in &files {
-        client.did_open(&uri(path), text);
-        client.wait_for_text(&uri(path), text).await;
+        let file = root.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    for (path, text) in &files {
+        if path.ends_with(".fe") {
+            client.did_open(&uri(path), text);
+            client.wait_for_text(&uri(path), text).await;
+        }
     }
     let app = uri("app/src/lib.fe");
     let lib = uri("lib/src/lib.fe");
