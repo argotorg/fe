@@ -37,11 +37,12 @@ extern {
     pub(ingot) fn read(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
     pub(ingot) fn write(_ fd: i32, _ buf: *u8, _ count: usize) -> isize
     fn strerror(_ code: i32) -> *u8
+    fn gai_strerror(_ code: i32) -> *u8
 }
 
 /// Why an operation failed: its kind, and the host's error number if the
-/// host reported it.
-pub struct Error { kind: ErrorKind, code: Option<i32> }
+/// host reported it, or the code `getaddrinfo` gave a failed lookup.
+pub struct Error { kind: ErrorKind, code: Option<i32>, lookup: bool }
 
 impl Copy for Error {}
 
@@ -49,12 +50,13 @@ impl Error {
     /// An error of `kind` that no host error number gives, such as one a
     /// `Read` implementation returns.
     pub fn new(_ kind: ErrorKind) -> Self {
-        Error { kind, code: Option::None }
+        Error { kind, code: Option::None, lookup: false }
     }
 
-    /// The host's error number, if the host reported the error.
+    /// The host's error number, if the host reported the error. A failed
+    /// lookup has none, but its text is the host's.
     pub fn code(self) -> Option<i32> {
-        self.code
+        if self.lookup { Option::None } else { self.code }
     }
 
     /// What went wrong, in terms every host shares.
@@ -68,18 +70,30 @@ impl Error {
 impl Error {
     /// The error with the host's error number `code`.
     pub fn from_code(_ code: i32) -> Self {
-        Error { kind: sys::errno_kind(code), code: Option::Some(code) }
+        Error { kind: sys::errno_kind(code), code: Option::Some(code), lookup: false }
+    }
+
+    /// The error of a `getaddrinfo` that returned `code`: `errno`'s for
+    /// `EAI_SYSTEM`.
+    pub(ingot) fn from_lookup_code(_ code: i32) -> Self {
+        if code == sys::EAI_SYSTEM {
+            return sys::last_error()
+        }
+        let not_found = code == sys::EAI_NONAME || code == sys::EAI_NODATA
+        let kind = if not_found { ErrorKind::HostNotFound } else { ErrorKind::Other }
+        Error { kind, code: Option::Some(code), lookup: true }
     }
 }
 
 /// The host's description of an error it reported, such as `No such file or
-/// directory`, and otherwise the kind's.
+/// directory`, or `gai_strerror`'s of a failed lookup, and otherwise the
+/// kind's.
 #[cfg(target = "native")]
 impl Display for Error {
     fn fmt(self, _ out: mut MemBuffer) {
         match self.code {
             Option::Some(code) => {
-                let text = unsafe { strerror(code) }
+                let text = if self.lookup { unsafe { gai_strerror(code) } } else { unsafe { strerror(code) } }
                 out.extend_from(unsafe { MemSlice::from_raw_parts(ptr: text, len: c_string_len(text)) })
             }
             Option::None => self.kind.fmt(mut out),
@@ -131,6 +145,8 @@ pub enum ErrorKind {
     /// The input isn't what the reader takes, such as a line longer than
     /// its limit.
     InvalidData,
+    /// A lookup found no address for the host name.
+    HostNotFound,
     Other,
 }
 
@@ -159,6 +175,7 @@ impl Display for ErrorKind {
             ErrorKind::BrokenPipe => "broken pipe",
             ErrorKind::UnexpectedEof => "unexpected end of input",
             ErrorKind::InvalidData => "invalid data",
+            ErrorKind::HostNotFound => "host not found",
             ErrorKind::Other => "other error",
         }
         text.fmt(mut out)

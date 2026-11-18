@@ -3510,10 +3510,100 @@ write to a file open for reading: Other (Bad file descriptor)"#,
     }
 }
 
+// One poller serves non-blocking clients and their server ends on 127.0.0.1.
+#[test]
+fn native_net_poller_serves_many_sockets() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/poll.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("poll")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            "serve: client got echo hello
+serve: client got echo hello
+serve: client got echo hello
+serve: more than one wait: true
+reregister: events before: 0
+reregister: events after: 1, readable: true, its token: true
+reregister: both: true true
+reregister: removed the replacement: true
+reregister: then get: true, remove: true
+reregister: then set_interest: NotFound
+kept: events before: 1
+kept: events after reregister: 0
+kept: events before: 1
+kept: events after remove: 0
+kept: removed the third: true
+hangup: readable: true, hangup: true
+refused: ConnectionRefused
+stale interest: the new source's event: true, as the replaced one's: false
+half close: events of a writer: 0
+half close: waited for both: readable true, writable false, hangup true
+done
+",
+            "O{level}"
+        );
+    }
+}
+
+// TCP and UDP on 127.0.0.1, each socket at a free port.
+#[test]
+fn native_net_sockets_talk_over_loopback() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/net.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("net")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            "echo: peers: true true
+echo: echo hello
+echo: echo world
+udp: sent 4
+udp: b received ping, from a: true
+udp: a received pong
+udp: recv with a timeout: TimedOut
+udp: non-blocking recv: WouldBlock
+refused: connect: ConnectionRefused
+refused: connect_timeout: ConnectionRefused
+read timeout: read: TimedOut
+read timeout: zero: InvalidInput
+read timeout: 1 ns: ok
+read timeout: then read 1 byte
+broken pipe: client writes: BrokenPipe
+broken pipe: server writes: BrokenPipe
+broken pipe: imported stream writes: BrokenPipe
+nonblocking accept: nothing waiting: WouldBlock
+nonblocking accept: accepted stream blocks: true
+nonblocking accept: read y
+nonblocking accept: from_raw_fd read z
+nonblocking connect: stream blocks: false
+nonblocking connect: failure: false
+nonblocking connect: read with nothing sent: WouldBlock
+nonblocking connect: read hi
+connect_timeout: stream blocks: true
+connect_timeout: zero: InvalidInput
+connect_timeout: server reads 0 bytes after the shutdown
+lookup: localhost first is a loopback address: true
+lookup: connected to the first: true true
+lookup: 127.0.0.1: 1 127.0.0.1:9
+lookup: no name: HostNotFound, error number: false
+still running
+",
+            "O{level}"
+        );
+    }
+}
+
 // Each host error number has the kind Rust gives it, among the kinds Fe has.
 #[test]
 fn native_errors_take_the_kinds_of_host_error_numbers() {
-    const KINDS: [&str; 20] = [
+    const KINDS: [&str; 21] = [
         "NotFound",
         "PermissionDenied",
         "AlreadyExists",
@@ -3533,6 +3623,7 @@ fn native_errors_take_the_kinds_of_host_error_numbers() {
         "BrokenPipe",
         "UnexpectedEof",
         "InvalidData",
+        "HostNotFound",
         "Other",
     ];
     let mut expected = String::new();

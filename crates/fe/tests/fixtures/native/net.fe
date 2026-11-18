@@ -1,0 +1,295 @@
+use core::MemBuffer
+use std::io::{BufReader, Display, Error, ErrorKind, Read, Stdout, Write}
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Net, Shutdown, SocketAddr, TcpListener, TcpStream}
+use std::time::Duration
+
+extern {
+    fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
+    fn socketpair(_ domain: i32, _ kind: i32, _ protocol: i32, _ fds: *i32) -> i32
+}
+
+// `fcntl`'s command to read a descriptor's status flags, the same on Linux
+// and macOS, and the non-blocking flag, which is not.
+const F_GETFL: i32 = 3
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000
+#[cfg(target_os = "macos")]
+const O_NONBLOCK: i32 = 4
+
+// Runs each `std::net` case on the loopback interface and prints what it
+// observed. Every socket binds port 0 of 127.0.0.1.
+pub fn main() -> i32 uses (out: mut Stdout, net: mut Net) {
+    report("echo", echo())
+    report("udp", udp())
+    report("refused", refused())
+    report("read timeout", read_timeout())
+    report("broken pipe", broken_pipe())
+    report("nonblocking accept", nonblocking_accept())
+    report("nonblocking connect", nonblocking_connect())
+    report("connect_timeout", connect_timeout())
+    report("lookup", lookup())
+    println!("still running")
+    0
+}
+
+// Two lines go to a server, which sends each back, both read with
+// `BufReader::read_line`.
+fn echo() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    let addr = listener.local_addr()?
+    var client = net.connect(addr)?
+    client.set_nodelay(true)?
+    client.write_all(format!("hello\nworld\n").span())?
+    client.shutdown(Shutdown::Write)?
+    let (stream, peer) = listener.accept()?
+    println!("echo: peers: ", peer == client.local_addr()?, " ", client.peer_addr()? == addr)
+    var server = BufReader::new(stream)
+    var line = MemBuffer::empty()
+    while server.read_line(mut line)? {
+        server.inner().write_all(format!("echo ", line, "\n").span())?
+        line.clear()
+    }
+    core::mem::drop(server)
+    var reader = BufReader::new(client)
+    while reader.read_line(mut line)? {
+        println!("echo: ", line)
+        line.clear()
+    }
+    Result::Ok(())
+}
+
+// Datagrams each way, then receives with nothing sent.
+fn udp() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var a = net.bind_udp(loopback())?
+    var b = net.bind_udp(loopback())?
+    let a_addr = a.local_addr()?
+    a.set_broadcast(true)?
+    println!("udp: sent ", a.send_to(format!("ping").span(), b.local_addr()?)?)
+    var buf = MemBuffer::new(16)
+    let (count, from) = b.recv_from(buf.span())?
+    println!("udp: b received ", buf.span().head(count), ", from a: ", from == a_addr)
+    b.connect(a_addr)?
+    b.send(format!("pong").span())?
+    let count = a.recv(buf.span())?
+    println!("udp: a received ", buf.span().head(count))
+    a.set_read_timeout(Option::Some(Duration::from_millis(20)))?
+    failure("udp: recv with a timeout", a.recv(buf.span()))
+    a.set_nonblocking(true)?
+    failure("udp: non-blocking recv", a.recv(buf.span()))
+    Result::Ok(())
+}
+
+// Connections to a port that was a listener's.
+fn refused() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    let addr = net.listen(loopback())?.local_addr()?
+    failure("refused: connect", net.connect(addr))
+    failure("refused: connect_timeout", net.connect_timeout(addr, Duration::from_secs(5)))
+    Result::Ok(())
+}
+
+// A read that waits longer than its timeout, then one that doesn't.
+fn read_timeout() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    var client = net.connect(listener.local_addr()?)?
+    let (server, _) = listener.accept()?
+    var server = server
+    var buf = MemBuffer::new(1)
+    client.set_read_timeout(Option::Some(Duration::from_millis(20)))?
+    failure("read timeout: read", client.read(buf.span()))
+    failure("read timeout: zero", client.set_read_timeout(Option::Some(Duration::from_nanos(0))))
+    // A timeout below a microsecond waits one.
+    failure("read timeout: 1 ns", client.set_write_timeout(Option::Some(Duration::from_nanos(1))))
+    server.write_all(format!("x").span())?
+    println!("read timeout: then read ", client.read(buf.span())?, " byte")
+    Result::Ok(())
+}
+
+// Writes after the peer has closed the connection, each way, which leave
+// the process running.
+fn broken_pipe() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    let addr = listener.local_addr()?
+    var client = net.connect(addr)?
+    let (server, _) = listener.accept()?
+    core::mem::drop(server)
+    failure("broken pipe: client writes", write_after_close(mut client))
+    let other = net.connect(addr)?
+    let (server, _) = listener.accept()?
+    var server = server
+    core::mem::drop(other)
+    failure("broken pipe: server writes", write_after_close(mut server))
+    // A pair of connected `AF_UNIX` stream sockets, made outside `std`.
+    let pair = MemBuffer::new(8)
+    core::assert(unsafe { socketpair(1, 1, 0, core::ptr::cast(pair.ptr())) } == 0)
+    var imported = unsafe { TcpStream::from_raw_fd(pair.read_le<i32>(0)) }
+    core::mem::drop(unsafe { TcpStream::from_raw_fd(pair.read_le<i32>(4)) })
+    failure("broken pipe: imported stream writes", write_after_close(mut imported))
+    Result::Ok(())
+}
+
+// Reads the end of `stream`, whose peer has closed, then writes until a
+// write fails other than with `ConnectionReset`, which macOS may report once
+// for the peer's reset before later writes fail with `EPIPE`, which raises
+// `SIGPIPE` unless the socket keeps it from doing so.
+fn write_after_close(_ stream: mut TcpStream) -> Result<Error, ()> {
+    var buf = MemBuffer::new(1)
+    if stream.read(buf.span())? != 0 {
+        return Result::Ok(())
+    }
+    for _ in 0..100 {
+        match stream.write_all(format!("x").span()) {
+            Result::Ok(_) => {}
+            Result::Err(error) => match error.kind() {
+                ErrorKind::ConnectionReset => {}
+                _ => return Result::Err(error),
+            },
+        }
+    }
+    Result::Ok(())
+}
+
+// A non-blocking listener, and the blocking stream it accepts.
+fn nonblocking_accept() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    listener.set_nonblocking(true)?
+    failure("nonblocking accept: nothing waiting", listener.accept())
+    var client = net.connect(listener.local_addr()?)?
+    var stream = accept_soon(mut listener)?
+    println!("nonblocking accept: accepted stream blocks: ", unsafe { fcntl(stream.as_raw_fd(), F_GETFL) } & O_NONBLOCK == 0)
+    client.write_all(format!("y").span())?
+    var buf = MemBuffer::new(1)
+    stream.read_exact(buf.span())?
+    println!("nonblocking accept: read ", buf.span())
+    // A stream from the descriptor of another, which then gives it up.
+    let raw = stream.as_raw_fd()
+    core::mem::forget(stream)
+    var again = unsafe { TcpStream::from_raw_fd(raw) }
+    client.write_all(format!("z").span())?
+    again.read_exact(buf.span())?
+    println!("nonblocking accept: from_raw_fd read ", buf.span())
+    Result::Ok(())
+}
+
+// The connection that reaches the non-blocking `listener` once the queue has
+// it, which can be a moment after `connect` returns.
+fn accept_soon(_ listener: mut TcpListener) -> Result<Error, TcpStream> {
+    var tries: u32 = 0
+    while true {
+        match listener.accept() {
+            Result::Ok((stream, _)) => return Result::Ok(stream),
+            Result::Err(error) => if tries == 1000000 || !would_block(error) {
+                return Result::Err(error)
+            },
+        }
+        tries += 1
+    }
+    core::panic()
+}
+
+fn would_block(_ error: Error) -> bool {
+    match error.kind() {
+        ErrorKind::WouldBlock => true,
+        _ => false,
+    }
+}
+
+// A connection in progress, which the accept completes.
+fn nonblocking_connect() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    var client = net.connect_nonblocking(listener.local_addr()?)?
+    println!("nonblocking connect: stream blocks: ", unsafe { fcntl(client.as_raw_fd(), F_GETFL) } & O_NONBLOCK == 0)
+    let (server, _) = listener.accept()?
+    var server = server
+    println!("nonblocking connect: failure: ", client.take_error()?.is_some())
+    var buf = MemBuffer::new(2)
+    failure("nonblocking connect: read with nothing sent", client.read(buf.span()))
+    server.write_all(format!("hi").span())?
+    client.set_nonblocking(false)?
+    client.read_exact(buf.span())?
+    println!("nonblocking connect: read ", buf.span())
+    Result::Ok(())
+}
+
+// A connection with a time limit, which leaves the stream blocking.
+fn connect_timeout() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    let addr = listener.local_addr()?
+    var client = net.connect_timeout(addr, Duration::from_secs(5))?
+    println!("connect_timeout: stream blocks: ", unsafe { fcntl(client.as_raw_fd(), F_GETFL) } & O_NONBLOCK == 0)
+    failure("connect_timeout: zero", net.connect_timeout(addr, Duration::from_nanos(0)))
+    let (server, _) = listener.accept()?
+    var server = server
+    client.shutdown(Shutdown::Write)?
+    var rest = MemBuffer::empty()
+    println!("connect_timeout: server reads ", server.read_to_end(mut rest)?, " bytes after the shutdown")
+    Result::Ok(())
+}
+
+// Names the host resolves without a network: `localhost`, whose first
+// address takes a connection, an address, and no name at all.
+fn lookup() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    let found = net.lookup("localhost", 0)?
+    let first = found[0]
+    let loopback = match first.ip() {
+        IpAddr::V4(ip) => ip == Ipv4Addr::LOCALHOST,
+        IpAddr::V6(ip) => ip == Ipv6Addr::LOCALHOST,
+    }
+    println!("lookup: localhost first is a loopback address: ", loopback)
+    var listener = net.listen(first)?
+    let again = net.lookup("localhost", listener.local_addr()?.port())?
+    let client = net.connect(again[0])?
+    let (_, peer) = listener.accept()?
+    println!("lookup: connected to the first: ", client.peer_addr()? == again[0], " ", peer == client.local_addr()?)
+    let numeric = net.lookup("127.0.0.1", 9)?
+    println!("lookup: 127.0.0.1: ", numeric.len(), " ", numeric[0])
+    match net.lookup("", 80) {
+        Result::Ok(_) => println!("lookup: no name: ok"),
+        Result::Err(error) => println!("lookup: no name: ", kind_name(error.kind()), ", error number: ", error.code().is_some()),
+    }
+    Result::Ok(())
+}
+
+fn loopback() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
+fn report<T: Display>(_ label: T, _ result: Result<Error, ()>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => {}
+        Result::Err(error) => println!(label, " failed: ", kind_name(error.kind()), " (", error, ")"),
+    }
+}
+
+// Prints `label` and the kind of `result`'s error, or `ok`.
+fn failure<L: Display, T>(_ label: L, _ result: Result<Error, T>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => println!(label, ": ok"),
+        Result::Err(error) => println!(label, ": ", kind_name(error.kind())),
+    }
+}
+
+fn kind_name(_ kind: ErrorKind) -> String<20> {
+    match kind {
+        ErrorKind::NotFound => "NotFound",
+        ErrorKind::PermissionDenied => "PermissionDenied",
+        ErrorKind::AlreadyExists => "AlreadyExists",
+        ErrorKind::NotADirectory => "NotADirectory",
+        ErrorKind::IsADirectory => "IsADirectory",
+        ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::WouldBlock => "WouldBlock",
+        ErrorKind::TimedOut => "TimedOut",
+        ErrorKind::ConnectionRefused => "ConnectionRefused",
+        ErrorKind::ConnectionReset => "ConnectionReset",
+        ErrorKind::ConnectionAborted => "ConnectionAborted",
+        ErrorKind::NotConnected => "NotConnected",
+        ErrorKind::AddrInUse => "AddrInUse",
+        ErrorKind::AddrNotAvailable => "AddrNotAvailable",
+        ErrorKind::NetworkUnreachable => "NetworkUnreachable",
+        ErrorKind::HostUnreachable => "HostUnreachable",
+        ErrorKind::BrokenPipe => "BrokenPipe",
+        ErrorKind::UnexpectedEof => "UnexpectedEof",
+        ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
+        ErrorKind::Other => "Other",
+    }
+}
