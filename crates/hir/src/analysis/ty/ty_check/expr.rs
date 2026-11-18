@@ -1730,6 +1730,7 @@ impl<'db> TyChecker<'db> {
                         locate: callable,
                         codec,
                         codec_choice_failed: false,
+                        codec_choices: None,
                     },
                 );
                 return ExprProp::new(output_ty, lhs.is_mut);
@@ -1981,6 +1982,7 @@ impl<'db> TyChecker<'db> {
         // position in the list's choices and its operand's span.
         let mut opening_conditions: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> =
             Vec::new();
+        let mut providers = Vec::new();
 
         for binding in bindings {
             let named = if binding.key_path.is_none()
@@ -2321,7 +2323,16 @@ impl<'db> TyChecker<'db> {
                     .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                 continue;
             }
+            providers.push((binding, self.env.choices));
+        }
+
+        // Provider expressions retain the choices preceding them in source
+        // order. Their witnesses are checked under the complete frame.
+        let choices = self.env.choices;
+        for (binding, operand_choices) in providers {
+            self.env.choices = operand_choices;
             let value_prop = self.check_expr_unknown(binding.value);
+            self.env.choices = choices;
             // A provider confers authority over its place for the body; it
             // opens no access.
             self.consume_access(binding.value);
@@ -3652,12 +3663,10 @@ impl<'db> TyChecker<'db> {
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
-        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
-        let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
-            self.db,
-            trait_goal,
-            assumptions,
-        );
+        let solve_cx = TraitSolveCx::new(self.db, scope)
+            .with_assumptions(assumptions)
+            .with_choices(self.env.choices);
+        let query = solve_cx.query(self.db, trait_goal);
         crate::analysis::ty::trait_resolution::is_goal_query_satisfiable(self.db, solve_cx, &query)
     }
 

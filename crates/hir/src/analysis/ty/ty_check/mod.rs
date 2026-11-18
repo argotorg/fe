@@ -4648,6 +4648,8 @@ pub struct PlaceEntryCalls<'db> {
     /// A lexical codec proof failed at the producer. Preserve that result even
     /// when only substitution later determines whether the layout needs it.
     pub codec_choice_failed: bool,
+    /// The checked context needed if a packed codec proof is deferred.
+    pub codec_choices: Option<super::trait_resolution::ChosenImpls<'db>>,
 }
 
 impl<'db> PlaceEntryCalls<'db> {
@@ -5132,6 +5134,9 @@ impl<'db> TypedBody<'db> {
             plan.visit_with(visitor);
         }
         for calls in self.tables.place_entries.values() {
+            if let Some(choices) = calls.codec_choices {
+                choices.visit_with(visitor);
+            }
             calls.locate.visit_with(visitor);
             for callable in &calls.codec {
                 callable.visit_with(visitor);
@@ -5179,6 +5184,9 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .flatten()
             .for_each(|lowering| *lowering = lowering.clone().fold_with(db, folder));
         for calls in this.place_entries.values_mut() {
+            calls.codec_choices = calls
+                .codec_choices
+                .map(|choices| choices.fold_with(db, folder));
             for callable in calls.iter_mut() {
                 *callable = callable.clone().fold_with(db, folder);
             }
