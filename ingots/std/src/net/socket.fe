@@ -4,11 +4,12 @@ use core::{MemBuffer, MemSlice, MemSpan, MemVec, Option, Result, ptr}
 use ingot::io::{Display, Error, ErrorKind, Read, Write}
 use ingot::native::{Host, HostCapabilitySeal}
 use ingot::sys::{
-    self, EINTR, EINVAL, Fd, IPPROTO_TCP, POLLOUT, PollSet, SHUT_RD, SHUT_RDWR, SHUT_WR, SOCK_DGRAM,
-    SOCK_STREAM, TCP_NODELAY, accept_socket, bind, c_string, check_call, connect, freeaddrinfo,
-    getaddrinfo, getpeername, getsockname, listen, recv, recvfrom, send, sendto, setsockopt, shutdown,
+    self, EINTR, EINVAL, Fd, IPPROTO_TCP, POLLIN, POLLOUT, PollSet, SHUT_RD, SHUT_RDWR, SHUT_WR,
+    SOCK_DGRAM, SOCK_STREAM, TCP_NODELAY, accept_socket, bind, c_string, check_call, connect,
+    freeaddrinfo, getaddrinfo, getpeername, getsockname, getsockopt, listen, recv, recvfrom, send,
+    sendto, setsockopt, shutdown,
 }
-use ingot::time::Duration
+use ingot::time::{Duration, Instant}
 use super::{IpAddr, SocketAddr}
 
 // The connections a listener queues before it accepts them.
@@ -136,6 +137,7 @@ impl Copy for Shutdown {}
 ///
 /// A blocking stream waits to read and write, at most its read or write
 /// timeout if it has one, after which the operation fails with `TimedOut`.
+/// A signal neither ends the wait nor starts the timeout again.
 /// A non-blocking one fails with `WouldBlock` instead of waiting. A write to
 /// a connection the peer has closed fails with `BrokenPipe`, without a
 /// `SIGPIPE`.
@@ -231,7 +233,7 @@ impl TcpListener {
         len.write_le<u32>(offset: 0, value: sys::SOCKADDR_STORAGE_SIZE.downcast_unchecked())
         let accepted = accept_socket(fd, raw.ptr(), core::ptr::cast(len.ptr()))?
         let peer = sys::decode_sockaddr(raw.span())?
-        Result::Ok((TcpStream { socket: Socket { fd: accepted, nonblocking: false } }, peer))
+        Result::Ok((TcpStream { socket: Socket::adopt(accepted, nonblocking: false) }, peer))
     }
 
     /// The address the listener is at.
@@ -268,7 +270,11 @@ impl UdpSocket {
         let (raw, raw_len) = sys::encode_sockaddr(addr)
         let (ptr, len) = (bytes.ptr(), sys::io_len(bytes.len()))
         let target = raw.ptr()
-        self.socket.timed(sys::retry(|| unsafe { sendto(fd, ptr, len, sys::SEND_FLAGS, target, raw_len) }))
+        self.socket.transfer(
+            events: POLLOUT,
+            timeout: self.socket.write_timeout,
+            |flags: i32| unsafe { sendto(fd, ptr, len, sys::SEND_FLAGS | flags, target, raw_len) },
+        )
     }
 
     /// Receives a datagram into the start of `buf`: its length, at most
@@ -280,7 +286,11 @@ impl UdpSocket {
         var raw_len = MemBuffer::new(4)
         raw_len.write_le<u32>(offset: 0, value: sys::SOCKADDR_STORAGE_SIZE.downcast_unchecked())
         let (source, source_len) = (raw.ptr(), core::ptr::cast<u8, u32>(raw_len.ptr()))
-        let count = self.socket.timed(sys::retry(|| unsafe { recvfrom(fd, ptr, len, 0, source, source_len) }))?
+        let count = self.socket.transfer(
+            events: POLLIN,
+            timeout: self.socket.read_timeout,
+            |flags: i32| unsafe { recvfrom(fd, ptr, len, flags, source, source_len) },
+        )?
         Result::Ok((count, sys::decode_sockaddr(raw.span())?))
     }
 
@@ -338,13 +348,27 @@ impl UdpSocket {
     }
 }
 
-// A socket, and whether it is non-blocking: what TCP and UDP sockets share.
-struct Socket { fd: Fd, nonblocking: bool }
+// A socket, whether it is non-blocking, and its timeouts, which its
+// options `SO_RCVTIMEO` and `SO_SNDTIMEO` hold too: what TCP and UDP sockets
+// share.
+struct Socket {
+    fd: Fd,
+    nonblocking: bool,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
+}
 
 impl Socket {
     // A new blocking socket of `kind` for addresses of `addr`'s family.
     fn new(_ addr: SocketAddr, kind: i32) -> Result<Error, Self> {
-        Result::Ok(Socket { fd: sys::new_socket(sys::address_domain(addr), kind)?, nonblocking: false })
+        Result::Ok(
+            Socket {
+                fd: sys::new_socket(sys::address_domain(addr), kind)?,
+                nonblocking: false,
+                read_timeout: Option::None,
+                write_timeout: Option::None,
+            },
+        )
     }
 
     // The socket `fd`, made elsewhere, which it takes over.
@@ -352,7 +376,15 @@ impl Socket {
         // This fails only for a descriptor that is no socket, whose writes
         // raise no `SIGPIPE` here: they fail in `send`.
         let _ = sys::no_sigpipe(fd)
-        Socket { fd: Fd { fd }, nonblocking: sys::is_nonblocking(fd).unwrap_or(default: false) }
+        Socket::adopt(Fd { fd }, nonblocking: sys::is_nonblocking(fd).unwrap_or(default: false))
+    }
+
+    // The socket `fd`, which was accepted or made elsewhere, with the
+    // timeouts it has: on Linux a connection takes its listener's.
+    fn adopt(_ fd: own Fd, nonblocking: bool) -> Self {
+        let read_timeout = socket_timeout(fd.fd, name: sys::SO_RCVTIMEO)
+        let write_timeout = socket_timeout(fd.fd, name: sys::SO_SNDTIMEO)
+        Socket { fd, nonblocking, read_timeout, write_timeout }
     }
 
     fn bind(mut self, _ addr: SocketAddr) -> Result<Error, ()> {
@@ -393,29 +425,56 @@ impl Socket {
     fn recv(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
         let fd = self.fd.fd
         let (ptr, len) = (buf.ptr(), sys::io_len(buf.len()))
-        self.timed(sys::retry(|| unsafe { recv(fd, ptr, len, 0) }))
+        self.transfer(events: POLLIN, timeout: self.read_timeout, |flags: i32| unsafe { recv(fd, ptr, len, flags) })
     }
 
     fn send(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
         let fd = self.fd.fd
         let (ptr, len) = (bytes.ptr(), sys::io_len(bytes.len()))
-        self.timed(sys::retry(|| unsafe { send(fd, ptr, len, sys::SEND_FLAGS) }))
+        self.transfer(
+            events: POLLOUT,
+            timeout: self.write_timeout,
+            |flags: i32| unsafe { send(fd, ptr, len, sys::SEND_FLAGS | flags) },
+        )
     }
 
-    // `result`, in which `EAGAIN` on a blocking socket is the end of its
-    // timeout, and so `TimedOut`.
-    fn timed(self, _ result: own Result<Error, usize>) -> Result<Error, usize> {
-        match result {
-            Result::Err(error) => {
-                let timed_out = !self.nonblocking
-                    && match error.kind() {
-                        ErrorKind::WouldBlock => true,
-                        _ => false,
-                    }
-                Result::Err(if timed_out { Error::new(ErrorKind::TimedOut) } else { error })
-            }
-            Result::Ok(count) => Result::Ok(count),
+    // Makes `call`, a receive or send with the flags it is given, until it
+    // does other than fail with `EINTR`: its result. On a blocking socket
+    // with a `timeout`, a signal doesn't start the timeout again: the
+    // socket waits for `events` for the rest of it, and the next call
+    // doesn't wait.
+    fn transfer<F: Fn(i32) -> isize>(self, events: u16, timeout: Option<Duration>, _ call: F) -> Result<Error, usize> uses F::E {
+        let deadline = match timeout {
+            Option::Some(limit) => if self.nonblocking { Option::None } else { Option::Some(Instant::now() + limit) },
+            Option::None => Option::None,
         }
+        var flags: i32 = 0
+        while true {
+            let result = call(flags)
+            if result >= 0 {
+                return Result::Ok(result.downcast_unchecked())
+            }
+            let code = sys::errno()
+            // A call that doesn't wait finds nothing if the socket had an
+            // event of another kind.
+            if code != EINTR && !(code == sys::EAGAIN && flags != 0) {
+                // `EAGAIN` on a blocking socket is the end of its timeout.
+                let timed_out = code == sys::EAGAIN && !self.nonblocking
+                return Result::Err(if timed_out { Error::new(ErrorKind::TimedOut) } else { Error::from_code(code) })
+            }
+            match deadline {
+                Option::Some(deadline) => {
+                    var fds = PollSet::new()
+                    fds.add(self.fd.fd, events)
+                    if fds.wait(Option::Some(deadline.duration_since(Instant::now())))? == 0 {
+                        return Result::Err(Error::new(ErrorKind::TimedOut))
+                    }
+                    flags = sys::MSG_DONTWAIT
+                }
+                Option::None => {}
+            }
+        }
+        Result::Ok(0)
     }
 
     fn local_addr(self) -> Result<Error, SocketAddr> {
@@ -444,7 +503,13 @@ impl Socket {
             }
             Option::None => {}
         }
-        check_call(unsafe { setsockopt(self.fd.fd, sys::SOL_SOCKET, name, time.ptr(), 16) })
+        check_call(unsafe { setsockopt(self.fd.fd, sys::SOL_SOCKET, name, time.ptr(), 16) })?
+        if name == sys::SO_RCVTIMEO {
+            self.read_timeout = timeout
+        } else {
+            self.write_timeout = timeout
+        }
+        Result::Ok(())
     }
 
     fn set_nonblocking(mut self, _ nonblocking: bool) -> Result<Error, ()> {
@@ -457,4 +522,18 @@ impl Socket {
         let code = sys::socket_option(self.fd.fd, level: sys::SOL_SOCKET, name: sys::SO_ERROR)?
         Result::Ok(if code == 0 { Option::None } else { Option::Some(Error::from_code(code)) })
     }
+}
+
+// The timeout that the option `name` of the socket `fd` holds, a `struct
+// timeval`: none if it is zero, which is forever, or `fd` is no socket.
+fn socket_timeout(_ fd: i32, name: i32) -> Option<Duration> {
+    let time = MemBuffer::new(16)
+    var len = MemBuffer::new(4)
+    len.write_le<u32>(offset: 0, value: 16)
+    if unsafe { getsockopt(fd, sys::SOL_SOCKET, name, time.ptr(), core::ptr::cast(len.ptr())) } != 0 {
+        return Option::None
+    }
+    // 64-bit seconds, then microseconds in the low 32 bits of their field.
+    let micros = time.read_le<u64>(0) * 1000000 + time.read_le<u32>(8) as u64
+    if micros == 0 { Option::None } else { Option::Some(Duration::from_micros(micros)) }
 }

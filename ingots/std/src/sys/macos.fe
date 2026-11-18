@@ -101,6 +101,8 @@ const SO_NOSIGPIPE: i32 = 0x1022
 
 // The flags of each `send`: none, since every socket has `SO_NOSIGPIPE`.
 pub const SEND_FLAGS: i32 = 0
+// The flag of a receive or send that doesn't wait.
+pub const MSG_DONTWAIT: i32 = 0x80
 
 /// The first 16 bits of a socket address of `domain`: its length, then its
 /// family.

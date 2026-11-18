@@ -103,6 +103,8 @@ const SOCK_CLOEXEC: i32 = 0x80000
 // The flags of each `send`: `MSG_NOSIGNAL`, so that a write to a closed
 // connection raises no `SIGPIPE`.
 pub const SEND_FLAGS: i32 = 0x4000
+// The flag of a receive or send that doesn't wait.
+pub const MSG_DONTWAIT: i32 = 0x40
 
 /// The first 16 bits of a socket address of `domain`: its family.
 pub fn sockaddr_header(_ domain: i32) -> u16 {
