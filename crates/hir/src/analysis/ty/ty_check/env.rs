@@ -1778,11 +1778,7 @@ impl<'db> TyCheckEnv<'db> {
         };
         let pending_proof = |span: DynLazySpan<'db>| {
             super::super::diagnostics::FuncBodyDiag::from(
-                super::super::diagnostics::BodyDiag::CompileTimePhase {
-                    primary: span,
-                    message: "scoped derive requires a prepared generated implementation".into(),
-                    label: super::super::diagnostics::BodyDiag::UNPREPARED_PROVIDER_LABEL,
-                },
+                super::super::diagnostics::BodyDiag::unprepared_provider(span),
             )
         };
         // Each trait goal a call or constant uses is now final: prove it once,

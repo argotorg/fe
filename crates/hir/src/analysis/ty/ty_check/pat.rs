@@ -258,11 +258,7 @@ impl<'db> TyChecker<'db> {
             // a generated implementation is a demand for preparation.
             if let Some(request) = outcome.request() {
                 self.env.generation_demands.request(self.db, request);
-                self.push_diag(BodyDiag::CompileTimePhase {
-                    primary,
-                    message: "scoped derive requires a prepared generated implementation".into(),
-                    label: BodyDiag::UNPREPARED_PROVIDER_LABEL,
-                });
+                self.push_diag(BodyDiag::unprepared_provider(primary));
                 return PatternAnalysisStatus::Invalid;
             }
             if choices.is_some() && evidence.dispatch_proof().is_none() {

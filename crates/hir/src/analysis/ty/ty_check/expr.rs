@@ -4464,6 +4464,7 @@ impl<'db> TyChecker<'db> {
                     GoalSatisfiability::Satisfied(solution) => solution,
                     GoalSatisfiability::NeedsGeneration(request) if emit_diag => {
                         self.env.generation_demands.request(self.db, request);
+                        self.push_diag(BodyDiag::unprepared_provider(span));
                         return Err(Box::new(EffectPatternKey::Trait(pattern)));
                     }
                     _ => {

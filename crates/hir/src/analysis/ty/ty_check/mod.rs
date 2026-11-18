@@ -2992,11 +2992,7 @@ impl<'db> TyChecker<'db> {
             }
             GoalSatisfiability::NeedsGeneration(request) => {
                 self.env.generation_demands.request(db, request);
-                self.push_diag(BodyDiag::CompileTimePhase {
-                    primary: obligation.span,
-                    message: "scoped derive requires a prepared generated implementation".into(),
-                    label: BodyDiag::UNPREPARED_PROVIDER_LABEL,
-                });
+                self.push_diag(BodyDiag::unprepared_provider(obligation.span));
                 TraitObligationOutcome::Discharged
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
