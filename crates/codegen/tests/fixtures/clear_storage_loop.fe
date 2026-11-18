@@ -1,0 +1,32 @@
+// Clearing more than 16 storage words zeroes them in a loop; a place of 16
+// words keeps one store per word.
+use std::evm::StorageMap
+
+struct Narrow {
+    words: [u256; 16],
+}
+
+struct Wide {
+    words: [u256; 17],
+}
+
+msg ClearMsg {
+    #[selector = 1]
+    Narrow { k: u256 },
+    #[selector = 2]
+    Wide { k: u256 },
+}
+
+pub contract Clears {
+    mut narrow: StorageMap<u256, Narrow>,
+    mut wide: StorageMap<u256, Wide>,
+
+    recv ClearMsg {
+        Narrow { k } uses (mut narrow) {
+            narrow.remove(k)
+        }
+        Wide { k } uses (mut wide) {
+            wide.remove(k)
+        }
+    }
+}
