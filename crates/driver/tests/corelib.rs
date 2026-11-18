@@ -1143,7 +1143,7 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         (
             "hir/src/analysis/ty/ty_check/expr.rs",
             "resolve_core_trait",
-            3,
+            2,
         ),
         // `Collection`, which does not decide anything, by `["iter", name]`.
         (
