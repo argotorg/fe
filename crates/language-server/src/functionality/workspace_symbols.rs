@@ -18,14 +18,18 @@ pub async fn handle_workspace_symbols(
 
     // Iterate through all files in the workspace
     let workspace = backend.db.workspace();
-    for (url, file) in workspace.all_files(&backend.db).iter() {
+    for (url, _) in workspace.all_files(&backend.db).iter() {
         // Only process .fe files
         if !url.path().ends_with(".fe") {
             continue;
         }
 
-        let top_mod = map_file_to_mod(&backend.db, file);
-        collect_matching_symbols(&backend.db, top_mod, &query, &mut symbols);
+        let analysis_db = backend.analysis_db_for_url(&url);
+        let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
+            continue;
+        };
+        let top_mod = map_file_to_mod(&analysis_db, file);
+        collect_matching_symbols(&analysis_db, top_mod, &query, &mut symbols);
     }
 
     for symbol in symbols.iter_mut() {

@@ -147,27 +147,28 @@ pub async fn handle_prepare(
             .uri
             .clone(),
     );
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(
         params.text_document_position_params.position,
         file_text.as_str(),
     );
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
 
     let item = match target {
         Target::Scope(scope) => match scope.item() {
-            ItemKind::Struct(s) => struct_to_hierarchy_item(&backend.db, s),
-            ItemKind::Enum(e) => enum_to_hierarchy_item(&backend.db, e),
-            ItemKind::Trait(t) => trait_to_hierarchy_item(&backend.db, t),
+            ItemKind::Struct(s) => struct_to_hierarchy_item(&analysis_db, s),
+            ItemKind::Enum(e) => enum_to_hierarchy_item(&analysis_db, e),
+            ItemKind::Trait(t) => trait_to_hierarchy_item(&analysis_db, t),
             _ => None,
         },
         _ => None,
@@ -187,21 +188,22 @@ pub async fn handle_supertypes(
     params: TypeHierarchySupertypesParams,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.item.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
 
     let items = match target {
-        Target::Scope(scope) => find_supertypes(&backend.db, scope.item()),
+        Target::Scope(scope) => find_supertypes(&analysis_db, scope.item()),
         _ => vec![],
     }
     .into_iter()
@@ -224,21 +226,22 @@ pub async fn handle_subtypes(
     params: TypeHierarchySubtypesParams,
 ) -> Result<Option<Vec<TypeHierarchyItem>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.item.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
 
     let items = match target {
-        Target::Scope(scope) => find_subtypes(&backend.db, scope.item()),
+        Target::Scope(scope) => find_subtypes(&analysis_db, scope.item()),
         _ => vec![],
     }
     .into_iter()

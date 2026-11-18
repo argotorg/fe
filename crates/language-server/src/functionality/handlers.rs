@@ -10,7 +10,10 @@ use async_lsp::{
     },
 };
 
-use common::{InputDb, compilation::Target, stdlib::is_embedded_builtin};
+use common::{
+    InputDb, compilation::Target, file::IngotFileKind, ingot::IngotKind,
+    stdlib::is_embedded_builtin,
+};
 use driver::{
     init_ingot,
     project_target::{ingots_target, set_target},
@@ -506,6 +509,9 @@ fn apply_file_change(
         .and_then(|name| name.to_str())
         .is_some_and(|name| name == "fe.toml");
 
+    // A provider can depend on another file in the indexed workspace, so any
+    // authored edit invalidates every prepared per-file view.
+    backend.invalidate_analysis_views();
     match kind {
         ChangeKind::Open(contents) => {
             debug!("file opened: {:?}", &path_str);
@@ -723,6 +729,39 @@ pub async fn handle_files_need_diagnostics(
         // and all subsequent LSP requests fail with SendError.
         use crate::lsp_diagnostics::LspDiagnostics;
         let diagnostics_map = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // Diagnostics come from the same prepared view that hover, goto
+            // and every other request of this revision use.
+            let standalone = ingot.kind(&backend.db) == IngotKind::StandAlone;
+            let source_url = ingot
+                .files(&backend.db)
+                .iter()
+                .find(|(_, file)| matches!(file.kind(&backend.db), Some(IngotFileKind::Source)))
+                .map(|(url, _)| url.clone());
+            if let Some(url) = source_url {
+                return match backend.try_analysis_db_for_url(&url) {
+                    Ok(db) => {
+                        let prepared_ingot = db
+                            .workspace()
+                            .containing_ingot(&db, url)
+                            .expect("prepared view keeps every indexed file");
+                        db.diagnostics_for_ingot(prepared_ingot)
+                    }
+                    Err(error) if standalone => {
+                        crate::lsp_diagnostics::generation_error_diagnostics(&backend.db, error)
+                    }
+                    // A package keeps its authored diagnostics, such as parse
+                    // errors in the file being edited, beside the failure.
+                    Err(error) => {
+                        let mut diagnostics = backend.db.diagnostics_for_ingot(ingot);
+                        for (uri, failure) in
+                            crate::lsp_diagnostics::generation_error_diagnostics(&backend.db, error)
+                        {
+                            diagnostics.entry(uri).or_default().extend(failure);
+                        }
+                        diagnostics
+                    }
+                };
+            }
             backend.db.diagnostics_for_ingot(ingot)
         })) {
             Ok(map) => map,
@@ -848,13 +887,14 @@ pub async fn handle_hover_request(
             .uri
             .clone(),
     );
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         warn!("handle_hover_request failed to get file for url: `{url}`");
         return Ok(None);
     };
 
     debug!("handling hover request in file: {:?}", file);
-    let (response, doc_path) = hover_helper(&backend.db, file, message).unwrap_or_else(|e| {
+    let (response, doc_path) = hover_helper(&analysis_db, file, message).unwrap_or_else(|e| {
         error!("Error handling hover: {:?}", e);
         (None, None)
     });

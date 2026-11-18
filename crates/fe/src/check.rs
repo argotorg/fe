@@ -267,8 +267,31 @@ fn check_ingot_url(
         return true;
     }
 
+    if prepare_generation(db, std::slice::from_ref(ingot_url), report) {
+        return true;
+    }
     let mut seen = HashSet::new();
     check_ingot_and_dependencies(db, ingot_url, dump_mir, report, &mut seen)
+}
+
+/// Check the program the selected ingots generate: replace the authored
+/// database with their one prepared view when they request generation.
+/// Returns whether preparation failed.
+fn prepare_generation(
+    db: &mut DriverDataBase,
+    roots: &[Url],
+    report: Option<&ReportContext>,
+) -> bool {
+    match driver::generation::prepare_ingots_in_place(db, roots) {
+        Ok(()) => false,
+        Err(error) => {
+            eprintln!("{error}");
+            if let Some(report) = report {
+                write_report_file(report, "errors/generation.txt", &format!("{error}\n"));
+            }
+            true
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -329,14 +352,24 @@ fn check_workspace(
         }
     };
     let selected_member_paths: HashSet<Utf8PathBuf> = selected_member_paths.into_iter().collect();
+    let members = members
+        .into_iter()
+        .filter(|member| selected_member_paths.contains(&dir_path.join(member.path.as_str())))
+        .collect::<Vec<_>>();
+
+    // One prepared view serves every selected member; a prepared view refuses
+    // a second preparation.
+    let roots = members
+        .iter()
+        .map(|member| member.url.clone())
+        .collect::<Vec<_>>();
+    if prepare_generation(db, &roots, report) {
+        return true;
+    }
 
     let mut seen = HashSet::new();
     let mut has_errors = false;
     for member in members {
-        let member_path = dir_path.join(member.path.as_str());
-        if !selected_member_paths.contains(&member_path) {
-            continue;
-        }
         let member_url = member.url;
         if let Some(mismatch) = dependency_target_mismatch(db, &member_url) {
             eprintln!("Error: {mismatch}");
@@ -447,6 +480,20 @@ fn check_single_file(
 
     // Try to get the file and check it for errors
     if let Some(file) = db.workspace().get(db, &file_url) {
+        match driver::generation::prepare_file(db, file) {
+            Ok(Some(prepared)) => {
+                *db = prepared;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("{error}");
+                return true;
+            }
+        }
+        let file = db
+            .workspace()
+            .get(db, &file_url)
+            .expect("prepared source file");
         let top_mod = db.top_mod(file);
         let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);
         let mut has_errors = false;

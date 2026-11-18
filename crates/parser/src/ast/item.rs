@@ -93,6 +93,11 @@ impl FuncSignature {
         support::token(self.syntax(), SK::Ident)
     }
 
+    /// `${n}` in place of the name inside a quotation.
+    pub fn name_hole(&self) -> Option<super::QuoteHole> {
+        support::child(self.syntax())
+    }
+
     /// Returns the function's parameter list.
     pub fn params(&self) -> Option<super::FuncParamList> {
         support::child(self.syntax())
@@ -389,6 +394,11 @@ impl TraitConstItem {
         support::token(self.syntax(), SK::Ident)
     }
 
+    /// `${n}` in place of the name inside a quotation.
+    pub fn name_hole(&self) -> Option<super::QuoteHole> {
+        support::child(self.syntax())
+    }
+
     /// Returns the type of the associated const
     pub fn ty(&self) -> Option<super::Type> {
         support::child(self.syntax())
@@ -396,6 +406,47 @@ impl TraitConstItem {
 
     /// Returns the optional default value of the associated const
     pub fn value(&self) -> Option<super::Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// An associated constant as written: a `const` in a trait or impl body,
+    /// or a quoted `const` lowered as an impl member.
+    pub struct AssocConstSyntax,
+    SK::TraitConstItem | SK::Const,
+}
+impl super::AttrListOwner for AssocConstSyntax {}
+impl AssocConstSyntax {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Ident)
+    }
+
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// An associated type as written: a `type` or `shape` in a trait or impl
+    /// body, or a quoted `type` alias lowered as an impl member.
+    pub struct AssocTypeSyntax,
+    SK::TraitTypeItem | SK::TraitShapeItem | SK::TypeAlias,
+}
+impl super::AttrListOwner for AssocTypeSyntax {}
+impl AssocTypeSyntax {
+    pub fn name(&self) -> Option<SyntaxToken> {
+        match TraitShapeItem::cast(self.syntax().clone()) {
+            Some(shape) => shape.name(),
+            None => support::token(self.syntax(), SK::Ident),
+        }
+    }
+
+    pub fn ty(&self) -> Option<super::Type> {
+        support::child(self.syntax())
+    }
+
+    pub fn bounds(&self) -> Option<TypeBoundList> {
         support::child(self.syntax())
     }
 }
@@ -516,6 +567,15 @@ impl super::WhereClauseOwner for Impl {}
 impl super::AttrListOwner for Impl {}
 impl super::ItemModifierOwner for Impl {}
 impl Impl {
+    /// Returns the provider path of a header-only `impl Type with (Provider)` item.
+    pub fn derive_provider(&self) -> Option<super::Path> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|node| node.into_token())
+            .find(|token| token.kind() == SK::Ident && token.text() == "with")?;
+        support::child(self.syntax())
+    }
+
     /// Returns the type of the impl.
     /// `Foo::Bar<T>` in `impl Foo::Bar<T> where .. { .. }`
     pub fn ty(&self) -> Option<super::Type> {
@@ -540,8 +600,18 @@ impl super::WhereClauseOwner for ImplTrait {}
 impl super::AttrListOwner for ImplTrait {}
 impl super::ItemModifierOwner for ImplTrait {}
 impl ImplTrait {
+    /// A header-only request; no written implementation body.
+    pub fn derive_provider(&self) -> Option<super::Path> {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|node| node.into_token())
+            .find(|token| token.kind() == SK::Ident && token.text() == "with")?;
+        support::child(self.syntax())
+    }
+
     /// A named alternative introduced by `as Name` after the subject type.
     pub fn selection_name(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::AsKw)?;
         support::token(self.syntax(), SK::Ident)
     }
 
@@ -576,6 +646,11 @@ impl Const {
     /// `FOO` in `const FOO: u32 = 42;`
     pub fn name(&self) -> Option<SyntaxToken> {
         support::token(self.syntax(), SK::Ident)
+    }
+
+    /// `${n}` in place of the name inside a quotation.
+    pub fn name_hole(&self) -> Option<super::QuoteHole> {
+        support::child(self.syntax())
     }
 
     /// Returns the type of the const.
@@ -739,11 +814,21 @@ ast_node! {
     SK::TraitItemList,
     IntoIterator<Item=TraitItem>,
 }
+impl TraitItemList {
+    pub fn hole_items(&self) -> impl Iterator<Item = super::QuoteHole> {
+        support::children(self.syntax())
+    }
+}
 
 ast_node! {
     pub struct ImplItemList,
     SK::ImplItemList,
     IntoIterator<Item=ImplItem>,
+}
+impl ImplItemList {
+    pub fn hole_items(&self) -> impl Iterator<Item = super::QuoteHole> {
+        support::children(self.syntax())
+    }
 }
 
 ast_node! {

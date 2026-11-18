@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::{
     hir_def::{
         BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
@@ -25,7 +26,7 @@ use crate::analysis::{
         diagnostics::{BodyDiag, FuncBodyDiag},
         evidence::{
             BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
-            RowEvidence, UseEvidence, declared_bound_evidence, instantiated_selection,
+            RowEvidence, UseEvidence, declared_bound_evidence_with_pending, instantiated_selection,
             prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
@@ -36,6 +37,7 @@ use crate::analysis::{
         trait_def::{AssocBinding, ResolvedMethodInstance, TraitInstId},
         trait_resolution::{
             TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
+            generation::GenerationRequest,
         },
         ty_def::{
             BorrowKind, InvalidCause, Kind, ShapeCon, StringFallback, TyBase, TyData, TyFlags,
@@ -303,16 +305,26 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     // stays the inference variable the callee was instantiated with, as does
     // an omitted parameter without a default; one with a default takes it.
     let inferred = &callable.generic_args[offset..];
-    let mut provided: Vec<_> =
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
-            .into_iter()
-            .zip(given)
-            .zip(inferred)
-            .map(|((lowered, arg), &var)| match arg {
-                GenericArg::Infer => var,
-                _ => lowered,
-            })
-            .collect();
+    let lowered_args = match callable.callable_def {
+        CallableDef::Func(func) => super::super::ty_lower::lower_protocol_generic_arg_list(
+            db,
+            args,
+            tc.env.scope(),
+            tc.env.assumptions(),
+            &lowering_cx,
+            func.into(),
+        ),
+        _ => lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx),
+    };
+    let mut provided: Vec<_> = lowered_args
+        .into_iter()
+        .zip(given)
+        .zip(inferred)
+        .map(|((lowered, arg), &var)| match arg {
+            GenericArg::Infer => var,
+            _ => lowered,
+        })
+        .collect();
     let completed_args = match callable.callable_def {
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
@@ -556,20 +568,21 @@ impl<'db> Callable<'db> {
     /// `declared_bound_evidence` records them, and the trait key of each
     /// component of the callee's rows for the provider that the call's
     /// `effect_args` give that component.
+    /// Returns the generation requests the producer met.
     pub(crate) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         solve_cx: TraitSolveCx<'db>,
         effect_args: &[super::ResolvedEffectArg<'db>],
-    ) {
+    ) -> Vec<GenerationRequest<'db>> {
         let CallableDef::Func(func) = self.callable_def else {
-            return;
+            return Vec::new();
         };
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
         let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
-            return;
+            return Vec::new();
         };
-        let evidence = declared_bound_evidence(
+        let (evidence, mut pending) = declared_bound_evidence_with_pending(
             db,
             func_declared_bounds(db, func, mode),
             func_signature(db, func, mode),
@@ -606,6 +619,7 @@ impl<'db> Callable<'db> {
                 })?;
                 let goal = super::super::instantiate_trait_self(db, goal, provider_ty);
                 let outcome = prove_outcome(db, solve_cx, goal);
+                pending.extend(outcome.request());
                 Some(RowEvidence {
                     path: component.path.clone(),
                     goal,
@@ -622,6 +636,7 @@ impl<'db> Callable<'db> {
             ),
             entries: evidence,
         });
+        pending
     }
 
     /// Missing dictionaries cannot be reconstructed ordinarily after a lexical
@@ -1524,7 +1539,7 @@ impl<'db> Callable<'db> {
             CallableDef::Func(func) => param_env(db, func.into()),
             CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => declared,
         };
-        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
+        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope(), Tier::All)
             .with_assumptions(definition_assumptions);
 
         let mut pending_obligations = Vec::new();

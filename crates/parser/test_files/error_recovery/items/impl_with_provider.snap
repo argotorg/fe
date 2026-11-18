@@ -1,0 +1,89 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/impl_with_provider.fe
+---
+Root@0..112
+  ItemList@0..111
+    Item@0..16
+      Impl@0..16
+        ImplKw@0..4 "impl"
+        WhiteSpace@4..5 " "
+        PathType@5..11
+          Path@5..11
+            PathSegment@5..11
+              Ident@5..11 "Packet"
+        WhiteSpace@11..12 " "
+        Ident@12..16 "with"
+    Newline@16..18 "\n\n"
+    Item@18..46
+      Impl@18..46
+        ImplKw@18..22 "impl"
+        WhiteSpace@22..23 " "
+        PathType@23..29
+          Path@23..29
+            PathSegment@23..29
+              Ident@23..29 "Packet"
+        WhiteSpace@29..30 " "
+        Ident@30..34 "with"
+        WhiteSpace@34..35 " "
+        LParen@35..36 "("
+        Path@36..46
+          PathSegment@36..46
+            Ident@36..46 "InspectAbi"
+    Newline@46..48 "\n\n"
+    Item@48..85
+      Impl@48..85
+        ImplKw@48..52 "impl"
+        WhiteSpace@52..53 " "
+        PathType@53..67
+          Path@53..59
+            PathSegment@53..59
+              Ident@53..59 "Packet"
+          GenericArgList@59..67
+            Lt@59..60 "<"
+            TypeGenericArg@60..61
+              PathType@60..61
+                Path@60..61
+                  PathSegment@60..61
+                    Ident@60..61 "T"
+            Comma@61..62 ","
+            WhiteSpace@62..63 " "
+            TypeGenericArg@63..64
+              PathType@63..64
+                Path@63..64
+                  PathSegment@63..64
+                    Ident@63..64 "u"
+            Error@64..66
+              RParen@64..65 ")"
+              RParen@65..66 ")"
+            Gt@66..67 ">"
+        WhiteSpace@67..68 " "
+        Ident@68..72 "with"
+        WhiteSpace@72..73 " "
+        LParen@73..74 "("
+        Path@74..84
+          PathSegment@74..84
+            Ident@74..84 "InspectAbi"
+        RParen@84..85 ")"
+    Newline@85..87 "\n\n"
+    Item@87..111
+      ImplTrait@87..111
+        ImplKw@87..91 "impl"
+        WhiteSpace@91..92 " "
+        TraitRef@92..97
+          Path@92..97
+            PathSegment@92..97
+              Ident@92..97 "Score"
+        WhiteSpace@97..98 " "
+        ForKw@98..101 "for"
+        WhiteSpace@101..102 " "
+        PathType@102..108
+          Path@102..108
+            PathSegment@102..108
+              Ident@102..108 "Packet"
+        WhiteSpace@108..109 " "
+        TraitItemList@109..111
+          LBrace@109..110 "{"
+          RBrace@110..111 "}"
+  Newline@111..112 "\n"

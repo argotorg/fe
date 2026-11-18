@@ -5,10 +5,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     HirDb,
     hir_def::{
-        Body, Enum, EnumVariant, ExprId, FieldDefListId, FieldParent, Func, FuncParamListId,
-        FuncParamName, GenericParamListId, GenericParamOwner, HirIngot, Impl, ItemKind,
-        TopLevelMod, TrackedItemId, TrackedItemVariant, Trait, Use, VariantDefListId, VariantKind,
-        Visibility,
+        AuthoredLocator, AuthoredScope, Body, Enum, EnumVariant, ExprId, FieldDefListId,
+        FieldParent, Func, FuncParamListId, FuncParamName, GenericParamListId, GenericParamOwner,
+        HirIngot, Impl, ItemKind, TopLevelMod, TrackedItemId, TrackedItemVariant, Trait, Use,
+        VariantDefListId, VariantKind, Visibility,
         scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
 };
@@ -38,7 +38,9 @@ pub(super) struct ScopeGraphBuilder<'db> {
     scope_stack: Vec<NodeId>,
     module_stack: Vec<NodeId>,
     id_stack: Vec<TrackedItemId<'db>>,
+    quote_mod_stack: Vec<Option<TopLevelMod<'db>>>,
     declared_blocks: Vec<FxHashMap<NodeId, Option<ExprId>>>,
+    quoted_origins: Vec<(ItemKind<'db>, AuthoredScope<'db>)>,
 }
 
 impl<'db> ScopeGraphBuilder<'db> {
@@ -51,11 +53,13 @@ impl<'db> ScopeGraphBuilder<'db> {
             scope_stack: Default::default(),
             module_stack: Default::default(),
             id_stack: Default::default(),
+            quote_mod_stack: Default::default(),
             declared_blocks: vec![],
+            quoted_origins: vec![],
         };
 
         let id = TrackedItemId::new(db, None, TrackedItemVariant::TopLevelMod(top_mod.name(db)));
-        builder.enter_item_scope(id, true);
+        builder.enter_item_scope(id, true, None);
         builder
     }
 
@@ -69,7 +73,9 @@ impl<'db> ScopeGraphBuilder<'db> {
             scope_stack: Default::default(),
             module_stack: Default::default(),
             id_stack: vec![func.id(db)],
+            quote_mod_stack: Default::default(),
             declared_blocks: vec![],
+            quoted_origins: vec![],
         }
     }
 
@@ -77,20 +83,48 @@ impl<'db> ScopeGraphBuilder<'db> {
         self.graph.build(self.top_mod, lower_diagnostics)
     }
 
-    pub(super) fn enter_item_scope(&mut self, id: TrackedItemId<'db>, is_mod: bool) {
+    pub(super) fn enter_item_scope(
+        &mut self,
+        id: TrackedItemId<'db>,
+        is_mod: bool,
+        quote_top_mod: Option<TopLevelMod<'db>>,
+    ) {
         self.id_stack.push(id);
+        self.quote_mod_stack.push(quote_top_mod);
         self.enter_scope_impl(is_mod);
     }
 
-    pub(super) fn enter_body_scope(&mut self, id: TrackedItemId<'db>) {
+    pub(super) fn enter_body_scope(
+        &mut self,
+        id: TrackedItemId<'db>,
+        quote_top_mod: Option<TopLevelMod<'db>>,
+    ) {
         self.declared_blocks.push(FxHashMap::default());
-        self.enter_item_scope(id, false);
+        self.enter_item_scope(id, false, quote_top_mod);
+    }
+
+    pub(super) fn intern_quote_mod(&mut self, quote_top_mod: TopLevelMod<'db>) -> u16 {
+        if let Some(idx) = self
+            .graph
+            .quote_mods
+            .iter()
+            .position(|&mod_| mod_ == quote_top_mod)
+        {
+            idx as u16
+        } else {
+            let idx = self.graph.quote_mods.len() as u16;
+            self.graph.quote_mods.push(quote_top_mod);
+            idx
+        }
     }
 
     pub(super) fn leave_item_scope(&mut self, item: ItemKind<'db>) {
         use ItemKind::*;
 
         self.id_stack.pop();
+        if let Some(Some(quote_top_mod)) = self.quote_mod_stack.pop() {
+            self.graph.quoted_top_mods.insert(item, quote_top_mod);
+        }
         let item_node = self.scope_stack.pop().unwrap();
         self.initialize_item_scope(item_node, item);
 
@@ -329,6 +363,102 @@ impl<'db> ScopeGraphBuilder<'db> {
             .add_edge(parent_node, item_node, parent_to_child_edge);
     }
 
+    pub(super) fn find_item_by_range(&self, range: parser::TextRange) -> Option<ItemKind<'db>> {
+        let root = super::top_mod_ast(self.db, self.top_mod);
+        use parser::ast::prelude::*;
+        self.graph
+            .nodes
+            .values()
+            .find_map(|(scope, _)| match *scope {
+                ScopeId::Item(item @ ItemKind::Struct(s)) => {
+                    (s.origin(self.db).authored_range(root.syntax()) == Some(range)).then_some(item)
+                }
+                ScopeId::Item(item @ ItemKind::Enum(e)) => {
+                    let crate::span::HirOrigin::Raw(ptr) = e.origin(self.db) else {
+                        return None;
+                    };
+                    (ptr.to_node(root.syntax()).syntax().text_range() == range).then_some(item)
+                }
+                _ => None,
+            })
+    }
+
+    /// Keep target discovery edges while giving the whole generated item
+    /// its producer lexical origin. Its body remains a child of the item.
+    pub(super) fn defer_quoted_item_origin(
+        &mut self,
+        item: ItemKind<'db>,
+        producer: AuthoredScope<'db>,
+    ) {
+        self.quoted_origins.push((item, producer));
+    }
+
+    pub(super) fn apply_quoted_function_origins(&mut self) {
+        for (item, producer) in std::mem::take(&mut self.quoted_origins) {
+            self.set_quoted_item_origin(item, producer);
+        }
+    }
+
+    pub(super) fn set_quoted_item_origin(
+        &mut self,
+        item: ItemKind<'db>,
+        producer: AuthoredScope<'db>,
+    ) {
+        let item_node = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|(node, (scope, _))| (*scope == ScopeId::Item(item)).then_some(node))
+            .expect("generated item scope");
+        let (publication_node, publication) = self
+            .graph
+            .edges
+            .get(&item_node)
+            .and_then(|edges| {
+                edges
+                    .iter()
+                    .find(|(_, kind)| matches!(kind, EdgeKind::Lex(_)))
+            })
+            .map(|(node, _)| (*node, self.graph.nodes[*node].0))
+            .expect("generated item retains its publication scope");
+        self.graph
+            .edges
+            .entry(item_node)
+            .or_default()
+            .retain(|(_, kind)| !matches!(kind, EdgeKind::Lex(_)));
+        self.graph.nodes[item_node].1.publication_parent = Some(publication);
+        if matches!(
+            publication,
+            ScopeId::Item(ItemKind::ImplTrait(_) | ItemKind::Impl(_) | ItemKind::Trait(_))
+        ) {
+            self.graph
+                .add_edge(item_node, publication_node, EdgeKind::self_ty());
+        }
+        // A producer in another module is linked after lowering: its scope
+        // graph may itself contain code generated from this module.
+        if producer.top_mod(self.db) != self.top_mod {
+            self.graph.foreign_origins.push((item_node, producer));
+            return;
+        }
+        let AuthoredLocator::Producer { module, block } = producer.locator(self.db) else {
+            unreachable!("a quotation's origin is its producer scope")
+        };
+        let lexical_scope = find_producer_scope(
+            self.db,
+            self.top_mod,
+            self.graph.nodes.values().map(|(scope, _)| *scope),
+            module,
+            block,
+        );
+        let lexical = self
+            .graph
+            .nodes
+            .iter()
+            .find_map(|(node, (scope, _))| (*scope == lexical_scope).then_some(node))
+            .expect("validated producer scope exists in copied source");
+        self.graph.add_lex_edge(item_node, lexical);
+    }
+
     pub(super) fn joined_id(&self, variant: TrackedItemVariant<'db>) -> TrackedItemId<'db> {
         self.id_stack.last().unwrap().join(self.db, variant)
     }
@@ -517,6 +647,59 @@ impl<'db> ScopeGraphBuilder<'db> {
     }
 }
 
+/// The scope a quotation in `quote_top_mod` was written in, among `scopes` of
+/// that module's graph: the authored block at `producer_block`, else the `mod`
+/// at `producer`, else the module itself.
+pub(super) fn find_producer_scope<'db>(
+    db: &'db dyn HirDb,
+    quote_top_mod: TopLevelMod<'db>,
+    scopes: impl IntoIterator<Item = ScopeId<'db>>,
+    producer: Option<parser::TextRange>,
+    producer_block: Option<parser::TextRange>,
+) -> ScopeId<'db> {
+    use parser::ast::prelude::*;
+    let root = super::top_mod_ast(db, quote_top_mod);
+    let scopes: Vec<ScopeId<'db>> = scopes.into_iter().collect();
+    if let Some(range) = producer_block
+        && let Some(scope) = scopes.iter().copied().find(|&scope| {
+            let ScopeId::Block(body, expression) = scope else {
+                return false;
+            };
+            // A producer is authored in the quote's module; generated
+            // bodies there point into other quotes.
+            if body.syntax_top_mod(db) != quote_top_mod {
+                return false;
+            }
+            let crate::span::HirOrigin::Raw(ptr) =
+                body.source_map(db).expr_map.node_to_source(expression)
+            else {
+                return false;
+            };
+            let expr_node = ptr.to_node(root.syntax());
+            expr_node.syntax().text_range() == range
+                || parser::ast::UnsafeExpr::cast(expr_node.syntax().clone())
+                    .and_then(|u| u.block())
+                    .is_some_and(|b| b.syntax().text_range() == range)
+        })
+    {
+        return scope;
+    }
+    if let Some(range) = producer
+        && let Some(scope) = scopes.iter().copied().find(|&scope| {
+            let ScopeId::Item(ItemKind::Mod(mod_)) = scope else {
+                return false;
+            };
+            let crate::span::HirOrigin::Raw(ptr) = mod_.origin(db) else {
+                return false;
+            };
+            ptr.to_node(root.syntax()).syntax().text_range() == range
+        })
+    {
+        return scope;
+    }
+    ScopeId::Item(ItemKind::TopMod(quote_top_mod))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct NodeId(u32);
 entity_impl!(NodeId);
@@ -526,6 +709,9 @@ struct IntermediateScopeGraph<'db> {
     nodes: PrimaryMap<NodeId, (ScopeId<'db>, Scope<'db>)>,
     edges: FxHashMap<NodeId, Vec<(NodeId, EdgeKind<'db>)>>,
     unresolved_uses: FxHashSet<Use<'db>>,
+    quote_mods: Vec<TopLevelMod<'db>>,
+    quoted_top_mods: common::indexmap::IndexMap<ItemKind<'db>, TopLevelMod<'db>>,
+    foreign_origins: Vec<(NodeId, AuthoredScope<'db>)>,
 }
 
 impl<'db> IntermediateScopeGraph<'db> {
@@ -534,6 +720,11 @@ impl<'db> IntermediateScopeGraph<'db> {
         top_mod: TopLevelMod<'db>,
         lower_diagnostics: Vec<LowerDiagnostic>,
     ) -> ScopeGraph<'db> {
+        let foreign_origins = self
+            .foreign_origins
+            .iter()
+            .map(|(node, producer)| (self.nodes[*node].0, *producer))
+            .collect();
         // The first scope entered is the root.
         let root = self.nodes[NodeId::new(0)].0;
         for (from_node, edges) in self.edges {
@@ -556,6 +747,9 @@ impl<'db> IntermediateScopeGraph<'db> {
             scopes,
             unresolved_uses: self.unresolved_uses,
             lower_diagnostics,
+            quote_mods: self.quote_mods,
+            quoted_top_mods: self.quoted_top_mods,
+            foreign_origins,
         }
     }
 

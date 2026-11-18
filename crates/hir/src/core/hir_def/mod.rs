@@ -1,4 +1,5 @@
 pub mod attr;
+pub mod authored;
 pub mod body;
 pub mod effects;
 pub mod expr;
@@ -18,6 +19,7 @@ mod scope_graph_viz;
 pub(crate) mod module_tree;
 
 pub use attr::*;
+pub use authored::{AuthoredLocator, AuthoredScope};
 pub use body::*;
 use common::ingot::{Ingot, IngotKind};
 pub use effects::*;

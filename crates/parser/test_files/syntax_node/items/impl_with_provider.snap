@@ -1,0 +1,204 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/impl_with_provider.fe
+---
+Root@0..228
+  ItemList@0..227
+    Item@0..29
+      Impl@0..29
+        ImplKw@0..4 "impl"
+        WhiteSpace@4..5 " "
+        PathType@5..11
+          Path@5..11
+            PathSegment@5..11
+              Ident@5..11 "Packet"
+        WhiteSpace@11..12 " "
+        Ident@12..16 "with"
+        WhiteSpace@16..17 " "
+        LParen@17..18 "("
+        Path@18..28
+          PathSegment@18..28
+            Ident@18..28 "InspectAbi"
+        RParen@28..29 ")"
+    Newline@29..31 "\n\n"
+    Item@31..65
+      Impl@31..65
+        ImplKw@31..35 "impl"
+        GenericParamList@35..43
+          Lt@35..36 "<"
+          TypeGenericParam@36..42
+            Ident@36..37 "T"
+            TypeBoundList@37..42
+              Colon@37..38 ":"
+              WhiteSpace@38..39 " "
+              TypeBound@39..42
+                TraitRef@39..42
+                  Path@39..42
+                    PathSegment@39..42
+                      Ident@39..42 "Ord"
+          Gt@42..43 ">"
+        WhiteSpace@43..44 " "
+        PathType@44..51
+          Path@44..51
+            PathSegment@44..51
+              Ident@44..48 "Box2"
+              GenericArgList@48..51
+                Lt@48..49 "<"
+                TypeGenericArg@49..50
+                  PathType@49..50
+                    Path@49..50
+                      PathSegment@49..50
+                        Ident@49..50 "T"
+                Gt@50..51 ">"
+        WhiteSpace@51..52 " "
+        Ident@52..56 "with"
+        WhiteSpace@56..57 " "
+        LParen@57..58 "("
+        Path@58..64
+          PathSegment@58..64
+            Ident@58..64 "Within"
+        RParen@64..65 ")"
+    Newline@65..67 "\n\n"
+    Item@67..117
+      Impl@67..117
+        ImplKw@67..71 "impl"
+        GenericParamList@71..74
+          Lt@71..72 "<"
+          TypeGenericParam@72..73
+            Ident@72..73 "T"
+          Gt@73..74 ">"
+        WhiteSpace@74..75 " "
+        PathType@75..82
+          Path@75..82
+            PathSegment@75..82
+              Ident@75..79 "Box2"
+              GenericArgList@79..82
+                Lt@79..80 "<"
+                TypeGenericArg@80..81
+                  PathType@80..81
+                    Path@80..81
+                      PathSegment@80..81
+                        Ident@80..81 "T"
+                Gt@81..82 ">"
+        WhiteSpace@82..83 " "
+        Ident@83..87 "with"
+        WhiteSpace@87..88 " "
+        LParen@88..89 "("
+        Path@89..103
+          PathSegment@89..92
+            Ident@89..92 "pkg"
+          Colon2@92..94 "::"
+          PathSegment@94..103
+            Ident@94..100 "Within"
+            GenericArgList@100..103
+              Lt@100..101 "<"
+              TypeGenericArg@101..102
+                PathType@101..102
+                  Path@101..102
+                    PathSegment@101..102
+                      Ident@101..102 "T"
+              Gt@102..103 ">"
+        RParen@103..104 ")"
+        Newline@104..105 "\n"
+        WhereClause@105..117
+          WhereKw@105..110 "where"
+          WhiteSpace@110..111 " "
+          WherePredicate@111..117
+            PathType@111..112
+              Path@111..112
+                PathSegment@111..112
+                  Ident@111..112 "T"
+            TypeBoundList@112..117
+              Colon@112..113 ":"
+              WhiteSpace@113..114 " "
+              TypeBound@114..117
+                TraitRef@114..117
+                  Path@114..117
+                    PathSegment@114..117
+                      Ident@114..117 "Ord"
+    Newline@117..119 "\n\n"
+    Item@119..158
+      ImplTrait@119..158
+        ImplKw@119..123 "impl"
+        WhiteSpace@123..124 " "
+        TraitRef@124..129
+          Path@124..129
+            PathSegment@124..129
+              Ident@124..129 "Score"
+        WhiteSpace@129..130 " "
+        ForKw@130..133 "for"
+        WhiteSpace@133..134 " "
+        PathType@134..140
+          Path@134..140
+            PathSegment@134..140
+              Ident@134..140 "Packet"
+        WhiteSpace@140..141 " "
+        Ident@141..145 "with"
+        WhiteSpace@145..146 " "
+        LParen@146..147 "("
+        Path@147..157
+          PathSegment@147..157
+            Ident@147..157 "InspectAbi"
+        RParen@157..158 ")"
+    Newline@158..160 "\n\n"
+    Item@160..227
+      ImplTrait@160..227
+        PubKw@160..163 "pub"
+        WhiteSpace@163..164 " "
+        ImplKw@164..168 "impl"
+        GenericParamList@168..171
+          Lt@168..169 "<"
+          TypeGenericParam@169..170
+            Ident@169..170 "T"
+          Gt@170..171 ">"
+        WhiteSpace@171..172 " "
+        TraitRef@172..177
+          Path@172..177
+            PathSegment@172..177
+              Ident@172..177 "Score"
+        WhiteSpace@177..178 " "
+        ForKw@178..181 "for"
+        WhiteSpace@181..182 " "
+        PathType@182..189
+          Path@182..189
+            PathSegment@182..189
+              Ident@182..186 "Box2"
+              GenericArgList@186..189
+                Lt@186..187 "<"
+                TypeGenericArg@187..188
+                  PathType@187..188
+                    Path@187..188
+                      PathSegment@187..188
+                        Ident@187..188 "T"
+                Gt@188..189 ">"
+        WhiteSpace@189..190 " "
+        AsKw@190..192 "as"
+        WhiteSpace@192..193 " "
+        Ident@193..200 "Ordered"
+        WhiteSpace@200..201 " "
+        Ident@201..205 "with"
+        WhiteSpace@205..206 " "
+        LParen@206..207 "("
+        Path@207..213
+          PathSegment@207..213
+            Ident@207..213 "Within"
+        RParen@213..214 ")"
+        Newline@214..215 "\n"
+        WhereClause@215..227
+          WhereKw@215..220 "where"
+          WhiteSpace@220..221 " "
+          WherePredicate@221..227
+            PathType@221..222
+              Path@221..222
+                PathSegment@221..222
+                  Ident@221..222 "T"
+            TypeBoundList@222..227
+              Colon@222..223 ":"
+              WhiteSpace@223..224 " "
+              TypeBound@224..227
+                TraitRef@224..227
+                  Path@224..227
+                    PathSegment@224..227
+                      Ident@224..227 "Ord"
+  Newline@227..228 "\n"

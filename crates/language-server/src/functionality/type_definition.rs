@@ -20,21 +20,22 @@ pub async fn handle_goto_type_definition(
             .uri
             .clone(),
     );
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
 
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &internal_url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor: Cursor = to_offset_from_position(
         params.text_document_position_params.position,
         file_text.as_str(),
     );
 
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     // Get the target at cursor (handles references, definitions, and bindings)
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
@@ -43,8 +44,8 @@ pub async fn handle_goto_type_definition(
     let location = match target {
         Target::Local { ty, .. } => {
             // Get the span of the type's definition
-            ty.name_span(&backend.db)
-                .and_then(|name_span| to_lsp_location_from_lazy_span(&backend.db, name_span).ok())
+            ty.name_span(&analysis_db)
+                .and_then(|name_span| to_lsp_location_from_lazy_span(&analysis_db, name_span).ok())
         }
         Target::Scope(_) => {
             // For scopes, go-to-type-definition doesn't make sense

@@ -119,7 +119,11 @@ impl<'db> DependencyIssues<'db> {
                         } else {
                             db.mir_diagnostics_for_ingot(ingot)
                         };
-                        (!hir.is_empty() || !mir.is_empty())
+                        // A warning in a dependency does not stop its dependents:
+                        // only an error does, as for the package itself.
+                        let mir_has_errors =
+                            mir.iter().any(|diag| diag.severity == Severity::Error);
+                        (hir.has_errors(db) || mir_has_errors)
                             .then_some(DependencyIssue::Diagnostics { url, hir, mir })
                     }
                 })
@@ -378,6 +382,35 @@ mod tests {
         assert!(diagnostics.mir.is_empty());
         assert!(formatted.contains("Dependency: dep (version: 1.0.0)"));
         assert!(formatted.contains("expected expression"));
+    }
+
+    #[test]
+    fn a_warning_in_a_source_dependency_does_not_fail_its_dependents() {
+        let (db, root_url) = db_with_source_dependency(
+            "fn root() {}",
+            "dep",
+            "struct Cell { word: u256 }
+impl Cell {
+    fn get_mut(mut self) -> mut u256 {
+        mut self.word
+    }
+}
+fn var_of_mut(_ cell: mut Cell) {
+    var w = cell.get_mut()
+    w += 1
+}
+",
+        );
+        let dependency_url = Url::parse("file:///dependency/src/lib.fe").unwrap();
+        let dependency_file = db.workspace().get(&db, &dependency_url).unwrap();
+        let dependency = db.run_on_top_mod(db.top_mod(dependency_file));
+        // The dependency has a warning and no error, so a dependent builds.
+        assert!(!dependency.is_empty());
+        assert!(!dependency.has_errors(&db));
+        let diagnostics = collect(&db, &root_url);
+        assert!(diagnostics.hir.is_empty());
+        assert!(diagnostics.dependencies.is_empty());
+        assert!(diagnostics.mir.is_empty());
     }
 
     #[test]

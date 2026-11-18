@@ -1,0 +1,10 @@
+// An `unsafe fn` that the trusted `t2` wrote is unsafe code of every package
+// that placed it. `u`, which nothing trusts, splices `t2`'s item into its own
+// quotation, so a call of the function is refused naming `u`.
+pub struct Placed {}
+impl Placed with (u::SplicesItem)
+
+#[test]
+fn calls_an_unsafe_fn_that_u_placed() {
+    assert(unsafe { Placed {}.unsafe_fn() } == 8)
+}

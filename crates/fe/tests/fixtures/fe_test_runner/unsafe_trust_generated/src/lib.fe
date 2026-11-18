@@ -1,0 +1,46 @@
+// The providers of `dep` write unsafe code in their quotations, and nothing
+// trusts `dep`. The code is published into this ingot, but `dep` wrote it, so
+// a call that reaches it is refused like a call of `dep`'s own function.
+use dep::{Reading, ReadsSafely, ReadsUnsafely, VouchesSafely, VouchesUnsafely, Vouching}
+
+pub struct Header {}
+impl Reading for Header with (ReadsUnsafely)
+
+pub struct Safe {}
+impl Reading for Safe with (ReadsSafely)
+
+// The `unsafe impl` is written here, so it asserts the members that `dep`
+// supplies; only an `unsafe` block that `dep` wrote is `dep`'s unsafe code.
+pub struct Vouched {}
+unsafe impl Vouching for Vouched with (VouchesSafely)
+
+pub struct VouchedUnsafely {}
+unsafe impl Vouching for VouchedUnsafely with (VouchesUnsafely)
+
+pub struct Generated {}
+impl Generated with (dep::WritesUnsafely)
+
+#[test]
+fn header_member_runs_unsafe_code() {
+    assert!(Header {}.read() == 7)
+}
+
+#[test]
+fn generated_member_runs_unsafe_code() {
+    assert!(Generated {}.write() == 9)
+}
+
+#[test]
+fn safe_header_member_needs_no_trust() {
+    assert!(Safe {}.read() == 5)
+}
+
+#[test]
+fn vouched_header_member_needs_no_trust() {
+    assert!(Vouched {}.vouch() == 3)
+}
+
+#[test]
+fn vouched_header_member_with_an_unsafe_block_runs_unsafe_code() {
+    assert!(VouchedUnsafely {}.vouch() == 3)
+}

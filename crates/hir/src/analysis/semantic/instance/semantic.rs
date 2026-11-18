@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -24,7 +25,8 @@ use crate::{
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
-                resolve_core_trait, resolve_lib_type_path, runtime_builtin_func_kind,
+                presence_trait, resolve_core_trait, resolve_lib_type_path,
+                runtime_builtin_func_kind,
             },
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
@@ -529,7 +531,7 @@ pub fn instantiated_typed_body<'db>(
         db,
         goals,
         supplied,
-        TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
+        TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db), Tier::All),
     );
     let bound = crate::analysis::ty::evidence::BoundEvidence {
         schema: body.bound_schema(),
@@ -1204,6 +1206,11 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let kind = if matches!(error, MethodArgMapError::DeclaredOnly) {
+        SemanticDiagnosticKind::DeclaredOnlyImplementation
+    } else {
+        SemanticDiagnosticKind::Internal
+    };
     let message = match error {
         MethodArgMapError::SignatureMismatch {
             nominal,
@@ -1227,12 +1234,13 @@ fn method_arg_map_diagnostic<'db>(
                 evidence.pretty_print(db),
             )
         }
+        MethodArgMapError::DeclaredOnly => "this call goes through an implementation that is only declared by a written header; its members are produced by generation and cannot run while a provider evaluates".to_string(),
         error => format!("checked call body argument mapping failed: {error:?}"),
     };
     SemanticDiagnosticId::new(
         db,
         SemanticDiagnostic {
-            kind: SemanticDiagnosticKind::Internal,
+            kind,
             instance,
             primary: SemanticDiagnosticLabel {
                 message,
@@ -1818,7 +1826,7 @@ impl<'db> SemanticInstance<'db> {
                     // Existing named or bound proofs are never replaced.
                     callable.record_evidence(
                         db,
-                        TraitSolveCx::new(db, self.normalization_scope(db))
+                        TraitSolveCx::new(db, self.normalization_scope(db), Tier::All)
                             .with_assumptions(self.assumptions(db)),
                     );
                 }
@@ -1974,6 +1982,43 @@ impl<'db> SemanticInstance<'db> {
     #[salsa::tracked]
     pub fn callees(self, db: &'db dyn HirAnalysisDb) -> Vec<SemanticCalleeRef<'db>> {
         collect_semantic_callees(db, self)
+    }
+
+    /// The instances that running the body evaluates besides its explicit
+    /// calls: the constants it reads and the codec callees of its place
+    /// entries. A constant is not a callee, but evaluating it runs its body.
+    pub fn implicit_dependencies(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<SemanticInstanceKey<'db>> {
+        let typed_body = self.key(db).typed_body(db);
+        let Some(body) = typed_body.body() else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
+        let mut push = |key| {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        };
+        for expr in body.exprs(db).keys() {
+            if let Some(const_ref) = typed_body.expr_const_ref(expr)
+                && let Some(resolved) = super::const_ref::resolve_semantic_const_ref(
+                    db,
+                    const_ref,
+                    typed_body.expr_ty(db, expr),
+                    SemOrigin::Expr(expr),
+                )
+            {
+                push(resolved.instance(db));
+            }
+            if typed_body.place_entry_calls(expr).is_some()
+                && let Ok(codec) = self.entry_codec_callees(db, expr)
+            {
+                codec.into_iter().for_each(&mut push);
+            }
+        }
+        keys
     }
 
     /// Borrow checking and runtime lowering consume concrete layouts, so a
@@ -2258,7 +2303,9 @@ fn instance_calls<'db>(
     calls.chain(loops).collect()
 }
 
-/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data.
+/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data. Off
+/// the EVM the answer decides whether the panic reverts with the value or
+/// traps, so `Encode` declares `#[decides]`; `AbiSize` is its supertrait.
 pub fn panic_payload_encodable<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -2268,14 +2315,14 @@ pub fn panic_payload_encodable<'db>(
     let Some(abi) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
         return false;
     };
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     let satisfied = |inst| {
         matches!(
             is_goal_satisfiable(db, solve_cx, inst),
             GoalSatisfiability::Satisfied(_)
         )
     };
-    resolve_core_trait(db, scope, &["abi", "Encode"])
+    presence_trait(db, scope, "core::abi::Encode")
         .is_some_and(|encode| satisfied(TraitInstId::new_simple(db, encode, vec![ty, abi])))
         && resolve_core_trait(db, scope, &["abi", "AbiSize"])
             .is_some_and(|size| satisfied(TraitInstId::new_simple(db, size, vec![ty])))
@@ -2433,6 +2480,15 @@ fn instance_limit_violation_cycle_initial<'db>(
     _: SemanticInstance<'db>,
 ) -> Option<SemanticDiagnosticId<'db>> {
     None
+}
+
+/// Whether `instance` is past the instance limits, so that it is rejected as
+/// itself where it is checked and its calls need not be followed.
+pub fn exceeds_instance_limits<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    instance_limit_violation(db, instance).is_some()
 }
 
 fn normalize_adt_field_types<'db>(
@@ -3123,7 +3179,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
             matches!(
                 is_goal_satisfiable(
                     db,
-                    TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(db, func.scope(), Tier::All).with_assumptions(assumptions),
                     goal,
                 ),
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }

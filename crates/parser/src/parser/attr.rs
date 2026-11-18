@@ -213,9 +213,10 @@ impl super::Parse for AttrArgScope {
     }
 }
 
-/// Whether the next tokens are a simple path (`a` or `a::b`) that ends at `=`,
-/// `,` or `)`, or a `=` missing its key: an argument's key rather than an
-/// expression.
+/// Whether the next tokens are a simple path (`a`, `a::b` or `super::b`) that
+/// ends at `=`, `,` or `)`, or a `=` missing its key: an argument's key rather
+/// than an expression. A segment may be `self`, `super` or `ingot`, as in any
+/// path.
 fn starts_attr_arg_key<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     const MAX_KEY_TOKENS: usize = 32;
     let tokens = parser.peek_n_non_trivia(MAX_KEY_TOKENS);
@@ -225,7 +226,12 @@ fn starts_attr_arg_key<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     }
     let mut idx = 0;
     loop {
-        if tokens.get(idx) != Some(&SyntaxKind::Ident) {
+        if !matches!(
+            tokens.get(idx),
+            Some(
+                SyntaxKind::Ident | SyntaxKind::SelfKw | SyntaxKind::SuperKw | SyntaxKind::IngotKw
+            )
+        ) {
             return false;
         }
         idx += 1;

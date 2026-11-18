@@ -62,43 +62,44 @@ pub async fn handle_semantic_tokens_full(
     params: async_lsp::lsp_types::SemanticTokensParams,
 ) -> Result<Option<SemanticTokensResult>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.text_document.uri);
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let line_offsets = calculate_line_offsets(file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     let mut tokens: Vec<(u32, u32, u32, u32, u32)> = vec![]; // (line, col, length, type, modifiers)
 
     // Collect tokens from all items in the module
-    for &item in top_mod.all_items(&backend.db) {
-        for reference in item.references(&backend.db) {
+    for &item in top_mod.all_items(&analysis_db) {
+        for reference in item.references(&analysis_db) {
             // For path references, emit a separate token per segment so that
             // each part of `C::init_code_offset` gets its own token type
             // (type param vs function). This also fixes ctrl+hover underline
             // in editors that use semantic tokens for word boundary detection.
             if let ReferenceView::Path(view) = reference {
-                let last_idx = view.path.segment_index(&backend.db);
+                let last_idx = view.path.segment_index(&analysis_db);
                 for idx in 0..=last_idx {
                     let segment_span = view.span.clone().segment(idx);
                     let Some(seg_span) = segment_span
                         .clone()
                         .ident()
-                        .resolve(&backend.db)
-                        .or_else(|| segment_span.resolve(&backend.db))
+                        .resolve(&analysis_db)
+                        .or_else(|| segment_span.resolve(&analysis_db))
                     else {
                         continue;
                     };
-                    if seg_span.file.url(&backend.db) != Some(url.clone()) {
+                    if seg_span.file.url(&analysis_db) != Some(url.clone()) {
                         continue;
                     }
 
                     // Resolve this segment to its target
-                    let token_type = match view.segment_target(&backend.db, idx).first() {
+                    let token_type = match view.segment_target(&analysis_db, idx).first() {
                         Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                         Some(Target::Local { .. }) => Some(3),
                         None => None,
@@ -119,14 +120,14 @@ pub async fn handle_semantic_tokens_full(
             }
 
             // Non-path references: single token for the reference span
-            let Some(span) = reference.span().resolve(&backend.db) else {
+            let Some(span) = reference.span().resolve(&analysis_db) else {
                 continue;
             };
-            if span.file.url(&backend.db) != Some(url.clone()) {
+            if span.file.url(&analysis_db) != Some(url.clone()) {
                 continue;
             }
 
-            let token_type = match reference.target(&backend.db).first() {
+            let token_type = match reference.target(&analysis_db).first() {
                 Some(Target::Scope(scope)) => item_kind_to_token_type(scope.item()),
                 Some(Target::Local { .. }) => Some(3), // variable
                 None => None,

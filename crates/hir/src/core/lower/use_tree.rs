@@ -23,6 +23,10 @@ impl<'db> Use<'db> {
             return vec![use_];
         };
 
+        if ctxt.quote_names_resolve_at_producer() {
+            refuse_glob_imports(ctxt, &use_tree);
+        }
+
         // If the use tree has no subtree, then there is no need to decompose it.
         if !use_tree.has_subtree() {
             let path = UsePathId::lower_ast_partial(ctxt, use_tree.path());
@@ -50,6 +54,24 @@ impl<'db> Use<'db> {
                 ctxt.leave_item_scope(use_)
             })
             .collect()
+    }
+}
+
+/// Refuses a glob import in a quotation, at any depth of the use tree. The
+/// names that a glob brings in are not known when the quotation is lowered, so
+/// a name that only the glob provides would be looked up in the producer's
+/// scope, where it can mean another item or nothing.
+fn refuse_glob_imports(ctxt: &mut FileLowerCtxt<'_>, tree: &ast::UseTree) {
+    if let Some(segment) = tree.path().and_then(|path| path.into_iter().last())
+        && matches!(segment.kind(), Some(ast::UsePathSegmentKind::Glob(_)))
+    {
+        ctxt.record_generation_error(
+            segment.syntax().text_range(),
+            "a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}`",
+        );
+    }
+    for child in tree.children().into_iter().flatten() {
+        refuse_glob_imports(ctxt, &child);
     }
 }
 

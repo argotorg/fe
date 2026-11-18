@@ -137,6 +137,19 @@ impl super::Parse for ItemScope {
             parser.error(&error_msg);
         }
 
+        // A quoted `type` is an associated type member; where it is spliced
+        // decides whether a type member is allowed there.
+        if at_quoted_item_root(parser)
+            && !matches!(
+                parser.current_kind(),
+                Some(FnKw | ConstKw | ImplKw | TypeKw)
+            )
+        {
+            parser.error_msg_on_current_token(
+                "only functions, constants, types and impls can be quoted",
+            );
+        }
+
         parser.expect(
             &[
                 ModKw,
@@ -158,7 +171,7 @@ impl super::Parse for ItemScope {
 
         match parser.current_kind() {
             Some(ModKw) => parser.parse_cp(ModScope::default(), checkpoint),
-            Some(FnKw) => parser.parse_cp(FuncScope::default(), checkpoint),
+            Some(FnKw) => parser.parse_cp(FuncScope::new(quoted_fn_scope(parser)), checkpoint),
             Some(StructKw) => parser.parse_cp(super::struct_::StructScope::default(), checkpoint),
             Some(ContractKw) => parser.parse_cp(ContractScope::default(), checkpoint),
             Some(MsgKw) => parser.parse_cp(MsgScope::default(), checkpoint),
@@ -171,7 +184,7 @@ impl super::Parse for ItemScope {
             Some(UseKw) => parser.parse_cp(UseScope::default(), checkpoint),
             Some(ConstKw) => {
                 if is_fn_item_head(parser) {
-                    parser.parse_cp(FuncScope::default(), checkpoint)
+                    parser.parse_cp(FuncScope::new(quoted_fn_scope(parser)), checkpoint)
                 } else {
                     parser.parse_cp(ConstScope::default(), checkpoint)
                 }
@@ -183,6 +196,30 @@ impl super::Parse for ItemScope {
         }?;
 
         Ok(())
+    }
+}
+
+/// A quoted function may become a method where it is spliced, so it may take
+/// `self`.
+/// Only the immediate output items have the bounded Code<Item> whitelist.
+/// Bodies of those items contain ordinary Fe declarations, just like authored
+/// function bodies; being a descendant of a quote does not change that grammar.
+fn at_quoted_item_root<S: TokenStream>(parser: &Parser<S>) -> bool {
+    let mut parents = parser.parents.iter().rev().skip(1);
+    match parents.next().map(|entry| entry.kind) {
+        Some(SyntaxKind::QuoteItemList) => true,
+        Some(SyntaxKind::BlockExpr) => parents
+            .next()
+            .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr),
+        _ => false,
+    }
+}
+
+fn quoted_fn_scope<S: TokenStream>(parser: &Parser<S>) -> FuncDefScope {
+    if at_quoted_item_root(parser) {
+        FuncDefScope::Impl
+    } else {
+        FuncDefScope::Normal
     }
 }
 
@@ -791,7 +828,7 @@ impl super::Parse for TraitUsesItemScope {
     }
 }
 
-define_scope! { TraitShapeItemScope, TraitShapeItem }
+define_scope! { pub(super) TraitShapeItemScope, TraitShapeItem }
 impl super::Parse for TraitShapeItemScope {
     type Error = Recovery<ErrProof>;
 
@@ -823,7 +860,10 @@ impl super::Parse for TraitConstItemScope {
 
         parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon, SyntaxKind::Eq]);
 
-        if parser.find_and_pop(
+        if parser.at_quote_hole() {
+            parser.pop_recovery_stack();
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+        } else if parser.find_and_pop(
             SyntaxKind::Ident,
             ExpectedKind::Name(SyntaxKind::TraitConstItem),
         )? {
@@ -856,11 +896,39 @@ impl super::Parse for ImplScope {
         parse_generic_params_opt(parser, false)?;
 
         let is_impl_trait = parser.dry_run(|parser| {
-            parser.parse(TraitRefScope::default()).is_ok()
-                && parser
-                    .find(SyntaxKind::ForKw, ExpectedKind::Unspecified)
-                    .is_ok_and(|x| x)
+            if parser.parse(TraitRefScope::default()).is_err() {
+                return false;
+            }
+            if parser.current_kind() == Some(SyntaxKind::ForKw) {
+                return true;
+            }
+            if parser.recovery_mode == super::RecoveryMode::NoRecover {
+                return false;
+            }
+            parser.set_newline_as_trivia(false);
+            while let Some(kind) = parser.current_kind() {
+                if kind == SyntaxKind::Newline
+                    || kind == SyntaxKind::WhereKw
+                    || kind == SyntaxKind::AsKw
+                    || parser.is_ident("with")
+                {
+                    return false;
+                }
+                if kind == SyntaxKind::ForKw {
+                    return true;
+                }
+                if parser
+                    .parents
+                    .iter()
+                    .any(|scope| scope.is_recovery_match(kind))
+                {
+                    return false;
+                }
+                parser.bump();
+            }
+            false
         });
+        parser.set_newline_as_trivia(true);
 
         if is_impl_trait {
             parser.set_scope_kind(SyntaxKind::ImplTrait);
@@ -905,6 +973,35 @@ impl super::Parse for ImplScope {
             }
         }
 
+        if parser
+            .current_token()
+            .is_some_and(|token| token.text() == "with")
+        {
+            let parent = if is_impl_trait {
+                SyntaxKind::ImplTrait
+            } else {
+                SyntaxKind::Impl
+            };
+            parser.bump();
+            parser.set_scope_recovery_stack(&[SyntaxKind::LParen, SyntaxKind::RParen]);
+            parser.set_newline_as_trivia(true);
+            if parser.find_and_pop(SyntaxKind::LParen, ExpectedKind::Unspecified)? {
+                parser.bump();
+                parser.parse_or_recover(PathScope::default())?;
+            }
+            if parser.find_and_pop(
+                SyntaxKind::RParen,
+                ExpectedKind::ClosingBracket {
+                    bracket: SyntaxKind::RParen,
+                    parent,
+                },
+            )? {
+                parser.bump();
+            }
+            // A provider header has no body; its requirements follow the provider.
+            parse_where_clause_opt(parser, ItemBlock::Absent)?;
+            return Ok(());
+        }
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;
 
@@ -961,7 +1058,10 @@ impl super::Parse for ConstScope {
         parser.set_newline_as_trivia(false);
         parser.set_scope_recovery_stack(&[SyntaxKind::Ident, SyntaxKind::Colon, SyntaxKind::Eq]);
 
-        if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Const))? {
+        if parser.at_quote_hole() {
+            parser.pop_recovery_stack();
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+        } else if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Const))? {
             parser.bump();
         }
         if parser.find_and_pop(
@@ -1076,6 +1176,11 @@ fn parse_fn_item_block<S: TokenStream>(
             break;
         }
 
+        if parser.at_quote_hole() {
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+            continue;
+        }
+
         let mut checkpoint = attr::parse_attr_list(parser)?;
         let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
@@ -1114,6 +1219,11 @@ fn parse_trait_item_block<S: TokenStream>(
         parser.set_newline_as_trivia(true);
         if matches!(parser.current_kind(), Some(SyntaxKind::RBrace) | None) {
             break;
+        }
+
+        if parser.at_quote_hole() {
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+            continue;
         }
 
         let mut checkpoint = attr::parse_attr_list(parser)?;

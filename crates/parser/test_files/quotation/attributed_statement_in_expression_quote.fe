@@ -1,0 +1,8 @@
+use core::meta::{Code, Expr}
+
+const fn f() -> Code<Expr> {
+    quote {
+        #[unroll]
+        for x in [1, 2] { }
+    }
+}

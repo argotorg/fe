@@ -1,0 +1,10 @@
+const fn deep<T>(_ n: usize) -> bool {
+    if n == 0 { true } else { deep<(T,)>(n - 1) }
+}
+
+pub struct Poly<T> where { deep<T>(2) } { pub a: T }
+
+pub fn use_it() -> u256 {
+    let p: Poly<u256> = Poly { a: 1 }
+    p.a
+}

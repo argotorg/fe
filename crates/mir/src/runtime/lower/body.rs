@@ -1,4 +1,5 @@
 use common::compilation::Target;
+use hir::analysis::name_resolution::Tier;
 use hir::analysis::ty::AddressSpace;
 use std::mem::size_of;
 
@@ -21,7 +22,7 @@ use hir::analysis::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            RuntimeBuiltinFuncKind, concrete_usize, resolve_core_trait, resolve_lib_func_path,
+            RuntimeBuiltinFuncKind, concrete_usize, presence_trait, resolve_lib_func_path,
             resolve_lib_type_path, runtime_builtin_func_kind,
         },
         trait_def::TraitInstId,
@@ -348,12 +349,14 @@ fn panic_payload_is_error_variant<'db>(
     let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
         return false;
     };
-    let Some(error_variant_trait) = resolve_core_trait(db, scope, &["error", "ErrorVariant"])
-    else {
+    // A type has an error variant only by an implementation written in the
+    // package or a dependency: a generated one is refused where it is
+    // requested, since it would change what a revert of the value carries.
+    let Some(error_variant_trait) = presence_trait(db, scope, "core::error::ErrorVariant") else {
         return false;
     };
     let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     matches!(
         is_goal_satisfiable(db, solve_cx, error_variant),
         GoalSatisfiability::Satisfied(_)
@@ -362,6 +365,9 @@ fn panic_payload_is_error_variant<'db>(
 
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
     match expr {
+        NExpr::ItemQuote { .. } => {
+            unreachable!("compile-time quotation passed runtime phase admission")
+        }
         NExpr::ArrayRepeat { .. } => false,
         // An operation that can panic runs even when its result is unused.
         NExpr::Unary { op, .. } => op.overflow() == Some(Overflow::Checked),
@@ -978,6 +984,9 @@ impl<'db> RmirEmitter<'db> {
                         )
                 });
             let read_from_current_slot = match expr {
+                NExpr::ItemQuote { .. } => {
+                    unreachable!("compile-time quotation passed runtime phase admission")
+                }
                 NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
                     self.semantic_body.operand_local(*src) == Some(dst)
                         && self.normalized_value_temps[src.value.index()].is_none()
@@ -1143,6 +1152,9 @@ impl<'db> RmirEmitter<'db> {
         };
 
         match expr {
+            NExpr::ItemQuote { .. } => {
+                unreachable!("compile-time quotation passed runtime phase admission")
+            }
             NExpr::Forward { src } | NExpr::StructuralRepack { value: src, .. } => {
                 let value = self.lower_semantic_operand_for_class(bb, *src, &dst_class);
                 let value = self.coerce_value_if_needed(bb, value, &dst_class);
@@ -1571,6 +1583,9 @@ impl<'db> RmirEmitter<'db> {
             );
         }
         match value.value(self.db) {
+            SemConstValue::Meta { .. } | SemConstValue::ItemCode { .. } => unreachable!(
+                "checked compile-time metadata has no normalized runtime representation"
+            ),
             SemConstValue::Tuple { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
@@ -1893,6 +1908,9 @@ impl<'db> RmirEmitter<'db> {
         );
         let ty = self.const_lowering_ty(ty, target);
         match value.value(self.db) {
+            SemConstValue::Meta { .. } | SemConstValue::ItemCode { .. } => unreachable!(
+                "checked compile-time metadata has no normalized runtime representation"
+            ),
             SemConstValue::Tuple { elems, .. }
             | SemConstValue::Struct { fields: elems, .. }
             | SemConstValue::Array { elems, .. } => {
@@ -4809,6 +4827,9 @@ impl<'db> RmirEmitter<'db> {
             return false;
         };
         match expr {
+            NExpr::ItemQuote { .. } => {
+                unreachable!("compile-time quotation passed runtime phase admission")
+            }
             NExpr::Load { place, .. }
             | NExpr::Borrow { place, .. }
             | NExpr::MakeView { place, .. } => place == &dst_place,

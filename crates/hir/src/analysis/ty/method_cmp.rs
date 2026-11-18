@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use thin_vec::ThinVec;
 
 use super::{
@@ -1171,7 +1172,9 @@ pub(crate) fn classify_constraint_entailment(
         GoalSatisfiability::NeedsConfirmation { solutions, .. } if !solutions.is_empty() => {
             ConstraintEntailment::Proven
         }
-        GoalSatisfiability::NeedsConfirmation { .. } => ConstraintEntailment::Incomplete,
+        GoalSatisfiability::NeedsConfirmation { .. } | GoalSatisfiability::NeedsGeneration(_) => {
+            ConstraintEntailment::Incomplete
+        }
         GoalSatisfiability::UnSat(_) => ConstraintEntailment::Disproven,
     }
 }
@@ -1238,7 +1241,7 @@ fn compare_constraints<'db>(
         }
         let entailment = classify_constraint_entailment(is_goal_satisfiable(
             db,
-            TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
+            TraitSolveCx::new(db, trait_m.scope(), Tier::All).with_assumptions(trait_m_constraints),
             goal,
         ));
         match entailment {

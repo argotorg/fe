@@ -1,0 +1,9 @@
+// `u` is not trusted, but an empty array has no element to destroy, so no
+// `drop` of `u` runs and nothing is refused.
+use u::WD
+
+#[test]
+fn drops_an_empty_array_of_values_of_u() {
+    let none: [WD; 0] = []
+    assert(true)
+}

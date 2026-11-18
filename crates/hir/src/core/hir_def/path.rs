@@ -1,5 +1,6 @@
 use super::{GenericArgListId, IdentId, TraitRefId, TypeId};
 use crate::{HirDb, hir_def::Partial};
+use common::{ingot::Ingot, stdlib::BUILTIN_CORE_BASE_URL};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -15,6 +16,23 @@ pub enum PathKind<'db> {
     Ident {
         ident: Partial<IdentId<'db>>,
         generic_args: GenericArgListId<'db>,
+    },
+    BoundIngot {
+        ingot: Ingot<'db>,
+        display: IdentId<'db>,
+    },
+    /// A declaration written in an authored module, bound when the path is
+    /// resolved.
+    BoundItem {
+        item: super::AuthoredScope<'db>,
+        display: PathId<'db>,
+    },
+    /// A name resolved in an authored scope instead of where the path occurs:
+    /// generated code naming items of its producer or of a reflected record.
+    InScope {
+        scope: super::AuthoredScope<'db>,
+        local_ident: Option<IdentId<'db>>,
+        display: PathId<'db>,
     },
     QualifiedType {
         type_: TypeId<'db>,
@@ -85,8 +103,43 @@ impl<'db> PathId<'db> {
         } else {
             match self.kind(db) {
                 PathKind::Ident { ident, .. } => ident.to_opt(),
+                PathKind::BoundIngot { display, .. } => Some(display),
+                PathKind::BoundItem { display, .. } => display.root_ident(db),
+                PathKind::InScope { display, .. } => display.root_ident(db),
                 PathKind::QualifiedType { .. } => None,
             }
+        }
+    }
+
+    pub fn hygiene_scope(self, db: &'db dyn HirDb) -> Option<super::scope_graph::ScopeId<'db>> {
+        if let Some(parent) = self.parent(db) {
+            parent.hygiene_scope(db)
+        } else {
+            match self.kind(db) {
+                PathKind::InScope { scope, .. } => Some(scope.resolve(db)),
+                _ => None,
+            }
+        }
+    }
+
+    pub fn local_ident(self, db: &'db dyn HirDb) -> Option<IdentId<'db>> {
+        if self.parent(db).is_none() {
+            match self.kind(db) {
+                PathKind::Ident {
+                    ident,
+                    generic_args,
+                } if generic_args.is_empty(db) => ident.to_opt(),
+                PathKind::InScope {
+                    local_ident,
+                    display,
+                    ..
+                } if display.generic_args(db).is_empty(db) => {
+                    local_ident.or_else(|| display.ident(db).to_opt())
+                }
+                _ => None,
+            }
+        } else {
+            None
         }
     }
 
@@ -97,6 +150,7 @@ impl<'db> PathId<'db> {
                     ident,
                     generic_args,
                 } if generic_args.is_empty(db) => ident.to_opt(),
+                PathKind::InScope { display, .. } => display.as_ident(db),
                 _ => None,
             }
         } else {
@@ -114,6 +168,7 @@ impl<'db> PathId<'db> {
                 PathKind::Ident { ident, .. } if ident.is_present() => {
                     ident.unwrap().is_self_ty(db)
                 }
+                PathKind::InScope { display, .. } => display.is_self_ty(db),
                 _ => false,
             }
         } else {
@@ -138,6 +193,15 @@ impl<'db> PathId<'db> {
                     ident: Partial::Present(to),
                     generic_args,
                 },
+                PathKind::InScope {
+                    scope,
+                    local_ident,
+                    display,
+                } => PathKind::InScope {
+                    scope,
+                    local_ident,
+                    display: display.replace_root(from, to, db),
+                },
                 kind => kind,
             };
             PathId::new(db, kind, None)
@@ -147,10 +211,14 @@ impl<'db> PathId<'db> {
     pub fn is_core_lib_path(self, db: &'db dyn HirDb) -> bool {
         match self.parent(db) {
             Some(parent) => parent.is_core_lib_path(db),
-            None => self
-                .as_ident(db)
-                .map(|id| id.data(db) == "core")
-                .unwrap_or_default(),
+            None => match self.kind(db) {
+                PathKind::BoundIngot { ingot, .. } => {
+                    ingot.base(db).as_str() == BUILTIN_CORE_BASE_URL
+                }
+                PathKind::BoundItem { display, .. } => display.is_core_lib_path(db),
+                PathKind::InScope { display, .. } => display.is_core_lib_path(db),
+                _ => self.as_ident(db).is_some_and(|id| id.data(db) == "core"),
+            },
         }
     }
 
@@ -199,6 +267,9 @@ impl<'db> PathId<'db> {
     pub fn ident(self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {
         match self.kind(db) {
             PathKind::Ident { ident, .. } => ident,
+            PathKind::BoundIngot { display, .. } => Partial::Present(display),
+            PathKind::BoundItem { display, .. } => display.ident(db),
+            PathKind::InScope { display, .. } => display.ident(db),
             PathKind::QualifiedType { .. } => Partial::Absent,
         }
     }
@@ -206,8 +277,39 @@ impl<'db> PathId<'db> {
     pub fn generic_args(self, db: &'db dyn HirDb) -> GenericArgListId<'db> {
         match self.kind(db) {
             PathKind::Ident { generic_args, .. } => generic_args,
+            PathKind::BoundIngot { .. } => GenericArgListId::none(db),
+            PathKind::BoundItem { display, .. } => display.generic_args(db),
+            PathKind::InScope { display, .. } => display.generic_args(db),
             PathKind::QualifiedType { .. } => GenericArgListId::none(db),
         }
+    }
+
+    pub fn with_generic_args(
+        self,
+        db: &'db dyn HirDb,
+        generic_args: GenericArgListId<'db>,
+    ) -> Option<Self> {
+        let kind = match self.kind(db) {
+            PathKind::Ident { ident, .. } => PathKind::Ident {
+                ident,
+                generic_args,
+            },
+            PathKind::BoundItem { item, display } => PathKind::BoundItem {
+                item,
+                display: display.with_generic_args(db, generic_args)?,
+            },
+            PathKind::InScope {
+                scope,
+                local_ident,
+                display,
+            } => PathKind::InScope {
+                scope,
+                local_ident,
+                display: display.with_generic_args(db, generic_args)?,
+            },
+            _ => return None,
+        };
+        Some(Self::new(db, kind, self.parent(db)))
     }
 
     pub fn strip_generic_args(self, db: &'db dyn HirDb) -> PathId<'db> {
@@ -216,6 +318,20 @@ impl<'db> PathId<'db> {
             PathKind::Ident { ident, .. } => PathKind::Ident {
                 ident,
                 generic_args: GenericArgListId::none(db),
+            },
+            kind @ PathKind::BoundIngot { .. } => kind,
+            PathKind::BoundItem { item, display } => PathKind::BoundItem {
+                item,
+                display: display.strip_generic_args(db),
+            },
+            PathKind::InScope {
+                scope,
+                local_ident,
+                display,
+            } => PathKind::InScope {
+                scope,
+                local_ident,
+                display: display.strip_generic_args(db),
             },
             kind @ PathKind::QualifiedType { .. } => kind,
         };
@@ -247,6 +363,9 @@ impl<'db> PathId<'db> {
                     generic_args.pretty_print(db)
                 )
             }
+            PathKind::BoundIngot { display, .. } => display.data(db).clone(),
+            PathKind::BoundItem { display, .. } => display.pretty_print(db),
+            PathKind::InScope { display, .. } => display.pretty_print(db),
             PathKind::QualifiedType { type_, trait_ } => {
                 format!(
                     "<{} as {}>",

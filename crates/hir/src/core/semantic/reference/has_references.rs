@@ -400,7 +400,10 @@ impl<'db> TopLevelMod<'db> {
     /// For `Target::Scope`, filters pre-resolved cached results from per-item
     /// salsa queries. The resolution work (path segment resolution, field/method
     /// target inference) is done once and cached — subsequent searches for
-    /// different targets reuse the same cached resolution.
+    /// different targets reuse the same cached resolution. Generated items of
+    /// this module are skipped: their references are written in the producer's
+    /// quotation, which may be in another file, so they are neither text of
+    /// this module nor safe to edit through it.
     ///
     /// For `Target::Local`, filters body references by binding identity.
     pub fn references_to_target<DB>(
@@ -415,6 +418,9 @@ impl<'db> TopLevelMod<'db> {
             Target::Scope(scope) => {
                 let mut results = Vec::new();
                 for &item in self.all_items(db) {
+                    if ScopeId::from_item(item).is_in_published_item(db) {
+                        continue;
+                    }
                     for resolved in resolved_item_scope_targets(db, item) {
                         if resolved.scope == *scope {
                             results.push(MatchedReference {

@@ -13,7 +13,7 @@ use super::{
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor},
 };
-use crate::analysis::{HirAnalysisDb, ty::ty_def::TyData};
+use crate::analysis::{HirAnalysisDb, name_resolution::Tier, ty::ty_def::TyData};
 use crate::hir_def::CallableDef;
 
 /// An inherent-method candidate returned by [`probe_method`], carrying the
@@ -98,17 +98,34 @@ impl<'db> TyFoldable<'db> for BoundInherentMethod<'db> {
     }
 }
 
-#[salsa::tracked(cycle_initial=collect_methods_cycle_initial)]
+/// The inherent methods in `tier`: without the impls generated in `ingot` in
+/// the authored tier.
 pub(crate) fn collect_methods<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
+) -> &'db MethodTable<'db> {
+    collect_methods_in_tier(db, ingot, tier.in_ingot(db, ingot))
+}
+
+#[salsa::tracked(cycle_initial=collect_methods_cycle_initial)]
+fn collect_methods_in_tier<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    tier: Tier,
 ) -> MethodTable<'db> {
     let mut collector = MethodCollector::new(db, ingot);
 
     for (_, external) in ingot.resolved_external_ingots(db).iter() {
         collector.collect_impls(external.all_impls(db));
     }
-    collector.collect_impls(ingot.all_impls(db));
+    let own: Vec<Impl<'db>> = ingot
+        .all_impls(db)
+        .iter()
+        .copied()
+        .filter(|impl_| tier == Tier::All || !impl_.members_generated_in(db, ingot))
+        .collect();
+    collector.collect_impls(&own);
     collector.finalize()
 }
 
@@ -116,18 +133,24 @@ fn collect_methods_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     _ingot: Ingot<'db>,
+    _tier: Tier,
 ) -> MethodTable<'db> {
     MethodTable::new()
 }
 
+/// The inherent methods of `name` that apply to the receiver of `query`, in
+/// `tier` of the table of `ingot`: the authored tier of the ingot the lookup
+/// starts in hides the impls generated there.
 pub(crate) fn probe_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
     query: MethodProbe<'db>,
     scope: ScopeId<'db>,
     name: IdentId<'db>,
 ) -> Vec<ProbedMethod<'db>> {
-    probe_canonical_method(db, ingot, Canonical::new(db, query), scope, name)
+    let tier = tier.for_table(db, scope.ingot(db), ingot);
+    probe_canonical_method(db, ingot, tier, Canonical::new(db, query), scope, name)
         .iter()
         .map(|&(def, bound)| ProbedMethod { def, bound, query })
         .collect()
@@ -137,11 +160,12 @@ pub(crate) fn probe_method<'db>(
 fn probe_canonical_method<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
     query: Canonical<MethodProbe<'db>>,
     scope: ScopeId<'db>,
     name: IdentId<'db>,
 ) -> Vec<(CallableDef<'db>, Solution<BoundInherentMethod<'db>>)> {
-    let table = collect_methods(db, ingot);
+    let table = collect_methods(db, ingot, tier);
     table.probe(db, query, scope, name)
 }
 
@@ -451,6 +475,7 @@ fn context<T: Output<Item = U>, U>(value: Pair<u256, T>) {}
         let candidates = probe_method(
             &db,
             top_mod.ingot(&db),
+            Tier::All,
             MethodProbe {
                 receiver,
                 assumptions,

@@ -628,7 +628,7 @@ fn resolve_trait_symbol_ignoring_args<'db>(
             .ok()?
             .as_scope(db)?
     } else {
-        scope
+        key_path.hygiene_scope(db).unwrap_or(scope)
     };
     let ident = key_path.ident(db).to_opt()?;
     let query_path = PathId::new(

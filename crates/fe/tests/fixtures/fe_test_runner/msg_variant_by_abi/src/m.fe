@@ -1,0 +1,64 @@
+use super::{Alt}
+use core::abi::{Abi, AbiDecoder, ByteInput, Decode, Encode, AbiFrame}
+use std::evm::{Evm, Call}
+use core::ptr
+use core::abi::store_word
+
+msg M {
+    #[selector = 0x11111111]
+    Ping { x: u256 } -> u256,
+    #[selector = 0x33333333]
+    Pong { x: u256 } -> u256,
+}
+
+impl Encode<Alt> for M::Ping { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Alt> for M::Ping {
+    fn decode_payload<D: AbiDecoder<Alt>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        M::Ping { x: 0 }
+    }
+}
+impl Encode<Alt> for M::Pong { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Alt> for M::Pong {
+    fn decode_payload<D: AbiDecoder<Alt>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        M::Pong { x: 0 }
+    }
+}
+
+pub contract C {
+    recv M {
+        Ping { x } -> u256 { x + 1 }
+        Pong { x } -> u256 { x + 2 }
+    }
+}
+
+fn raw(_ sel: u256, _ salt: u256) -> bool uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: salt)
+    let p = ptr::alloc_bytes(64)
+    unsafe { store_word(ptr: p, value: sel << 224) }
+    unsafe { store_word(ptr: ptr::offset_bytes(p, 4), value: 5) }
+    var ret = ptr::MemBuffer::empty()
+    let outcome = unsafe {
+        evm.raw_call(addr: c, gas: 1000000, value: Wei::zero(), args: ptr::MemSpan::from_raw_parts(ptr: p, len: 36), ret: mut ret)
+    }
+    outcome.success()
+}
+
+#[test]
+fn the_client_and_the_contract_use_the_selector_of_the_blocks_abi() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let r: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Ping { x: 5 })
+    assert(r == 6)
+    let r: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: M::Pong { x: 5 })
+    assert(r == 7)
+}
+
+#[test]
+fn the_selectors_of_the_blocks_abi_reach_the_arms() uses (evm: mut Evm) {
+    assert(raw(0x11111111, 1))
+    assert(raw(0x33333333, 2))
+}
+
+#[test]
+fn the_selector_of_another_abi_reaches_no_arm() uses (evm: mut Evm) {
+    assert(!raw(0x22222222, 3))
+}

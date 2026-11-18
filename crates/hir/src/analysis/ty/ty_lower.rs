@@ -24,7 +24,7 @@ use super::{
             collect_candidate_constraints, collect_constraints, collect_func_decl_constraints,
         },
     },
-    ty_def::{InvalidCause, Kind, TyData, TyId, TyParam},
+    ty_def::{InvalidCause, Kind, TyBase, TyData, TyId, TyParam},
 };
 use crate::analysis::name_resolution::{
     NameDomain, NameResKind, PathRes, TypePosition, path_resolver::PathResolutionResult,
@@ -98,7 +98,26 @@ fn lower_hir_ty_impl<'db>(
             TyId::app(db, array, len_ty)
         }
 
+        HirTyKind::Primitive(primitive, args) => {
+            let base = TyId::new(db, TyData::TyBase(super::ty_def::TyBase::from(*primitive)));
+            // Arguments of a frozen ground type, valid by construction.
+            let args = lower_generic_arg_list(db, *args, scope, assumptions, lowering_cx);
+            TyId::foldl(db, base, &args)
+        }
         HirTyKind::Never => TyId::never(db),
+        HirTyKind::AuthoredField(field) => match field.bound_type(db) {
+            Some(ty) => {
+                let record = field
+                    .record(db)
+                    .resolve(db)
+                    .to_item()
+                    .and_then(GenericParamOwner::from_item_opt);
+                lowering_cx.with_spliced_record(record, || {
+                    lower_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
+                })
+            }
+            None => TyId::invalid(db, InvalidCause::Other),
+        },
     };
     // A `#[view]` type exists only behind accesses, never inside a value.
     match lowered.view_part(db) {
@@ -261,6 +280,11 @@ pub(crate) fn lower_opt_const_body<'db>(
     let Some(body) = body.to_opt() else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
     };
+    if let Some(record) = lowering_cx.spliced_record()
+        && super::const_ty::lexical_const_body_owner(db, body) == Some(record)
+    {
+        return lower_spliced_record_const(db, body, record, scope, assumptions, lowering_cx);
+    }
     if lowering_cx.const_bodies() == ConstBodyLowering::Deferred {
         if let Some(path) = const_body_simple_path(db, body)
             && path.parent(db).is_none()
@@ -288,6 +312,61 @@ pub(crate) fn lower_opt_const_body<'db>(
     }
     lower_const_body_path(db, body, scope, assumptions, lowering_cx)
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
+}
+
+/// An anonymous constant of a spliced field type: an array length or constant
+/// argument written in the field's record. The splice names the type's other
+/// names in the record and leaves the record's parameters to the use site
+/// (`AuthoredFieldType::bound_type`), but a lowered body cannot be rebound. So
+/// the constant is read in the record, as the record's own field types read
+/// it, and each of the record's parameters is then what its name means where
+/// the type is spliced. A parameter whose name means nothing there keeps the
+/// record's formal, as an unspliced read of the constant would.
+fn lower_spliced_record_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    record: GenericParamOwner<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+) -> ConstTyId<'db> {
+    let declared = lowering_cx.with_spliced_record(None, || {
+        lower_opt_const_body(
+            db,
+            Partial::Present(body),
+            crate::hir_def::ItemKind::from(record).scope(),
+            collect_constraints(db, record).instantiate_identity(),
+            lowering_cx,
+        )
+    });
+    let schema = ParamSchemaId::full(db, record);
+    let subst = CompleteSubst::from_optional_values(db, ParamDomainId::full(db, schema), |slot| {
+        let formal = schema.formal_at(db, slot)?;
+        let name = formal.as_generic_param(db)?.name;
+        let named = lowering_cx.with_spliced_record(None, || {
+            lowering_cx.without_recording(|| {
+                lower_path_impl(
+                    db,
+                    scope,
+                    Partial::Present(PathId::from_ident(db, name)),
+                    assumptions,
+                    TypePosition::GenericArg,
+                    lowering_cx,
+                )
+            })
+        });
+        (!named.has_invalid(db)
+            && named.is_const_ty(db) == formal.is_const_ty(db)
+            && named.kind(db) == formal.kind(db))
+        .then_some(named)
+    });
+    let spliced = Binder::bind(record, TyId::const_ty(db, declared))
+        .instantiate_subst(db, &subst)
+        .expect("a record's constant uses its declaration domain");
+    match spliced.data(db) {
+        TyData::ConstTy(const_ty) => *const_ty,
+        _ => unreachable!("constant parameters are substituted by constants"),
+    }
 }
 
 /// Whether lowering reads an anonymous constant as the constant, trait
@@ -839,6 +918,98 @@ impl<'db> TyAlias<'db> {
             Err(cause) => TyId::invalid(db, cause),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ProtocolArgumentRole {
+    Trait,
+}
+
+/// Only resolved canonical protocol declarations may issue descriptors. An
+/// ordinary user trait/type with the same spelling keeps ordinary arguments.
+pub(crate) fn protocol_argument_role<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::hir_def::ItemKind<'db>,
+) -> Option<ProtocolArgumentRole> {
+    use super::corelib::resolve_lib_trait_path;
+    use crate::hir_def::ItemKind;
+    let scope = owner.scope();
+    match owner {
+        ItemKind::Trait(trait_)
+            if resolve_lib_trait_path(db, scope, "core::derive::Derive") == Some(trait_) =>
+        {
+            Some(ProtocolArgumentRole::Trait)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn lower_protocol_descriptor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    arg: &GenericArg<'db>,
+    role: ProtocolArgumentRole,
+    scope: ScopeId<'db>,
+    _assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+) -> Option<TyId<'db>> {
+    use crate::hir_def::ItemKind;
+    let GenericArg::Type(argument) = arg else {
+        return None;
+    };
+    let HirTyKind::Path(path) = argument.ty.to_opt()?.data(db) else {
+        return None;
+    };
+    let path = path.to_opt()?;
+    let NameResKind::Scope(ScopeId::Item(ItemKind::Trait(trait_))) =
+        crate::analysis::name_resolution::resolve_type_path_definition(db, path, scope)?
+    else {
+        return None;
+    };
+    let ty = match role {
+        ProtocolArgumentRole::Trait
+            if path.generic_args(db).data(db).is_empty() && !path.generic_args(db).is_given(db) =>
+        {
+            TyId::new(db, TyData::TyBase(TyBase::TraitDescriptor(trait_)))
+        }
+        ProtocolArgumentRole::Trait => TyId::invalid(db, InvalidCause::Other),
+    };
+    lowering_cx.record_resolution(path, &PathRes::Ty(ty));
+    Some(ty)
+}
+
+pub(crate) fn lower_protocol_generic_arg_list<'db>(
+    db: &'db dyn HirAnalysisDb,
+    args: GenericArgListId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+    owner: crate::hir_def::ItemKind<'db>,
+) -> Vec<TyId<'db>> {
+    // Avoid canonical declaration lookup for nullary definitions while resolving
+    // the protocol declaration itself.
+    let role = (!args.data(db).is_empty())
+        .then(|| protocol_argument_role(db, owner))
+        .flatten();
+    args.data(db)
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if index == 0
+                && let Some(role) = role
+                && let Some(descriptor) =
+                    lower_protocol_descriptor(db, arg, role, scope, assumptions, lowering_cx)
+            {
+                return descriptor;
+            }
+            lower_generic_arg_list(
+                db,
+                GenericArgListId::given(db, vec![arg.clone()]),
+                scope,
+                assumptions,
+                lowering_cx,
+            )[0]
+        })
+        .collect()
 }
 
 pub(crate) fn lower_generic_arg_list<'db>(

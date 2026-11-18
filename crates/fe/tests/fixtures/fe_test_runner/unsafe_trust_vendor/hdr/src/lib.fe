@@ -1,0 +1,7 @@
+// This ingot writes an `unsafe impl` whose members come from a provider of
+// `dep`, which the root trusts. The `unsafe impl` asserts the members, and
+// nothing trusts this ingot to assert them.
+use dep::{VouchesSafely, Vouching}
+
+pub struct Marked {}
+unsafe impl Vouching for Marked with (VouchesSafely)

@@ -1,0 +1,9 @@
+use ingot::meta::{Record, Code, Item}
+
+/// Key for an inherent implementation header `impl Type with (Provider)`.
+pub struct Inherent {}
+
+/// Authored structural input, checked output through the ordinary establish gate.
+pub trait Derive<G> {
+    const fn derive(_ record: Record) -> Code<Item>
+}

@@ -48,14 +48,82 @@ pub struct Body<'db> {
     /// with its module.
     #[returns(copy)]
     pub(crate) lazy_func: Option<Func<'db>>,
+    /// The module whose syntax `source_map` and `origin` point into, and the
+    /// quotations that wrote and placed the code of this body.
+    pub quote_origins: QuoteOrigins<'db>,
 
     pub(crate) source_map: BodySourceMap,
     pub(crate) origin: HirOrigin<ast::Expr>,
 }
 
+/// Where the syntax of a body came from, and which quotations wrote and placed
+/// it. Generated code is written by the package of the quotation that holds its
+/// text. A fragment that another quotation splices keeps its own writer, and
+/// each quotation around it placed the fragment into the code that runs.
+///
+/// A chain lists the modules of the quotations active where code was lowered,
+/// innermost first: the writer, then the placers with the outermost last. The
+/// chain of hand-written code is empty, because its writer is the module that
+/// holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub struct QuoteOrigins<'db> {
+    /// The module whose syntax the body's source map and origin point into:
+    /// the module that holds an authored body, the producer's module for a
+    /// generated one.
+    pub syntax_top_mod: TopLevelMod<'db>,
+    /// The chain where the body was built, shared by every expression that is
+    /// not part of a spliced fragment.
+    pub frames: Vec<TopLevelMod<'db>>,
+    /// The chain of each expression lowered inside a spliced fragment, by
+    /// increasing expression.
+    pub spliced: Vec<(ExprId, Vec<TopLevelMod<'db>>)>,
+}
+
+impl<'db> QuoteOrigins<'db> {
+    /// The chain of `expr`: empty for hand-written code.
+    pub fn chain(&self, expr: ExprId) -> &[TopLevelMod<'db>] {
+        self.spliced
+            .binary_search_by_key(&expr.index(), |(spliced, _)| spliced.index())
+            .map_or(&self.frames, |index| &self.spliced[index].1)
+    }
+}
+
+/// The quotations that wrote and placed an item, innermost first (see
+/// `QuoteOrigins`).
+#[salsa::interned]
+#[derive(Debug)]
+pub struct QuoteChain<'db> {
+    pub modules: Vec<TopLevelMod<'db>>,
+}
+
 impl<'db> Body<'db> {
     pub fn span(self) -> LazyBodySpan<'db> {
         LazyBodySpan::new(self)
+    }
+
+    /// The module whose syntax `source_map` and `origin` point into: `top_mod`
+    /// for authored bodies, the producer's module for generated ones.
+    pub fn syntax_top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
+        self.quote_origins(db).syntax_top_mod
+    }
+
+    /// The modules of the quotations that wrote and placed `expr`, writer
+    /// first and outermost placer last; the module that holds the syntax of
+    /// hand-written code.
+    pub fn expr_quote_chain(self, db: &'db dyn HirDb, expr: ExprId) -> Vec<TopLevelMod<'db>> {
+        match self.quote_origins(db).chain(expr) {
+            [] => vec![self.syntax_top_mod(db)],
+            chain => chain.to_vec(),
+        }
+    }
+
+    /// The modules of the quotations that wrote and placed this body as a
+    /// whole (an `unsafe fn` is unsafe code from its signature), writer first.
+    pub fn quote_chain(self, db: &'db dyn HirDb) -> Vec<TopLevelMod<'db>> {
+        match &self.quote_origins(db).frames[..] {
+            [] => vec![self.syntax_top_mod(db)],
+            chain => chain.to_vec(),
+        }
     }
 
     pub fn scope(self) -> ScopeId<'db> {
@@ -201,6 +269,19 @@ pub struct BodySourceMap {
     pub stmt_map: SourceNodeMap<ast::Stmt, StmtId>,
     pub expr_map: SourceNodeMap<ast::Expr, ExprId>,
     pub pat_map: SourceNodeMap<ast::Pat, PatId>,
+    pub quote_mods: Vec<u16>,
+    /// The open names of spliced quotes that only bare pattern names bind.
+    pub open_name_binders: Vec<OpenNameBinders>,
+}
+
+/// An open name of a quote spliced into the body, bound only by the bare
+/// pattern names `pats`, innermost first. A bare name binds only if it names no
+/// constant or unit variant, which type checking decides; if none of `pats`
+/// binds, the open name has no enclosing binder.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OpenNameBinders {
+    pub name: String,
+    pub pats: Vec<PatId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -210,6 +291,7 @@ where
     Node: EntityRef,
 {
     pub node_to_source: SecondaryMap<Node, HirOrigin<Ast>>,
+    pub node_to_quote_mod: SecondaryMap<Node, Option<u16>>,
 }
 
 impl<Ast, Node> SourceNodeMap<Ast, Node>
@@ -218,11 +300,25 @@ where
     Node: EntityRef,
 {
     pub(crate) fn insert(&mut self, node: Node, ast: HirOrigin<Ast>) {
+        self.insert_with_quote_mod(node, ast, None);
+    }
+
+    pub(crate) fn insert_with_quote_mod(
+        &mut self,
+        node: Node,
+        ast: HirOrigin<Ast>,
+        quote_mod: Option<u16>,
+    ) {
         self.node_to_source[node] = ast;
+        self.node_to_quote_mod[node] = quote_mod;
     }
 
     pub(crate) fn node_to_source(&self, node: Node) -> &HirOrigin<Ast> {
         &self.node_to_source[node]
+    }
+
+    pub(crate) fn node_to_quote_mod(&self, node: Node) -> Option<u16> {
+        self.node_to_quote_mod[node]
     }
 }
 
@@ -234,6 +330,7 @@ where
     fn default() -> Self {
         Self {
             node_to_source: SecondaryMap::new(),
+            node_to_quote_mod: SecondaryMap::new(),
         }
     }
 }

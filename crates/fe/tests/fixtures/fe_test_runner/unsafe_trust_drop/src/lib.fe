@@ -1,0 +1,25 @@
+// Drop elaboration inserts the call of `Drop::drop` where a value that owns
+// drop glue goes out of scope, and no call names it. `u` wrote the unsafe code
+// in the `drop` of `WD`, `WE` and `WF`, and nothing trusts `u`, so a scope that
+// drops a `WD`, a value that holds a `WE`, or an array of `WF` is refused.
+use u::{WD, WE, mk_wd, mk_we, mk_wf}
+
+pub struct Holder { pub w: WE }
+
+#[test]
+fn drops_a_value_of_u() {
+    let d = mk_wd()
+    assert(true)
+}
+
+#[test]
+fn drops_a_value_that_holds_one() {
+    let h = Holder { w: mk_we() }
+    assert(true)
+}
+
+#[test]
+fn drops_an_array_of_values() {
+    let pair = [mk_wf(), mk_wf()]
+    assert(true)
+}

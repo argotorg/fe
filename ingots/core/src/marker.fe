@@ -5,6 +5,7 @@
 // parameter). Values of non-`Copy` types are moved (consumed) implicitly when
 // used in an owned context.
 
+#[decides = "whether a value is copied or moved"]
 pub trait Copy {}
 
 /// A `Copy` type a view parameter takes by copy, a *snapshot*: a scalar or a
@@ -13,6 +14,7 @@ pub trait Copy {}
 /// Every other value, `Copy` or not, is viewed in place: the call reads the
 /// caller's place for its duration, and a projection's result over it is the
 /// caller's place.
+#[decides = "whether a view takes a value by copy"]
 pub trait Snapshot: Copy {}
 
 /// A type pinned to a state space: a value of it, and every place in it,
@@ -23,6 +25,7 @@ pub trait Snapshot: Copy {}
 /// is a value, those without `unsafe` fields.
 /// A storage collection is pinned (`StateIndex`), and so is a cell such as
 /// `TSlot`.
+#[decides = "where a value may be kept"]
 pub trait Pinned {
     type Space
 }

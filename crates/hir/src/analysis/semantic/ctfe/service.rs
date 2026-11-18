@@ -21,8 +21,9 @@ use crate::analysis::{
     ty::{
         const_expr::{ConstExpr, ConstExprId, ConstInvocation},
         const_ty::{
-            ConstTyData, ConstTyId, const_ty_from_assoc_const_use,
-            const_ty_from_inherent_const_use, const_ty_from_sem_const,
+            ConstTyData, ConstTyId, assoc_const_use_is_declared_only,
+            const_ty_from_assoc_const_use, const_ty_from_inherent_const_use,
+            const_ty_from_sem_const,
         },
         corelib::ctfe_extern_intrinsic_kind,
         evidence::EvidenceList,
@@ -1193,7 +1194,12 @@ fn force_immutable_description<'db>(
         }
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => elems,
         SemConstValue::Struct { fields, .. } | SemConstValue::Enum { fields, .. } => fields,
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => return Ok(value),
+        SemConstValue::Unit
+        | SemConstValue::Scalar { .. }
+        | SemConstValue::ItemCode { .. }
+        | SemConstValue::Meta { .. } => {
+            return Ok(value);
+        }
     };
     let fields = fields
         .iter()
@@ -1680,7 +1686,12 @@ fn force_const_computation_in_context<'db>(
                 } else {
                     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::InvalidOperation {
                         origin,
-                        message: "associated constant selection has no unique value".into(),
+                        message: if assoc_const_use_is_declared_only(db, use_) {
+                            "this constant is read through an implementation that is only declared by a written header; its members are produced by generation and cannot be read while a provider evaluates"
+                        } else {
+                            "associated constant selection has no unique value"
+                        }
+                        .into(),
                     }))
                 };
             };

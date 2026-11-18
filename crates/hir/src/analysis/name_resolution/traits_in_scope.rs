@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::core::hir_def::{ItemKind, Trait, WhereClauseOwner, scope_graph::ScopeId};
 use common::indexmap::IndexSet;
 
@@ -75,7 +76,7 @@ pub(crate) fn available_traits_in_scope_impl<'db>(
     let mut traits = IndexSet::default();
     let scope = t_scope.scope(db);
 
-    let imports = &resolve_imports(db, scope.ingot(db)).1;
+    let imports = &resolve_imports(db, scope.ingot(db), Tier::All).1;
     if let Some(named) = imports.named_resolved.get(&scope) {
         named
             .values()

@@ -18,7 +18,7 @@ error[8-0146]: the callee's parameters are not known
 13 │     f()
    │      ^^ its spread is `..S`, which lists no known parameters
    │
-   ┌─ src/functional.fe:22:8
+   ┌─ src/functional.fe:23:8
    │
-22 │     fn call(self, ..A) -> Self::Out uses E
+23 │     fn call(self, ..A) -> Self::Out uses E
    │        ---- function defined here
