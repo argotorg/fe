@@ -65,6 +65,8 @@ pub struct LspDb<'a>(pub &'a DriverDataBase);
 
 /// Extension trait for LSP-specific functionality on DriverDataBase
 pub trait LspDiagnostics {
+    /// Diagnose an ingot in the supplied view. The backend prepares the view
+    /// for editor requests before running analysis.
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>>;
     #[allow(dead_code)]
     fn file_line_starts(&self, file: File) -> Vec<usize>;
@@ -72,28 +74,6 @@ pub trait LspDiagnostics {
 
 impl LspDiagnostics for DriverDataBase {
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>> {
-        if ingot.kind(self) == IngotKind::StandAlone
-            && self.generation_inputs().functions(self).is_empty()
-            && self.generation_inputs().requests(self).is_empty()
-        {
-            for (url, file) in ingot.files(self).iter() {
-                if !matches!(file.kind(self), Some(IngotFileKind::Source)) {
-                    continue;
-                }
-                match driver::generation::prepare_file(self, file) {
-                    Ok(Some(prepared)) => {
-                        if let Some(prepared_ingot) = prepared
-                            .workspace()
-                            .containing_ingot(&prepared, url.clone())
-                        {
-                            return prepared.diagnostics_for_ingot(prepared_ingot);
-                        }
-                    }
-                    Err(error) => return generation_error_diagnostics(self, error),
-                    Ok(None) => {}
-                }
-            }
-        }
         let t_total = std::time::Instant::now();
         let mut result = FxHashMap::<Url, Vec<Diagnostic>>::default();
         let mut pass_manager = initialize_analysis_pass();
