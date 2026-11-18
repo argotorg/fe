@@ -2363,8 +2363,7 @@ fn type_choice_read<'db>(
 ) -> Option<TraitInstId<'db>> {
     use crate::analysis::ty::{
         const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
-        evidence::{EvidenceId, prove},
-        trait_def::ImplementorOrigin,
+        evidence::{ProofOutcome, prove_outcome},
         visitor::{TyVisitable, TyVisitor, walk_const_ty},
     };
     struct Reads<'db> {
@@ -2378,16 +2377,12 @@ fn type_choice_read<'db>(
             &mut self,
             cx: TraitSolveCx<'db>,
             goal: TraitInstId<'db>,
-            proof: impl FnOnce(&'db dyn HirAnalysisDb) -> Option<EvidenceId<'db>>,
+            prove: impl FnOnce(&'db dyn HirAnalysisDb) -> ProofOutcome<'db>,
         ) {
             let db = self.db;
             if self.found.is_none()
                 && cx.choices().is_some()
-                && (proof(db).is_some_and(|proof| proof.has_named_impl(db))
-                    || cx.matching_choice(db, goal).is_some_and(|choice| {
-                        matches!(choice.origin(db), ImplementorOrigin::Hir(item)
-                            if item.selection_name(db).is_some())
-                    }))
+                && prove(db).reads_named_choice(db, cx, goal)
             {
                 self.found = Some(goal);
             }
@@ -2415,7 +2410,7 @@ fn type_choice_read<'db>(
                 if let Some(callable) = typed.callable_expr(expr) {
                     let mut callable = capture.specialize(self.db, callable.clone());
                     if let Some(goal) = callable.trait_inst() {
-                        self.goal_in(cx, goal, |db| prove(db, cx, goal));
+                        self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
                     }
                     let effect_args = capture.specialize(
                         self.db,
@@ -2436,7 +2431,11 @@ fn type_choice_read<'db>(
                             .enumerate()
                         {
                             if let Ok(goal) = substitute_complete(self.db, bound, &subst) {
-                                self.goal_in(cx, goal, |db| proofs.get(db, index));
+                                self.goal_in(cx, goal, |db| {
+                                    proofs
+                                        .get(db, index)
+                                        .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+                                });
                             }
                         }
                     }
@@ -2446,7 +2445,7 @@ fn type_choice_read<'db>(
                         capture.specialize(self.db, reference)
                 {
                     let goal = use_.inst();
-                    self.goal_in(cx, goal, |db| prove(db, cx, goal));
+                    self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
                 }
             }
         }
@@ -2477,7 +2476,7 @@ fn type_choice_read<'db>(
                     {
                         let goal = use_.inst();
                         let cx = self.cx;
-                        self.goal_in(cx, goal, |db| prove(db, cx, goal));
+                        self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
                     }
                 }
                 _ => {}

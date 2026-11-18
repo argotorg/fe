@@ -804,6 +804,27 @@ pub(crate) enum ProofOutcome<'db> {
 }
 
 impl<'db> ProofOutcome<'db> {
+    /// A type constant may not depend on a named choice. If a proof fails,
+    /// check whether removing named choices restores a proof. This catches
+    /// failures inside prerequisites as well as at the root goal.
+    pub(crate) fn reads_named_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
+        goal: TraitInstId<'db>,
+    ) -> bool {
+        match self {
+            Self::Proven(proof) => proof.has_named_impl(db),
+            Self::Unavailable => {
+                cx.matching_named_choice(db, goal)
+                    || cx.without_named_choices(db).is_some_and(|ordinary| {
+                        matches!(prove_outcome(db, ordinary, goal), Self::Proven(_))
+                    })
+            }
+            Self::Deferred => false,
+        }
+    }
+
     pub(crate) fn evidence(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proven(evidence) => Some(evidence),
