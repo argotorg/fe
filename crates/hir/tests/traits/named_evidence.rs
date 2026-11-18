@@ -122,7 +122,11 @@ fn charge() -> u256 uses (p: Price) { p.amount() }
 fn chosen() -> u256 { with (RequireGate, Price = Box { value: Item {} }) { charge() } }
 "#;
     let codes = diagnostics(source);
-    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert_eq!(
+        codes,
+        ["8-0075"],
+        "the effect provider needs its chosen proof"
+    );
     assert!(diagnostics(&source.replace("RequireGate, ", "")).is_empty());
 }
 

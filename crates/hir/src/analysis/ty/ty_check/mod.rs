@@ -4656,6 +4656,15 @@ impl<'db> PlaceEntryCalls<'db> {
     pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut Callable<'db>> {
         std::iter::once(&mut self.locate).chain(&mut self.codec)
     }
+
+    /// Admission of an abstract body leaves a deferred codec obligation
+    /// for the instance that supplies the remaining type arguments.
+    pub(crate) fn deferred_codec_is_parametric(&self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.codec_choices.is_some()
+            && self.codec[0]
+                .trait_inst()
+                .is_some_and(|goal| collect_flags(db, goal).contains(TyFlags::HAS_PARAM))
+    }
 }
 
 // A private module keeps the shared tables type out of the crate's public
