@@ -6277,6 +6277,9 @@ fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
             );
         }
     }
+    let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "execute the satisfied specialization: {output}");
+    assert!(output.contains("1 passed; 0 failed"), "{output}");
 }
 
 #[test]

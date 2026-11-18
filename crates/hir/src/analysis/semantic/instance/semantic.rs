@@ -2131,6 +2131,7 @@ impl<'db> SemanticInstance<'db> {
             for (expr, _) in body.exprs(db).iter() {
                 if regions.expr(expr) == region
                     && let Some(calls) = typed_body.place_entry_calls(expr)
+                    && !calls.deferred_codec_is_parametric(db)
                     && let Some(goal) = calls.locate.trait_inst()
                     && self.state_index_lanes(db, goal.self_ty(db)).is_some()
                     && let Err(error) = self.entry_codec_callees(db, expr)
