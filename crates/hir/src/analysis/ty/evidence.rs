@@ -27,7 +27,7 @@ use super::{
     },
     trait_lower::lower_impl_trait,
     trait_resolution::{
-        PredicateListId, Selection, TraitSolveCx, answering_assumption,
+        ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
         constraint::collect_candidate_constraints, generation::GenerationRequest,
         normalize_trait_inst_preserving_validity,
     },
@@ -326,12 +326,13 @@ pub enum Evidence<'db> {
     /// The assumption at this position in the extended assumption list of
     /// the body the goal was proved in.
     Assumption(BoundSlotRef<'db>),
-    /// The compiler's provisional ordinary Solidity codec obligation. Its
+    /// The compiler's provisional Solidity codec obligation. Its
     /// element is still generic, so the whole-slot fallback is not a selection.
     /// Substitution closes this leaf without replacing any selected parent.
     DeferredSolCodec {
         goal: TraitInstId<'db>,
         scope: ScopeId<'db>,
+        choices: Option<ChosenImpls<'db>>,
     },
 }
 
@@ -486,7 +487,7 @@ fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>
     }
 }
 
-/// Complete only the ordinary obligations explicitly retained by the producer.
+/// Complete only the obligations explicitly retained by the producer.
 /// This runs at instance finalization, never in generic substitution/folding.
 #[salsa::tracked(returns(copy))]
 pub(crate) fn complete_deferred_evidence<'db>(
@@ -498,16 +499,25 @@ pub(crate) fn complete_deferred_evidence<'db>(
     }
     match proof.data(db) {
         Evidence::Assumption(_) => Some(proof),
-        Evidence::DeferredSolCodec { goal, scope } => {
-            if collect_flags(db, *goal).intersects(
-                TyFlags::HAS_PARAM
-                    | TyFlags::HAS_VAR
-                    | TyFlags::HAS_PROJECTION
-                    | TyFlags::HAS_INVALID,
-            ) {
+        Evidence::DeferredSolCodec {
+            goal,
+            scope,
+            choices,
+        } => {
+            let open = TyFlags::HAS_PARAM
+                | TyFlags::HAS_VAR
+                | TyFlags::HAS_PROJECTION
+                | TyFlags::HAS_INVALID;
+            if collect_flags(db, *goal).intersects(open)
+                || choices.is_some_and(|choices| collect_flags(db, choices).intersects(open))
+            {
                 Some(proof)
             } else {
-                prove(db, TraitSolveCx::new(db, *scope, Tier::All), *goal)
+                prove(
+                    db,
+                    TraitSolveCx::new(db, *scope, Tier::All).with_choices(*choices),
+                    *goal,
+                )
             }
         }
         Evidence::Impl {
@@ -749,11 +759,16 @@ impl<'db> TyFoldable<'db> for EvidenceId<'db> {
                         .collect(),
                 },
             ),
-            Evidence::DeferredSolCodec { goal, scope } => EvidenceId::new(
+            Evidence::DeferredSolCodec {
+                goal,
+                scope,
+                choices,
+            } => EvidenceId::new(
                 db,
                 Evidence::DeferredSolCodec {
                     goal: goal.fold_with(db, folder),
                     scope: *scope,
+                    choices: choices.map(|choices| choices.fold_with(db, folder)),
                 },
             ),
             Evidence::Assumption(slot) => EvidenceId::new(
@@ -783,7 +798,12 @@ impl<'db> TyVisitable<'db> for EvidenceId<'db> {
                     cond.visit_with(visitor);
                 }
             }
-            Evidence::DeferredSolCodec { goal, .. } => goal.visit_with(visitor),
+            Evidence::DeferredSolCodec { goal, choices, .. } => {
+                goal.visit_with(visitor);
+                if let Some(choices) = choices {
+                    choices.visit_with(visitor);
+                }
+            }
             Evidence::Assumption(slot) => slot.applied.visit_with(visitor),
         }
     }
@@ -1159,6 +1179,7 @@ fn prove_in<'db>(
             Evidence::DeferredSolCodec {
                 goal: resolved.trait_inst(),
                 scope: solve_cx.origin_scope(db),
+                choices: solve_cx.choices(),
             },
         ));
     }

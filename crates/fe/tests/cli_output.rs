@@ -6367,6 +6367,68 @@ fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
 }
 
 #[test]
+fn named_storage_keeps_choices_in_deferred_codec_proofs() {
+    let direct = include_str!("fixtures/named_storage_codec_failure.fe");
+    let erased = direct
+        .replace(
+            "fn read_bound",
+            "fn fill<T>(counters: mut Counters<Codec>) {\n    with (Encoded<T>) { counters[1] = 6 }\n}\nfn read_bound",
+        )
+        .replace(
+            "with (Encoded<Arg>) { counters[1] = 6 }",
+            "fill<Arg>(counters: mut counters)",
+        )
+        .replace("with (Encoded<Arg>) { counters[1] }", "raw");
+    let runtime = r#"
+impl Missing for Arg {}
+
+#[test]
+fn deferred_argument_selects_the_codec() uses (evm: mut std::evm::Evm) {
+    let c = evm.create2<C>(value: std::evm::Wei::zero(), args: (), salt: 0)
+    let values: (u32, u32, u32) = evm.call(
+        addr: c, gas: 400000, value: std::evm::Wei::zero(), message: M::Exercise {},
+    )
+    assert!(values.0 == 5 && values.2 == 17)
+}
+"#;
+    let sol = include_str!("fixtures/named_storage_sol_codec_prerequisite.fe");
+    let temp = tempdir().unwrap();
+    for (name, source, satisfied, bits) in [
+        (
+            "erased_argument",
+            erased.as_str(),
+            format!("{erased}{runtime}"),
+            "32",
+        ),
+        (
+            "solidity_prerequisite",
+            sol,
+            format!("{sol}\nimpl Missing for u8 {{}}\n"),
+            "8",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{name}: {output}"
+        );
+
+        fs::write(&path, satisfied).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("1 passed; 0 failed"), "{name}: {output}");
+
+        let whole_slot = source.replace(&format!("BITS: u256 = {bits}"), "BITS: u256 = 256");
+        fs::write(&path, whole_slot).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}, unused whole-slot codec: {output}");
+    }
+}
+
+#[test]
 fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("generic_codec.fe");
