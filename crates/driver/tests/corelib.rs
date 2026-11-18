@@ -1098,11 +1098,6 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         ("hir/src/analysis/ty/trait_def.rs", "Snapshot", 1),
         ("hir/src/analysis/ty/trait_def.rs", "Pinned", 1),
         ("hir/src/analysis/ty/trait_def.rs", "ErrorVariant", 1),
-        // The traits that keep the orphan rule for named implementations.
-        ("hir/src/analysis/ty/corelib.rs", "StateIndex", 1),
-        ("hir/src/analysis/ty/corelib.rs", "LaneCodec", 1),
-        ("hir/src/analysis/ty/corelib.rs", "Encode", 1),
-        ("hir/src/analysis/ty/corelib.rs", "SolPacked", 1),
         // The `impl ErrorVariant<Sol>` that `#[error]` writes.
         ("hir/src/core/lower/error.rs", "ErrorVariant", 1),
         // The syntax of `Fn(A) -> R` and `FnMut(A) -> R`.
@@ -1223,13 +1218,6 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/adt_def.rs", "presence_trait", "\"core::marker::Pinned\"", 1, Deciding, "whether a type is pinned to a state space"),
         ("hir/src/analysis/ty/clearable.rs", "resolve_core_trait", "&[\"marker\", \"Clearable\"]", 1, Structural, "the compiler writes `Clearable` and a package cannot"),
         ("hir/src/analysis/ty/closure.rs", "presence_trait", "path", 1, HandedOn, "`Fn` and `FnMut`, named in the caller"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_core_trait", "&[\"abi\", \"Encode\"]", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_core_trait", "&[\"ops\", \"LaneCodec\"]", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_core_trait", "&[\"ops\", \"StateIndex\"]", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait_path", "\"std::evm::SolPacked\"", 1, Identity, "the traits that keep the orphan rule for named implementations"),
-        ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait_path", "\"std::evm::StorageKey\"", 1, Identity, "the traits that keep the orphan rule for named implementations"),
         ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait", "path_id", 1, HandedOn, "the cached end of the library accessors"),
         ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait_path", "\"core::meta::FieldQuery\"", 1, Identity, "recognises core's own trait"),
         ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait_path", "\"std::evm::Contract\"", 1, Identity, "recognises the metadata methods of the trait"),
