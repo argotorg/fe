@@ -1,0 +1,70 @@
+use core::abi::DynString
+use core::hint::black_box
+use core::num::IntDowncast
+use core::ptr::MemBuffer
+use core::text
+
+#[test]
+fn decimal_limit_and_last_digit() {
+    let prefix: DynString = "11579208923731619542357098500868790785326998466564056403945758400791312963993"
+    for digit in 0 .. 10 {
+        let input = text::concat([prefix.clone(), text::decimal(black_box(digit as u256))])
+        let parsed = text::parse_uint(input)
+        if digit <= 5 {
+            assert!(parsed.unwrap() == u256::max() - (5 - digit as u256))
+        } else {
+            assert!(parsed.is_none())
+        }
+    }
+    assert!(text::parse_uint(text::concat([prefix, "60"])).is_none())
+    assert!(text::parse_uint("").is_none())
+    assert!(text::parse_uint("-1").is_none())
+}
+
+#[test]
+fn hex_limit_and_last_digit() {
+    let prefix: DynString = "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    for digit in 0 .. 16 {
+        let suffix = text::hex(black_box(digit as u256), 1).slice(start: 1, len: 1)
+        let input = text::concat([prefix.clone(), suffix])
+        assert!(
+            text::parse_hex_uint(input).unwrap() == u256::max() - (15 - digit as u256),
+        )
+        assert!(text::parse_hex_uint(text::concat(["1", input])).is_none())
+    }
+}
+
+#[test]
+fn every_input_byte() {
+    var input = MemBuffer::new(3)
+    input[0] = b'1'
+    input[2] = b'2'
+    for byte in 0 .. 256 {
+        input[1] = black_box(byte.downcast_unchecked())
+        let decimal_digit = byte >= 48 && byte <= 57
+        let hex_digit = decimal_digit || (byte >= 65 && byte <= 70) || (byte >= 97 && byte <= 102)
+        assert!(text::parse_uint(input.span()).is_some() == decimal_digit)
+        assert!(text::parse_hex_uint(input.span()).is_some() == hex_digit)
+    }
+}
+
+#[test]
+fn leading_zeroes_and_mixed_values() {
+    var input = MemBuffer::new(100)
+    for i in 0 .. 99 {
+        input[i] = b'0'
+    }
+    input[99] = b'9'
+    assert!(text::parse_uint(input.span()).unwrap() == 9)
+    assert!(text::parse_hex_uint(input.span()).unwrap() == 9)
+    var value: u256 = 123456789
+    for i in 0 .. 100 {
+        value = value.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+        assert!(
+            text::parse_uint(text::decimal(black_box(value))).unwrap() == value,
+        )
+        assert!(
+            text::parse_hex_uint(text::hex(black_box(value), 32)).unwrap() == value,
+        )
+    }
+}
