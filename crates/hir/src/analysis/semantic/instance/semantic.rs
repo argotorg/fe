@@ -173,7 +173,9 @@ impl<'db> SemanticInstanceKey<'db> {
                 supplied
                     .entries(db)
                     .iter()
-                    .map(|entry| entry.filter(|proof| proof.has_named_impl(db)))
+                    .map(|entry| {
+                        entry.filter(|proof| proof.has_named_impl(db) || proof.has_deferred(db))
+                    })
                     .collect(),
             )
             .with_rows(db, supplied.rows(db).clone()),

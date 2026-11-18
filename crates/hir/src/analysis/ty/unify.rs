@@ -489,14 +489,23 @@ where
     where
         T: TyFoldable<'db>,
     {
+        self.freshen_with_origins(value).0
+    }
+
+    pub(super) fn freshen_with_origins<T>(
+        &mut self,
+        value: T,
+    ) -> (T, FxHashMap<TyId<'db>, TyId<'db>>)
+    where
+        T: TyFoldable<'db>,
+    {
         let db = self.db;
-        value.fold_with(
-            db,
-            &mut FreshVarFolder {
-                table: self,
-                params: FxHashMap::default(),
-            },
-        )
+        let mut folder = FreshVarFolder {
+            table: self,
+            params: FxHashMap::default(),
+        };
+        let fresh = value.fold_with(db, &mut folder);
+        (fresh, folder.params)
     }
 
     pub fn instantiate_to_term(&mut self, mut ty: TyId<'db>) -> TyId<'db> {

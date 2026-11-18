@@ -689,7 +689,7 @@ fn resolve_trait_impl_instance_query<'db>(
             // A selected name can supply arguments absent from the trait head.
             // Keep its application (and captured outer parameters) instead of
             // attempting to reconstruct all implementation arguments from `inst`.
-            if let Some(super::trait_resolution::ChoiceMatch::Implementation(choice)) =
+            if let Some(super::trait_resolution::ChoiceMatch::Implementation(_, choice)) =
                 super::trait_resolution::matching_choice(db, solve_cx.choices(), inst)
                 && choice.template.origin(db) == selected.origin(db)
             {

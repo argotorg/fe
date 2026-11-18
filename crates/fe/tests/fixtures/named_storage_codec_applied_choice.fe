@@ -1,0 +1,60 @@
+use std::evm::{Evm, Wei, SolArray, SolPacked}
+
+trait Mask {
+    fn code(_ value: u8) -> u8
+}
+impl Mask for u8 {
+    fn code(_ value: u8) -> u8 { value }
+}
+impl Mask for u8 as XorMask {
+    fn code(_ value: u8) -> u8 { value ^ 1 }
+}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+impl Gate for u8 {
+    fn code(_ value: u8) -> u8 { value }
+}
+impl<A: Mask> Gate for u8 as Encoded {
+    fn code(_ value: u8) -> u8 { A::code(value) }
+}
+
+struct Elem<K> {
+    value: u8,
+}
+
+impl<K: Gate> SolPacked for Elem<K> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: K::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { K::code(self.value) as u256 }
+}
+
+fn write<K, A: Mask>(array: mut SolArray<Elem<K>>) {
+    with (Encoded<A>) { array[0] = Elem { value: 7 } }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u8,
+}
+
+pub contract C {
+    mut array: SolArray<Elem<u8>>
+    recv M {
+        Run -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            with (XorMask) { write<u8, u8>(array: mut array) }
+            array[0].value
+        }
+    }
+}
+
+#[test]
+fn applied_choice_keeps_the_source_bound() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Run {})
+    assert!(raw == 6)
+}

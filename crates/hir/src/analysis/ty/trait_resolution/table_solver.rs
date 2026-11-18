@@ -95,7 +95,7 @@ fn impl_header_may_match<'db>(
 /// candidate does not silently fall back to an ordinary implementation.
 #[derive(Clone, Copy)]
 pub(crate) enum ChoiceMatch<'db> {
-    Implementation(super::ChosenImpl<'db>),
+    Implementation(usize, super::ChosenImpl<'db>),
     NeedsGeneration(super::generation::GenerationRequest<'db>),
     Unsettled,
 }
@@ -108,7 +108,7 @@ fn matching_choice_in<'db>(
     table: &PersistentUnificationTable<'db>,
 ) -> Option<ChoiceMatch<'db>> {
     let choices = choices?;
-    for &entry in choices.items(db).iter().rev() {
+    for (index, &entry) in choices.items(db).iter().enumerate().rev() {
         let choice = match entry {
             super::ChoiceEntry::Impl(choice) => choice,
             super::ChoiceEntry::Provider(opening) => {
@@ -154,7 +154,7 @@ fn matching_choice_in<'db>(
             {
                 return Some(ChoiceMatch::Unsettled);
             }
-            return Some(ChoiceMatch::Implementation(choice));
+            return Some(ChoiceMatch::Implementation(index, choice));
         }
     }
     None
@@ -564,7 +564,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             prepared.normalized_goal,
             &prepared.table,
         ) {
-            Some(ChoiceMatch::Implementation(choice)) => {
+            Some(ChoiceMatch::Implementation(_, choice)) => {
                 return Ok(CallbackOutcome::Continue(vec![Clause::Chosen(choice)]));
             }
             Some(ChoiceMatch::NeedsGeneration(request)) => {

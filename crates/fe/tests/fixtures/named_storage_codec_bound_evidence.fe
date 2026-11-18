@@ -1,0 +1,83 @@
+use std::evm::{Evm, Wei, SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+trait Missing {}
+impl Missing for u8 {}
+impl Gate for u8 {
+    fn code(_ value: u8) -> u8 { value }
+}
+impl<T: Missing> Gate for T as Encoded {
+    fn code(_ value: u8) -> u8 { value ^ 1 }
+}
+
+struct Elem<K, T> {
+    value: u8,
+}
+
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+fn write<K, T: Gate>(array: mut SolArray<Elem<K, T>>) {
+    array[0] = Elem { value: 7 }
+}
+
+fn write_unrelated<K, T: Gate, U>(array: mut SolArray<Elem<K, U>>) {
+    array[0] = Elem { value: 7 }
+}
+
+msg M {
+    #[selector = 1]
+    Run { reverse: bool } -> (u8, u8),
+    #[selector = 2]
+    Unrelated -> u8,
+}
+
+pub contract C {
+    mut array: SolArray<Elem<u8, u8>>
+    recv M {
+        Run { reverse } -> (u8, u8) uses (mut array) {
+            array.push(Elem { value: 0 })
+            if reverse {
+                with (Encoded<u8>) { write(array: mut array) }
+                let selected = array[0].value
+                write(array: mut array)
+                (array[0].value, selected)
+            } else {
+                write(array: mut array)
+                let ordinary = array[0].value
+                with (Encoded<u8>) { write(array: mut array) }
+                (ordinary, array[0].value)
+            }
+        }
+        Unrelated -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            with (Encoded<u8>) {
+                write_unrelated<u8, u8, u8>(array: mut array)
+            }
+            array[0].value
+        }
+    }
+}
+
+#[test]
+fn ordinary_and_selected_in_both_orders() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let ordinary_first: (u8, u8) = evm.call(addr: c, gas: 500000, value: Wei::zero(), message: M::Run { reverse: false })
+    let selected_first: (u8, u8) = evm.call(addr: c, gas: 500000, value: Wei::zero(), message: M::Run { reverse: true })
+    assert!(ordinary_first.0 == 7 && ordinary_first.1 == 6)
+    assert!(selected_first.0 == 7 && selected_first.1 == 6)
+}
+
+#[test]
+fn coincident_type_is_not_the_declared_bound() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let value: u8 = evm.call(addr: c, gas: 500000, value: Wei::zero(), message: M::Unrelated {})
+    assert!(value == 7)
+}
