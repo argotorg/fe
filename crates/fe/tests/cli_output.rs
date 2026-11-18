@@ -5874,12 +5874,14 @@ fn named_storage_late_codec_uses_declared_bound_evidence() {
     let repeated = source.replace("SolPacked for Elem<u8, T>", "SolPacked for Elem<T, T>");
     let applied = include_str!("fixtures/named_storage_codec_applied_choice.fe");
     let stronger = include_str!("fixtures/named_storage_codec_stronger_bound.fe");
+    let projected = include_str!("fixtures/named_storage_codec_projected_bound.fe");
     let temp = tempdir().unwrap();
     for (name, source, expected) in [
         ("distinct", source, "2 passed; 0 failed"),
         ("repeated", repeated.as_str(), "2 passed; 0 failed"),
         ("applied", applied, "1 passed; 0 failed"),
         ("stronger_bound", stronger, "2 passed; 0 failed"),
+        ("projected_bound", projected, "2 passed; 0 failed"),
     ] {
         let path = temp.path().join(format!("{name}.fe"));
         fs::write(&path, source).unwrap();
