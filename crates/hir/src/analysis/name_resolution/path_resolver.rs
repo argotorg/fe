@@ -2,9 +2,9 @@ use crate::core::hir_def::{GenericArg, TypeMode};
 use crate::hir_def::{CallableDef, Func};
 use crate::{
     core::hir_def::{
-        Const, Enum, EnumVariant, GenericArgListId, GenericParamOwner, HirIngot, IdentId, Impl,
-        ImplTrait, ItemKind, Partial, PathId, PathKind, Trait, TypeBound, TypeId, TypeKind,
-        VariantKind, scope_graph::ScopeId,
+        Const, Enum, EnumVariant, GenericParamOwner, HirIngot, IdentId, Impl, ImplTrait, ItemKind,
+        Partial, PathId, PathKind, Trait, TypeBound, TypeId, TypeKind, VariantKind,
+        scope_graph::ScopeId,
     },
     core::semantic::trait_self_predicate,
     span::{DynLazySpan, path::LazyPathSpan, types::LazyTySpan},
@@ -20,7 +20,9 @@ use super::{
     EarlyNameQueryId, ExpectedPathKind, NameDomain,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate},
+    method_selection::{
+        MethodCandidate, MethodSelectionError, select_method_candidate_with_choices,
+    },
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query,
     traits_in_scope::traits_available_for_selection,
@@ -40,7 +42,7 @@ use crate::analysis::{
         method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
         trait_def::{
-            AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId,
+            AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId, TraitRefId,
             impls_for_ty_with_satisfied_constraints,
         },
         trait_lower::{
@@ -460,7 +462,10 @@ impl<'db> PathResError<'db> {
                             PathKind::QualifiedType { trait_, .. } => {
                                 trait_.path(db).unwrap().ident(db).unwrap()
                             }
-                            PathKind::Ident { .. } => ident,
+                            PathKind::Ident { .. }
+                            | PathKind::BoundIngot { .. }
+                            | PathKind::BoundItem { .. }
+                            | PathKind::InScope { .. } => ident,
                         };
                         let span = trait_span.name().into();
                         PathResDiag::ExpectedTrait(span, trait_ident, res.kind_name())
@@ -604,14 +609,43 @@ pub(crate) fn resolve_type_path_definition<'db>(
     let mut parent_scope = None;
     for segment_idx in 0..path.len(db) {
         let segment = path.segment(db, segment_idx)?;
-        if !matches!(segment.kind(db), PathKind::Ident { .. }) {
+        if let PathKind::BoundItem { item, .. } = segment.kind(db) {
+            let item = item.resolve(db);
+            if segment_idx + 1 == path.len(db) {
+                return Some(NameResKind::Scope(item));
+            }
+            parent_scope = Some(item);
+            continue;
+        }
+        if segment_idx == 0
+            && let PathKind::BoundIngot { ingot, .. } = segment.kind(db)
+        {
+            parent_scope = Some(ingot.root_mod(db).scope());
+            continue;
+        }
+        if !matches!(
+            segment.kind(db),
+            PathKind::Ident { .. } | PathKind::InScope { .. }
+        ) {
             return None;
         }
-        let query = make_query(db, segment, parent_scope.unwrap_or(scope));
+        let query_scope =
+            parent_scope.unwrap_or_else(|| segment.hygiene_scope(db).unwrap_or(scope));
+        let query = make_query(db, segment, query_scope);
         let resolved = resolve_query(db, query)
             .pick(NameDomain::TYPE)
             .as_ref()
             .ok()?;
+        if segment.hygiene_scope(db).is_some()
+            && matches!(
+                resolved.kind,
+                NameResKind::Scope(
+                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
+                )
+            )
+        {
+            return None;
+        }
         if segment_idx + 1 == path.len(db) {
             return Some(resolved.kind);
         }
@@ -1047,9 +1081,10 @@ where
     F: FnMut(PathId<'db>, &PathRes<'db>),
 {
     let is_trait = |kind| matches!(kind, NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_))));
-    let definition = resolve_type_path_definition(db, path, scope);
+    let query_scope = path.hygiene_scope(db).unwrap_or(scope);
+    let definition = resolve_type_path_definition(db, path, query_scope);
     if let Some(outer) =
-        definition.and_then(|definition| shadowed_trait(db, path, scope, definition))
+        definition.and_then(|definition| shadowed_trait(db, path, query_scope, definition))
     {
         let res = resolve_name_res_with_minter(db, outer, path, scope, assumptions, lowering_cx)?;
         lowering_cx.record_resolution(path, &res);
@@ -1058,14 +1093,7 @@ where
     }
 
     let path = match definition {
-        Some(kind) if !is_trait(kind) => PathId::new(
-            db,
-            PathKind::Ident {
-                ident: path.ident(db),
-                generic_args: GenericArgListId::none(db),
-            },
-            path.parent(db),
-        ),
+        Some(kind) if !is_trait(kind) => path.strip_generic_args(db),
         _ => path,
     };
     resolve_path_with_observer_and_minter(
@@ -1235,7 +1263,11 @@ fn find_written_path<'db, R>(
                         segment_span.map(|span| span.qualified_type().ty()),
                         visit,
                     ),
-                    PathKind::Ident { generic_args, .. } => generic_args
+                    PathKind::Ident { .. }
+                    | PathKind::BoundIngot { .. }
+                    | PathKind::BoundItem { .. }
+                    | PathKind::InScope { .. } => segment
+                        .generic_args(db)
                         .data(db)
                         .iter()
                         .enumerate()
@@ -1257,7 +1289,9 @@ fn find_written_path<'db, R>(
                 }
             })
         }
-        TypeKind::Never => None,
+        TypeKind::Primitive(..) | TypeKind::Never => None,
+        // A spliced field type is written in its record, not here.
+        TypeKind::AuthoredField(_) => None,
     }
 }
 
@@ -1298,7 +1332,15 @@ fn trait_arg_path_error<'db>(
                         position,
                         lowering_cx,
                     ) {
-                        Ok(ty) if ty.is_const_ty(db) => None,
+                        Ok(ty)
+                            if ty.is_const_ty(db)
+                                || matches!(
+                                    ty.base_ty(db).data(db),
+                                    TyData::TyBase(TyBase::TraitDescriptor(_))
+                                ) =>
+                        {
+                            None
+                        }
                         Ok(_) => Some((nth, result)),
                         // Why it names nothing as an argument, which may be a
                         // constant, not only why it names no type.
@@ -1394,6 +1436,31 @@ fn resolve_segment<'db>(
     lowering_cx: &LoweringContext<'db>,
     decided_by_value: &mut bool,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
+    // A bound path names its item or ingot directly. Like every other
+    // resolution it is reported to the observer by the caller.
+    if let PathKind::BoundItem { item, .. } = path.kind(db) {
+        let declaration = NameRes {
+            kind: NameResKind::Scope(item.resolve(db)),
+            domain: NameDomain::TYPE | NameDomain::VALUE,
+            derivation: super::NameDerivation::Def,
+        };
+        return resolve_name_res_with_minter(
+            db,
+            &declaration,
+            path,
+            scope,
+            assumptions,
+            lowering_cx,
+        );
+    }
+
+    if let PathKind::BoundIngot { ingot, .. } = path.kind(db) {
+        if path.parent(db).is_some() {
+            return Err(PathResError::parse_err(path));
+        }
+        return Ok(PathRes::Mod(ingot.root_mod(db).scope()));
+    }
+
     if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
         if path.parent(db).is_some() {
             return Err(PathResError::new(
@@ -1467,10 +1534,11 @@ fn resolve_segment<'db>(
         return Err(PathResError::parse_err(path));
     };
 
-    let parent_scope = parent_res
-        .as_ref()
-        .and_then(|r| r.as_scope(db))
-        .unwrap_or(scope);
+    let parent_scope = if let Some(r) = parent_res.as_ref() {
+        r.as_scope(db).unwrap_or(scope)
+    } else {
+        path.hygiene_scope(db).unwrap_or(scope)
+    };
 
     match parent_res {
         Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
@@ -1583,14 +1651,17 @@ fn resolve_segment<'db>(
                 && lowering_cx.const_bodies() == ConstBodyLowering::Eager
             {
                 let receiver_ty = Canonicalized::new(db, ty);
-                match select_method_candidate(
+                let selection = select_method_candidate_with_choices(
                     db,
                     &receiver_ty,
                     ident,
                     parent_scope,
                     assumptions,
                     None,
-                ) {
+                    lowering_cx.method_choices(),
+                );
+                lowering_cx.record_generation_requests(selection.pending);
+                match selection.result {
                     Ok(cand) => {
                         *decided_by_value = true;
                         return Ok(PathRes::Method(ty, cand));
@@ -1803,12 +1874,26 @@ fn resolve_segment<'db>(
     };
 
     let bucket = resolve_query(db, make_query(db, path, parent_scope));
+
+    // A path bound to a scope never names a parameter of a function.
+    let is_disallowed_hygiene_res = |res: &NameRes<'db>| {
+        path.hygiene_scope(db).is_some()
+            && matches!(
+                res.kind,
+                NameResKind::Scope(
+                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
+                )
+            )
+    };
+
     let value = (is_tail && resolve_tail_as_value).then(|| bucket.pick(NameDomain::VALUE));
-    let res = if let Some(Ok(res)) = value {
+    let res = if let Some(Ok(res)) = value
+        && !is_disallowed_hygiene_res(res)
+    {
         *decided_by_value = true;
         res.clone()
     } else {
-        match pick_type_domain_from_bucket(parent_res, bucket, path) {
+        let res = match pick_type_domain_from_bucket(parent_res.clone(), bucket, path) {
             // A value that can't be told apart is the error when no type has
             // the name: the name isn't missing.
             Err(PathResError {
@@ -1822,7 +1907,17 @@ fn resolve_segment<'db>(
                 return Err(PathResError::from_name_res_error(err.clone(), path));
             }
             res => res?,
+        };
+        if is_disallowed_hygiene_res(&res) {
+            return Err(PathResError::new(
+                PathResErrorKind::NotFound {
+                    parent: parent_res,
+                    bucket: NameResBucket::default(),
+                },
+                path,
+            ));
         }
+        res
     };
     resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx)
 }
@@ -2066,7 +2161,7 @@ pub(crate) fn shadowed_inherent_fn_for_const<'db>(
 /// `true` if the two inherent impls' self types unify (with each impl's params
 /// instantiated as fresh inference vars). This is the structural conflict
 /// notion used for inherent methods, applied to consts.
-fn inherent_impl_self_types_unify<'db>(
+pub(crate) fn inherent_impl_self_types_unify<'db>(
     db: &'db dyn HirAnalysisDb,
     a: Impl<'db>,
     b: Impl<'db>,
@@ -2088,6 +2183,20 @@ fn inherent_impl_self_types_unify<'db>(
     let a_self = instantiate(&mut table, a, a_ty);
     let b_self = instantiate(&mut table, b, b_ty);
     table.unify(a_self, b_self).is_ok()
+}
+
+pub(crate) fn select_trait_const_for_type<'db>(
+    db: &'db dyn HirAnalysisDb,
+    receiver_ty: TyId<'db>,
+    name: IdentId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<Trait<'db>> {
+    match select_assoc_const_candidate(db, receiver_ty, name, scope, assumptions, None) {
+        AssocConstSelection::Found(inst) => Some(inst.def(db)),
+        AssocConstSelection::Ambiguous(insts) => insts.first().map(|inst| inst.def(db)),
+        AssocConstSelection::NotFound => None,
+    }
 }
 
 fn select_assoc_const_candidate<'db>(
@@ -2189,10 +2298,16 @@ fn select_assoc_const_candidate<'db>(
         receiver_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
     ];
 
-    let mut matches: IndexSet<TraitInstId<'db>> = IndexSet::default();
+    // A candidate is a trait applied to arguments, however many times it is
+    // found: an assumption carries the associated equalities of the instance it
+    // states (`Shape<Unit = u256>`, as the chosen named implementation's does)
+    // that an implementor's declared instance does not, and the two are one
+    // candidate. The first instance found is kept.
+    let identity = |inst: TraitInstId<'db>| inst.trait_ref(db);
+    let mut matches: IndexMap<TraitRefId<'db>, TraitInstId<'db>> = IndexMap::default();
     // Candidates whose trait arguments this receiver doesn't determine.
-    let mut unresolved: IndexSet<TraitInstId<'db>> = IndexSet::default();
-    let mut enclosing: IndexSet<TraitInstId<'db>> = IndexSet::default();
+    let mut unresolved: IndexSet<TraitRefId<'db>> = IndexSet::default();
+    let mut enclosing: IndexSet<TraitRefId<'db>> = IndexSet::default();
     receiver.with_materialized(db, |cx| {
         let receiver_ty = cx.query();
         for &pred in assumptions.extend_all_bounds(db).list(db) {
@@ -2205,7 +2320,7 @@ fn select_assoc_const_candidate<'db>(
             if cx.unify::<TyId<'db>>(receiver_ty, self_ty).is_ok()
                 && let Some(pred) = cx.try_extract::<TraitInstId<'db>>(pred)
             {
-                matches.insert(pred);
+                matches.entry(identity(pred)).or_insert(pred);
             }
             cx.rollback_to(snapshot);
         }
@@ -2228,18 +2343,38 @@ fn select_assoc_const_candidate<'db>(
                 let inst = cx.instantiate_with_fresh_vars(declared);
                 if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
                     let inst = cx.try_extract::<TraitInstId<'db>>(inst).unwrap_or_else(|| {
-                        unresolved.insert(declared);
+                        unresolved.insert(identity(declared));
                         declared
                     });
-                    matches.insert(inst);
+                    matches.entry(identity(inst)).or_insert(inst);
                     if is_enclosing_impl(db, candidate, scope) {
-                        enclosing.insert(inst);
+                        enclosing.insert(identity(inst));
                     }
                 }
                 cx.rollback_to(snapshot);
             }
         }
     });
+    if let Some(choices) = choices {
+        for entry in choices.items(db) {
+            let crate::analysis::ty::trait_resolution::ChoiceEntry::Provider(opening) = entry
+            else {
+                continue;
+            };
+            let trait_ = opening.offered_trait(db);
+            if trait_.const_(db, name).is_none() {
+                continue;
+            }
+            let mut args = vec![receiver_ty];
+            let params = crate::analysis::ty::ty_lower::collect_generic_params(db, trait_.into());
+            args.extend_from_slice(&params.params(db)[1..]);
+            let inst = TraitInstId::new_simple(db, trait_, args);
+            if params.params(db).len() > 1 {
+                unresolved.insert(identity(inst));
+            }
+            matches.entry(identity(inst)).or_insert(inst);
+        }
+    }
 
     // Like method selection: a sole applicable candidate is used, but among
     // several only traits in scope and the impl `scope` is in count, so an
@@ -2249,12 +2384,22 @@ fn select_assoc_const_candidate<'db>(
         let available = traits_available_for_selection(
             db,
             scope,
-            assumptions.list(db).iter().map(|pred| pred.def(db)),
+            assumptions.list(db).iter().map(|pred| pred.def(db)).chain(
+                choices
+                    .into_iter()
+                    .flat_map(|choices| choices.items(db).iter())
+                    .filter_map(|entry| match entry {
+                        crate::analysis::ty::trait_resolution::ChoiceEntry::Provider(opening) => {
+                            Some(opening.offered_trait(db))
+                        }
+                        crate::analysis::ty::trait_resolution::ChoiceEntry::Impl(_) => None,
+                    }),
+            ),
         );
-        let visible: IndexSet<TraitInstId<'db>> = matches
+        let visible: IndexMap<TraitRefId<'db>, TraitInstId<'db>> = matches
             .iter()
-            .copied()
-            .filter(|inst| enclosing.contains(inst) || available.contains(&inst.def(db)))
+            .filter(|&(key, inst)| enclosing.contains(key) || available.contains(&inst.def(db)))
+            .map(|(&key, &inst)| (key, inst))
             .collect();
         if visible.is_empty() { matches } else { visible }
     } else {
@@ -2263,10 +2408,10 @@ fn select_assoc_const_candidate<'db>(
     // A candidate whose trait arguments are unknown can't be selected.
     match candidates.first() {
         None => AssocConstSelection::NotFound,
-        Some(&inst) if candidates.len() == 1 && !unresolved.contains(&inst) => {
+        Some((key, &inst)) if candidates.len() == 1 && !unresolved.contains(key) => {
             AssocConstSelection::Found(inst)
         }
-        Some(_) => AssocConstSelection::Ambiguous(candidates.into_iter().collect()),
+        Some(_) => AssocConstSelection::Ambiguous(candidates.values().copied().collect()),
     }
 }
 
@@ -2628,7 +2773,20 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
             ScopeId::Item(item) => match item {
                 ItemKind::Struct(_) | ItemKind::Enum(_) => {
                     let adt_ref = AdtRef::try_from_item(item).unwrap();
-                    PathRes::Ty(ty_from_adtref(db, path, adt_ref, &args(), lowering_cx)?)
+                    PathRes::Ty(ty_from_adtref(
+                        db,
+                        path,
+                        adt_ref,
+                        &super::super::ty::ty_lower::lower_protocol_generic_arg_list(
+                            db,
+                            path.generic_args(db),
+                            scope,
+                            assumptions,
+                            lowering_cx,
+                            item,
+                        ),
+                        lowering_cx,
+                    )?)
                 }
                 ItemKind::Contract(contract) => {
                     // Contracts have no generic parameters
@@ -2698,6 +2856,21 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                         // resolve yet, such as `Q::T` in `Option<Q::T>` before `Q: Ty` is
                         // collected, fails the trait path, so its bound waits for the others.
                         for (arg_idx, arg) in path.generic_args(db).data(db).iter().enumerate() {
+                            if arg_idx == 0
+                                && let Some(role) =
+                                    super::super::ty::ty_lower::protocol_argument_role(db, t.into())
+                                && super::super::ty::ty_lower::lower_protocol_descriptor(
+                                    db,
+                                    arg,
+                                    role,
+                                    scope,
+                                    assumptions,
+                                    lowering_cx,
+                                )
+                                .is_some()
+                            {
+                                continue;
+                            }
                             if let Some((nth, result)) =
                                 trait_arg_path_error(db, arg, scope, assumptions, lowering_cx)
                             {

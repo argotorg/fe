@@ -725,6 +725,7 @@ impl<'db> Expr<'db> {
                 )
             }
 
+            Expr::ItemQuote(_) => "quote { <authored items> }".to_string(),
             Expr::UnsupportedMacroCall => "<unsupported macro call>".to_string(),
             Expr::Assert(args) => {
                 let args_str = args

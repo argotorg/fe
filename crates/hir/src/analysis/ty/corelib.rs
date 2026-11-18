@@ -20,8 +20,8 @@ use crate::{
         },
     },
     hir_def::{
-        ArithBinOp, CallableDef, CompBinOp, Func, FuncParamMode, IdentId, PathId, Trait,
-        scope_graph::ScopeId,
+        ArithBinOp, CallableDef, CompBinOp, Func, FuncParamMode, HirIngot, IdentId, ItemKind,
+        PathId, Trait, scope_graph::ScopeId,
     },
     semantic::EffectRequirementKey,
 };
@@ -33,7 +33,7 @@ pub fn resolve_core_trait<'db>(
     segments: &[&str],
 ) -> Option<Trait<'db>> {
     let (module_segments, [trait_name]) = segments.split_last_chunk::<1>()?;
-    let mut module_path = lib_root_path(db, scope, "core");
+    let (scope, mut module_path) = library_path_start(db, scope, "core")?;
 
     for segment in module_segments {
         module_path = module_path.push_str(db, segment);
@@ -98,6 +98,17 @@ pub fn resolve_lib_trait_path<'db>(
 ) -> Option<Trait<'db>> {
     let path_id = LibPath::new(db, path.to_string());
     resolve_lib_trait(db, scope, path_id)
+}
+
+/// Field queries are evaluated without a lexical named opening. Their canonical
+/// protocol therefore has only ordinary implementations; unrelated user traits
+/// with the same spelling retain the usual named-implementation behavior.
+pub(crate) fn is_ordinary_field_query_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> bool {
+    trait_.scope().top_mod(db).ingot(db).kind(db) == IngotKind::Core
+        && resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldQuery") == Some(trait_)
 }
 
 /// Returns `true` if `func` is the library function at the fully-qualified
@@ -288,6 +299,16 @@ pub(crate) enum NumericExternIntrinsic {
 
 #[derive(Clone, Copy)]
 pub(crate) enum CtfeExternIntrinsic {
+    MetaFieldCount,
+    MetaField,
+    MetaFieldType,
+    MetaBinders,
+    MetaBinderAt,
+    MetaVariantCount,
+    MetaVariant,
+    MetaTypeIs,
+    MetaQueryField,
+    MetaEmpty,
     SizeOf,
     StorageSlots,
     Keccak256,
@@ -320,7 +341,27 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
         _ => {}
     }
-    if lib_func_matches(db, func, "core::intrinsic::size_of") {
+    if lib_func_matches(db, func, "core::meta::field_count") {
+        Some(CtfeExternIntrinsic::MetaFieldCount)
+    } else if lib_func_matches(db, func, "core::meta::field") {
+        Some(CtfeExternIntrinsic::MetaField)
+    } else if lib_func_matches(db, func, "core::meta::field_type") {
+        Some(CtfeExternIntrinsic::MetaFieldType)
+    } else if lib_func_matches(db, func, "core::meta::binders") {
+        Some(CtfeExternIntrinsic::MetaBinders)
+    } else if lib_func_matches(db, func, "core::meta::binder_at") {
+        Some(CtfeExternIntrinsic::MetaBinderAt)
+    } else if lib_func_matches(db, func, "core::meta::variant_count") {
+        Some(CtfeExternIntrinsic::MetaVariantCount)
+    } else if lib_func_matches(db, func, "core::meta::variant") {
+        Some(CtfeExternIntrinsic::MetaVariant)
+    } else if lib_func_matches(db, func, "core::meta::type_is") {
+        Some(CtfeExternIntrinsic::MetaTypeIs)
+    } else if lib_func_matches(db, func, "core::meta::query_field") {
+        Some(CtfeExternIntrinsic::MetaQueryField)
+    } else if lib_func_matches(db, func, "core::meta::empty") {
+        Some(CtfeExternIntrinsic::MetaEmpty)
+    } else if lib_func_matches(db, func, "core::intrinsic::size_of") {
         Some(CtfeExternIntrinsic::SizeOf)
     } else if lib_func_matches(db, func, "core::intrinsic::storage_slots") {
         Some(CtfeExternIntrinsic::StorageSlots)
@@ -654,7 +695,7 @@ fn resolve_lib_path<'db>(
     path: LibPath<'db>,
 ) -> Option<TyId<'db>> {
     let mut segments = path.string(db).split("::");
-    let mut path = lib_root_path(db, scope, segments.next()?);
+    let (scope, mut path) = library_path_start(db, scope, segments.next()?)?;
 
     for segment in segments {
         path = path.push_str(db, segment);
@@ -674,7 +715,7 @@ fn resolve_lib_func<'db>(
     path: LibPath<'db>,
 ) -> Option<Func<'db>> {
     let mut segments = path.string(db).split("::");
-    let mut path = lib_root_path(db, scope, segments.next()?);
+    let (scope, mut path) = library_path_start(db, scope, segments.next()?)?;
 
     for segment in segments {
         path = path.push_str(db, segment);
@@ -704,16 +745,55 @@ fn resolve_lib_trait<'db>(
     path: LibPath<'db>,
 ) -> Option<Trait<'db>> {
     let mut segments = path.string(db).split("::");
-    let mut path = lib_root_path(db, scope, segments.next()?);
+    let (scope, mut path) = library_path_start(db, scope, segments.next()?)?;
 
     for segment in segments {
         path = path.push_str(db, segment);
     }
 
-    let assumptions = PredicateListId::empty_list(db);
-    match resolve_path(db, path, scope, assumptions, true).ok()? {
-        PathRes::Trait(trait_) => Some(trait_.def(db)),
+    match crate::analysis::name_resolution::resolve_type_path_definition(db, path, scope)? {
+        crate::analysis::name_resolution::NameResKind::Scope(ScopeId::Item(ItemKind::Trait(
+            trait_,
+        ))) => Some(trait_),
         _ => None,
+    }
+}
+
+pub(crate) fn library_root_scope<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    root: &str,
+) -> Option<ScopeId<'db>> {
+    let expected = match root {
+        "core" => IngotKind::Core,
+        "std" => IngotKind::Std,
+        _ => return None,
+    };
+    let own = scope.top_mod(db).ingot(db);
+    let library = if own.kind(db) == expected {
+        own
+    } else {
+        own.resolved_external_ingots(db)
+            .iter()
+            .find_map(|(name, ingot)| {
+                (name.data(db) == root && ingot.kind(db) == expected).then_some(*ingot)
+            })?
+    };
+    Some(library.root_mod(db).scope())
+}
+
+fn library_path_start<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    root: &str,
+) -> Option<(ScopeId<'db>, PathId<'db>)> {
+    if matches!(root, "core" | "std") {
+        Some((
+            library_root_scope(db, scope, root)?,
+            PathId::from_ident(db, IdentId::make_ingot(db)),
+        ))
+    } else {
+        Some((scope, lib_root_path(db, scope, root)))
     }
 }
 

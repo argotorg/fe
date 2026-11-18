@@ -55,26 +55,132 @@ impl<'db> FuncParamListId<'db> {
 impl<'db> WhereClauseId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WhereClause) -> Self {
         let mut const_idx = 0;
-        let predicates: Vec<_> = ast
-            .iter()
-            .map(|pred| match pred.kind() {
+        let mut predicates = Vec::new();
+        Self::lower_ast_into(ctxt, ast, &mut const_idx, &mut predicates);
+        Self::new(ctxt.db(), predicates)
+    }
+
+    fn lower_ast_into(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::WhereClause,
+        const_idx: &mut usize,
+        out: &mut Vec<WhereClausePredicate<'db>>,
+    ) {
+        for pred in ast.iter() {
+            match pred.kind() {
                 ast::WherePredicateKind::Type(pred) => {
-                    WhereClausePredicate::Type(WherePredicate::lower_ast(ctxt, pred))
+                    out.push(WhereClausePredicate::Type(WherePredicate::lower_ast(
+                        ctxt, pred,
+                    )));
                 }
                 ast::WherePredicateKind::Const(pred) => {
                     let body = Body::lower_ast_with_variant(
                         ctxt,
                         pred.expr(),
                         None,
-                        TrackedItemVariant::WhereConstPredicate(const_idx),
+                        TrackedItemVariant::WhereConstPredicate(*const_idx as u32),
                         BodyKind::Anonymous,
                     );
-                    const_idx += 1;
-                    WhereClausePredicate::Const(body)
+                    *const_idx += 1;
+                    out.push(WhereClausePredicate::Const(body));
                 }
-            })
-            .collect();
-        Self::new(ctxt.db(), predicates)
+                ast::WherePredicateKind::Hole(hole) => {
+                    use parser::ast::prelude::*;
+                    if let Some(common::generation::FrozenHoleValue::Code(code)) =
+                        ctxt.current_hole(hole.syntax().text_range())
+                    {
+                        Self::lower_code_into(
+                            ctxt,
+                            &code,
+                            hole.syntax().text_range(),
+                            const_idx,
+                            out,
+                        );
+                    } else {
+                        ctxt.record_generation_error(
+                            hole.syntax().text_range(),
+                            "where-clause quotation hole requires Code<Where> splice",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn lower_code_into(
+        ctxt: &mut FileLowerCtxt<'db>,
+        code: &common::generation::FrozenCode,
+        origin_range: parser::TextRange,
+        const_idx: &mut usize,
+        out: &mut Vec<WhereClausePredicate<'db>>,
+    ) {
+        use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
+        use parser::ast::prelude::*;
+        match code {
+            FrozenCode::Empty { .. } => {}
+            FrozenCode::Template {
+                kind: FrozenCodeKind::Where,
+                quote_file,
+                quote_range,
+                producer_module,
+                producer_block,
+                holes,
+            } => {
+                let (quote, frame) = ctxt.resolve_quote_template(
+                    quote_file,
+                    *quote_range,
+                    *producer_module,
+                    *producer_block,
+                    true,
+                    holes.clone(),
+                );
+                for (name, range) in &frame.open_names {
+                    ctxt.file_scoped_error(
+                        frame.quote_top_mod.file(ctxt.db()),
+                        *range,
+                        format!("quoted open name `{name}` has no enclosing binder"),
+                    );
+                }
+                ctxt.quote_frames.push(frame);
+                if let Some(where_clause) = quote.where_clause().and_then(|w| w.clause()) {
+                    Self::lower_ast_into(ctxt, where_clause, const_idx, out);
+                } else if let Some(block) = quote.body() {
+                    for stmt in block.stmts() {
+                        if let ast::StmtKind::Expr(expr_stmt) = stmt.kind()
+                            && let Some(expr) = expr_stmt.expr()
+                            && let ast::ExprKind::QuoteHole(hole) = expr.kind()
+                            && let Some(FrozenHoleValue::Code(nested)) =
+                                ctxt.current_hole(hole.syntax().text_range())
+                        {
+                            Self::lower_code_into(
+                                ctxt,
+                                &nested,
+                                hole.syntax().text_range(),
+                                const_idx,
+                                out,
+                            );
+                        } else {
+                            ctxt.record_generation_error(
+                                stmt.syntax().text_range(),
+                                "where-clause quotation requires where predicates",
+                            );
+                        }
+                    }
+                } else {
+                    ctxt.record_generation_error(
+                        *quote_range,
+                        "where-clause quotation requires where predicates",
+                    );
+                }
+                ctxt.quote_frames.pop();
+            }
+            _ => {
+                ctxt.record_generation_error(
+                    origin_range,
+                    "where-clause quotation hole requires Code<Where> splice",
+                );
+            }
+        }
     }
 
     pub(super) fn lower_ast_opt(

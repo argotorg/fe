@@ -8,7 +8,7 @@ use parser::syntax_kind::SyntaxKind;
 
 use super::types::{
     Doc, ToDoc, TokenPiece, block_list_auto, block_list_spaced_auto, has_comment_tokens,
-    singleton_tuple, token_doc,
+    quote_hole_doc, singleton_tuple, token_doc,
 };
 
 impl ToDoc for ast::Pat {
@@ -22,6 +22,7 @@ impl ToDoc for ast::Pat {
             PatKind::PathTuple(path_tuple) => path_tuple.to_doc(ctx),
             PatKind::Record(record) => record.to_doc(ctx),
             PatKind::Or(or) => or.to_doc(ctx),
+            PatKind::QuoteHole(hole) => quote_hole_doc(ctx, hole.syntax()),
         }
     }
 }

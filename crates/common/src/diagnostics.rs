@@ -30,12 +30,20 @@ impl CompleteDiagnostic {
         }
     }
 
-    pub fn primary_span(&self) -> Option<Span> {
-        let span = self
-            .sub_diagnostics
+    /// The span of the primary label, or else of any label that has one. A
+    /// diagnostic without a source span gives `None`.
+    pub fn first_span(&self) -> Option<Span> {
+        self.sub_diagnostics
             .iter()
             .find_map(|sub| sub.is_primary().then(|| sub.span.clone()).flatten())
-            .or_else(|| self.sub_diagnostics.iter().find_map(|sub| sub.span.clone()));
+            .or_else(|| self.sub_diagnostics.iter().find_map(|sub| sub.span.clone()))
+    }
+
+    /// The span that locates the diagnostic. A diagnostic that is meant to be
+    /// shown carries one, so a build with debug assertions stops at one that
+    /// does not; a caller that can do without a span uses [`Self::first_span`].
+    pub fn primary_span(&self) -> Option<Span> {
+        let span = self.first_span();
 
         debug_assert!(
             span.is_some(),
@@ -54,8 +62,8 @@ pub fn cmp_complete_diagnostics(
 ) -> std::cmp::Ordering {
     match lhs.error_code.cmp(&rhs.error_code) {
         std::cmp::Ordering::Equal => {
-            let lhs_span = lhs.primary_span();
-            let rhs_span = rhs.primary_span();
+            let lhs_span = lhs.first_span();
+            let rhs_span = rhs.first_span();
             match (lhs_span, rhs_span) {
                 (Some(lhs_span), Some(rhs_span)) => lhs_span.cmp(&rhs_span),
                 (Some(_), None) => std::cmp::Ordering::Less,

@@ -336,7 +336,13 @@ impl<'db> ResolvedImplInstance<'db> {
             .method_defs(db)
             .get(&name)
             .copied()?;
-        let (body, body_args) = if let Some(func) = implementor.method_at(db, name, mode) {
+        // A written header says the implementation exists, not what its
+        // members are. Its members are generated later, so neither a member nor
+        // the trait's default stands in for them.
+        let header_only = implementor.members_unknown(db);
+        let (body, body_args) = if header_only {
+            (None, self.trait_inst().args(db).to_vec())
+        } else if let Some(func) = implementor.method_at(db, name, mode) {
             (Some(func), self.impl_args(db).to_vec())
         } else {
             (
@@ -381,6 +387,7 @@ impl<'db> ResolvedImplInstance<'db> {
             body_args,
             body_to_nominal,
             effect_pairs,
+            declared_only: header_only,
         })
     }
 
@@ -469,11 +476,12 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-) -> Selection<ResolvedImplInstance<'db>> {
+) -> Selection<'db, ResolvedImplInstance<'db>> {
     match resolve_trait_impl_instance_query(db, solve_cx, inst) {
         ImplSelection::Unique(resolved) => Selection::Unique(resolved),
         ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
         ImplSelection::NotFound => Selection::NotFound,
+        ImplSelection::NeedsGeneration(request) => Selection::NeedsGeneration(request),
     }
 }
 
@@ -481,7 +489,7 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-) -> Selection<ResolvedImplInstance<'db>> {
+) -> Selection<'db, ResolvedImplInstance<'db>> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
@@ -594,6 +602,7 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
 /// An implementation selection, without candidates for an ambiguous one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
+    NeedsGeneration(super::trait_resolution::generation::GenerationRequest<'db>),
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
     NotFound,
@@ -617,30 +626,28 @@ fn resolve_trait_impl_instance_query<'db>(
             // A selected name can supply arguments absent from the trait head.
             // Keep its application (and captured outer parameters) instead of
             // attempting to reconstruct all implementation arguments from `inst`.
-            if let Some(choices) = solve_cx.choices() {
-                for &choice in choices.items(db).iter().rev() {
-                    if choice.template.origin(db) != selected.origin(db) {
-                        continue;
-                    }
-                    let mut table = UnificationTable::new(db);
-                    let instantiated = super::trait_resolution::ChosenImpl {
-                        template: selected,
-                        ..choice
-                    }
-                    .instantiate(&mut table);
-                    if instantiated
-                        .trait_inst(db)
-                        .args(db)
-                        .iter()
-                        .zip(inst.args(db))
-                        .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
-                    {
-                        return ImplSelection::Unique(ResolvedImplInstance {
-                            selected,
-                            instantiated: instantiated.fold_with(db, &mut table),
-                            trait_inst: inst.fold_with(db, &mut table),
-                        });
-                    }
+            if let Some(super::trait_resolution::ChoiceMatch::Implementation(choice)) =
+                super::trait_resolution::matching_choice(db, solve_cx.choices(), inst)
+                && choice.template.origin(db) == selected.origin(db)
+            {
+                let mut table = UnificationTable::new(db);
+                let instantiated = super::trait_resolution::ChosenImpl {
+                    template: selected,
+                    ..choice
+                }
+                .instantiate(&mut table);
+                if instantiated
+                    .trait_inst(db)
+                    .args(db)
+                    .iter()
+                    .zip(inst.args(db))
+                    .all(|(&candidate, &goal)| table.unify(candidate, goal).is_ok())
+                {
+                    return ImplSelection::Unique(ResolvedImplInstance {
+                        selected,
+                        instantiated: instantiated.fold_with(db, &mut table),
+                        trait_inst: inst.fold_with(db, &mut table),
+                    });
                 }
             }
             instantiate_selected_impl(db, selected, inst)
@@ -652,6 +659,7 @@ fn resolve_trait_impl_instance_query<'db>(
         // owned by the caller through a fresh local table.
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
+        Selection::NeedsGeneration(request) => ImplSelection::NeedsGeneration(request),
     }
 }
 
@@ -668,11 +676,18 @@ pub struct ResolvedMethodInstance<'db> {
     /// The declaration's effects paired with the body's, absent when the body
     /// is the declaration.
     effect_pairs: Option<Vec<(usize, usize)>>,
+    /// The selected implementation is a written header whose members
+    /// preparation has not produced. It has no body, and neither does the
+    /// trait's default stand in for one.
+    declared_only: bool,
 }
 
 #[derive(Debug, Clone)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    /// The call goes through an implementation that a written header declares
+    /// and preparation has not produced.
+    DeclaredOnly,
     NominalArity {
         expected: usize,
         given: usize,
@@ -719,6 +734,12 @@ impl<'db> ResolvedMethodInstance<'db> {
 
     pub fn body(&self) -> Option<Func<'db>> {
         self.body
+    }
+
+    /// Whether the selected implementation is a written header with no members
+    /// yet, so that no call through it has a body to run.
+    pub fn is_declared_only(&self) -> bool {
+        self.declared_only
     }
 
     pub fn body_args(&self) -> &[TyId<'db>] {
@@ -954,7 +975,7 @@ pub fn assoc_const_body_template_for_trait_inst<'db>(
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound => return None,
+        Selection::NotFound | Selection::NeedsGeneration(_) => return None,
     };
     selected_assoc_const_body_template(db, resolved, const_name)
 }
@@ -964,6 +985,11 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     resolved: ResolvedImplInstance<'db>,
     const_name: IdentId<'db>,
 ) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
+    // A written header does not say what the implementation's constants are,
+    // and the trait's default is not a stand-in.
+    if resolved.selected().members_unknown(db) {
+        return None;
+    }
     let explicit = match resolved.selected().origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait
             .assoc_consts(db)
@@ -1032,6 +1058,8 @@ pub enum UnchoosableReason {
     /// revert carries. `Pinned` and `ErrorVariant` have no methods and their
     /// outputs must agree, so a named implementation of them could not differ.
     Presence,
+    /// Field queries run outside lexical implementation openings.
+    FieldQuery,
 }
 
 /// The name of the trait of a named implementation that no use can choose,
@@ -1045,6 +1073,9 @@ pub(crate) fn unchoosable_named_trait<'db>(
     candidate: ImplementorId<'db>,
 ) -> Option<(IdentId<'db>, UnchoosableReason)> {
     let def = candidate.trait_(db).def(db);
+    if super::corelib::is_ordinary_field_query_trait(db, def) {
+        return Some((def.name(db).to_opt()?, UnchoosableReason::FieldQuery));
+    }
     let scope = implementation.scope();
     let by_presence = [
         super::corelib::resolve_core_trait(db, scope, &["marker", "Copy"]),
@@ -1431,6 +1462,31 @@ fn at_overlap<'db>(
     Some((own, other))
 }
 
+/// The first associated type projection in `ty` that goes through an
+/// implementation whose members are unknown, such as `S::Out` when only a
+/// derive header declares `impl Tr for S`. Such a projection has no value yet.
+pub fn declared_only_projection<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: crate::hir_def::scope_graph::ScopeId<'db>,
+    ty: TyId<'db>,
+) -> Option<TyId<'db>> {
+    match ty.data(db) {
+        TyData::AssocTy(assoc) => {
+            let Selection::Unique(resolved) = resolve_trait_impl_instance(
+                db,
+                TraitSolveCx::new(db, scope),
+                assoc.trait_.as_predicate(db),
+            ) else {
+                return None;
+            };
+            resolved.selected().members_unknown(db).then_some(ty)
+        }
+        TyData::TyApp(abs, arg) => declared_only_projection(db, scope, *abs)
+            .or_else(|| declared_only_projection(db, scope, *arg)),
+        _ => None,
+    }
+}
+
 /// Represents the trait environment of an ingot, which maintain all trait
 /// implementors which can be used in the ingot.
 #[derive(Debug, PartialEq, Eq, Clone, SalsaValue)]
@@ -1570,6 +1626,16 @@ impl<'db> ImplementorId<'db> {
                 panic!("requested HIR impl-trait for a structural builtin implementor")
             }
         }
+    }
+
+    /// Whether the members of this implementation are unknown, as for a derive
+    /// header that preparation has not given members yet. See
+    /// `ImplTrait::members_unknown`.
+    pub(crate) fn members_unknown(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(
+            self.origin(db),
+            ImplementorOrigin::Hir(impl_trait) if impl_trait.members_unknown(db)
+        )
     }
 
     /// Associated type defined in this impl, if any.

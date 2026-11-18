@@ -106,7 +106,10 @@ impl super::Parse for FuncSignatureScope {
         }
         parser.set_scope_recovery_stack(&recovery_tokens);
 
-        if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
+        if parser.at_quote_hole() {
+            parser.pop_recovery_stack();
+            parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+        } else if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Func))? {
             parser.bump();
         }
 

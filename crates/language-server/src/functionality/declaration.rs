@@ -19,15 +19,16 @@ pub async fn handle_goto_declaration(
 ) -> Result<Option<GotoDefinitionResponse>, ResponseError> {
     let params = params.text_document_position_params;
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri);
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &internal_url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.position, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
 
     let locations: Vec<_> = resolution
         .as_slice()
@@ -36,10 +37,10 @@ pub async fn handle_goto_declaration(
             Target::Scope(scope) => {
                 // For declaration, always go to the item's own location
                 // (no trait_method_def redirect like goto-definition does)
-                to_lsp_location_from_scope(&backend.db, *scope).ok()
+                to_lsp_location_from_scope(&analysis_db, *scope).ok()
             }
             Target::Local { span, .. } => {
-                to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
+                to_lsp_location_from_lazy_span(&analysis_db, span.clone()).ok()
             }
         })
         .map(|mut location| {

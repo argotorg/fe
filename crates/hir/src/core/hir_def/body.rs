@@ -48,6 +48,10 @@ pub struct Body<'db> {
     /// with its module.
     #[returns(copy)]
     pub(crate) lazy_func: Option<Func<'db>>,
+    /// The module whose syntax `source_map` and `origin` point into: `top_mod`
+    /// for authored bodies, the producer's module for generated ones.
+    #[returns(copy)]
+    pub syntax_top_mod: TopLevelMod<'db>,
 
     pub(crate) source_map: BodySourceMap,
     pub(crate) origin: HirOrigin<ast::Expr>,
@@ -201,6 +205,19 @@ pub struct BodySourceMap {
     pub stmt_map: SourceNodeMap<ast::Stmt, StmtId>,
     pub expr_map: SourceNodeMap<ast::Expr, ExprId>,
     pub pat_map: SourceNodeMap<ast::Pat, PatId>,
+    pub quote_mods: Vec<u16>,
+    /// The open names of spliced quotes that only bare pattern names bind.
+    pub open_name_binders: Vec<OpenNameBinders>,
+}
+
+/// An open name of a quote spliced into the body, bound only by the bare
+/// pattern names `pats`, innermost first. A bare name binds only if it names no
+/// constant or unit variant, which type checking decides; if none of `pats`
+/// binds, the open name has no enclosing binder.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct OpenNameBinders {
+    pub name: String,
+    pub pats: Vec<PatId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -210,6 +227,7 @@ where
     Node: EntityRef,
 {
     pub node_to_source: SecondaryMap<Node, HirOrigin<Ast>>,
+    pub node_to_quote_mod: SecondaryMap<Node, Option<u16>>,
 }
 
 impl<Ast, Node> SourceNodeMap<Ast, Node>
@@ -218,11 +236,25 @@ where
     Node: EntityRef,
 {
     pub(crate) fn insert(&mut self, node: Node, ast: HirOrigin<Ast>) {
+        self.insert_with_quote_mod(node, ast, None);
+    }
+
+    pub(crate) fn insert_with_quote_mod(
+        &mut self,
+        node: Node,
+        ast: HirOrigin<Ast>,
+        quote_mod: Option<u16>,
+    ) {
         self.node_to_source[node] = ast;
+        self.node_to_quote_mod[node] = quote_mod;
     }
 
     pub(crate) fn node_to_source(&self, node: Node) -> &HirOrigin<Ast> {
         &self.node_to_source[node]
+    }
+
+    pub(crate) fn node_to_quote_mod(&self, node: Node) -> Option<u16> {
+        self.node_to_quote_mod[node]
     }
 }
 
@@ -234,6 +266,7 @@ where
     fn default() -> Self {
         Self {
             node_to_source: SecondaryMap::new(),
+            node_to_quote_mod: SecondaryMap::new(),
         }
     }
 }

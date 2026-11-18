@@ -4499,7 +4499,9 @@ impl<'db> Impl<'db> {
             TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
             ty,
         ) {
-            WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
+            WellFormedness::WellFormed | WellFormedness::Pending(_) => {
+                InherentImplAdmissibility::Admissible { ty }
+            }
             WellFormedness::IllFormed { goal, subgoal } => {
                 InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
             }
@@ -4843,6 +4845,9 @@ impl<'db> ImplTrait<'db> {
         impl_trait: ImplTrait<'db>,
         marker: Trait<'db>,
     ) -> bool {
+        if crate::core::meta::is_pending_derive_request(db, impl_trait) {
+            return false;
+        }
         let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
             return false;
         };
@@ -4924,7 +4929,11 @@ impl<'db> ImplTrait<'db> {
         Self::impl_trait_local_nominal_root(db, impl_trait).is_some_and(|root| match root {
             TyBase::Adt(adt) => adt.ingot(db) == impl_trait_ingot,
             TyBase::Contract(contract) => contract.top_mod(db).ingot(db) == impl_trait_ingot,
-            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => false,
+            TyBase::Prim(_)
+            | TyBase::Func(_)
+            | TyBase::Closure(_)
+            | TyBase::TraitDescriptor(_)
+            | TyBase::Shape(_) => false,
         })
     }
 
@@ -4973,12 +4982,29 @@ impl<'db> ImplTrait<'db> {
         self.assoc_type_bindings_for_trait_inst_in_mode(db, trait_inst, true)
     }
 
+    /// Whether the members of this implementation are unknown: it is a derive
+    /// header, `impl Tr for T with (P)`, that preparation has not given
+    /// members yet. The header says the implementation exists, and nothing
+    /// else. Neither a member nor the trait's default stands in for what its
+    /// provider will produce, so every lookup of a method body, a constant or
+    /// an associated type that would fall back to the trait's default asks
+    /// this first.
+    pub(crate) fn members_unknown(self, db: &'db dyn HirAnalysisDb) -> bool {
+        // Only a derive header can be unfulfilled; the lowered modifier tells
+        // so without reading the syntax.
+        self.derive_provider(db).is_some()
+            && crate::core::meta::is_unfulfilled_derive_request(db, self)
+    }
+
     fn assoc_type_bindings_for_trait_inst_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_inst: TraitInstId<'db>,
         defer_const_bodies: bool,
     ) -> IndexMap<IdentId<'db>, TyId<'db>> {
+        if self.members_unknown(db) {
+            return IndexMap::new();
+        }
         // Semantic associated type implementations in this impl-trait block.
         let mut types: IndexMap<_, _> = self
             .assoc_types(db)

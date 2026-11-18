@@ -96,7 +96,8 @@ use crate::analysis::{
         is_scope_visible_from,
         method_selection::{
             AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
-            select_callable_value_method, select_method_candidate, select_trait_method_candidates,
+            select_callable_value_method, select_method_candidate_with_choices,
+            select_trait_method_candidates,
         },
         resolve_name_res_with_minter, resolve_query,
     },
@@ -114,7 +115,7 @@ use crate::analysis::{
     },
 };
 use crate::core::semantic::storage_slot_span;
-use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{BlockKind, FieldParent, ItemKind, Trait, scope_graph::ScopeId};
 use common::{compilation::Target, indexmap::IndexMap};
 
 #[derive(Debug, Clone, Copy)]
@@ -458,6 +459,94 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
+            Expr::ItemQuote(holes) => {
+                let hole_tys = holes
+                    .iter()
+                    .map(|&hole| self.check_expr_unknown(hole).ty)
+                    .collect::<Vec<_>>();
+                let expected_resolved = expected.fold_with(self.db, &mut self.table);
+                let kind = crate::core::meta::code_kind_from_ty(self.db, expected_resolved)
+                    .unwrap_or_else(|| {
+                        use common::generation::FrozenCodeKind;
+                        use parser::ast::{self, prelude::*};
+                        let body = self.env.body();
+                        if let crate::span::HirOrigin::Raw(ptr) =
+                            body.source_map(self.db).expr_map.node_to_source(expr)
+                        {
+                            let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
+                            if let ast::ExprKind::Quote(quote) = ptr.to_node(root.syntax()).kind() {
+                                if quote.pattern().is_some() {
+                                    return FrozenCodeKind::Pat;
+                                }
+                                if quote.item_list().is_some() {
+                                    return FrozenCodeKind::Item;
+                                }
+                                if quote.where_clause().is_some() {
+                                    return FrozenCodeKind::Where;
+                                }
+                                if quote.arm_list().is_some() {
+                                    return FrozenCodeKind::Arm;
+                                }
+                                if let Some(block) = quote.body() {
+                                    let stmts = block.stmts().collect::<Vec<_>>();
+                                    if stmts.is_empty() && block.items().next().is_some() {
+                                        return FrozenCodeKind::Item;
+                                    }
+                                    if !stmts.is_empty()
+                                        && block.items().next().is_none()
+                                        && stmts.iter().all(|stmt| {
+                                            matches!(
+                                                stmt.kind(),
+                                                ast::StmtKind::Expr(inner)
+                                                    if inner.expr().is_some_and(|e| matches!(e.kind(), ast::ExprKind::QuoteHole(_)))
+                                            )
+                                        })
+                                        && !hole_tys.is_empty()
+                                        && let Some(hole_kind) =
+                                            crate::core::meta::code_kind_from_ty(
+                                                self.db,
+                                                hole_tys[0].fold_with(self.db, &mut self.table),
+                                            )
+                                        && (stmts.len() == 1 || hole_kind != FrozenCodeKind::Pat)
+                                        && hole_tys[1..].iter().all(|ty| {
+                                            crate::core::meta::code_kind_from_ty(
+                                                self.db,
+                                                ty.fold_with(self.db, &mut self.table),
+                                            ) == Some(hole_kind)
+                                        })
+                                    {
+                                        return hole_kind;
+                                    }
+                                }
+                            }
+                        }
+                        FrozenCodeKind::Expr
+                    });
+                let marker_path = match kind {
+                    common::generation::FrozenCodeKind::Item => "core::meta::Item",
+                    common::generation::FrozenCodeKind::Expr => "core::meta::Expr",
+                    common::generation::FrozenCodeKind::Pat => "core::meta::Pat",
+                    common::generation::FrozenCodeKind::Arm => "core::meta::Arm",
+                    common::generation::FrozenCodeKind::Where => "core::meta::Where",
+                };
+                let code = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    "core::meta::Code",
+                );
+                let marker = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    self.env.scope(),
+                    marker_path,
+                );
+                match (code, marker) {
+                    (Some(code), Some(marker)) => {
+                        ExprProp::new(TyId::app(self.db, code, marker), true)
+                    }
+                    _ => ExprProp::invalid(self.db),
+                }
+            }
+
             Expr::Lit(LitKind::String(string_id)) => {
                 ExprProp::new(self.string_literal_ty(*string_id, expected), true)
             }
@@ -525,6 +614,24 @@ impl<'db> TyChecker<'db> {
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
         self.report_normalization_limit(expr, actual.ty, expected);
+        let compile_time = match self.env.owner() {
+            BodyOwner::Func(function, _) => function.is_const(self.db),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+            _ => false,
+        };
+        if !compile_time
+            && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(self.db, actual.ty)
+        {
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: expr.span(self.body()).into(),
+                message: format!(
+                    "`{}` is compile-time-only in a runtime expression",
+                    meta.pretty_print(self.db)
+                ),
+                label: BodyDiag::RUNTIME_CONTEXT_LABEL,
+            });
+            actual = ExprProp::invalid(self.db);
+        }
         let typeable = Typeable::Expr(expr, actual.clone());
         actual.ty = self.unify_ty(typeable, actual.ty, expected);
         actual
@@ -1379,17 +1486,32 @@ impl<'db> TyChecker<'db> {
             return ExprProp::new(to, true);
         }
 
-        if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
-            inner_expr.data(self.db, self.body())
-        {
+        let literal = match inner_expr.data(self.db, self.body()) {
+            Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, false)),
+            Partial::Present(Expr::Un(inner, UnOp::Minus)) => {
+                match inner.data(self.db, self.body()) {
+                    Partial::Present(Expr::Lit(LitKind::Int(integer))) => Some((*integer, true)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        if let Some((int_id, negative)) = literal {
             let value = int_id.data(self.db);
             let leaf = self.peel_transparent_newtypes(to);
-            if to.is_string(self.db) && self.int_literal_fits_in_ty(value, TyId::u256(self.db)) {
+            if !negative
+                && to.is_string(self.db)
+                && self.int_literal_fits_in_ty(value, TyId::u256(self.db))
+            {
                 let _ = self.table.unify(from, TyId::u256(self.db));
                 return ExprProp::new(to, true);
             }
 
-            if self.int_literal_fits_in_ty(value, to) {
+            if if negative {
+                self.negated_int_literal_fits_in_ty(value, to)
+            } else {
+                self.int_literal_fits_in_ty(value, to)
+            } {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.
                 let _ = self.table.unify(from, leaf);
@@ -1403,7 +1525,8 @@ impl<'db> TyChecker<'db> {
                 from,
                 to,
                 hint: Some(format!(
-                    "integer literal `{}` is not representable in `{}`",
+                    "integer literal `{}{}` is not representable in `{}`",
+                    if negative { "-" } else { "" },
                     value,
                     leaf.pretty_print(self.db),
                 )),
@@ -1808,6 +1931,12 @@ impl<'db> TyChecker<'db> {
                 expr.span(self.body()).into(),
                 operand_ty,
                 &UnOp::Minus,
+                resolve_core_trait(
+                    self.db,
+                    self.env.scope(),
+                    &UnOp::Minus.trait_path_segments(),
+                )
+                .is_some_and(|trait_def| self.provider_offers(trait_def)),
             );
             self.push_diag(diag);
         }
@@ -1959,6 +2088,112 @@ impl<'db> TyChecker<'db> {
             }
             None => unknown_ty,
         }
+    }
+
+    fn try_open_derive_provider(
+        &mut self,
+        value: ExprId,
+        provider_ty: TyId<'db>,
+        alias_scope: Option<crate::hir_def::scope_graph::ScopeId<'db>>,
+    ) -> bool {
+        use super::super::trait_resolution::{
+            ChosenImpls,
+            generation::{ProviderOpening, offered_traits},
+        };
+        use parser::ast::prelude::*;
+        let offers = offered_traits(self.db, self.env.scope(), provider_ty);
+        if offers.is_empty() {
+            return false;
+        }
+        let mut owner_scope = Some(self.env.owner().scope());
+        let mut generated_owner = false;
+        while let Some(scope) = owner_scope {
+            // Members under an explicit derive header, such as its generated
+            // constants, are generated even though the header is authored.
+            generated_owner |= scope.data(self.db).publication_parent.is_some()
+                || matches!(
+                    scope,
+                    ScopeId::Item(ItemKind::ImplTrait(header))
+                        if crate::core::meta::is_derive_request(self.db, header)
+                );
+            owner_scope = scope.parent(self.db);
+        }
+        let body = self.body();
+        let origin = body.source_map(self.db).expr_map.node_to_source(value);
+        let key = if !generated_owner
+            && let crate::span::HirOrigin::Raw(pointer) = origin
+            && let Some(file) = body.top_mod(self.db).file(self.db).url(self.db)
+        {
+            let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
+            Some(common::generation::ScopedDeriveOpeningKey {
+                file,
+                binding_range: pointer.to_node(root.syntax()).syntax().text_range(),
+            })
+        } else {
+            None
+        };
+        let Some(key) = key else {
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: value.span(body).into(),
+                message: "scoped derive openings require a uniquely identified authored body; generated openings need a portable generated-owner identity".into(),
+                label: BodyDiag::REFUSED_OPENING_LABEL,
+            });
+            self.env.named_impl_operands.insert(value);
+            self.env.type_expr(value, ExprProp::invalid(self.db));
+            return true;
+        };
+        for scope in [alias_scope, provider_ty.as_scope(self.db)]
+            .into_iter()
+            .flatten()
+        {
+            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+                self.env
+                    .generation_demands
+                    .refuse(key, "scoped derive provider path is not visible");
+                if !matches!(
+                    value.data(self.db, body),
+                    Partial::Present(Expr::RecordInit(..))
+                ) && let Some(name) = scope.name(self.db)
+                {
+                    self.push_diag(PathResDiag::Invisible(
+                        value.span(body).into(),
+                        name,
+                        scope.name_span(self.db),
+                    ));
+                }
+                self.env.named_impl_operands.insert(value);
+                self.env.type_expr(value, ExprProp::invalid(self.db));
+                return true;
+            }
+        }
+        if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
+            && !fields.is_empty()
+        {
+            let message = "scoped derive provider literals must have no fields; provider values are not evaluated";
+            self.env.generation_demands.refuse(key, message);
+            self.push_diag(BodyDiag::CompileTimePhase {
+                primary: value.span(body).into(),
+                message: message.into(),
+                label: BodyDiag::REFUSED_OPENING_LABEL,
+            });
+            self.env.named_impl_operands.insert(value);
+            self.env.type_expr(value, ExprProp::invalid(self.db));
+            return true;
+        }
+        for trait_ in offers {
+            let opening =
+                ProviderOpening::new(self.db, key.clone(), provider_ty, trait_, self.env.scope());
+            self.env.provider_openings.push(opening);
+            self.env.choices = Some(ChosenImpls::push_provider(
+                self.db,
+                self.env.choices,
+                opening,
+            ));
+        }
+        self.env.named_impl_operands.insert(value);
+        self.env
+            .type_expr(value, ExprProp::new(TyId::unit(self.db), false));
+        true
     }
 
     fn check_with(
@@ -2216,9 +2451,10 @@ impl<'db> TyChecker<'db> {
                         applied,
                     )
                 };
-                let entry = *choice
+                let entry = choice
                     .items(self.db)
                     .last()
+                    .and_then(|entry| entry.implementation())
                     .expect("a pushed choice is the last item");
                 let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
                 if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
@@ -2270,9 +2506,10 @@ impl<'db> TyChecker<'db> {
                             resolved.selected(),
                             resolved.instantiated(),
                         );
-                        let entry = *choice
+                        let entry = choice
                             .items(self.db)
                             .last()
+                            .and_then(|entry| entry.implementation())
                             .expect("a pushed choice is the last item");
                         let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
                         if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
@@ -2305,7 +2542,8 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                     super::super::trait_resolution::Selection::Ambiguous(_)
-                    | super::super::trait_resolution::Selection::NotFound => {
+                    | super::super::trait_resolution::Selection::NotFound
+                    | super::super::trait_resolution::Selection::NeedsGeneration(_) => {
                         self.push_diag(TyDiagCollection::from(
                             TraitConstraintDiag::TraitBoundNotSat {
                                 span: binding.value.span(self.body()).into(),
@@ -2321,7 +2559,72 @@ impl<'db> TyChecker<'db> {
                     .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                 continue;
             }
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(Partial::Present(path))) =
+                    binding.value.data(self.db, self.body())
+                && !(path.is_bare_ident(self.db)
+                    && self
+                        .env
+                        .visible_binding(
+                            path.local_ident(self.db)
+                                .unwrap_or_else(|| path.ident(self.db).unwrap()),
+                        )
+                        .is_some())
+                && let Ok(resolved) = crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    *path,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    false,
+                )
+                && let Some((provider_ty, alias_scope)) = (match resolved {
+                    crate::analysis::name_resolution::PathRes::Ty(ty) => Some((ty, None)),
+                    crate::analysis::name_resolution::PathRes::TyAlias(alias, ty) => {
+                        Some((ty, Some(alias.alias.scope())))
+                    }
+                    _ => None,
+                })
+                && self.try_open_derive_provider(binding.value, provider_ty, alias_scope)
+            {
+                continue;
+            }
             let value_prop = self.check_expr_unknown(binding.value);
+            // A record literal is also a spelling of a compile-time provider.
+            // Its type is owned by ordinary expression checking, not re-resolved
+            // from the constructor's source spelling.
+            let provider_ty = self.table.fold_ty(self.db, value_prop.ty);
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::RecordInit(path, _)) =
+                    binding.value.data(self.db, self.body())
+            {
+                let (resolved_ty, alias_scope) = path
+                    .to_opt()
+                    .and_then(|path| {
+                        crate::analysis::name_resolution::resolve_path(
+                            self.db,
+                            path,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                            false,
+                        )
+                        .ok()
+                    })
+                    .map_or((None, None), |resolved| match resolved {
+                        crate::analysis::name_resolution::PathRes::Ty(ty) => (Some(ty), None),
+                        crate::analysis::name_resolution::PathRes::TyAlias(alias, ty) => {
+                            (Some(ty), Some(alias.alias.scope()))
+                        }
+                        _ => (None, None),
+                    });
+                let provider_ty = if provider_ty.has_invalid(self.db) {
+                    resolved_ty.unwrap_or(provider_ty)
+                } else {
+                    provider_ty
+                };
+                if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
+                    continue;
+                }
+            }
             // A provider confers authority over its place for the body; it
             // opens no access.
             self.consume_access(binding.value);
@@ -2418,10 +2721,76 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        if let Some(choices) = self.env.choices {
+            use super::super::trait_resolution::ChoiceEntry;
+            let start = outer_choices.map_or(0, |outer| outer.items(self.db).len());
+            let entries = &choices.items(self.db)[start..];
+            if entries
+                .iter()
+                .any(|entry| matches!(entry, ChoiceEntry::Provider(_)))
+            {
+                let mut seen = rustc_hash::FxHashMap::default();
+                let mut conflict = None;
+                for entry in entries {
+                    let (trait_, provider) = match entry {
+                        ChoiceEntry::Impl(choice) => (
+                            choice.implementation().trait_inst(self.db).def(self.db),
+                            false,
+                        ),
+                        ChoiceEntry::Provider(opening) => (opening.offered_trait(self.db), true),
+                    };
+                    if let Some(previous_provider) = seen.insert(trait_, provider)
+                        && (previous_provider || provider)
+                    {
+                        conflict = Some(if previous_provider && provider {
+                            "one `with` header gives two derive providers for the same trait"
+                        } else {
+                            "one `with` header gives a derive provider and a choice for the same trait"
+                        });
+                        break;
+                    }
+                }
+                if let Some(message) = conflict {
+                    let opening = entries
+                        .iter()
+                        .find_map(|entry| match entry {
+                            ChoiceEntry::Provider(opening) => Some(*opening),
+                            ChoiceEntry::Impl(_) => None,
+                        })
+                        .expect("provider-containing group");
+                    self.env
+                        .generation_demands
+                        .refuse(opening.key(self.db).clone(), message);
+                    self.push_diag(BodyDiag::CompileTimePhase {
+                        primary: body_expr.span(self.body()).into(),
+                        message: message.into(),
+                        label: BodyDiag::REFUSED_OPENING_LABEL,
+                    });
+                    // An invalid opening supplies no candidates or requests.
+                    // In particular, do not check its body under a winning
+                    // provider or silently retry it under ordinary selection.
+                    self.env.effect_env_mut().pop_frame();
+                    self.env.choices = outer_choices;
+                    return ExprProp::invalid(self.db);
+                }
+            }
+        }
         if ambiguous_opening {
-            // An operand with two meanings leaves the block's meaning open:
-            // its body is not checked, so that it reports nothing the operand
-            // would have provided.
+            // Preparation consumes demands before final diagnostics. An invalid
+            // header must not let an unrelated provider execute first.
+            if let Some(opening) = self.env.choices.and_then(|choices| {
+                choices.items(self.db).iter().find_map(|entry| match entry {
+                    super::super::trait_resolution::ChoiceEntry::Provider(opening) => {
+                        Some(*opening)
+                    }
+                    super::super::trait_resolution::ChoiceEntry::Impl(_) => None,
+                })
+            }) {
+                self.env.generation_demands.refuse(
+                    opening.key(self.db).clone(),
+                    "ambiguous implementation operand in `with` header",
+                );
+            }
             self.env.effect_env_mut().pop_frame();
             self.env.choices = outer_choices;
             return ExprProp::invalid(self.db);
@@ -4054,25 +4423,17 @@ impl<'db> TyChecker<'db> {
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
-        let mut candidate = select_method_candidate(
-            self.db,
-            &canonical_r_ty,
-            method_name,
-            self.env.scope(),
-            method_assumptions,
-            None,
-        );
+        let mut candidate =
+            self.select_method_in_scope(&canonical_r_ty, method_name, method_assumptions, None);
         if matches!(
             candidate,
             Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
         ) {
             for &receiver_ty in receiver_tys.iter().skip(1) {
                 let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
-                let fallback = select_method_candidate(
-                    self.db,
+                let fallback = self.select_method_in_scope(
                     &fallback_canonical,
                     method_name,
-                    self.env.scope(),
                     method_assumptions,
                     None,
                 );
@@ -4261,6 +4622,30 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// Selects a method under the lexical choices at this point of the body.
+    /// Requests that candidate probes stopped on become demands of the body.
+    fn select_method_in_scope(
+        &mut self,
+        receiver: &Canonicalized<'db, TyId<'db>>,
+        method_name: IdentId<'db>,
+        assumptions: PredicateListId<'db>,
+        trait_: Option<Trait<'db>>,
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        let outcome = select_method_candidate_with_choices(
+            self.db,
+            receiver,
+            method_name,
+            self.env.scope(),
+            assumptions,
+            trait_,
+            self.env.choices,
+        );
+        self.env
+            .generation_demands
+            .requests(self.db, outcome.pending);
+        outcome.result
+    }
+
     fn check_path(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
         let Expr::Path(path) = expr_data else {
             unreachable!()
@@ -4284,7 +4669,7 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
+        let lowering_cx = LoweringContext::new().with_method_choices(self.env.choices);
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
@@ -4317,6 +4702,9 @@ impl<'db> TyChecker<'db> {
                 }
             }
         };
+        self.env
+            .generation_demands
+            .requests(self.db, lowering_cx.take_generation_requests());
         match res {
             ResolvedPathInBody::Binding(binding) => {
                 let ty = self
@@ -5427,6 +5815,19 @@ impl<'db> TyChecker<'db> {
     /// Resolve a core::ops trait method for an operator on a given LHS type and
     /// optionally check the RHS against the inferred method parameter type.
     /// Returns the fully-instantiated function type and concrete trait instance.
+    /// Whether a `with` in scope asks a derive provider for `trait_def`.
+    fn provider_offers(&self, trait_def: Trait<'db>) -> bool {
+        self.env.choices.is_some_and(|choices| {
+            choices.items(self.db).iter().any(|entry| {
+                matches!(
+                    entry,
+                    super::super::trait_resolution::ChoiceEntry::Provider(opening)
+                        if opening.offered_trait(self.db) == trait_def
+                )
+            })
+        })
+    }
+
     pub(super) fn check_ops_trait(
         &mut self,
         expr: ExprId,
@@ -5490,6 +5891,7 @@ impl<'db> TyChecker<'db> {
                         expr.span(self.body()).into(),
                         lhs_ty,
                         op,
+                        self.provider_offers(trait_def),
                     );
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
@@ -5556,6 +5958,7 @@ impl<'db> TyChecker<'db> {
                         expr.span(self.body()).into(),
                         lhs_ty,
                         op,
+                        self.provider_offers(trait_def),
                     );
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
@@ -5605,11 +6008,9 @@ impl<'db> TyChecker<'db> {
             let lhs_candidates = self.receiver_candidates(lhs_ty);
             let mut selected_lhs_ty = lhs_candidates[0];
             let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            let mut method_candidate = select_method_candidate(
-                self.db,
+            let mut method_candidate = self.select_method_in_scope(
                 &c_lhs_ty,
                 op.trait_method(self.db),
-                self.env.scope(),
                 method_assumptions,
                 Some(trait_def),
             );
@@ -5619,11 +6020,9 @@ impl<'db> TyChecker<'db> {
             ) {
                 for &candidate_ty in lhs_candidates.iter().skip(1) {
                     let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                    let fallback = select_method_candidate(
-                        self.db,
+                    let fallback = self.select_method_in_scope(
                         &c_candidate_ty,
                         op.trait_method(self.db),
-                        self.env.scope(),
                         method_assumptions,
                         Some(trait_def),
                     );
@@ -5666,6 +6065,7 @@ impl<'db> TyChecker<'db> {
                         expr.span(self.body()).into(),
                         lhs_ty,
                         op,
+                        self.provider_offers(trait_def),
                     );
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
@@ -6071,6 +6471,8 @@ fn resolve_ident_expr<'db>(
     lowering_cx: &LoweringContext<'db>,
 ) -> ResolvedPathInBody<'db> {
     let ident = path.ident(db).unwrap();
+    let local_ident = path.local_ident(db).unwrap_or(ident);
+    let hygiene_scope = path.hygiene_scope(db);
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
         // First, surface any ambiguity/conflict in the bucket as a dedicated
@@ -6104,6 +6506,16 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
+        if path.hygiene_scope(db).is_some()
+            && matches!(
+                res.kind,
+                crate::analysis::name_resolution::NameResKind::Scope(
+                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
+                )
+            )
+        {
+            return ResolvedPathInBody::Invalid;
+        }
         let Ok(reso) =
             resolve_name_res_with_minter(db, res, path, scope, env.assumptions(), lowering_cx)
         else {
@@ -6116,31 +6528,33 @@ fn resolve_ident_expr<'db>(
 
     loop {
         let block = env.get_block(current_idx);
-        if let Some(binding) = block.lookup_var(ident) {
+        if let Some(binding) = block.lookup_var(local_ident) {
             return ResolvedPathInBody::Binding(binding);
         }
 
-        let scope = block.scope;
-        let directive = QueryDirective::for_scope(db, scope).disallow_lex();
-        let query = EarlyNameQueryId::new(db, ident, scope, directive);
-        let bucket = resolve_query(db, query);
-
-        let resolved = resolve_bucket(bucket, scope);
-        if matches!(resolved, ResolvedPathInBody::Invalid) {
-            if current_idx == 0 {
-                break;
+        // A spliced quote keeps its producer's free names. Only its hygienic
+        // local binders may resolve in the enclosing generated body.
+        if hygiene_scope.is_none() {
+            let scope = block.scope;
+            let directive = QueryDirective::for_scope(db, scope).disallow_lex();
+            let query = EarlyNameQueryId::new(db, ident, scope, directive);
+            let bucket = resolve_query(db, query);
+            let resolved = resolve_bucket(bucket, scope);
+            if !matches!(resolved, ResolvedPathInBody::Invalid) {
+                return resolved;
             }
-            current_idx -= 1;
-        } else {
-            return resolved;
         }
+        if current_idx == 0 {
+            break;
+        }
+        current_idx -= 1;
     }
 
-    let body_scope = env.body().scope();
+    let body_scope = hygiene_scope.unwrap_or_else(|| env.body().scope());
     let directive = QueryDirective::for_scope(db, body_scope);
     let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
     let bucket = resolve_query(db, query);
-    match resolve_bucket(bucket, env.scope()) {
+    match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {
         ResolvedPathInBody::Invalid => ResolvedPathInBody::NewBinding(ident),
         r => r,
     }

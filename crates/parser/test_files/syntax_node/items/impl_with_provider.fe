@@ -1,0 +1,11 @@
+impl Packet with (InspectAbi)
+
+impl<T: Ord> Box2<T> with (Within)
+
+impl<T> Box2<T> with (pkg::Within<T>)
+where T: Ord
+
+impl Score for Packet with (InspectAbi)
+
+pub impl<T> Score for Box2<T> as Ordered with (Within)
+where T: Ord

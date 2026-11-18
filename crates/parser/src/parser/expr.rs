@@ -642,6 +642,10 @@ impl super::Parse for FieldExprScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::Dot);
 
+        if parser.current_kind() == Some(SyntaxKind::Dollar) {
+            return parser.parse(expr_atom::QuoteHoleScope::default());
+        }
+
         parser.expect(&[SyntaxKind::Ident, SyntaxKind::Int], None)?;
         parser.bump();
         Ok(())

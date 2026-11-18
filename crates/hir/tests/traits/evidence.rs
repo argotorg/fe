@@ -960,6 +960,62 @@ pub const fn read_step() -> u256 {
     }
 }
 
+/// Inside a named implementation that states an associated type, the chosen
+/// implementation's instance (`Shape<Unit = u256>`) and an ordinary
+/// implementation's declared instance (`Shape`) are one candidate for
+/// `Self::SIDES`, not two.
+#[test]
+fn assoc_const_path_in_named_impl_with_assoc_type_beside_an_ordinary_impl_is_one_candidate() {
+    let source = r#"
+trait Shape {
+    const SIDES: usize
+    type Unit
+    const fn area() -> usize
+}
+
+struct Square {}
+
+impl Shape for Square as Named {
+    const SIDES: usize = 3
+    type Unit = u256
+    const fn area() -> usize { Self::SIDES * Self::SIDES }
+}
+
+impl Shape for Square {
+    const SIDES: usize = 3
+    type Unit = u256
+    const fn area() -> usize { 100 }
+}
+
+pub const fn named_area() -> usize {
+    with (Named) { Square::area() }
+}
+
+pub const fn ordinary_area() -> usize {
+    Square::area()
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("assoc_const_named_with_assoc_type.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [("named_area", 9usize), ("ordinary_area", 100usize)] {
+        let owner = BodyOwner::func(&db, func(&db, module, name));
+        let evaluated =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let value = evaluated.into_ready().expect("const evaluation succeeded");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar int");
+        };
+        assert_eq!(value.to_usize(), Some(expected), "{name}");
+    }
+}
+
 #[test]
 fn trait_const_pattern_uses_chosen_evidence_and_refuses_conflict() {
     let source = r#"

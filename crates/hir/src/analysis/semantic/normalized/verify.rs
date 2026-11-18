@@ -541,6 +541,15 @@ fn verify_expr<'db>(
             }
             Ok(())
         }
+        NExpr::ItemQuote { holes, .. } => {
+            if crate::core::meta::code_kind_from_ty(db, result_ty).is_none() {
+                return Err(NormalizedBodyVerifyError::ExpressionType);
+            }
+            for &hole in holes {
+                verify_scalar_ty(db, body, hole)?;
+            }
+            Ok(())
+        }
         NExpr::Forward { .. } | NExpr::CodeRegionRef { .. } => Ok(()),
     }
 }
@@ -975,7 +984,8 @@ fn value_has_mutable_view_origin<'db>(
                 NPlaceBase::Root(_) | NPlaceBase::Deref { .. } => None,
             }
         }
-        NExpr::CodeRegionRef { .. }
+        NExpr::ItemQuote { .. }
+        | NExpr::CodeRegionRef { .. }
         | NExpr::Const(_)
         | NExpr::Unary { .. }
         | NExpr::Binary { .. }

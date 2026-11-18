@@ -125,6 +125,8 @@ pub(crate) enum ConstBodyLowering {
 #[derive(Debug)]
 pub(crate) struct LoweringContext<'db> {
     const_bodies: ConstBodyLowering,
+    /// Lexical candidate availability for value-tail method discovery only.
+    method_choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
@@ -135,6 +137,14 @@ pub(crate) struct LoweringContext<'db> {
     /// Set while lowering resolves a path that an anonymous constant's body
     /// writes (`without_recording`).
     recording_paused: std::cell::Cell<bool>,
+    /// The record whose field type is being lowered where generated code
+    /// spliced it (`with_spliced_record`).
+    spliced_record: std::cell::Cell<Option<GenericParamOwner<'db>>>,
+    /// The generation requests that method discovery under `method_choices`
+    /// stopped on. The caller that supplied the choices owes them to
+    /// preparation (`take_generation_requests`).
+    generation_requests:
+        std::cell::RefCell<Vec<super::trait_resolution::generation::GenerationRequest<'db>>>,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -152,11 +162,42 @@ impl<'db> LoweringContext<'db> {
     pub(crate) fn for_const_bodies(const_bodies: ConstBodyLowering) -> Self {
         Self {
             const_bodies,
+            method_choices: None,
             impl_assoc_type: None,
             choices: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
+            spliced_record: std::cell::Cell::new(None),
+            generation_requests: Default::default(),
         }
+    }
+
+    pub(crate) fn with_method_choices(
+        mut self,
+        choices: Option<super::trait_resolution::ChosenImpls<'db>>,
+    ) -> Self {
+        self.method_choices = choices;
+        self.choices = choices;
+        self
+    }
+
+    pub(crate) fn method_choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
+        self.method_choices
+    }
+
+    /// Called by path resolution for the requests a method discovery met.
+    pub(crate) fn record_generation_requests(
+        &self,
+        requests: impl IntoIterator<Item = super::trait_resolution::generation::GenerationRequest<'db>>,
+    ) {
+        self.generation_requests.borrow_mut().extend(requests);
+    }
+
+    /// The requests path resolution met under this context's choices.
+    pub(crate) fn take_generation_requests(
+        &self,
+    ) -> Vec<super::trait_resolution::generation::GenerationRequest<'db>> {
+        std::mem::take(&mut self.generation_requests.borrow_mut())
     }
 
     /// Makes this lowering lower an associated type of `impl_trait`.
@@ -174,6 +215,7 @@ impl<'db> LoweringContext<'db> {
         choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     ) -> Self {
         self.choices = choices;
+        self.method_choices = choices;
         self
     }
 
@@ -205,6 +247,24 @@ impl<'db> LoweringContext<'db> {
         let result = resolve();
         self.recording_paused.set(paused);
         result
+    }
+
+    /// Runs `lower` with `record` as the record whose spliced field type is
+    /// being lowered, or with none. The anonymous constants of a spliced field
+    /// type are written in its record and are read there.
+    pub(crate) fn with_spliced_record<R>(
+        &self,
+        record: Option<GenericParamOwner<'db>>,
+        lower: impl FnOnce() -> R,
+    ) -> R {
+        let enclosing = self.spliced_record.replace(record);
+        let result = lower();
+        self.spliced_record.set(enclosing);
+        result
+    }
+
+    pub(crate) fn spliced_record(&self) -> Option<GenericParamOwner<'db>> {
+        self.spliced_record.get()
     }
 
     pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
@@ -457,6 +517,8 @@ fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId
 
 fn sem_const_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
     match value.value(db) {
+        SemConstValue::ItemCode { ty, .. } => ty_is_fully_ground(db, *ty),
+        SemConstValue::Meta { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Unit => true,
         SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Description(term) => const_ty_is_fully_ground(db, *term),
@@ -949,7 +1011,10 @@ fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId
             ty.is_some_and(|ty| ty_is_fully_ground(db, ty))
                 && match capture {
                     ConstCaptureEnv::Empty => true,
-                    ConstCaptureEnv::Identity(_) => false,
+                    // An identity capture reads its owner's formals without
+                    // spelling them; with no formals, such as the `4` in
+                    // `impl Report for Buf<4>`, the body depends on none.
+                    ConstCaptureEnv::Identity(domain) => !domain.has_formals(db),
                     ConstCaptureEnv::Bound(subst) => subst
                         .values()
                         .iter()
@@ -1208,6 +1273,14 @@ fn canonicalize_sem_const_for_mode<'db>(
             .into_boxed_slice()
     };
     let value = match value.value(db) {
+        SemConstValue::ItemCode { ty, code } => SemConstValue::ItemCode {
+            ty: canonicalize(*ty),
+            code: code.clone(),
+        },
+        SemConstValue::Meta { ty, value } => SemConstValue::Meta {
+            ty: canonicalize(*ty),
+            value: *value,
+        },
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
             ty: canonicalize(*ty),

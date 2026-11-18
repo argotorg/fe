@@ -295,6 +295,7 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
                 args.iter().for_each(|arg| self.check_expr(arg.expr));
                 self.check_call_target(expr);
             }
+            Expr::ItemQuote(holes) => holes.iter().for_each(|&hole| self.check_expr(hole)),
             Expr::UnsupportedMacroCall => {}
             Expr::Assert(args) => args.iter().for_each(|arg| self.check_expr(arg.expr)),
             Expr::MethodCall(receiver, _name, _generic_args, args) => {

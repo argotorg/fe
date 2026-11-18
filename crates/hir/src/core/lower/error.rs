@@ -365,6 +365,7 @@ fn create_selector_const<'db>(
         body_ctxt.pats,
         body_ctxt.f_ctxt.top_mod(),
         body_ctxt.f_ctxt.lazy_func(),
+        body_ctxt.f_ctxt.syntax_top_mod(),
         body_ctxt.source_map,
         origin,
     );
@@ -376,6 +377,7 @@ fn create_selector_const<'db>(
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
         vis: crate::hir_def::Visibility::Public,
+        generated: None,
     }
 }
 

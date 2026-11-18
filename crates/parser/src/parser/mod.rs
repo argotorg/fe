@@ -201,6 +201,18 @@ impl<S: TokenStream> Parser<S> {
         self.parents.last_mut().unwrap().kind = kind;
     }
 
+    pub(super) fn quote_scope_depth(&self) -> usize {
+        self.parents
+            .iter()
+            .filter(|entry| entry.kind == SyntaxKind::QuoteExpr)
+            .count()
+    }
+
+    /// Whether a `$` here starts a splice in a slot that only quotes have.
+    pub(super) fn at_quote_hole(&mut self) -> bool {
+        self.current_kind() == Some(SyntaxKind::Dollar) && self.quote_scope_depth() > 0
+    }
+
     pub fn expect_and_pop_recovery_stack(&mut self) -> Result<(), Recovery<ErrProof>> {
         let current = self.current_kind();
         let r = if current.is_some() && self.scope_aux_recovery().contains(&current.unwrap()) {

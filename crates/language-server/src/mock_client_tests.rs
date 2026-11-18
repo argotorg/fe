@@ -460,6 +460,26 @@ impl MockLspClient {
             .await
     }
 
+    /// Request a rename.
+    pub async fn rename(
+        &mut self,
+        uri: &Url,
+        line: u32,
+        character: u32,
+        new_name: &str,
+    ) -> Result<Option<WorkspaceEdit>, async_lsp::Error> {
+        self.server
+            .rename(RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position { line, character },
+                },
+                new_name: new_name.into(),
+                work_done_progress_params: WorkDoneProgressParams::default(),
+            })
+            .await
+    }
+
     /// Request completion.
     pub async fn completion(
         &mut self,
@@ -1053,6 +1073,147 @@ fn hover_text(hover: &Hover) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
     }
+}
+
+#[tokio::test]
+async fn standalone_generation_updates_diagnostics_and_hover_after_edits() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+    let other_uri = Url::parse("file:///tmp/fe-lsp-other-standalone.fe").unwrap();
+    let other_source = "fn other() -> u256 { 3 }\n";
+    client.did_open(&other_uri, other_source);
+    client.wait_for_text(&other_uri, other_source).await;
+    let uri = Url::parse("file:///tmp/fe-lsp-record-generation.fe").unwrap();
+    let source = "use core::derive::{Derive, Inherent}\n\
+use core::meta::{Code, Item, Record}\n\
+pub struct Make {}\n\
+impl Derive<Inherent> for Make { const fn derive(_ record: Record) -> Code<Item> { quote { pub fn generated() -> u256 { 42 } } } }\n\
+struct Pair { first: u256 }\n\
+impl Pair with (Make)\n\
+fn call_generated() -> u256 { Pair::generated() }\n";
+    client.did_open(&uri, source);
+    client.clear_diagnostics();
+    client.analyze(&uri, source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == uri).await);
+    let diagnostics = client.diagnostics();
+    assert!(diagnostics.iter().any(|d| d.uri == uri));
+    assert!(
+        diagnostics
+            .iter()
+            .filter(|d| d.uri == uri)
+            .flat_map(|d| &d.diagnostics)
+            .all(|d| d.severity != Some(DiagnosticSeverity::ERROR)),
+        "{diagnostics:?}"
+    );
+    let hover = hover_at(&mut client, &uri, 6, 39).await;
+    assert!(hover_text(&hover).contains("generated"), "{hover:?}");
+    client.wait_for_text(&other_uri, other_source).await;
+
+    let invalid_output = source.replace("{ 42 }", "{ true }");
+    client.clear_diagnostics();
+    client.did_change(&uri, 2, &invalid_output);
+    client.analyze(&uri, &invalid_output).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == uri
+                    && d.diagnostics
+                        .iter()
+                        .any(|d| d.message.contains("generated output admission failed"))
+            })
+            .await,
+        "{:?}",
+        client.diagnostics()
+    );
+
+    let without_generation = source.replace("impl Pair with (Make)", "");
+    client.clear_diagnostics();
+    client.did_change(&uri, 3, &without_generation);
+    client.analyze(&uri, &without_generation).await;
+    assert!(
+        client
+            .wait_for_diagnostics(|d| {
+                d.uri == uri
+                    && d.diagnostics
+                        .iter()
+                        .any(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+            })
+            .await
+    );
+    let diagnostics = client.diagnostics();
+    assert!(
+        diagnostics
+            .iter()
+            .filter(|d| d.uri == uri)
+            .flat_map(|d| &d.diagnostics)
+            .any(|d| d.severity == Some(DiagnosticSeverity::ERROR)),
+        "{diagnostics:?}"
+    );
+    assert!(
+        client
+            .hover(&uri, 4, 33)
+            .await
+            .expect("hover failed")
+            .is_none()
+    );
+}
+
+/// A file whose own provider generates members for its record, one of them
+/// naming the record through a splice: renaming the record edits its declaration,
+/// its header and its authored uses, never the provider's quotation.
+#[tokio::test]
+async fn rename_in_a_file_that_generates_for_its_own_record_skips_the_quotation() {
+    let mut client = MockLspClient::start().await;
+    client.initialize().await;
+    let uri = Url::parse("file:///tmp/fe-lsp-rename-generated.fe").unwrap();
+    let source = "use core::derive::{Derive, Inherent}\n\
+use core::meta::{Code, Item, Record}\n\
+\n\
+pub struct Make {}\n\
+impl Derive<Inherent> for Make {\n\
+    const fn derive(_ record: Record) -> Code<Item> {\n\
+        quote { pub const fn score() -> usize { 1 } pub fn same(self, _ other: ${record}) -> bool { true } }\n\
+    }\n\
+}\n\
+\n\
+\n\
+pub struct Pair { first: u256 }\n\
+impl Pair with (Make)\n\
+pub const fn total() -> usize { Pair::score() }\n";
+    client.did_open(&uri, source);
+    client.clear_diagnostics();
+    client.analyze(&uri, source).await;
+    assert!(client.wait_for_diagnostics(|d| d.uri == uri).await);
+    let rename = client
+        .rename(&uri, 13, 33, "Couple")
+        .await
+        .expect("rename failed")
+        .expect("rename produces edits");
+    let mut edits = rename
+        .changes
+        .expect("rename edits by file")
+        .into_iter()
+        .map(|(file, edits)| {
+            let mut lines = edits
+                .into_iter()
+                .map(|edit| (edit.range.start.line, edit.new_text))
+                .collect::<Vec<_>>();
+            lines.sort();
+            (file, lines)
+        })
+        .collect::<Vec<_>>();
+    edits.sort();
+    assert_eq!(
+        edits,
+        vec![(
+            uri.clone(),
+            vec![
+                (11, "Couple".to_string()),
+                (12, "Couple".to_string()),
+                (13, "Couple".to_string())
+            ]
+        )]
+    );
 }
 
 async fn hover_at(client: &mut MockLspClient, uri: &Url, line: u32, character: u32) -> Hover {

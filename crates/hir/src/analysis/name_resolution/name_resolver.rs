@@ -57,6 +57,12 @@ pub struct QueryDirective {
     /// functions are not in scope as bare names inside their own impl or
     /// trait and must be referred to via `Self::f` or `self.f()`.
     allow_assoc_fn: bool,
+
+    /// If `allow_enclosing_item_bindings` is `false`, parameters, `Self`, and
+    /// associated items of enclosing functions, impls, or traits are not
+    /// visible when resolving names through a generated function's lexical
+    /// origin.
+    allow_enclosing_item_bindings: bool,
 }
 
 impl QueryDirective {
@@ -74,6 +80,7 @@ impl QueryDirective {
             allow_lex: true,
             allow_external: true,
             allow_assoc_fn: true,
+            allow_enclosing_item_bindings: true,
         }
     }
 
@@ -90,6 +97,11 @@ impl QueryDirective {
 
     fn disallow_assoc_fn(mut self) -> Self {
         self.allow_assoc_fn = false;
+        self
+    }
+
+    fn disallow_enclosing_item_bindings(mut self) -> Self {
+        self.allow_enclosing_item_bindings = false;
         self
     }
 }
@@ -527,7 +539,15 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                     scope,
                     ScopeId::Item(ItemKind::Impl(_) | ItemKind::ImplTrait(_) | ItemKind::Trait(_))
                 );
+            let only_lex = !query.directive(self.db).allow_enclosing_item_bindings
+                && !matches!(
+                    scope,
+                    ScopeId::Block(..) | ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_))
+                );
             for edge in s_graph.edges(scope) {
+                if only_lex && !matches!(edge.kind, EdgeKind::Lex(_)) {
+                    continue;
+                }
                 if hide_assoc_fns && matches!(edge.dest, ScopeId::Item(ItemKind::Func(_))) {
                     continue;
                 }
@@ -553,10 +573,13 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
         // 4. Look for the name in the lexical scope if it exists.
         if let Some(parent) = parent {
-            let directive = query
+            let mut directive = query
                 .directive(self.db)
                 .disallow_external()
                 .disallow_assoc_fn();
+            if scope.data(self.db).publication_parent.is_some() {
+                directive = directive.disallow_enclosing_item_bindings();
+            }
             let query_for_parent =
                 EarlyNameQueryId::new(self.db, query.name(self.db), parent, directive);
 

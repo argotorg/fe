@@ -69,9 +69,11 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                 .scope()
                 .pretty_path(db)
                 .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
-                ty.pretty_print(db).to_string()
-            }
+            TyBase::Prim(_)
+            | TyBase::Func(_)
+            | TyBase::Closure(_)
+            | TyBase::TraitDescriptor(_)
+            | TyBase::Shape(_) => ty.pretty_print(db).to_string(),
         },
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
@@ -988,11 +990,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
 
 impl DiagnosticVoucher for FuncBodyDiag<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        match self {
+        let mut diagnostic = match self {
             Self::Ty(diag) => diag.to_complete(db),
             Self::Body(diag) => diag.to_complete(db),
             Self::NameRes(diag) => diag.to_complete(db),
-        }
+        };
+        diagnostic.severity = self.severity();
+        diagnostic
     }
 }
 
@@ -1244,6 +1248,10 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                     PathKind::Ident { ident, .. } => ident
                         .to_opt()
                         .map_or_else(|| segment.pretty_print(db), |id| id.data(db).to_owned()),
+                    PathKind::BoundIngot { display, .. } => display.data(db).to_owned(),
+                    PathKind::BoundItem { display, .. } | PathKind::InScope { display, .. } => {
+                        display.pretty_print(db)
+                    }
                     PathKind::QualifiedType { type_, trait_ } => {
                         let ty = type_.pretty_print(db);
                         let trait_name = trait_.pretty_print(db);
@@ -2916,6 +2924,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 span.resolve(db),
                 error_code,
             ),
+            Self::CompileTimePhase {
+                primary,
+                message,
+                label,
+            } => primary_diag(severity, message, *label, primary.resolve(db), error_code),
             Self::InfiniteOccurrence(span) => primary_diag(
                 Severity::Error,
                 "infinite sized type found",
@@ -4113,6 +4126,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 trait_path,
                 wraps,
                 needs_bound,
+                scoped_provider,
             } => {
                 let trait_path_str = trait_path.pretty_print(db);
                 let sub_diagnostics = vec![
@@ -4133,7 +4147,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     },
                 ];
 
-                let notes = if *wraps {
+                let mut notes = if *wraps {
                     vec![format!(
                         "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{trait_path_str}`",
                         op.data(db),
@@ -4141,6 +4155,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 } else {
                     vec![]
                 };
+                if *scoped_provider {
+                    notes.push("a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)`".to_string());
+                }
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("`{}` trait is not implemented", trait_path.pretty_print(db)),
@@ -6057,6 +6074,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 format!("`{}` requires type normalization through evidence, which is not supported yet", goal.pretty_print(db, true)),
                 primary.resolve(db), error_code,
             ),
+            BodyDiag::QuotedOpenNameUnbound { primary, name } => primary_diag(
+                Severity::Error,
+                format!("quoted open name `{name}` has no enclosing binder"),
+                format!("`{name}` names a constant or unit variant here, so it binds nothing"),
+                primary.resolve(db),
+                error_code,
+            ),
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)
@@ -6099,6 +6123,9 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 Severity::Error,
                 format!("`{}` cannot have a named implementation", name.data(db)),
                 match reason {
+                    crate::analysis::ty::trait_def::UnchoosableReason::FieldQuery => {
+                        "`query_field` evaluates it outside every `with`, so no choice made with `with` reaches it"
+                    }
                     crate::analysis::ty::trait_def::UnchoosableReason::Presence => {
                         "the compiler uses whether a type implements it, not a choice made with `with`"
                     }
@@ -6465,6 +6492,14 @@ impl DiagnosticVoucher for ImplDiag<'_> {
         let severity = Severity::Error;
 
         match self {
+            Self::UnfulfilledDeriveRequest { primary } => primary_diag(
+                severity,
+                "derive header was not prepared",
+                "a derive header is prepared only in a single source file that belongs to no package",
+                primary.resolve(db),
+                error_code,
+            ),
+
             Self::ConflictMethodImpl {
                 primary,
                 conflict_with,

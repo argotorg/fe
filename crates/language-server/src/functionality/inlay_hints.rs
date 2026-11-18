@@ -15,11 +15,11 @@ pub async fn handle_inlay_hints(
     params: async_lsp::lsp_types::InlayHintParams,
 ) -> Result<Option<Vec<InlayHint>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.text_document.uri);
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let file = backend
-        .db
+    let file = analysis_db
         .workspace()
-        .get(&backend.db, &url)
+        .get(&analysis_db, &url)
         .ok_or_else(|| {
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
@@ -27,11 +27,11 @@ pub async fn handle_inlay_hints(
             )
         })?;
 
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
     let mut hints = Vec::new();
 
     // Collect hints from all function bodies in the module
-    collect_hints_from_mod(&backend.db, top_mod, &mut hints);
+    collect_hints_from_mod(&analysis_db, top_mod, &mut hints);
 
     Ok(Some(hints))
 }

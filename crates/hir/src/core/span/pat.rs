@@ -98,7 +98,13 @@ impl ChainInitiator for PatRoot<'_> {
     fn init(&self, db: &dyn SpannedHirDb) -> ResolvedOrigin {
         let source_map = body_source_map(db, self.body);
         let origin = source_map.pat_map.node_to_source(self.pat);
-        let top_mod = self.body.top_mod(db);
-        ResolvedOrigin::resolve(db, top_mod, origin)
+        let node_quote_mod = source_map.pat_map.node_to_quote_mod(self.pat);
+        ResolvedOrigin::resolve_with_quote_mods(
+            db,
+            self.body,
+            origin,
+            node_quote_mod,
+            &source_map.quote_mods,
+        )
     }
 }

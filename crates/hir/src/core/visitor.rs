@@ -1283,6 +1283,11 @@ pub fn walk_expr<'db, V>(
             );
         }
 
+        Expr::ItemQuote(holes) => {
+            for hole in holes {
+                visit_node_in_body!(visitor, ctxt, hole, expr);
+            }
+        }
         Expr::UnsupportedMacroCall => {}
         Expr::Assert(call_args) => {
             ctxt.with_new_ctxt(
@@ -1962,7 +1967,10 @@ where
         0
     };
     match path.kind(ctxt.db) {
-        PathKind::Ident { .. } => {
+        PathKind::Ident { .. }
+        | PathKind::BoundIngot { .. }
+        | PathKind::BoundItem { .. }
+        | PathKind::InScope { .. } => {
             if let Some(ident) = path.ident(ctxt.db).to_opt() {
                 ctxt.with_new_ctxt(
                     |span| span.segment(idx).into_atom(),
@@ -2060,7 +2068,8 @@ pub fn walk_type<'db, V>(
             },
         ),
 
-        TypeKind::Never => {}
+        // A spliced field type is written, and visited, in its record.
+        TypeKind::Primitive(..) | TypeKind::Never | TypeKind::AuthoredField(_) => {}
     }
 }
 
@@ -2276,6 +2285,7 @@ where
             ChainRoot::StaticAssert(assert_) => assert_.top_mod(self.db),
             ChainRoot::Use(use_) => use_.top_mod(self.db),
             ChainRoot::Body(body) => body.top_mod(self.db),
+            ChainRoot::AssocMember(member) => member.item().top_mod(self.db),
             ChainRoot::Stmt(_) | ChainRoot::Expr(_) | ChainRoot::Pat(_) => {
                 self.body().top_mod(self.db)
             }

@@ -252,11 +252,24 @@ impl<'db> TyChecker<'db> {
                 use_.inst(),
             );
             evidence.record_dispatch(use_.inst(), outcome.evidence());
+            // As for a constant read in an expression: a proof that waits for
+            // a generated implementation is a demand for preparation.
+            if let Some(request) = outcome.request() {
+                self.env.generation_demands.request(self.db, request);
+                self.push_diag(BodyDiag::CompileTimePhase {
+                    primary,
+                    message: "scoped derive requires a prepared generated implementation".into(),
+                    label: BodyDiag::UNPREPARED_PROVIDER_LABEL,
+                });
+                return PatternAnalysisStatus::Invalid;
+            }
             if choices.is_some() && evidence.dispatch_proof().is_none() {
                 failed_goals.push(use_.inst());
             }
         }
-        failed_goals.extend(cref.record_bound_evidence(self.db, choices));
+        let (missing, requests) = cref.record_bound_evidence(self.db, choices);
+        self.env.generation_demands.requests(self.db, requests);
+        failed_goals.extend(missing);
         cref.qualify_evidence(self.db, self.env.owner());
         if !failed_goals.is_empty() {
             for goal in failed_goals {
@@ -293,6 +306,8 @@ impl<'db> TyChecker<'db> {
                     ..
                 } => LitKind::Bool(*flag),
                 SemConstValue::Unit
+                | SemConstValue::ItemCode { .. }
+                | SemConstValue::Meta { .. }
                 | SemConstValue::Description(..)
                 | SemConstValue::Tuple { .. }
                 | SemConstValue::Struct { .. }
@@ -543,8 +558,11 @@ impl<'db> TyChecker<'db> {
                         PatternAnalysisStatus::Invalid,
                     );
                 }
-                Some(Ok(res)) if !shadowed(res) => {}
+                Some(Ok(res)) if !shadowed(res) => {
+                    self.matching_bare_pats.insert(pat);
+                }
                 _ => {
+                    let bind_name = path.local_ident(self.db).unwrap_or(name);
                     let binding = LocalBinding::local(
                         pat,
                         matches!(
@@ -555,7 +573,7 @@ impl<'db> TyChecker<'db> {
                     let mut is_valid = true;
                     if let Some(LocalBinding::Local {
                         pat: conflict_with, ..
-                    }) = self.env.register_pending_binding(name, binding)
+                    }) = self.env.register_pending_binding(bind_name, binding)
                     {
                         let diag = BodyDiag::DuplicatedBinding {
                             primary: span.into(),
@@ -567,7 +585,7 @@ impl<'db> TyChecker<'db> {
                     }
                     let actual = self.fresh_ty();
                     let analysis = if is_valid {
-                        self.ready_wildcard(expected, Some(self.binding_ref(pat, name)))
+                        self.ready_wildcard(expected, Some(self.binding_ref(pat, bind_name)))
                     } else {
                         PatternAnalysisStatus::Invalid
                     };

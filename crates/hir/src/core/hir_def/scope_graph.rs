@@ -34,6 +34,14 @@ pub struct ScopeGraph<'db> {
     pub unresolved_uses: FxHashSet<Use<'db>>,
     /// The diagnostics reported while lowering the graph's items.
     pub lower_diagnostics: Vec<LowerDiagnostic>,
+    /// Producer top-level modules referenced by cross-file quotations in this graph.
+    pub quote_mods: Vec<TopLevelMod<'db>>,
+    /// Producer top-level modules for items/bodies lowered from cross-file quotes.
+    pub quoted_top_mods: IndexMap<ItemKind<'db>, TopLevelMod<'db>>,
+    /// Generated items whose lexical parent is a producer scope in another
+    /// module. Lowering records them; the module's linked graph adds each as
+    /// the item's lexical edge, so lowering never reads the other module.
+    pub foreign_origins: Vec<(ScopeId<'db>, super::AuthoredScope<'db>)>,
 }
 
 impl<'db> ScopeGraph<'db> {
@@ -124,6 +132,47 @@ impl<'db> ScopeId<'db> {
             ScopeId::Field(p, _) => p.top_mod(db),
             ScopeId::Variant(v) => v.enum_.top_mod(db),
             ScopeId::Block(body, _) => body.top_mod(db),
+        }
+    }
+
+    /// Whether this scope is a generated item or inside one. Generated code is
+    /// published into a module but written in its producer's quotation, so
+    /// the module's own text holds nothing of it.
+    pub fn is_generated(self, db: &'db dyn HirDb) -> bool {
+        let mut scope = self;
+        loop {
+            if scope.data(db).publication_parent.is_some() {
+                return true;
+            }
+            match scope.parent(db) {
+                Some(parent) => scope = parent,
+                None => return false,
+            }
+        }
+    }
+
+    /// The module whose syntax this scope was lowered from. A generated item
+    /// is published into its target module but written in its producer's
+    /// quotation, which is its lexical parent; everything else is in `top_mod`.
+    pub fn syntax_top_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db> {
+        let mut scope = self;
+        loop {
+            match scope {
+                ScopeId::Item(ItemKind::Body(body)) | ScopeId::Block(body, _) => {
+                    return body.syntax_top_mod(db);
+                }
+                ScopeId::Item(ItemKind::TopMod(top_mod)) => return top_mod,
+                _ => {}
+            }
+            if scope.data(db).publication_parent.is_some() {
+                return scope
+                    .lex_parent(db)
+                    .map_or_else(|| scope.top_mod(db), |producer| producer.top_mod(db));
+            }
+            match scope.parent(db) {
+                Some(parent) => scope = parent,
+                None => return scope.top_mod(db),
+            }
         }
     }
 
@@ -229,13 +278,17 @@ impl<'db> ScopeId<'db> {
 
     /// Returns `true` if `self` is a transitive reflexive child of `of`.
     pub fn is_transitive_child_of(self, db: &dyn HirDb, of: ScopeId) -> bool {
-        let mut current = Some(self);
-
-        while let Some(scope) = current {
+        let mut pending = vec![self];
+        let mut seen = FxHashSet::default();
+        while let Some(scope) = pending.pop() {
+            if !seen.insert(scope) {
+                continue;
+            }
             if scope == of {
                 return true;
             }
-            current = scope.parent(db);
+            pending.extend(scope.lex_parent(db));
+            pending.extend(scope.parent(db));
         }
 
         false
@@ -256,6 +309,9 @@ impl<'db> ScopeId<'db> {
     /// 1. the lexical parent if it exists
     /// 2. the parent module if 1. does not exist
     pub fn parent(self, db: &'db dyn HirDb) -> Option<Self> {
+        if let Some(publication) = self.data(db).publication_parent {
+            return Some(publication);
+        }
         let mut super_dest = None;
         for edge in self.edges(db) {
             if let EdgeKind::Lex(_) = edge.kind {
@@ -485,6 +541,8 @@ pub struct Scope<'db> {
     pub id: ScopeId<'db>,
     pub edges: IndexSet<ScopeEdge<'db>>,
     pub vis: Visibility,
+    /// Generated item membership, distinct from its lexical producer scope.
+    pub publication_parent: Option<ScopeId<'db>>,
 }
 
 impl<'db> Scope<'db> {
@@ -493,6 +551,7 @@ impl<'db> Scope<'db> {
             id: kind,
             edges: Default::default(),
             vis,
+            publication_parent: None,
         }
     }
 }

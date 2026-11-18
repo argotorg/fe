@@ -193,6 +193,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
             SemanticDiagnosticKind::UnencodablePanic => 18,
+            SemanticDiagnosticKind::CompileTimePhase => 19,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -229,6 +230,10 @@ impl SemanticDiagnosticKind {
             _ => format!("fn {name}"),
         };
         match self {
+            Self::CompileTimePhase => format!(
+                "compile-time-only body cannot be emitted at runtime: `{}`",
+                checker_name(db, instance)
+            ),
             Self::AccessConflict => format!("access conflict in `{item}`"),
             Self::MoveConflict => format!("move conflict in `{item}`"),
             Self::Internal => format!("internal access checking error in `{item}`"),
@@ -411,6 +416,7 @@ impl<'db> From<SemanticDiagnostic<'db>> for SemanticNormalizationFailure<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticDiagnosticKind {
+    CompileTimePhase,
     AccessConflict,
     MoveConflict,
     Internal,
