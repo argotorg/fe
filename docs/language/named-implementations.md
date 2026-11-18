@@ -95,8 +95,13 @@ declared, with the actual dictionaries of its conditions.
 
 ## Opening the ordinary implementation
 
-A named implementation's methods see their own implementation. A wrapper can
-explicitly open the ordinary implementation using a qualified trait path:
+A named implementation's methods see their own implementation. A default
+method that a named implementation keeps is checked with the trait, so
+`Self::price()` in its body calls the named implementation while a concrete
+`Item::price()` calls the ordinary one. A `with` block inside a named
+implementation's method is nearer than the implementation itself:
+`with (V) { Self::price() }` there calls `V`. A wrapper can explicitly open the
+ordinary implementation using a qualified trait path:
 
 ```fe
 impl Price for Item as Markup {
