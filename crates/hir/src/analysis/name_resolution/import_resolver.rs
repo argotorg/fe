@@ -36,8 +36,8 @@ use super::{
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{
-        AuthoredScope, HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy,
-        scope_graph::ScopeId,
+        AuthoredScope, HirIngot, IdentId, Partial, QuotedPathOrigin, Use, UsePathSegment,
+        prim_ty::PrimTy, scope_graph::ScopeId,
     },
 };
 
@@ -48,14 +48,14 @@ type GlobNames<'db> = FxHashMap<IdentId<'db>, Vec<NameRes<'db>>>;
 type SegmentError<'db> = (usize, NameResolutionError<'db>);
 
 /// Lookup follows a path from its root to the scopes that its segments name.
-/// Visibility may follow the quote producer once that path goes through a
-/// module imported by this very quotation.
+/// Visibility may follow the quote producer when the binding comes from its
+/// lexical scope or a local alias in the quotation names an authored module.
 #[derive(Clone, Copy)]
 struct UseLookup<'db> {
     target: ScopeId<'db>,
     root: ScopeId<'db>,
     suffix_producer: Option<AuthoredScope<'db>>,
-    local_type_only: bool,
+    local_quote: Option<QuotedPathOrigin<'db>>,
 }
 
 pub(crate) struct ImportResolver<'db> {
@@ -509,7 +509,7 @@ impl<'db> ImportResolver<'db> {
             target: root,
             root,
             suffix_producer: None,
-            local_type_only: false,
+            local_quote: None,
         };
         for (idx, segment) in segments[..segments.len() - 1].iter().enumerate() {
             let quote = path.quote_origin(db).filter(|_| {
@@ -525,7 +525,7 @@ impl<'db> ImportResolver<'db> {
             let mut resolved_at_producer = false;
             let bucket = if let Some(quote) = quote {
                 let local = UseLookup {
-                    local_type_only: true,
+                    local_quote: Some(quote),
                     ..lookup
                 };
                 match self.lookup(use_, local, idx, segment, NameDomain::TYPE, forced) {
@@ -561,7 +561,10 @@ impl<'db> ImportResolver<'db> {
             if idx == 0 && authored_root.is_none() && !resolved_at_producer {
                 lookup.suffix_producer = path
                     .quote_origin(db)
-                    .filter(|&origin| res.quoted_module_alias(db, origin))
+                    .filter(|&origin| {
+                        res.derivation.crosses_quotation_boundary(db, root)
+                            || res.quoted_module_alias(db, origin)
+                    })
                     .map(|origin| origin.producer);
             } else if lookup.suffix_producer.is_some() && !is_authored_module(db, lookup.target) {
                 lookup.suffix_producer = None;
@@ -606,7 +609,7 @@ impl<'db> ImportResolver<'db> {
                 NameRes::new_from_scope(root, NameDomain::TYPE, NameDerivation::External).into(),
             );
         }
-        let directive = if lookup.local_type_only {
+        let directive = if lookup.local_quote.is_some() {
             QueryDirective::new().disallow_external()
         } else if idx == 0 {
             QueryDirective::new()
@@ -616,18 +619,26 @@ impl<'db> ImportResolver<'db> {
         let query = EarlyNameQueryId::new(db, name, scope, directive);
         let mut bucket =
             NameResolver::new(db, self, self.tier.hides(self.ingot)).resolve_query(query);
-        if lookup.local_type_only {
+        if lookup.local_quote.is_some() {
             bucket.bucket.retain(|(found, _)| found.intersects(domain));
         }
 
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
             Ok(res) if !res.is_importable() => false,
-            Ok(res) if !res.is_visible(db, visibility_scope) => {
-                if invisible.is_none() {
-                    invisible = res.derived_from(db);
+            Ok(res) => {
+                let from = lookup
+                    .local_quote
+                    .filter(|_| res.derivation.crosses_quotation_boundary(db, scope))
+                    .map_or(visibility_scope, |origin| origin.producer.resolve(db));
+                if res.is_visible(db, from) {
+                    true
+                } else {
+                    if invisible.is_none() {
+                        invisible = res.derived_from(db);
+                    }
+                    false
                 }
-                false
             }
             _ => true,
         });

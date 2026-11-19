@@ -1835,20 +1835,19 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
 }
 
 #[test]
-fn quoted_trait_references_check_visibility_from_the_producer() {
+fn quoted_qualifiers_check_visibility_from_the_producer() {
     let library = r#"
 use core::meta::{Code, Item}
 
 pub mod helpers {
     pub(ingot) trait Marker {}
+    pub(ingot) const fn value() -> u8 { 7 }
 }
 
 pub const fn fragment() -> Code<Item> {
     quote {
         const fn score() -> u8 {
-            use ingot::helpers as local
-            fn check<T: local::Marker>() {}
-            7
+            /* generated body */
         }
     }
 }
@@ -1876,15 +1875,34 @@ pub const fn result() -> u8 { Target::score() }
         ]);
         prepare(&db, "app/")
     };
-    let accepted = prepare_library(library);
-    assert_eq!(ingot_errors(&accepted, "app/"), "");
-    assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "7");
+    let cases = [
+        (
+            "use ingot::helpers as local\nfn check<T: local::Marker>() {}\n7",
+            "Marker",
+        ),
+        (
+            "const helpers: u8 = 0\nfn check<T: helpers::Marker>() {}\n7",
+            "Marker",
+        ),
+        (
+            "const helpers: u8 = 0\nuse helpers::value as local\nlocal()",
+            "value",
+        ),
+        ("const helpers: u8 = 0\nhelpers::value()", "value"),
+    ];
+    for (body, member) in cases {
+        let library = library.replace("/* generated body */", body);
+        let accepted = prepare_library(&library);
+        assert_eq!(ingot_errors(&accepted, "app/"), "", "{body}");
+        assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "7", "{body}");
 
-    let hidden = library.replace("pub(ingot) trait Marker", "trait Marker");
-    let refused = prepare_library(&hidden);
-    let diagnostics = ingot_errors(&refused, "app/");
-    assert!(
-        diagnostics.contains("2-0003") && diagnostics.contains("`Marker` is not visible"),
-        "{diagnostics}"
-    );
+        let hidden = library.replace("pub(ingot) ", "");
+        let refused = prepare_library(&hidden);
+        let diagnostics = ingot_errors(&refused, "app/");
+        assert!(
+            diagnostics.contains("2-0003")
+                && diagnostics.contains(&format!("`{member}` is not visible")),
+            "{body}\n{diagnostics}"
+        );
+    }
 }

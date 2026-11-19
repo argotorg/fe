@@ -686,6 +686,27 @@ impl<'db> NameDerivation<'db> {
         }
     }
 
+    /// Whether the successful lookup followed a published item's lexical
+    /// edge back into the quotation producer's scope.
+    pub(super) fn crosses_quotation_boundary(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        mut scope: ScopeId<'db>,
+    ) -> bool {
+        let mut derivation = self;
+        while let Self::Lex(parent) = derivation {
+            if scope.is_published(db) {
+                return true;
+            }
+            let Some(outer) = scope.lex_parent(db) else {
+                break;
+            };
+            scope = outer;
+            derivation = parent;
+        }
+        false
+    }
+
     /// Compares which of two derivations of a name shadows the other: in a
     /// scope, a definition shadows a named import, which shadows a glob
     /// import, and those shadow the names of lexical parents, external ingots

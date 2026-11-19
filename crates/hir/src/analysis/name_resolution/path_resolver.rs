@@ -800,17 +800,20 @@ fn path_name_bucket<'db>(
         QueryDirective::new().disallow_external(),
     );
     let local = resolve(local);
-    if !matches!(
-        local.pick(NameDomain::TYPE),
-        Err(NameResolutionError::NotFound)
-    ) {
-        return (local, None);
+    match local.pick(NameDomain::TYPE) {
+        Ok(binding) => (
+            local,
+            binding
+                .derivation
+                .crosses_quotation_boundary(db, scope)
+                .then_some(origin.producer),
+        ),
+        Err(NameResolutionError::NotFound) => (
+            resolve(make_query(db, path, origin.producer.resolve(db))),
+            Some(origin.producer),
+        ),
+        Err(_) => (local, None),
     }
-    let producer = origin.producer;
-    (
-        resolve(make_query(db, path, producer.resolve(db))),
-        Some(producer),
-    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
