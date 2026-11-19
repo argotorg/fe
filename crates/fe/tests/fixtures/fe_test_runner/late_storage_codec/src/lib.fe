@@ -1,0 +1,25 @@
+use ingot::codec::{Arg, Elem, write}
+use std::evm::{Evm, Wei, SolArray}
+
+msg M {
+    #[selector = 1]
+    ReadBack -> u8,
+}
+
+pub contract C {
+    mut array: SolArray<Elem<u8, Arg>>
+    recv M {
+        ReadBack -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            write<u8>(array: mut array)
+            array[0].value
+        }
+    }
+}
+
+#[test]
+fn a_scoped_provider_controls_the_codec_prerequisite() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::ReadBack {})
+    assert!(raw == 6)
+}
