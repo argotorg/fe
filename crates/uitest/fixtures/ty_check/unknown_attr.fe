@@ -1,0 +1,86 @@
+#![arithmatic(checked)]
+
+// A misspelled known attribute is reported, with the name it is closest to.
+#[mustuse]
+pub struct Proof { ok: bool }
+
+#[inlne]
+fn hinted() {}
+
+// An attribute the compiler knows nothing like is reported without a suggestion.
+#[definitely_not_an_attribute(foo = 1)]
+pub fn make() -> Proof {
+    Proof { ok: true }
+}
+
+#[path::to::attr]
+struct Pathed {}
+
+// Known attributes, in any form, are left to their own checks.
+#[must_use]
+#[inline(always)]
+fn known() -> u256 { 1 }
+
+// Unknown attributes are reported wherever an attribute can be written.
+#[derive(Clone)]
+enum Choice {
+    #[deprecated]
+    A,
+    B,
+}
+
+struct Point {
+    #[serde]
+    x: u256,
+}
+
+#[documented]
+mod inner {
+    #![lint]
+}
+
+#[allow]
+trait Named {
+    #[allow]
+    fn name(self) -> u256
+}
+
+#[allow]
+impl Named for Point {
+    #[allow]
+    fn name(self) -> u256 { self.x }
+}
+
+#[allow]
+const ONE: u256 = 1
+
+#[allow]
+type Alias = u256
+
+fn looped() {
+    #[unrol]
+    for _ in 0..2 {}
+}
+
+msg Msg {
+    #[selector = 1]
+    #[selectr = 1]
+    Ping {
+        #[indexd]
+        value: u256,
+    } -> u256,
+}
+
+pub contract C {
+    #[slott(0)]
+    mut value: u256
+
+    recv Msg {
+        Ping { value } -> u256 { value }
+    }
+}
+
+// A `#[cfg]` that doesn't hold drops its item before attributes are checked.
+#[cfg(target = "native")]
+#[native_only]
+fn dropped() {}

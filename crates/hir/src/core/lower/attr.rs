@@ -94,7 +94,33 @@ pub enum AttrMisuseErrorKind {
     InvalidForm { expected_form: &'static str },
     Duplicate,
     UnknownInRestrictedContext { expected_attrs: &'static str },
+    Unknown { suggestion: Option<&'static str> },
 }
+
+/// Every attribute name the compiler acts on somewhere. Whether one is allowed
+/// on a given target is checked by that target's own rules.
+const KNOWN_ATTRS: &[&str] = &[
+    "abi",
+    "arithmetic",
+    "cfg",
+    "cold",
+    "contract_init",
+    "contract_runtime",
+    "error",
+    "event",
+    "export",
+    "indexed",
+    "inline",
+    "must_use",
+    "payable",
+    "pointer",
+    "raw_place",
+    "selector",
+    "slot",
+    "test",
+    "unroll",
+    "view",
+];
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AttrForm {
@@ -105,6 +131,12 @@ pub(super) enum AttrForm {
     },
     /// One expression argument: `#[slot(BASE + 1)]`, `#[slot(BASE)]`.
     SingleExpr,
+    /// Bare, or any arguments whose keys are all allowed, with or without
+    /// values: `#[test(should_revert, panic = 0x11)]`. The values are checked
+    /// where the attribute is used.
+    Keys {
+        allowed_keys: &'static [&'static str],
+    },
 }
 
 impl AttrForm {
@@ -141,6 +173,14 @@ impl AttrForm {
                             value: Some(ast::AttrArgValueKind::Expr(_))
                         }]
                     )
+            }
+            Self::Keys { allowed_keys } => {
+                attr.value.is_none()
+                    && attr.args.iter().all(|arg| {
+                        arg.key
+                            .as_ref()
+                            .is_some_and(|key| allowed_keys.contains(&key.as_str()))
+                    })
             }
         }
     }
@@ -405,6 +445,60 @@ pub(super) fn validate_unknown_attrs_in_restricted_context<'db>(
             AttrMisuseErrorKind::UnknownInRestrictedContext { expected_attrs },
         );
     }
+}
+
+/// Reports each attribute in `attrs` whose name the compiler doesn't know,
+/// suggesting the closest known name.
+pub(super) fn report_unknown_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+) {
+    for attr in attrs.iter().flat_map(|attrs| attrs.normal_attrs()) {
+        let name = attr
+            .path()
+            .map(|path| path.text().to_string())
+            .unwrap_or_default();
+        // A missing name is a parse error, reported by the parser.
+        if name.is_empty() || KNOWN_ATTRS.contains(&name.as_str()) {
+            continue;
+        }
+        let suggestion = closest_known_attr(&name);
+        report_attr_misuse(
+            ctxt,
+            attr.syntax().text_range(),
+            name,
+            target.clone(),
+            AttrMisuseErrorKind::Unknown { suggestion },
+        );
+    }
+}
+
+/// The known attribute name closest to `name`, if it is within a third of
+/// `name`'s length (at least one edit) of it.
+fn closest_known_attr(name: &str) -> Option<&'static str> {
+    let max_distance = (name.chars().count() / 3).max(1);
+    KNOWN_ATTRS
+        .iter()
+        .map(|known| (edit_distance(name, known), *known))
+        .filter(|(distance, _)| *distance <= max_distance)
+        .min_by_key(|(distance, _)| *distance)
+        .map(|(_, known)| known)
+}
+
+/// The Levenshtein distance between `a` and `b`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let substitute = prev[j] + usize::from(ca != *cb);
+            cur.push(substitute.min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
 }
 
 pub(super) fn report_unsupported_attr<'db>(

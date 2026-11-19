@@ -1,0 +1,36 @@
+use std::evm::Evm
+
+// Every key `fe test` reads is accepted; their values are checked by `fe test`.
+#[test]
+fn plain() {}
+
+#[test(should_revert)]
+fn reverts() {}
+
+#[test(should_revert, panic = 0x11)]
+fn panics() {}
+
+#[test(should_revert, selector = 0x08c379a0)]
+fn selector() {}
+
+#[test(balance = 10)]
+fn funded() {}
+
+// An unknown key would otherwise be ignored.
+#[test(timestamp = 1000)]
+fn timestamp() uses (evm: mut Evm) {
+    assert!(evm.timestamp().as_seconds() == 1000)
+}
+
+#[test(should_revrt)]
+fn misspelled() {}
+
+#[test(1)]
+fn positional() {}
+
+#[test = true]
+fn value_form() {}
+
+#[test]
+#[test]
+fn duplicate() {}

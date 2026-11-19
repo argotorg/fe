@@ -464,7 +464,7 @@ fn lower_msg_variant_struct<'db>(
     variant: &ast::MsgVariant,
 ) -> Struct<'db> {
     let name = IdentId::lower_token_partial(builder.ctxt(), variant.name());
-    super::item::report_unsupported_member_attrs(
+    super::item::validate_member_attrs(
         builder.ctxt(),
         variant.attr_list(),
         "msg variant",
@@ -486,12 +486,7 @@ fn lower_msg_variant_fields<'db>(
             let fields = params
                 .into_iter()
                 .map(|field| {
-                    super::item::report_unsupported_member_attrs(
-                        ctxt,
-                        field.attr_list(),
-                        "field",
-                        None,
-                    );
+                    super::item::validate_member_attrs(ctxt, field.attr_list(), "field", None);
                     super::item::report_unsupported_field_mut(ctxt, &field, "msg variant field");
                     let attributes = AttrListId::lower_ast_opt(ctxt, field.attr_list());
                     let name = IdentId::lower_token_partial(ctxt, field.name());

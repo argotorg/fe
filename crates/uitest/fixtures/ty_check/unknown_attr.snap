@@ -1,0 +1,124 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/unknown_attr.fe
+---
+error[12-0008]: unknown attribute `#[arithmatic]` on module
+  ┌─ unknown_attr.fe:1:1
+  │
+1 │ #![arithmatic(checked)]
+  │ ^^^^^^^^^^^^^^^^^^^^^^^ did you mean `#[arithmetic]`?
+
+error[12-0008]: unknown attribute `#[mustuse]` on struct `Proof`
+  ┌─ unknown_attr.fe:4:1
+  │
+4 │ #[mustuse]
+  │ ^^^^^^^^^^ did you mean `#[must_use]`?
+
+error[12-0008]: unknown attribute `#[inlne]` on fn `hinted`
+  ┌─ unknown_attr.fe:7:1
+  │
+7 │ #[inlne]
+  │ ^^^^^^^^ did you mean `#[inline]`?
+
+error[12-0008]: unknown attribute `#[definitely_not_an_attribute]` on fn `make`
+   ┌─ unknown_attr.fe:11:1
+   │
+11 │ #[definitely_not_an_attribute(foo = 1)]
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[path::to::attr]` on struct `Pathed`
+   ┌─ unknown_attr.fe:16:1
+   │
+16 │ #[path::to::attr]
+   │ ^^^^^^^^^^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[derive]` on enum `Choice`
+   ┌─ unknown_attr.fe:25:1
+   │
+25 │ #[derive(Clone)]
+   │ ^^^^^^^^^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[deprecated]` on variant
+   ┌─ unknown_attr.fe:27:5
+   │
+27 │     #[deprecated]
+   │     ^^^^^^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[serde]` on field
+   ┌─ unknown_attr.fe:33:5
+   │
+33 │     #[serde]
+   │     ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[documented]` on mod `inner`
+   ┌─ unknown_attr.fe:37:1
+   │
+37 │ #[documented]
+   │ ^^^^^^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[lint]` on module
+   ┌─ unknown_attr.fe:39:5
+   │
+39 │     #![lint]
+   │     ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on trait `Named`
+   ┌─ unknown_attr.fe:42:1
+   │
+42 │ #[allow]
+   │ ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on fn `name`
+   ┌─ unknown_attr.fe:44:5
+   │
+44 │     #[allow]
+   │     ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on impl trait
+   ┌─ unknown_attr.fe:48:1
+   │
+48 │ #[allow]
+   │ ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on fn `name`
+   ┌─ unknown_attr.fe:50:5
+   │
+50 │     #[allow]
+   │     ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on const `ONE`
+   ┌─ unknown_attr.fe:54:1
+   │
+54 │ #[allow]
+   │ ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[allow]` on type alias `Alias`
+   ┌─ unknown_attr.fe:57:1
+   │
+57 │ #[allow]
+   │ ^^^^^^^^ the compiler does not recognize this attribute
+
+error[12-0008]: unknown attribute `#[unrol]` on for loop
+   ┌─ unknown_attr.fe:61:5
+   │
+61 │     #[unrol]
+   │     ^^^^^^^^ did you mean `#[unroll]`?
+
+error[12-0008]: unknown attribute `#[selectr]` on msg variant `Ping`
+   ┌─ unknown_attr.fe:67:5
+   │
+67 │     #[selectr = 1]
+   │     ^^^^^^^^^^^^^^ did you mean `#[selector]`?
+
+error[12-0008]: unknown attribute `#[indexd]` on field
+   ┌─ unknown_attr.fe:69:9
+   │
+69 │         #[indexd]
+   │         ^^^^^^^^^ did you mean `#[indexed]`?
+
+error[12-0008]: unknown attribute `#[slott]` on field
+   ┌─ unknown_attr.fe:75:5
+   │
+75 │     #[slott(0)]
+   │     ^^^^^^^^^^^ did you mean `#[slot]`?
