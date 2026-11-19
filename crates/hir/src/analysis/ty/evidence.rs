@@ -1945,10 +1945,8 @@ mod schema_tests {
         )
         .unwrap();
         let cx = TraitSolveCx::new(&db, module.scope());
-        for (field, expected) in [
-            (TyId::u256(&db), true),
-            (TyId::adt(&db, protected.into()), false),
-        ] {
+        let protected = super::super::adt_def::AdtRef::Struct(protected).as_adt(&db);
+        for (field, expected) in [(TyId::u256(&db), true), (TyId::adt(&db, protected), false)] {
             let aggregate = TyId::tuple_with_elems(&db, &[field]);
             let goal = TraitInstId::new_simple(&db, clearable, vec![aggregate]);
             assert!(super::super::clearable::clearable_implementor(&db, goal).is_some());
