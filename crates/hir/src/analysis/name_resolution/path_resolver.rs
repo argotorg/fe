@@ -805,7 +805,7 @@ fn path_name_bucket<'db>(
             resolve(make_query(db, path, origin.producer.resolve(db))),
             Some(origin.producer),
         ),
-        Err(_) => (local, None),
+        _ => (local, None),
     }
 }
 
