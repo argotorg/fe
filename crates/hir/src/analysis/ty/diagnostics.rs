@@ -778,11 +778,12 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
     },
 
-    /// Two implementation operands of one `with` answer one trait goal.
+    /// Two implementation operands of one `with` can answer the same goal.
     DuplicateWithChoice {
         primary: DynLazySpan<'db>,
         first: DynLazySpan<'db>,
         goal: TraitInstId<'db>,
+        possible: bool,
     },
 
     /// A bare `with` operand that names no implementation and no value.
