@@ -5948,6 +5948,28 @@ fn named_storage_deferred_lexical_choices_keep_their_source_parameters() {
 }
 
 #[test]
+fn named_storage_qualified_clearable_opening_checks_aggregate_fields() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("clearable_opening.fe");
+    let source = r#"
+use core::marker::Clearable
+struct Protected { unsafe invariant: u8 }
+fn open() { with (<(Protected,) as Clearable>) {} }
+"#;
+    fs::write(&path, source.replace("(Protected,)", "(u8,)")).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+
+    fs::write(&path, source).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(
+        output.contains("Protected") && output.contains("Clearable"),
+        "{output}"
+    );
+}
+
+#[test]
 fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("generic_codec.fe");
