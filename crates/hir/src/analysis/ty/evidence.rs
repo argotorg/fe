@@ -421,6 +421,25 @@ impl<'db> DeferredProofBounds<'db> {
     }
 }
 
+/// Retain the checked goal and its proof basis until the entry's layout and
+/// the concrete arguments determine whether this codec is required.
+pub(crate) fn deferred_codec_proof<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cx: TraitSolveCx<'db>,
+    source_goal: TraitInstId<'db>,
+    applied_goal: TraitInstId<'db>,
+) -> EvidenceId<'db> {
+    EvidenceId::new(
+        db,
+        Evidence::DeferredSolCodec {
+            goal: applied_goal,
+            scope: cx.origin_scope(db),
+            choices: cx.choices(),
+            bounds: Some(DeferredProofBounds::capture(db, source_goal, cx)),
+        },
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum Evidence<'db> {
     /// An implementation, `selected` and as `instantiated` for the goal,
@@ -1442,14 +1461,11 @@ fn prove_in<'db>(
         ImplementorOrigin::Structural
     ) && super::sol_codec::sol_codec_proof_is_deferred(db, resolved.trait_inst())
     {
-        return ProofOutcome::Proven(EvidenceId::new(
+        return ProofOutcome::Proven(deferred_codec_proof(
             db,
-            Evidence::DeferredSolCodec {
-                goal: resolved.trait_inst(),
-                scope: solve_cx.origin_scope(db),
-                choices: solve_cx.choices(),
-                bounds: Some(DeferredProofBounds::capture(db, goal, solve_cx)),
-            },
+            solve_cx,
+            goal,
+            resolved.trait_inst(),
         ));
     }
     let selected_proof = || -> Option<EvidenceId<'db>> {
