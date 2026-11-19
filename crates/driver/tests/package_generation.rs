@@ -1785,11 +1785,10 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
         assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "6");
     }
 
-    let diagnostics = match check(LIB_TOML, &app_with_shadow, library) {
-        Err(refusal) => refusal.to_string(),
-        Ok(Some(prepared)) => ingot_errors(&prepared, "app/"),
-        Ok(None) => panic!("the scoped request was not prepared"),
-    };
+    let prepared = check(LIB_TOML, &app_with_shadow, library)
+        .expect("body diagnostics are reported on the prepared package")
+        .expect("the scoped request generated a method");
+    let diagnostics = ingot_errors(&prepared, "app/");
     assert!(
         diagnostics.contains("`rules` is not found"),
         "{diagnostics}"
