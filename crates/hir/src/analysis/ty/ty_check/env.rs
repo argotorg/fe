@@ -1766,7 +1766,10 @@ impl<'db> TyCheckEnv<'db> {
                 if index > 0 {
                     use super::super::evidence::ProofOutcome;
                     match outcome {
-                        ProofOutcome::Deferred => codec_deferred = true,
+                        ProofOutcome::Deferred => {
+                            callable.retain_deferred_codec_evidence(self.db, solve_cx);
+                            codec_deferred = true;
+                        }
                         ProofOutcome::Proven(proof) if proof.has_deferred(self.db) => {
                             codec_deferred = true;
                         }
@@ -1775,6 +1778,7 @@ impl<'db> TyCheckEnv<'db> {
                             // prerequisite still depends on an argument of
                             // the entry or the applied lexical choice.
                             if super::codec_proof_is_parametric(self.db, callable, choices) {
+                                callable.retain_deferred_codec_evidence(self.db, solve_cx);
                                 codec_deferred = true;
                             } else {
                                 codec_choice_failed = true;

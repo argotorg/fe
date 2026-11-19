@@ -5924,6 +5924,30 @@ fn named_storage_late_codec_uses_declared_bound_evidence() {
 }
 
 #[test]
+fn named_storage_deferred_lexical_choices_keep_their_source_parameters() {
+    let source = include_str!("fixtures/named_storage_codec_lexical_origin.fe");
+    let matching = source
+        .replace("Encoded<A>", "Encoded<T>")
+        .replace("raw == 7", "raw == 6");
+    let unrelated_failure = source
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("A: Missing", "A")
+        .replace("T: Gate + Missing", "T: Gate");
+    let temp = tempdir().unwrap();
+    for (name, source) in [
+        ("unrelated_choice", source),
+        ("matching_choice", matching.as_str()),
+        ("unrelated_failed_choice", unrelated_failure.as_str()),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("2 passed; 0 failed"), "{name}: {output}");
+    }
+}
+
+#[test]
 fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("generic_codec.fe");
