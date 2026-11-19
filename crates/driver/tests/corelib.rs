@@ -1225,6 +1225,7 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/corelib.rs", "resolve_lib_trait_path", "EVM_CAPABILITY_SEAL", 2, Sealed, "the private seal of std's EVM capabilities"),
         ("hir/src/analysis/ty/drop_glue.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "which function of `Drop` is `drop`, after its presence was decided"),
         ("hir/src/analysis/ty/drop_glue.rs", "presence_trait", "\"core::ops::Drop\"", 1, Deciding, "whether a type has drop glue"),
+        ("hir/src/analysis/ty/evidence.rs", "resolve_core_trait", "&[\"marker\", \"Clearable\"]", 1, Structural, "the deferred proof regression checks the compiler's structural `Clearable` proof"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSpan\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"Encode\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
