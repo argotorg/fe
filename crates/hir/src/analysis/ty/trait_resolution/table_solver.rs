@@ -120,6 +120,18 @@ pub(crate) fn match_prepared_header<'db, U: UnificationStore<'db>>(
     compare_header_pairs(db, table, left, right, |_, pair| pair, false).map(|_| ())
 }
 
+pub(crate) fn match_prepared_type<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TyId<'db>,
+    right: TyId<'db>,
+) -> UnificationResult {
+    if !left.has_projection(db) && !right.has_projection(db) {
+        return table.unify_header(left, right);
+    }
+    compare_type_pairs(db, table, vec![(left, right)], |_, pair| pair, false).map(|_| ())
+}
+
 #[derive(Clone, Copy)]
 enum HeaderMatch {
     Exact,
@@ -168,10 +180,7 @@ fn compare_header_pairs<'db, U: UnificationStore<'db>>(
     table: &mut UnificationTableBase<'db, U>,
     left: TraitInstId<'db>,
     right: TraitInstId<'db>,
-    mut normalize_pair: impl FnMut(
-        &mut UnificationTableBase<'db, U>,
-        HeaderPair<'db>,
-    ) -> HeaderPair<'db>,
+    normalize_pair: impl FnMut(&mut UnificationTableBase<'db, U>, HeaderPair<'db>) -> HeaderPair<'db>,
     allow_possible: bool,
 ) -> Result<HeaderMatch, UnificationError> {
     if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
@@ -184,12 +193,25 @@ fn compare_header_pairs<'db, U: UnificationStore<'db>>(
         table.unify_header(trait_inst_head(db, left), trait_inst_head(db, right))?;
         return Ok(HeaderMatch::Exact);
     }
-    let mut pairs = left
+    let pairs = left
         .args(db)
         .iter()
         .copied()
         .zip(right.args(db).iter().copied())
         .collect::<Vec<_>>();
+    compare_type_pairs(db, table, pairs, normalize_pair, allow_possible)
+}
+
+fn compare_type_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    mut pairs: Vec<HeaderPair<'db>>,
+    mut normalize_pair: impl FnMut(
+        &mut UnificationTableBase<'db, U>,
+        HeaderPair<'db>,
+    ) -> HeaderPair<'db>,
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
     let mut deferred = Vec::new();
     while let Some((left, right)) = pairs.pop() {
         if !left.has_projection(db) && !right.has_projection(db) {
