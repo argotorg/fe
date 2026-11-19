@@ -326,7 +326,7 @@ pub struct DeferredProofBounds<'db> {
 
 enum SourceProof<'db> {
     Bound(EvidenceId<'db>),
-    Choice(usize),
+    Choice(usize, ImplementorId<'db>),
     Implementation(ImplementorId<'db>),
     Open,
 }
@@ -367,8 +367,8 @@ impl<'db> DeferredProofBounds<'db> {
         let source_cx = cx
             .with_assumptions(self.source_slots)
             .with_choices(self.source_choices);
-        if let Some(index) = source_cx.matching_choice_index(db, self.source_goal) {
-            return Ok(SourceProof::Choice(index));
+        if let Some((index, application)) = source_cx.matching_choice(db, self.source_goal) {
+            return Ok(SourceProof::Choice(index, application));
         }
         let exact = self.source_slots.list(db).contains(&self.source_goal);
         if !exact
@@ -1384,16 +1384,21 @@ fn prove_in<'db>(
     if !proof_inputs_settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
     }
-    let (selection, chosen) = if let Some(bounds) = bounds {
+    let (selection, chosen, source_conditions) = if let Some(bounds) = bounds {
         let source = match bounds.source_proof(db, solve_cx, goal) {
             Ok(SourceProof::Bound(proof)) => return ProofOutcome::Proven(proof),
             Ok(source) => source,
             Err(()) => return ProofOutcome::Unavailable,
         };
-        let chosen = match source {
-            SourceProof::Choice(index) => Some(index),
-            SourceProof::Open => solve_cx.matching_choice_index(db, goal),
-            _ => None,
+        let (chosen, source_conditions) = match source {
+            SourceProof::Choice(index, application) => {
+                (Some(index), Some(application.constraints(db)))
+            }
+            SourceProof::Open => (
+                solve_cx.matching_choice(db, goal).map(|(index, _)| index),
+                None,
+            ),
+            _ => (None, None),
         };
         let selection = if let Some(index) = chosen {
             let applied = solve_cx
@@ -1427,9 +1432,9 @@ fn prove_in<'db>(
             }
             selected
         };
-        (selection, chosen)
+        (selection, chosen, source_conditions)
     } else {
-        (resolve_trait_impl_instance(db, solve_cx, goal), None)
+        (resolve_trait_impl_instance(db, solve_cx, goal), None, None)
     };
     let Selection::Unique(resolved) = selection else {
         if chosen.is_some() {
@@ -1443,7 +1448,7 @@ fn prove_in<'db>(
             ProofOutcome::Unavailable
         };
     };
-    prove_selected(db, solve_cx, goal, bounds, chosen, resolved)
+    prove_selected(db, solve_cx, goal, bounds, source_conditions, resolved)
 }
 
 fn proof_inputs_settled(flags: TyFlags) -> bool {
@@ -1481,7 +1486,7 @@ fn prove_selected<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
     bounds: Option<DeferredProofBounds<'db>>,
-    chosen: Option<usize>,
+    chosen_source_conditions: Option<PredicateListId<'db>>,
     resolved: ResolvedImplInstance<'db>,
 ) -> ProofOutcome<'db> {
     if !proof_inputs_settled(collect_flags(db, resolved)) {
@@ -1518,14 +1523,8 @@ fn prove_selected<'db>(
                     BorrowKind::Ref
                 });
                 let conditions = bounds.and_then(|bounds| {
-                    let applied = chosen.and_then(|index| {
-                        let choice = bounds.source_choices?.items(db)[index];
-                        (choice.template.origin(db) == resolved.selected().origin(db))
-                            .then_some(choice.applied)
-                            .flatten()
-                    });
-                    if let Some(applied) = applied {
-                        Some((applied.constraints(db), bounds))
+                    if let Some(conditions) = chosen_source_conditions {
+                        Some((conditions, bounds))
                     } else {
                         source_conditions(db, resolved.selected(), bounds)
                     }
