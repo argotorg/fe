@@ -1785,10 +1785,15 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
         assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "6");
     }
 
-    let refusal = check(LIB_TOML, &app_with_shadow, library)
-        .err()
-        .expect("the producer cannot use a consumer-only dependency");
-    assert!(refusal.cause.contains("`rules` is not found"), "{refusal}");
+    let diagnostics = match check(LIB_TOML, &app_with_shadow, library) {
+        Err(refusal) => refusal.to_string(),
+        Ok(Some(prepared)) => ingot_errors(&prepared, "app/"),
+        Ok(None) => panic!("the scoped request was not prepared"),
+    };
+    assert!(
+        diagnostics.contains("`rules` is not found"),
+        "{diagnostics}"
+    );
 
     let glob = library
         .replace("use rules::score as imported", "use rules::*")
