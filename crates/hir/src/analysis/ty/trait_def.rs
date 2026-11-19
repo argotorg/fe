@@ -15,7 +15,10 @@ use crate::{
             ImplSelfKey, collect_trait_impls, complete_impl_trait, complete_selected_impl,
             lower_impl_trait_header,
         },
-        trait_resolution::{ChosenImpls, GoalSatisfiability, PredicateListId, Selection},
+        trait_resolution::{
+            ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId, Selection,
+            match_chosen_header,
+        },
         ty_check::{BodyOwner, ConstRef},
     },
     hir_def::{
@@ -462,6 +465,29 @@ pub(crate) fn instantiate_selected_impl<'db>(
         selected,
         instantiated: instantiated.fold_with(db, &mut table),
         trait_inst: inst.fold_with(db, &mut table),
+    })
+}
+
+pub(crate) fn instantiate_selected_choice<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    choice: ChosenImpl<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<ResolvedImplInstance<'db>> {
+    let selected = complete_selected_impl(db, choice.template)?;
+    let (instantiated, trait_inst) = match_chosen_header(
+        db,
+        solve_cx,
+        ChosenImpl {
+            template: selected,
+            ..choice
+        },
+        goal,
+    )?;
+    Some(ResolvedImplInstance {
+        selected,
+        instantiated,
+        trait_inst,
     })
 }
 

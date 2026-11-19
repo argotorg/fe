@@ -172,6 +172,43 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     Ok(())
 }
 
+/// Instantiate the specified lexical opening at an already attributed goal.
+/// The caller proves its conditions with that goal's source evidence.
+pub(crate) fn match_chosen_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    choice: super::ChosenImpl<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<(ImplementorId<'db>, TraitInstId<'db>)> {
+    let assumptions = solve_cx.assumptions().extend_all_bounds(db);
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
+    let goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
+    let mut table = PersistentUnificationTable::new(db);
+    let implementation = choice.instantiate(&mut table);
+    if goal.is_mut(db) && !implementation.gives_mut(db) {
+        return None;
+    }
+    let header = normalize_trait_inst_preserving_validity(
+        db,
+        implementation.trait_inst(db),
+        scope,
+        assumptions,
+    );
+    unify_trait_inst_with_normalized_assoc_bindings(
+        db,
+        &mut table,
+        header,
+        goal,
+        scope,
+        assumptions,
+    )
+    .ok()?;
+    Some((
+        implementation.fold_with(db, &mut table),
+        goal.fold_with(db, &mut table),
+    ))
+}
+
 /// Whether `assumption` answers the normalized `goal`: a `mut` goal holds
 /// only by a `mut` assumption.
 fn assumption_answers<'db>(
