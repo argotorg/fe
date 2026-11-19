@@ -27,7 +27,7 @@ use crate::analysis::{
         evidence::{
             BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
             RowEvidence, UseEvidence, declared_bound_evidence, declared_bound_evidence_from,
-            deferred_codec_proof, instantiated_selection, prove_outcome,
+            instantiated_selection, prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
@@ -551,16 +551,6 @@ impl<'db> Callable<'db> {
     /// The checker's proof of the call's trait goal.
     pub fn evidence(&self) -> Option<EvidenceId<'db>> {
         self.use_evidence.dispatch_proof()
-    }
-
-    pub(crate) fn retain_deferred_codec_evidence(
-        &mut self,
-        db: &'db dyn HirAnalysisDb,
-        solve_cx: TraitSolveCx<'db>,
-    ) {
-        let goal = self.trait_inst.expect("an entry codec has a trait goal");
-        self.use_evidence
-            .record_dispatch(goal, Some(deferred_codec_proof(db, solve_cx, goal, goal)));
     }
 
     /// Proves, in the checked body's context `solve_cx`, the bounds the
