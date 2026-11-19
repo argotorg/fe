@@ -359,7 +359,7 @@ fn prepare_file_within(
     };
     // A standalone file has no dependencies whose output could be read, so the
     // authored view shows its openings.
-    let Some(scan) = scan_file(db, file, syntax, true)? else {
+    let Some(scan) = scan_standalone_file(db, file, syntax)? else {
         return Ok(None);
     };
     // The one view every provider is admitted and evaluated in: the authored
@@ -530,17 +530,22 @@ pub fn prepare_ingots(
         let wants_view =
             !sealed.is_empty() || syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
         let mut input_db = wants_view.then(|| input_view(db, &ViewBasis::Package, &sealed));
-        let mut scans = Vec::new();
-        for (url, syntax) in syntaxes {
-            let scanned_in = input_db.as_ref().unwrap_or(db);
-            let file = scanned_in
-                .workspace()
-                .get(scanned_in, &url)
-                .expect("the view holds every authored file");
-            if let Some(scan) = scan_file(scanned_in, file, syntax, false)? {
-                scans.push((url, scan));
-            }
-        }
+        let scanned_in = input_db.as_ref().unwrap_or(db);
+        let has_scoped_demands = syntaxes.iter().any(|(_, syntax)| syntax.may_open_provider)
+            && !package_preparation_demands(scanned_in, &plan.files).is_empty();
+        let scans: Vec<_> = syntaxes
+            .into_iter()
+            .filter_map(|(url, syntax)| {
+                let has_scoped_opening = syntax.may_open_provider && has_scoped_demands;
+                (syntax.has_requests || has_scoped_opening).then_some((
+                    url,
+                    FileScan {
+                        root: syntax.root,
+                        has_scoped_opening,
+                    },
+                ))
+            })
+            .collect();
         if scans.is_empty() {
             continue;
         }
@@ -691,11 +696,10 @@ fn analyze_type_definitions_first<'db>(
 /// produce. The demands of a block are read in `db`, which must be the view
 /// the file's requests are evaluated in: a block that names output a
 /// dependency generated has a demand only where that output is visible.
-fn scan_file(
+fn scan_standalone_file(
     db: &DriverDataBase,
     file: File,
     syntax: FileSyntax,
-    standalone_only: bool,
 ) -> Result<Option<FileScan>, GenerationError> {
     analyze_type_definitions_first(db, db.top_mod(file));
     // Ordinary lexical implementation choices do not require preparation or
@@ -709,10 +713,9 @@ fn scan_file(
     if !syntax.has_requests && !has_scoped_opening {
         return Ok(None);
     }
-    if standalone_only
-        && file
-            .containing_ingot(db)
-            .is_none_or(|ingot| ingot.kind(db) != IngotKind::StandAlone)
+    if file
+        .containing_ingot(db)
+        .is_none_or(|ingot| ingot.kind(db) != IngotKind::StandAlone)
     {
         return Err(GenerationError {
             file: file.url(db).expect("indexed generation input"),
@@ -724,6 +727,26 @@ fn scan_file(
         root: syntax.root,
         has_scoped_opening,
     }))
+}
+
+fn package_preparation_demands(
+    db: &DriverDataBase,
+    files: &[url::Url],
+) -> Vec<hir::analysis::ty::trait_resolution::generation::GenerationDemand> {
+    let modules: Vec<_> = files
+        .iter()
+        .map(|url| {
+            let file = db
+                .workspace()
+                .get(db, url)
+                .expect("the view holds every authored file");
+            db.top_mod(file)
+        })
+        .collect();
+    if let Some(&first) = modules.first() {
+        analyze_type_definitions_first(db, first);
+    }
+    hir::analysis::ty::trait_resolution::generation::preparation_demands_for_modules(db, modules)
 }
 
 /// Collect and validate the explicit requests of one scanned file in the view the
@@ -1093,15 +1116,7 @@ fn admit_requests(
                 ));
             }
         }
-        let pending = modules
-            .iter()
-            .flat_map(|url| {
-                hir::analysis::ty::trait_resolution::generation::preparation_demands(
-                    &output,
-                    output_module(url).1,
-                )
-            })
-            .collect::<Vec<_>>();
+        let pending = package_preparation_demands(&output, modules);
         if !pending.is_empty() {
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();

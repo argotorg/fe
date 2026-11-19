@@ -6044,6 +6044,10 @@ impl<'db> TypedBody<'db> {
         &self.tables.generation_demands
     }
 
+    pub(crate) fn has_scoped_provider_openings(&self) -> bool {
+        !self.tables.provider_openings.is_empty()
+    }
+
     pub fn is_named_impl_operand(&self, expr: ExprId) -> bool {
         self.tables.named_impl_operands.contains(&expr)
     }

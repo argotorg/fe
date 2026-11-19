@@ -768,7 +768,10 @@ impl<'db> Callable<'db> {
         self.use_evidence.has_deferred(db)
     }
 
-    pub(crate) fn complete_deferred_evidence(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
+    pub(crate) fn complete_deferred_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<(), super::super::evidence::EvidenceCompletionError<'db>> {
         self.use_evidence.complete_deferred(db)
     }
 

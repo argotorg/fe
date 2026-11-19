@@ -488,7 +488,7 @@ pub fn generated_callee<'db>(
     if callable.has_deferred_evidence(db) {
         callable
             .complete_deferred_evidence(db)
-            .ok_or(MethodArgMapError::MissingBody)?;
+            .map_err(|_| MethodArgMapError::MissingBody)?;
     }
     let callee = semantic_callee_key_with_assumptions(
         db,
@@ -548,7 +548,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         completed = callable.clone();
         completed
             .complete_deferred_evidence(db)
-            .ok_or(MethodArgMapError::MissingBody)?;
+            .map_err(|_| MethodArgMapError::MissingBody)?;
         &completed
     } else {
         callable

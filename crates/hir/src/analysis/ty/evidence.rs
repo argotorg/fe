@@ -261,14 +261,17 @@ impl<'db> UseEvidence<'db> {
 
     /// Explicit instance-boundary completion. A present but uncompletable
     /// selected tree is an error, never an absent proof eligible for re-selection.
-    pub fn complete_deferred(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
+    pub(crate) fn complete_deferred(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<(), EvidenceCompletionError<'db>> {
         if let Some(dispatch) = &mut self.dispatch {
             dispatch.proof = complete_deferred_evidence(db, dispatch.proof)?;
         }
         if let Some(bounds) = &mut self.bounds {
             bounds.entries = bounds.entries.complete_deferred(db)?;
         }
-        Some(())
+        Ok(())
     }
 }
 
@@ -667,15 +670,15 @@ fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>
 /// Complete only the obligations explicitly retained by the producer.
 /// This runs at instance finalization, never in generic substitution/folding.
 #[salsa::tracked(returns(copy))]
-pub(crate) fn complete_deferred_evidence<'db>(
+fn complete_deferred_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
-) -> Option<EvidenceId<'db>> {
+) -> Result<EvidenceId<'db>, EvidenceCompletionError<'db>> {
     if !proof.has_deferred(db) {
-        return Some(proof);
+        return Ok(proof);
     }
     match proof.data(db) {
-        Evidence::Assumption(_) => Some(proof),
+        Evidence::Assumption(_) => Ok(proof),
         Evidence::DeferredSolCodec {
             goal,
             scope,
@@ -689,18 +692,26 @@ pub(crate) fn complete_deferred_evidence<'db>(
             if collect_flags(db, *goal).intersects(open)
                 || choices.is_some_and(|choices| collect_flags(db, choices).intersects(open))
             {
-                Some(proof)
+                Ok(proof)
             } else {
                 let cx = TraitSolveCx::new(db, *scope, Tier::All).with_choices(*choices);
-                match bounds {
+                let outcome = match bounds {
                     Some(bounds) => prove_in(
                         db,
                         cx.with_assumptions(bounds.applied_slots),
                         *goal,
                         Some(*bounds),
-                    )
-                    .evidence(),
-                    None => prove(db, cx, *goal),
+                    ),
+                    None => prove_outcome(db, cx, *goal),
+                };
+                match outcome {
+                    ProofOutcome::Proven(proof) => Ok(proof),
+                    ProofOutcome::NeedsGeneration(request) => {
+                        Err(EvidenceCompletionError::NeedsGeneration(request))
+                    }
+                    ProofOutcome::Deferred | ProofOutcome::Unavailable => {
+                        Err(EvidenceCompletionError::Unavailable)
+                    }
                 }
             }
         }
@@ -708,7 +719,7 @@ pub(crate) fn complete_deferred_evidence<'db>(
             selected,
             instantiated,
             conds,
-        } => Some(EvidenceId::new(
+        } => Ok(EvidenceId::new(
             db,
             Evidence::Impl {
                 selected: *selected,
@@ -716,10 +727,16 @@ pub(crate) fn complete_deferred_evidence<'db>(
                 conds: conds
                     .iter()
                     .map(|&proof| complete_deferred_evidence(db, proof))
-                    .collect::<Option<_>>()?,
+                    .collect::<Result<_, _>>()?,
             },
         )),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) enum EvidenceCompletionError<'db> {
+    Unavailable,
+    NeedsGeneration(GenerationRequest<'db>),
 }
 
 /// Proofs form a shared DAG. Cache this property so repeated tuple/condition
@@ -844,27 +861,31 @@ impl<'db> EvidenceList<'db> {
             .any(|proof| proof.has_deferred(db))
     }
 
-    pub fn complete_deferred(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
-        let complete = |proof| match proof {
-            Some(proof) => complete_deferred_evidence(db, proof).map(Some),
-            None => Some(None),
+    fn complete_deferred(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Self, EvidenceCompletionError<'db>> {
+        let complete = |proof: Option<EvidenceId<'db>>| {
+            proof
+                .map(|proof| complete_deferred_evidence(db, proof))
+                .transpose()
         };
         let entries = self
             .entries(db)
             .iter()
             .map(|proof| complete(*proof))
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let rows = self
             .rows(db)
             .iter()
             .map(|row| {
-                Some(RowEvidence {
+                Ok(RowEvidence {
                     proof: complete(row.proof)?,
                     ..row.clone()
                 })
             })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self::of(db, entries).with_rows(db, rows))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::of(db, entries).with_rows(db, rows))
     }
 
     pub(crate) fn missing_bound_goals(
@@ -1937,7 +1958,7 @@ pub(crate) fn instance_evidence<'db>(
                 {
                     // A selected parent is authoritative even if one retained
                     // obligation cannot close. Never replace that tree.
-                    let completed = complete_deferred_evidence(db, proof)?;
+                    let completed = complete_deferred_evidence(db, proof).ok()?;
                     return (!is_closed_goal(db, goal) || completed.is_closed(db))
                         .then_some(completed);
                 }

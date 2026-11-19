@@ -7,7 +7,7 @@ use salsa::SalsaValue;
 use crate::{
     analysis::{
         HirAnalysisDb,
-        semantic::{SemanticInstance, SemanticInstanceKey},
+        semantic::{SemanticInstance, SemanticInstanceKey, root_semantic_instance_key},
     },
     hir_def::{Trait, scope_graph::ScopeId},
 };
@@ -235,9 +235,16 @@ pub fn evaluation_demands<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
 ) -> GenerationDemands {
+    instance_demands(db, [key])
+}
+
+fn instance_demands<'db>(
+    db: &'db dyn HirAnalysisDb,
+    roots: impl IntoIterator<Item = SemanticInstanceKey<'db>>,
+) -> GenerationDemands {
     use super::super::ty_check::checked_body_demands;
     let mut demands = GenerationDemands::default();
-    let mut pending = std::collections::VecDeque::from([key]);
+    let mut pending: std::collections::VecDeque<_> = roots.into_iter().collect();
     let mut seen = std::collections::HashSet::new();
     while let Some(key) = pending.pop_front() {
         if !seen.insert(key) {
@@ -250,6 +257,7 @@ pub fn evaluation_demands<'db>(
         if crate::analysis::semantic::instance::instance_limit_violation(db, instance).is_some() {
             continue;
         }
+        demands.requests(db, instance.codec_generation_requests(db));
         for callee in instance.callees(db) {
             pending.push_back(callee.key);
         }
@@ -349,9 +357,51 @@ pub fn preparation_demands<'db>(
     db: &'db dyn HirAnalysisDb,
     module: crate::hir_def::TopLevelMod<'db>,
 ) -> Vec<GenerationDemand> {
+    preparation_demands_for_modules(db, [module])
+}
+
+pub fn preparation_demands_for_modules<'db>(
+    db: &'db dyn HirAnalysisDb,
+    modules: impl IntoIterator<Item = crate::hir_def::TopLevelMod<'db>>,
+) -> Vec<GenerationDemand> {
+    use super::super::ty_check::{BodyOwner, checked_body_demands, infer_body, module_body_owners};
+
+    let modules: Vec<_> = modules.into_iter().collect();
+    let owners: Vec<_> = modules
+        .iter()
+        .flat_map(|&module| module_body_owners(db, module))
+        .collect();
     let mut demands = GenerationDemands::default();
-    for owner in super::super::ty_check::module_body_owners(db, module) {
-        demands.extend(&super::super::ty_check::checked_body_demands(db, owner));
+    for &owner in &owners {
+        demands.extend(&checked_body_demands(db, owner));
+    }
+    if owners
+        .iter()
+        .any(|&owner| infer_body(db, owner).1.has_scoped_provider_openings())
+    {
+        let roots = owners.into_iter().filter_map(|owner| {
+            if owner.body(db).is_none()
+                || !matches!(
+                    owner,
+                    BodyOwner::Func(..)
+                        | BodyOwner::ContractInit { .. }
+                        | BodyOwner::ContractRecvArm { .. }
+                )
+            {
+                return None;
+            }
+            root_semantic_instance_key(db, owner).ok()
+        });
+        let files: std::collections::HashSet<_> = modules
+            .iter()
+            .filter_map(|module| module.file(db).url(db))
+            .collect();
+        // The package transaction owns the openings written in its files.
+        for demand in instance_demands(db, roots).into_vec() {
+            if files.contains(&demand.opening.file) {
+                demands.push(demand);
+            }
+        }
     }
     demands.into_vec()
 }
