@@ -169,6 +169,19 @@ where
         super::trait_resolution::match_prepared_header(self.db, &mut self.table, lhs.raw, rhs.raw)
     }
 
+    pub(crate) fn match_projection_receiver(
+        &mut self,
+        lhs: ScratchTy<'q, 'db>,
+        candidate: ScratchTraitInst<'q, 'db>,
+    ) -> UnificationResult {
+        super::trait_resolution::match_prepared_type(
+            self.db,
+            &mut self.table,
+            lhs.raw,
+            candidate.raw.self_ty(self.db),
+        )
+    }
+
     pub(crate) fn try_extract<U>(&mut self, value: U::Branded<'q>) -> Option<U>
     where
         U: TyFoldable<'db>
