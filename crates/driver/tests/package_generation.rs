@@ -96,6 +96,43 @@ const APP_WITH_LIB_TOML: &str =
 const LIB_TOML: &str = "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n";
 
 #[test]
+fn two_consumers_share_one_deferred_codec_specialization() {
+    let library =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/codec.fe");
+    let caller =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/lib.fe")
+            .replace("use ingot::codec::", "use lib::");
+    let second = APP_WITH_LIB_TOML.replace("name = \"app\"", "name = \"other\"");
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", library),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", caller.as_str()),
+        ("other/fe.toml", second.as_str()),
+        ("other/src/lib.fe", caller.as_str()),
+    ];
+    let db = project(&files);
+    assert!(prepare_ingots(&db, &[url("lib/")]).unwrap().is_none());
+
+    let forward = prepare_ingots(&db, &[url("app/"), url("other/")])
+        .unwrap()
+        .expect("the concrete calls request a provider");
+    let reverse = prepare_ingots(&db, &[url("other/"), url("app/")])
+        .unwrap()
+        .expect("the concrete calls request a provider");
+    let requests = forward.generation_inputs().requests(&forward);
+    assert_eq!(requests, reverse.generation_inputs().requests(&reverse));
+    assert_eq!(requests.len(), 1);
+    let scoped = requests[0].scoped_impl.as_ref().unwrap();
+    assert_eq!(scoped.demand.opening.file, url("lib/src/lib.fe"));
+    for root in ["app/", "other/"] {
+        let diagnostics = ingot_errors(&forward, root);
+        assert!(diagnostics.is_empty(), "{root}: {diagnostics}");
+    }
+    assert_authored_unchanged(&db, &files);
+}
+
+#[test]
 fn quoted_ingot_path_uses_the_dependency_producers_scope() {
     let library = r#"
 trait Gate { const fn code(_ value: u8) -> u8 }
