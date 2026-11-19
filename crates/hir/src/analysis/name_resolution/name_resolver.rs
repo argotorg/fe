@@ -53,6 +53,9 @@ pub struct QueryDirective {
     /// external ingot and builtin types as well.
     allow_external: bool,
 
+    /// A quote-local probe follows lexical parents only within generated code.
+    stay_inside_quote: bool,
+
     /// If `allow_assoc_fn` is `false`, functions defined in an `impl`,
     /// `impl trait` or `trait` scope are not visible. This is the case for
     /// queries propagated to a lexical parent: like in Rust, associated
@@ -81,6 +84,7 @@ impl QueryDirective {
         Self {
             allow_lex: true,
             allow_external: true,
+            stay_inside_quote: false,
             allow_assoc_fn: true,
             allow_enclosing_item_bindings: true,
         }
@@ -95,6 +99,17 @@ impl QueryDirective {
     pub(super) fn disallow_external(mut self) -> Self {
         self.allow_external = false;
         self
+    }
+
+    pub(super) fn quoted_locals(self) -> Self {
+        Self {
+            stay_inside_quote: true,
+            ..self.disallow_external()
+        }
+    }
+
+    pub(super) fn allows_lex_at(self, db: &dyn HirAnalysisDb, scope: ScopeId) -> bool {
+        self.allow_lex && !(self.stay_inside_quote && scope.is_published(db))
     }
 
     fn disallow_assoc_fn(mut self) -> Self {
@@ -686,27 +701,6 @@ impl<'db> NameDerivation<'db> {
         }
     }
 
-    /// Whether the successful lookup followed a published item's lexical
-    /// edge back into the quotation producer's scope.
-    pub(super) fn crosses_quotation_boundary(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        mut scope: ScopeId<'db>,
-    ) -> bool {
-        let mut derivation = self;
-        while let Self::Lex(parent) = derivation {
-            if scope.is_published(db) {
-                return true;
-            }
-            let Some(outer) = scope.lex_parent(db) else {
-                break;
-            };
-            scope = outer;
-            derivation = parent;
-        }
-        false
-    }
-
     /// Compares which of two derivations of a name shadows the other: in a
     /// scope, a definition shadows a named import, which shadows a glob
     /// import, and those shadow the names of lexical parents, external ingots
@@ -769,7 +763,7 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         {
             // Edges only need the query's name and whether lexical scopes apply.
             let name = query.name(self.db);
-            let allow_lex = query.directive(self.db).allow_lex;
+            let allow_lex = query.directive(self.db).allows_lex_at(self.db, scope);
             let mut process_edge =
                 |edge: &ScopeEdge<'db>| match edge.kind.propagate(self.db, name, allow_lex) {
                     PropagationResult::Terminated => {

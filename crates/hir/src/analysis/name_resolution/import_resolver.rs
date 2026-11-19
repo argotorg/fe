@@ -36,8 +36,8 @@ use super::{
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{
-        AuthoredScope, HirIngot, IdentId, Partial, QuotedPathOrigin, Use, UsePathSegment,
-        prim_ty::PrimTy, scope_graph::ScopeId,
+        AuthoredScope, HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy,
+        scope_graph::ScopeId,
     },
 };
 
@@ -48,14 +48,21 @@ type GlobNames<'db> = FxHashMap<IdentId<'db>, Vec<NameRes<'db>>>;
 type SegmentError<'db> = (usize, NameResolutionError<'db>);
 
 /// Lookup follows a path from its root to the scopes that its segments name.
-/// Visibility may follow the quote producer when the binding comes from its
-/// lexical scope or a local alias in the quotation names an authored module.
+/// Visibility may follow the quote producer when it supplies a binding or
+/// a local alias in the quotation names an authored module.
 #[derive(Clone, Copy)]
 struct UseLookup<'db> {
     target: ScopeId<'db>,
     root: ScopeId<'db>,
     suffix_producer: Option<AuthoredScope<'db>>,
-    local_quote: Option<QuotedPathOrigin<'db>>,
+    quote_lookup: QuoteLookup,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteLookup {
+    Ordinary,
+    Local,
+    Producer,
 }
 
 pub(crate) struct ImportResolver<'db> {
@@ -411,7 +418,8 @@ impl<'db> ImportResolver<'db> {
                 let segments = use_path(db, use_)?;
                 let idx = segments.len() - 1;
                 let domain = NameDomain::TYPE | NameDomain::VALUE;
-                let mut bucket = self.lookup(use_, lookup, idx, &segments[idx], domain, forced)?;
+                let (mut bucket, _) =
+                    self.lookup(use_, lookup, idx, &segments[idx], domain, forced)?;
                 bucket.set_derivation(NameDerivation::NamedImported(use_));
                 Ok(Resolved::Bucket(bucket))
             });
@@ -509,43 +517,11 @@ impl<'db> ImportResolver<'db> {
             target: root,
             root,
             suffix_producer: None,
-            local_quote: None,
+            quote_lookup: QuoteLookup::Ordinary,
         };
         for (idx, segment) in segments[..segments.len() - 1].iter().enumerate() {
-            let quote = path.quote_origin(db).filter(|_| {
-                idx == 0
-                    && authored_root.is_none()
-                    && segment
-                        .to_opt()
-                        .and_then(UsePathSegment::ident)
-                        .is_some_and(|name| {
-                            !matches!(name.data(db).as_str(), "ingot" | "self" | "super")
-                        })
-            });
-            let mut resolved_at_producer = false;
-            let bucket = if let Some(quote) = quote {
-                let local = UseLookup {
-                    local_quote: Some(quote),
-                    ..lookup
-                };
-                match self.lookup(use_, local, idx, segment, NameDomain::TYPE, forced) {
-                    Err(Stop::Failed((_, NameResolutionError::NotFound))) => {
-                        // A value at the root does not bind the type domain.
-                        // The local lookup already waited for any pending use.
-                        let producer = quote.producer.resolve(db);
-                        lookup = UseLookup {
-                            target: producer,
-                            root: producer,
-                            ..lookup
-                        };
-                        resolved_at_producer = true;
-                        self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?
-                    }
-                    result => result?,
-                }
-            } else {
-                self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?
-            };
+            let (bucket, producer) =
+                self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?;
             let res = bucket
                 .pick(NameDomain::TYPE)
                 .as_ref()
@@ -558,14 +534,12 @@ impl<'db> ImportResolver<'db> {
             }
             lookup.target = res.scope().unwrap();
             trace.push(lookup.target);
-            if idx == 0 && authored_root.is_none() && !resolved_at_producer {
-                lookup.suffix_producer = path
-                    .quote_origin(db)
-                    .filter(|&origin| {
-                        res.derivation.crosses_quotation_boundary(db, root)
-                            || res.quoted_module_alias(db, origin)
-                    })
-                    .map(|origin| origin.producer);
+            if idx == 0 && authored_root.is_none() {
+                lookup.suffix_producer = producer.or_else(|| {
+                    path.quote_origin(db)
+                        .filter(|&origin| res.quoted_module_alias(db, origin))
+                        .map(|origin| origin.producer)
+                });
             } else if lookup.suffix_producer.is_some() && !is_authored_module(db, lookup.target) {
                 lookup.suffix_producer = None;
             }
@@ -577,6 +551,72 @@ impl<'db> ImportResolver<'db> {
     /// it names in `domain`. Only the first segment is looked up in lexical
     /// parents and external ingots.
     fn lookup(
+        &self,
+        use_: Use<'db>,
+        lookup: UseLookup<'db>,
+        idx: usize,
+        segment: &Partial<UsePathSegment<'db>>,
+        domains: NameDomain,
+        forced: &Forced<'db>,
+    ) -> Result<(NameResBucket<'db>, Option<AuthoredScope<'db>>), Stop<'db>> {
+        let db = self.db;
+        let path = use_.path(db).unwrap();
+        let quote = path.quote_origin(db).filter(|_| {
+            idx == 0
+                && path.authored_scope(db).is_none()
+                && segment
+                    .to_opt()
+                    .and_then(UsePathSegment::ident)
+                    .is_some_and(|name| {
+                        !matches!(name.data(db).as_str(), "ingot" | "self" | "super")
+                    })
+        });
+        let Some(quote) = quote else {
+            return self
+                .lookup_in_scope(use_, lookup, idx, segment, domains, forced)
+                .map(|bucket| (bucket, None));
+        };
+
+        let local = UseLookup {
+            quote_lookup: QuoteLookup::Local,
+            ..lookup
+        };
+        let mut result = NameResBucket::default();
+        let mut type_producer = None;
+        // A one-segment use can bind a local value and an authored type
+        // under the same alias. Look for each domain independently.
+        for domain in domains.iter() {
+            let bucket = match self.lookup_in_scope(use_, local, idx, segment, domain, forced) {
+                Err(Stop::Failed((_, NameResolutionError::NotFound))) => {
+                    let scope = quote.producer.resolve(db);
+                    let producer = UseLookup {
+                        target: scope,
+                        root: scope,
+                        quote_lookup: QuoteLookup::Producer,
+                        ..lookup
+                    };
+                    match self.lookup_in_scope(use_, producer, idx, segment, domain, forced) {
+                        Ok(bucket) => {
+                            if domain == NameDomain::TYPE {
+                                type_producer = Some(quote.producer);
+                            }
+                            bucket
+                        }
+                        Err(Stop::Failed((_, NameResolutionError::NotFound))) => continue,
+                        Err(stop) => return Err(stop),
+                    }
+                }
+                result => result?,
+            };
+            result.bucket.extend(bucket.bucket);
+        }
+        if result.is_empty() {
+            return Err(Stop::Failed((idx, NameResolutionError::NotFound)));
+        }
+        Ok((result, type_producer))
+    }
+
+    fn lookup_in_scope(
         &self,
         use_: Use<'db>,
         lookup: UseLookup<'db>,
@@ -609,8 +649,8 @@ impl<'db> ImportResolver<'db> {
                 NameRes::new_from_scope(root, NameDomain::TYPE, NameDerivation::External).into(),
             );
         }
-        let directive = if lookup.local_quote.is_some() {
-            QueryDirective::new().disallow_external()
+        let directive = if lookup.quote_lookup == QuoteLookup::Local {
+            QueryDirective::new().quoted_locals()
         } else if idx == 0 {
             QueryDirective::new()
         } else {
@@ -619,26 +659,21 @@ impl<'db> ImportResolver<'db> {
         let query = EarlyNameQueryId::new(db, name, scope, directive);
         let mut bucket =
             NameResolver::new(db, self, self.tier.hides(self.ingot)).resolve_query(query);
-        if lookup.local_quote.is_some() {
+        if lookup.quote_lookup != QuoteLookup::Ordinary {
             bucket.bucket.retain(|(found, _)| found.intersects(domain));
+            for res in bucket.iter_ok_mut() {
+                res.domain &= domain;
+            }
         }
 
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
             Ok(res) if !res.is_importable() => false,
-            Ok(res) => {
-                let from = lookup
-                    .local_quote
-                    .filter(|_| res.derivation.crosses_quotation_boundary(db, scope))
-                    .map_or(visibility_scope, |origin| origin.producer.resolve(db));
-                if res.is_visible(db, from) {
-                    true
-                } else {
-                    if invisible.is_none() {
-                        invisible = res.derived_from(db);
-                    }
-                    false
+            Ok(res) if !res.is_visible(db, visibility_scope) => {
+                if invisible.is_none() {
+                    invisible = res.derived_from(db);
                 }
+                false
             }
             _ => true,
         });
@@ -654,7 +689,7 @@ impl<'db> ImportResolver<'db> {
             .collect();
         let found = found.and_then(|found| found.into_iter().min_by(|a, b| a.cmp_precedence(b)));
         let mut blockers = Vec::new();
-        self.blockers(use_, scope, name, idx == 0, found, &mut blockers);
+        self.blockers(use_, scope, name, directive, found, &mut blockers);
         blockers.retain(|&blocker| !forced.ignores(blocker));
         if !blockers.is_empty() {
             return Err(Stop::Blocked(blockers));
@@ -680,6 +715,7 @@ impl<'db> ImportResolver<'db> {
         // type of the same name, so a use path that starts with it is
         // ambiguous.
         let glob_shadows_external = idx == 0
+            && lookup.quote_lookup != QuoteLookup::Local
             && bucket.pick(NameDomain::TYPE).as_ref().is_ok_and(|res| {
                 matches!(res.derivation.origin(), NameDerivation::GlobImported(_))
                     && !res.is_external(db, lookup.root.ingot(db))
@@ -711,7 +747,7 @@ impl<'db> ImportResolver<'db> {
         use_: Use<'db>,
         scope: ScopeId<'db>,
         name: IdentId<'db>,
-        allow_lex: bool,
+        directive: QueryDirective,
         found: Option<&NameDerivation<'db>>,
         blockers: &mut Vec<(Use<'db>, bool)>,
     ) {
@@ -733,8 +769,10 @@ impl<'db> ImportResolver<'db> {
         if matches!(found, None | Some(NameDerivation::Lex(_))) {
             self.glob_blockers(use_, scope, None, name, &mut FxHashSet::default(), blockers);
         }
-        if allow_lex && let Some(parent) = scope.lex_parent(self.db) {
-            self.blockers(use_, parent, name, true, parent_found, blockers);
+        if directive.allows_lex_at(self.db, scope)
+            && let Some(parent) = scope.lex_parent(self.db)
+        {
+            self.blockers(use_, parent, name, directive, parent_found, blockers);
         }
     }
 

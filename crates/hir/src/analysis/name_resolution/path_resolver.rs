@@ -797,17 +797,10 @@ fn path_name_bucket<'db>(
         db,
         path.ident(db).unwrap(),
         scope,
-        QueryDirective::new().disallow_external(),
+        QueryDirective::new().quoted_locals(),
     );
     let local = resolve(local);
     match local.pick(NameDomain::TYPE) {
-        Ok(binding) => (
-            local,
-            binding
-                .derivation
-                .crosses_quotation_boundary(db, scope)
-                .then_some(origin.producer),
-        ),
         Err(NameResolutionError::NotFound) => (
             resolve(make_query(db, path, origin.producer.resolve(db))),
             Some(origin.producer),

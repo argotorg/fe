@@ -1810,6 +1810,34 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
         );
     }
 
+    for (before, after, read, expected) in [
+        ("const rules: u8 = 0", "", "selected", "3"),
+        ("const fn rules() -> u8 { 0 }", "", "selected()", "3"),
+        ("", "use ingot::helper as rules", "selected()", "12"),
+    ] {
+        let library = library
+            .replace(import, &format!("{before}\nuse rules as selected\n{after}"))
+            .replace(
+                "imported() + rules::score()",
+                &format!("{read} + selected::score()"),
+            );
+        for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
+            let prepared = check(&lib_with_rules, manifest, &library)
+                .expect("the producer can use its dependency")
+                .expect("the scoped request generated a method");
+            assert_eq!(ingot_errors(&prepared, "app/"), "", "{library}");
+            assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), expected);
+        }
+        let prepared = check(LIB_TOML, &app_with_shadow, &library)
+            .expect("body diagnostics are reported on the prepared package")
+            .expect("the scoped request generated a method");
+        let diagnostics = ingot_errors(&prepared, "app/");
+        assert!(
+            diagnostics.contains("`selected` is not found"),
+            "{diagnostics}"
+        );
+    }
+
     let local = library.replace(
         import,
         &format!("use ingot::local_rules as rules\n{import}"),
@@ -1819,6 +1847,14 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
         .expect("the scoped request generated a method");
     assert_eq!(ingot_errors(&prepared, "app/"), "");
     assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "8");
+    let local_single = local
+        .replace(import, "use rules as selected")
+        .replace("imported() + rules::score()", "selected::score()");
+    let prepared = check(LIB_TOML, &app_with_shadow, &local_single)
+        .expect("the quoted module alias supplies the type domain")
+        .expect("the scoped request generated a method");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "4");
 
     let glob = library
         .replace("use rules::score as imported", "use rules::*")
@@ -1839,7 +1875,7 @@ fn quoted_qualifiers_check_visibility_from_the_producer() {
     let library = r#"
 use core::meta::{Code, Item}
 
-pub mod helpers {
+pub(ingot) mod helpers {
     pub(ingot) trait Marker {}
     pub(ingot) const fn value() -> u8 { 7 }
 }
@@ -1895,6 +1931,10 @@ pub const fn result() -> u8 { Target::score() }
         let accepted = prepare_library(&library);
         assert_eq!(ingot_errors(&accepted, "app/"), "", "{body}");
         assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "7", "{body}");
+        let private_module = library.replace("pub(ingot) mod helpers", "mod helpers");
+        let accepted = prepare_library(&private_module);
+        assert_eq!(ingot_errors(&accepted, "app/"), "", "{body}");
+        assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "7", "{body}");
 
         let hidden = library.replace("pub(ingot) ", "");
         let refused = prepare_library(&hidden);
@@ -1904,5 +1944,44 @@ pub const fn result() -> u8 { Target::score() }
                 && diagnostics.contains(&format!("`{member}` is not visible")),
             "{body}\n{diagnostics}"
         );
+    }
+
+    let splice = r#"
+use core::meta::{Code, Item}
+
+mod inner {
+    use core::meta::{Code, Expr}
+    pub mod helpers { pub const fn value() -> u8 { 3 } }
+
+    pub const fn expression() -> Code<Expr> {
+        quote { {
+            const helpers: u8 = 0
+            /* inner expression */
+        } }
+    }
+}
+
+mod outer {
+    use core::meta::{Code, Item}
+    pub mod helpers { pub const fn value() -> u8 { 5 } }
+
+    pub const fn fragment() -> Code<Item> {
+        let inner = super::inner::expression()
+        quote {
+            const fn score() -> u8 { ${inner} }
+        }
+    }
+}
+
+pub const fn fragment() -> Code<Item> { outer::fragment() }
+"#;
+    for body in [
+        "helpers::value()",
+        "use helpers::value as selected\nselected()",
+    ] {
+        let library = splice.replace("/* inner expression */", body);
+        let accepted = prepare_library(&library);
+        assert_eq!(ingot_errors(&accepted, "app/"), "", "{body}");
+        assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "3", "{body}");
     }
 }
