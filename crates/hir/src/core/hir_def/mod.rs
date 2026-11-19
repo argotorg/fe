@@ -19,6 +19,7 @@ mod scope_graph_viz;
 pub(crate) mod module_tree;
 
 pub use attr::*;
+pub(crate) use authored::QuotedPathOrigin;
 pub use authored::{AuthoredLocator, AuthoredScope};
 pub use body::*;
 use common::ingot::{Ingot, IngotKind};

@@ -4632,16 +4632,18 @@ impl<'db> TyChecker<'db> {
         let scope = self.env.scope();
         let mut invisible = None;
         let mut applications = Vec::new();
-        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
-            applications.extend(const_requirements::constrained_applications(self.db, reso));
-            if invisible.is_some() {
-                return;
-            }
-            let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
-            if !reso.is_visible_from(self.db, vis_scope) {
-                invisible = Some((path, reso.name_span(self.db)));
-            }
-        };
+        let mut observe_segment =
+            |path: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+                applications.extend(const_requirements::constrained_applications(self.db, reso));
+                if invisible.is_some() {
+                    return;
+                }
+                if !quoted_visibility.unwrap_or_else(|| {
+                    reso.is_visible_from(self.db, path.hygiene_scope(self.db).unwrap_or(scope))
+                }) {
+                    invisible = Some((path, reso.name_span(self.db)));
+                }
+            };
 
         let res = resolve_path_with_observer_and_minter(
             self.db,

@@ -446,15 +446,16 @@ fn resolve_recv_path<'db>(
     let scope = contract.scope();
     let mut invisible = None;
     let mut applications = Vec::new();
-    let mut observe_segment = |segment: PathId<'db>, reso: &PathRes<'db>| {
-        applications.extend(constrained_applications(db, reso));
-        if invisible.is_none()
-            && segment.segment_index(db) >= offset
-            && !reso.is_visible_from(db, scope)
-        {
-            invisible = Some((segment, reso.name_span(db)));
-        }
-    };
+    let mut observe_segment =
+        |segment: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+            applications.extend(constrained_applications(db, reso));
+            if invisible.is_none()
+                && segment.segment_index(db) >= offset
+                && !quoted_visibility.unwrap_or_else(|| reso.is_visible_from(db, scope))
+            {
+                invisible = Some((segment, reso.name_span(db)));
+            }
+        };
     let res = resolve_path_with_observer_and_minter(
         db,
         path,

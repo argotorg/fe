@@ -468,6 +468,26 @@ pub struct NameRes<'db> {
 }
 
 impl<'db> NameRes<'db> {
+    /// A local module alias can give the rest of a quoted path producer
+    /// access only for another path copied from the same quotation.
+    pub(super) fn quoted_module_alias(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        origin: crate::hir_def::QuotedPathOrigin<'db>,
+    ) -> bool {
+        let NameDerivation::NamedImported(import) = self.derivation.origin() else {
+            return false;
+        };
+        import
+            .path(db)
+            .to_opt()
+            .and_then(|path| path.quote_origin(db))
+            == Some(origin)
+            && self
+                .scope()
+                .is_some_and(|scope| super::visibility_checker::is_authored_module(db, scope))
+    }
+
     /// Returns `true` if the name is visible from the given `scope`.
     pub fn is_visible(&self, db: &'db dyn HirAnalysisDb, from: ScopeId<'db>) -> bool {
         match self.derivation.origin() {

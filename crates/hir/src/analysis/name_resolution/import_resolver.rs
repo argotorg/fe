@@ -31,12 +31,13 @@ use super::{
         NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind, NameResolutionError,
         NameResolver, QueryDirective, Tier,
     },
-    visibility_checker::is_use_visible,
+    visibility_checker::{is_authored_module, is_use_visible},
 };
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{
-        HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy, scope_graph::ScopeId,
+        AuthoredScope, HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy,
+        scope_graph::ScopeId,
     },
 };
 
@@ -45,6 +46,16 @@ type GlobNames<'db> = FxHashMap<IdentId<'db>, Vec<NameRes<'db>>>;
 
 /// A failed lookup: the index of the path segment, and the error.
 type SegmentError<'db> = (usize, NameResolutionError<'db>);
+
+/// Lookup follows a path from its root to the scopes that its segments name.
+/// Visibility may follow the quote producer once that path goes through a
+/// module imported by this very quotation.
+#[derive(Clone, Copy)]
+struct UseLookup<'db> {
+    target: ScopeId<'db>,
+    root: ScopeId<'db>,
+    suffix_producer: Option<AuthoredScope<'db>>,
+}
 
 pub(crate) struct ImportResolver<'db> {
     db: &'db dyn HirAnalysisDb,
@@ -392,14 +403,14 @@ impl<'db> ImportResolver<'db> {
         let mut trace = Vec::new();
         let resolved = self
             .resolve_base(use_, forced, &mut trace)
-            .and_then(|target| {
+            .and_then(|lookup| {
                 if use_.is_glob(db) {
-                    return Ok(Resolved::Glob(target));
+                    return Ok(Resolved::Glob(lookup.target));
                 }
                 let segments = use_path(db, use_)?;
                 let idx = segments.len() - 1;
                 let domain = NameDomain::TYPE | NameDomain::VALUE;
-                let mut bucket = self.lookup(use_, target, idx, &segments[idx], domain, forced)?;
+                let mut bucket = self.lookup(use_, lookup, idx, &segments[idx], domain, forced)?;
                 bucket.set_derivation(NameDerivation::NamedImported(use_));
                 Ok(Resolved::Bucket(bucket))
             });
@@ -487,28 +498,41 @@ impl<'db> ImportResolver<'db> {
         use_: Use<'db>,
         forced: &Forced<'db>,
         trace: &mut Vec<ScopeId<'db>>,
-    ) -> Result<ScopeId<'db>, Stop<'db>> {
-        let segments = use_path(self.db, use_)?;
-        segments[..segments.len() - 1].iter().enumerate().try_fold(
-            use_lookup_scope(self.db, use_),
-            |target, (idx, segment)| {
-                let bucket = self.lookup(use_, target, idx, segment, NameDomain::TYPE, forced)?;
-                let res = bucket
-                    .pick(NameDomain::TYPE)
-                    .as_ref()
-                    .unwrap_or_else(|_| bucket.iter_ok().next().unwrap());
-                if res.is_mod(self.db) || res.is_enum(self.db) {
-                    let scope = res.scope().unwrap();
-                    trace.push(scope);
-                    Ok(scope)
-                } else {
-                    Err(Stop::Failed((
-                        idx,
-                        NameResolutionError::InvalidPathSegment(res.clone()),
-                    )))
-                }
-            },
-        )
+    ) -> Result<UseLookup<'db>, Stop<'db>> {
+        let db = self.db;
+        let segments = use_path(db, use_)?;
+        let path = use_.path(db).unwrap();
+        let authored_root = path.authored_scope(db);
+        let root = authored_root.map_or_else(|| use_scope(db, use_), |origin| origin.resolve(db));
+        let mut lookup = UseLookup {
+            target: root,
+            root,
+            suffix_producer: None,
+        };
+        for (idx, segment) in segments[..segments.len() - 1].iter().enumerate() {
+            let bucket = self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?;
+            let res = bucket
+                .pick(NameDomain::TYPE)
+                .as_ref()
+                .unwrap_or_else(|_| bucket.iter_ok().next().unwrap());
+            if !res.is_mod(db) && !res.is_enum(db) {
+                return Err(Stop::Failed((
+                    idx,
+                    NameResolutionError::InvalidPathSegment(res.clone()),
+                )));
+            }
+            lookup.target = res.scope().unwrap();
+            trace.push(lookup.target);
+            if idx == 0 && authored_root.is_none() {
+                lookup.suffix_producer = path
+                    .quote_origin(db)
+                    .filter(|&origin| res.quoted_module_alias(db, origin))
+                    .map(|origin| origin.producer);
+            } else if lookup.suffix_producer.is_some() && !is_authored_module(db, lookup.target) {
+                lookup.suffix_producer = None;
+            }
+        }
+        Ok(lookup)
     }
 
     /// Looks up the `idx`th segment of the path of `use_` in `scope`, for what
@@ -517,14 +541,17 @@ impl<'db> ImportResolver<'db> {
     fn lookup(
         &self,
         use_: Use<'db>,
-        scope: ScopeId<'db>,
+        lookup: UseLookup<'db>,
         idx: usize,
         segment: &Partial<UsePathSegment<'db>>,
         domain: NameDomain,
         forced: &Forced<'db>,
     ) -> Result<NameResBucket<'db>, Stop<'db>> {
         let db = self.db;
-        let lookup_scope = use_lookup_scope(db, use_);
+        let scope = lookup.target;
+        let visibility_scope = lookup
+            .suffix_producer
+            .map_or(lookup.root, |origin| origin.resolve(db));
         let name = segment
             .to_opt()
             .and_then(UsePathSegment::ident)
@@ -556,7 +583,7 @@ impl<'db> ImportResolver<'db> {
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
             Ok(res) if !res.is_importable() => false,
-            Ok(res) if !res.is_visible(db, lookup_scope) => {
+            Ok(res) if !res.is_visible(db, visibility_scope) => {
                 if invisible.is_none() {
                     invisible = res.derived_from(db);
                 }
@@ -604,10 +631,11 @@ impl<'db> ImportResolver<'db> {
         let glob_shadows_external = idx == 0
             && bucket.pick(NameDomain::TYPE).as_ref().is_ok_and(|res| {
                 matches!(res.derivation.origin(), NameDerivation::GlobImported(_))
-                    && !res.is_external(db, lookup_scope.ingot(db))
+                    && !res.is_external(db, lookup.root.ingot(db))
             })
             && (PrimTy::from_name(db, name).is_some()
-                || lookup_scope
+                || lookup
+                    .root
                     .ingot(db)
                     .resolved_external_ingots(db)
                     .iter()
@@ -748,15 +776,6 @@ impl<'db> ImportResolver<'db> {
 /// The scope that `use_` imports into.
 fn use_scope<'db>(db: &'db dyn HirAnalysisDb, use_: Use<'db>) -> ScopeId<'db> {
     ScopeId::from_item(use_.into()).lex_parent(db).unwrap()
-}
-
-/// The origin of the path of `use_`. A quoted import contributes its binding
-/// to the generated block, with its free path looked up at the producer.
-fn use_lookup_scope<'db>(db: &'db dyn HirAnalysisDb, use_: Use<'db>) -> ScopeId<'db> {
-    use_.path(db)
-        .to_opt()
-        .and_then(|path| path.authored_scope(db))
-        .map_or_else(|| use_scope(db, use_), |authored| authored.resolve(db))
 }
 
 /// The segments of the path of `use_`, of which there is at least one.

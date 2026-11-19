@@ -328,13 +328,14 @@ pub(super) fn bind_path_to_scope<'db, B: BindBodies<'db>>(
                     );
                 }
             }
-            PathId::new(
+            PathId::intern(
                 db,
                 PathKind::Ident {
                     ident,
                     generic_args,
                 },
                 parent,
+                path.local_quote_origin(db),
             )
         }
         PathKind::QualifiedType { type_, trait_ } => {

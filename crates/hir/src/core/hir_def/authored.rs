@@ -24,6 +24,16 @@ pub struct AuthoredScope<'db> {
     pub locator: AuthoredLocator,
 }
 
+/// One copy of a quotation in the destination HIR. A local path may use the
+/// producer's access for a module suffix when its root comes from an import
+/// copied in the same quotation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct QuotedPathOrigin<'db> {
+    pub(crate) producer: AuthoredScope<'db>,
+    pub(crate) range: TextRange,
+    pub(crate) frame_id: usize,
+}
+
 /// Where an authored scope was written in its module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthoredLocator {

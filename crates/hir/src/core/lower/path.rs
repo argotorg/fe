@@ -10,7 +10,8 @@ impl<'db> PathId<'db> {
         let db = ctxt.db();
 
         let mut path: Option<Self> = None;
-        for seg in ast.into_iter() {
+        let mut segments = ast.into_iter().peekable();
+        while let Some(seg) = segments.next() {
             match seg.kind() {
                 Some(ast::PathSegmentKind::QualifiedType(qualified)) => {
                     let type_ = TypeId::lower_ast_partial(ctxt, qualified.ty());
@@ -45,40 +46,35 @@ impl<'db> PathId<'db> {
                     ));
                 }
                 Some(ast::PathSegmentKind::Ident(ident))
-                    if path.is_none()
-                        && ctxt.quote_names_resolve_at_producer()
-                        && let Some(frame) = ctxt.quote_frames.last()
-                        && !quote_name_is_bound(
-                            seg.syntax(),
-                            ident.text(),
-                            frame.is_sub_quote,
-                            None,
-                        ) =>
+                    if path.is_none() && ctxt.quote_names_resolve_at_producer() =>
                 {
+                    let frame = ctxt.quote_frames.last().unwrap();
+                    let origin = frame.path_origin();
+                    let is_bound =
+                        quote_name_is_bound(seg.syntax(), ident.text(), frame.is_sub_quote, None);
+                    let is_member_quote = frame.is_member_quote;
                     let display_ident = IdentId::lower_token(ctxt, ident.clone());
-                    let local_ident = if ctxt
-                        .quote_frames
-                        .last()
-                        .is_some_and(|frame| frame.is_member_quote)
-                    {
+                    let generic_args = GenericArgListId::lower_ast_opt(ctxt, seg.generic_args());
+                    let kind = PathKind::Ident {
+                        ident: Partial::Present(display_ident),
+                        generic_args,
+                    };
+                    if is_bound {
+                        let local_quote_origin = segments.peek().is_some().then_some(origin);
+                        path = Some(Self::intern(db, kind, None, local_quote_origin));
+                        continue;
+                    }
+
+                    let local_ident = if is_member_quote {
                         display_ident
                     } else {
                         ctxt.resolve_sub_quote_local_ident(ident.text())
                     };
-                    let generic_args = GenericArgListId::lower_ast_opt(ctxt, seg.generic_args());
-                    let producer_scope = ctxt.quote_frames.last().unwrap().producer;
-                    let display = Self::new(
-                        db,
-                        PathKind::Ident {
-                            ident: Partial::Present(display_ident),
-                            generic_args,
-                        },
-                        None,
-                    );
+                    let display = Self::new(db, kind, None);
                     path = Some(Self::new(
                         db,
                         PathKind::InScope {
-                            scope: producer_scope,
+                            scope: origin.producer,
                             local_ident: Some(local_ident),
                             display,
                         },

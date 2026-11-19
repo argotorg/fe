@@ -698,15 +698,22 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     // position.
                     let scope = ctxt.scope();
                     let mut invisible = None;
-                    let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
-                        if invisible.is_some() {
-                            return;
-                        }
-                        let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
-                        if !reso.is_visible_from(self.db, vis_scope) {
-                            invisible = Some((path, reso.name_span(self.db)));
-                        }
-                    };
+                    let mut check_visibility =
+                        |path: PathId<'db>,
+                         reso: &PathRes<'db>,
+                         quoted_visibility: Option<bool>| {
+                            if invisible.is_some() {
+                                return;
+                            }
+                            if !quoted_visibility.unwrap_or_else(|| {
+                                reso.is_visible_from(
+                                    self.db,
+                                    path.hygiene_scope(self.db).unwrap_or(scope),
+                                )
+                            }) {
+                                invisible = Some((path, reso.name_span(self.db)));
+                            }
+                        };
 
                     let resolved = resolve_path_with_observer_and_minter(
                         self.db,
@@ -821,15 +828,17 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         let path_span = ctxt.span().unwrap();
 
         let mut invisible = None;
-        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
-            if invisible.is_some() {
-                return;
-            }
-            let vis_scope = path.hygiene_scope(self.db).unwrap_or(scope);
-            if !reso.is_visible_from(self.db, vis_scope) {
-                invisible = Some((path, reso.name_span(self.db)));
-            }
-        };
+        let mut check_visibility =
+            |path: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+                if invisible.is_some() {
+                    return;
+                }
+                if !quoted_visibility.unwrap_or_else(|| {
+                    reso.is_visible_from(self.db, path.hygiene_scope(self.db).unwrap_or(scope))
+                }) {
+                    invisible = Some((path, reso.name_span(self.db)));
+                }
+            };
 
         let resolved = resolve_path_with_observer_and_minter(
             self.db,
@@ -898,12 +907,13 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         // Visibility check for trait paths mirrors visit_path but expects a Trait.
         let mut invisible = None;
         let mut check_visibility =
-            |p: PathId<'db>, reso: &crate::analysis::name_resolution::PathRes<'db>| {
+            |p: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
                 if invisible.is_some() {
                     return;
                 }
-                let vis_scope = p.hygiene_scope(self.db).unwrap_or(scope);
-                if !reso.is_visible_from(self.db, vis_scope) {
+                if !quoted_visibility.unwrap_or_else(|| {
+                    reso.is_visible_from(self.db, p.hygiene_scope(self.db).unwrap_or(scope))
+                }) {
                     invisible = Some((p, reso.name_span(self.db)));
                 }
             };

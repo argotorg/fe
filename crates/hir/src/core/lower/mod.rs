@@ -1099,7 +1099,7 @@ impl<'db> FileLowerCtxt<'db> {
             Partial::Present(UsePathSegment::Ident(super_ident)),
             Partial::Present(UsePathSegment::Glob),
         ];
-        let path = Partial::Present(UsePathId::new(db, segs, None));
+        let path = Partial::Present(UsePathId::new(db, segs, None, None));
 
         let id = self.joined_id(TrackedItemVariant::Use(path));
         self.enter_item_scope(id, false);
@@ -1127,7 +1127,7 @@ impl<'db> FileLowerCtxt<'db> {
             .map(|ident| Partial::Present(UsePathSegment::Ident(ident)))
             .chain(std::iter::once(Partial::Present(UsePathSegment::Glob)))
             .collect();
-        let path = Partial::Present(UsePathId::new(db, segs, None));
+        let path = Partial::Present(UsePathId::new(db, segs, None, None));
 
         let id = self.joined_id(TrackedItemVariant::Use(path));
         self.enter_item_scope(id, false);

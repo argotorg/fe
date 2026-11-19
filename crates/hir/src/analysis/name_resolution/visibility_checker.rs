@@ -8,6 +8,11 @@ use crate::analysis::{
     },
 };
 
+pub(super) fn is_authored_module(db: &dyn HirAnalysisDb, scope: ScopeId) -> bool {
+    matches!(scope, ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_)))
+        && !scope.is_in_published_item(db)
+}
+
 /// Compute the "defining scope" for visibility purposes.
 ///
 /// For a private item, this is the scope within which the item is visible.

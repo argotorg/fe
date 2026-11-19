@@ -352,7 +352,7 @@ impl<'db> PathView<'db> {
                 seg_path,
                 self.scope,
                 enclosing_assumptions(db, self.scope),
-                &mut |_, _| {},
+                &mut |_, _, _| {},
                 &LoweringContext::new(),
             );
             return scopes_from_resolution(db, &res);

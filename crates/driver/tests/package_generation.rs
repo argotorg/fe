@@ -210,8 +210,20 @@ foundation = { path = "../foundation" }
 #[test]
 fn quoted_import_paths_keep_the_producer_scope_after_dependency_edits() {
     let library = r#"
-pub mod tuning {
-    pub const fn delta() -> u8 { 2 }
+mod tuning {
+    use core::meta::{Code, Expr}
+
+    pub(ingot) const fn delta() -> u8 { 2 }
+    const fn inner_delta() -> u8 { 2 }
+
+    pub const fn fragment() -> Code<Expr> {
+        quote {
+            {
+                use ingot::tuning as origin
+                origin::inner_delta()
+            }
+        }
+    }
 }
 
 pub mod producer {
@@ -224,6 +236,7 @@ pub mod producer {
     pub struct Provider {}
     impl Derive<Inherent> for Provider {
         const fn derive(_ record: Record) -> Code<Item> {
+            let inner = tuning::fragment()
             quote {
                 pub const fn code(self) -> u8 {
                     use ingot::{tuning::{delta as from_ingot}}
@@ -231,7 +244,10 @@ pub mod producer {
                     use tuning::delta as from_lexical_scope
                     use ingot::tuning as origin
                     use origin::delta
-                    from_ingot() + from_parent() + from_lexical_scope() + delta()
+                    use origin as again
+                    use again::delta as from_alias
+                    let from_qualified = origin::delta() + again::delta()
+                    from_ingot() + from_parent() + from_lexical_scope() + delta() + from_alias() + from_qualified + ${inner}
                 }
             }
         }
@@ -257,7 +273,7 @@ pub const fn result() -> u8 { Target {}.code() }
     ]);
     let edited = library.replace("u8 { 2 }", "u8 { 3 }");
 
-    for (source, expected) in [(library, "8"), (edited.as_str(), "12"), (library, "8")] {
+    for (source, expected) in [(library, "16"), (edited.as_str(), "24"), (library, "16")] {
         warm.workspace()
             .update(&mut warm, url("lib/src/lib.fe"), source.to_owned());
         let fresh = project(&[
@@ -272,6 +288,38 @@ pub const fn result() -> u8 { Target {}.code() }
             assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), expected);
         }
     }
+
+    // The outer quotation cannot access a member that is private to the
+    // producer of the spliced expression, even through its own alias.
+    let private = library.replace("+ again::delta()", "+ again::inner_delta()");
+    warm.workspace()
+        .update(&mut warm, url("lib/src/lib.fe"), private);
+    let prepared = prepare(&warm, "app/");
+    let diagnostics = ingot_errors(&prepared, "app/");
+    assert!(
+        diagnostics.contains("`inner_delta` is not visible")
+            && diagnostics.contains("again::inner_delta()")
+            && !diagnostics.contains("origin::inner_delta()"),
+        "{diagnostics}"
+    );
+
+    // A local value named `origin` does not provide the module binding.
+    // Resolving the module through the outer quote must not grant access
+    // from the producer of this fragment.
+    let cross_splice = library.replacen(
+        "use ingot::tuning as origin",
+        "const fn origin() -> u8 { 0 }",
+        1,
+    );
+    warm.workspace()
+        .update(&mut warm, url("lib/src/lib.fe"), cross_splice);
+    let prepared = prepare(&warm, "app/");
+    let diagnostics = ingot_errors(&prepared, "app/");
+    assert!(
+        diagnostics.contains("`inner_delta` is not visible")
+            && diagnostics.contains("origin::inner_delta()"),
+        "{diagnostics}"
+    );
 }
 
 #[test]

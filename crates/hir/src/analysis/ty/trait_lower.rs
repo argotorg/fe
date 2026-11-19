@@ -478,7 +478,7 @@ pub(crate) fn lower_trait_ref_with_minter<'db>(
         path,
         scope,
         assumptions,
-        &mut |_, _| {},
+        &mut |_, _, _| {},
         lowering_cx,
     ) {
         Ok(PathRes::Trait(t)) => {

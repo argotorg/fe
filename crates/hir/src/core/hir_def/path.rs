@@ -1,14 +1,17 @@
-use super::{GenericArgListId, IdentId, TraitRefId, TypeId};
+use super::{GenericArgListId, IdentId, QuotedPathOrigin, TraitRefId, TypeId};
 use crate::{HirDb, hir_def::Partial};
 use common::stdlib::BUILTIN_CORE_BASE_URL;
 
-#[salsa::interned]
+#[salsa::interned(constructor = intern)]
 #[derive(Debug)]
 pub struct PathId<'db> {
     #[returns(copy)]
     pub kind: PathKind<'db>,
     #[returns(copy)]
     pub parent: Option<PathId<'db>>,
+    /// Present on the root when a quoted path names a binder in its own copy.
+    #[returns(copy)]
+    pub(crate) local_quote_origin: Option<QuotedPathOrigin<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -41,6 +44,10 @@ pub enum PathKind<'db> {
 }
 
 impl<'db> PathId<'db> {
+    pub fn new(db: &'db dyn HirDb, kind: PathKind<'db>, parent: Option<Self>) -> Self {
+        Self::intern(db, kind, parent, None)
+    }
+
     pub fn from_str(db: &'db dyn HirDb, s: &str) -> Self {
         Self::from_ident(db, IdentId::new(db, s.to_string()))
     }
@@ -206,7 +213,7 @@ impl<'db> PathId<'db> {
                 },
                 kind => kind,
             };
-            PathId::new(db, kind, None)
+            PathId::intern(db, kind, None, self.local_quote_origin(db))
         }
     }
 
@@ -311,7 +318,12 @@ impl<'db> PathId<'db> {
             },
             _ => return None,
         };
-        Some(Self::new(db, kind, self.parent(db)))
+        Some(Self::intern(
+            db,
+            kind,
+            self.parent(db),
+            self.local_quote_origin(db),
+        ))
     }
 
     pub fn strip_generic_args(self, db: &'db dyn HirDb) -> PathId<'db> {
@@ -337,7 +349,7 @@ impl<'db> PathId<'db> {
             },
             kind @ PathKind::QualifiedType { .. } => kind,
         };
-        PathId::new(db, kind, parent)
+        PathId::intern(db, kind, parent, self.local_quote_origin(db))
     }
 
     pub fn pretty_print(self, db: &dyn HirDb) -> String {

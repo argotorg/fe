@@ -1,7 +1,7 @@
 //! Output HIR is built from the original checked quote syntax, never from an
 //! emitted source string. Provider evaluation has completed before this query.
 use super::FileLowerCtxt;
-use crate::hir_def::{Const, Func, Impl, ImplTrait, ItemKind, TopLevelMod};
+use crate::hir_def::{Const, Func, Impl, ImplTrait, ItemKind, QuotedPathOrigin, TopLevelMod};
 use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
 use parser::ast::{self, prelude::*};
 
@@ -25,6 +25,16 @@ pub(crate) struct ActiveQuoteFrame<'db> {
     pub(super) open_names: Vec<(String, parser::TextRange)>,
     pub(super) bound_names: rustc_hash::FxHashSet<String>,
     pub(super) holes: Vec<(parser::TextRange, FrozenHoleValue)>,
+}
+
+impl<'db> ActiveQuoteFrame<'db> {
+    pub(super) fn path_origin(&self) -> QuotedPathOrigin<'db> {
+        QuotedPathOrigin {
+            producer: self.producer,
+            range: self.quote_range,
+            frame_id: self.frame_id,
+        }
+    }
 }
 
 pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {

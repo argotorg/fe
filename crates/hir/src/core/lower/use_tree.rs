@@ -96,11 +96,12 @@ impl<'db> UsePathId<'db> {
             return Partial::Absent;
         };
         let authored_scope = quoted_import_scope(ctxt, first, import);
+        let quote_origin = ctxt.quote_frames.last().map(|frame| frame.path_origin());
         let segments: Vec<_> = ast_segs
             .into_iter()
             .map(|segment| UsePathSegment::lower_ast_partial(ctxt, segment))
             .collect();
-        Partial::Present(Self::new(ctxt.db(), segments, authored_scope))
+        Partial::Present(Self::new(ctxt.db(), segments, authored_scope, quote_origin))
     }
 }
 
