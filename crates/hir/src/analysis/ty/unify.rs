@@ -67,6 +67,7 @@ where
 {
     pub db: &'db dyn HirAnalysisDb,
     table: ena::unify::UnificationTable<U>,
+    comparing_header: bool,
 }
 
 impl<'db, U> UnificationTableBase<'db, U>
@@ -77,6 +78,7 @@ where
         Self {
             db,
             table: ena::unify::UnificationTable::new(),
+            comparing_header: false,
         }
     }
 
@@ -116,6 +118,16 @@ where
                 Err(err)
             }
         }
+    }
+
+    /// Compare trait header arguments while retaining ordinary variable binding.
+    /// Header equality neither coerces the never type nor infers the receiver
+    /// of an unresolved projection from equality of its output.
+    pub(super) fn unify_header_arg(&mut self, lhs: TyId<'db>, rhs: TyId<'db>) -> UnificationResult {
+        let previous = std::mem::replace(&mut self.comparing_header, true);
+        let result = self.unify(lhs, rhs);
+        self.comparing_header = previous;
+        result
     }
 
     /// Returns `Ok()` if the two types were unified, otherwise returns an
@@ -213,10 +225,11 @@ where
                 }
             }
 
-            (TyData::Invalid(_), _)
-            | (_, TyData::Invalid(_))
-            | (TyData::Never, _)
-            | (_, TyData::Never) => Ok(()),
+            (TyData::Invalid(_), _) | (_, TyData::Invalid(_)) | (TyData::Never, TyData::Never) => {
+                Ok(())
+            }
+
+            (TyData::Never, _) | (_, TyData::Never) if !self.comparing_header => Ok(()),
 
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
                 let const_ty1 = match normalize_const_tys_for_comparison(
@@ -284,7 +297,7 @@ where
             (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
                 if a1 == a2 {
                     Ok(())
-                } else if a1.name == a2.name && a1.mode == a2.mode {
+                } else if !self.comparing_header && a1.name == a2.name && a1.mode == a2.mode {
                     self.unify(a1.trait_, a2.trait_)
                 } else {
                     Err(UnificationError::TypeMismatch)

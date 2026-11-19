@@ -1954,6 +1954,101 @@ fn overlapping_projected_openings_in_one_with_are_rejected() {
 }
 
 #[test]
+fn projection_prediction_duplicate_bare_headers() {
+    let declarations = r#"
+trait Source { type Out }
+struct Z {}
+struct W {}
+impl Source for Z { type Out = u8 }
+impl Source for W { type Out = u16 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl<T: Source<Out = u8>> Pick<T::Out> for Wrap<T> as Projected {
+    const fn n() -> usize { 2 }
+}
+impl<T> Pick<u8> for Wrap<T> as Other {
+    const fn n() -> usize { 1 }
+}
+"#;
+    let checked = |openings| {
+        diagnostics(&format!(
+            "{declarations}fn run() {{ with ({openings}) {{}} }}"
+        ))
+    };
+    assert_eq!(
+        [
+            checked("Projected, Other"),
+            checked("Other, Projected"),
+            checked("Projected<W>, Other<W>"),
+        ],
+        [vec!["8-0160"], vec!["8-0160"], vec![]],
+    );
+}
+
+#[test]
+fn projection_prediction_later_arguments_determine_earlier_projections() {
+    let declarations = r#"
+trait Source { type Out }
+trait Reveal<A> { type Val }
+struct Token {}
+struct Z<X> {}
+struct Leaf {}
+struct Other {}
+impl Source for Leaf { type Out = u8 }
+impl Source for Other { type Out = u16 }
+impl<X: Source> Source for Z<X> { type Out = X::Out }
+impl<X> Reveal<X> for Token { type Val = X }
+impl<X> Reveal<X> for Other { type Val = bool }
+struct Wrap<K> {}
+trait Pick<A, B> { const fn n() -> usize }
+impl<A, B> Pick<A, B> for Wrap<Token> { const fn n() -> usize { 1 } }
+"#;
+    let mut failures = Vec::new();
+    for (header, goal) in [
+        ("T::Out, <K as Reveal<T>>::Val", "Y::Out, Z<Y>"),
+        ("<K as Reveal<T>>::Val, T::Out", "Z<Y>, Y::Out"),
+    ] {
+        for opening in ["Named", "Named<Token, Z<Y>>"] {
+            let source = format!(
+                r#"{declarations}
+impl<K: Reveal<T>, T: Source> Pick<{header}> for Wrap<K> as Named {{
+    const fn n() -> usize {{ 2 }}
+}}
+const fn run<Y: Source>() -> usize {{
+    with ({opening}) {{ <Wrap<Token> as Pick<{goal}>>::n() }}
+}}
+fn check() -> [u8; 2] {{ [0; run<Leaf>()] }}
+"#
+            );
+            let codes = diagnostics(&source);
+            if !codes.is_empty() {
+                failures.push((header, opening, codes));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn projection_prediction_never_is_distinct_in_a_header() {
+    let mut failures = Vec::new();
+    for (output, expected) in [("!", 1), ("u8", 2), ("u16", 1)] {
+        let declarations = PROJECTED_PICK.replace("type Out = u8", &format!("type Out = {output}"));
+        let source = format!(
+            r#"{declarations}
+const fn run() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+fn check() -> [u8; {expected}] {{ [0; run()] }}
+"#
+        );
+        let codes = diagnostics(&source);
+        if !codes.is_empty() {
+            failures.push((output, expected, codes));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
 fn failure_of_the_selected_projected_opening_does_not_fall_back() {
     let source = PROJECTED_PICK.replace(
         "impl<T: Source> Pick<T::Out>",
