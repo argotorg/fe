@@ -2223,7 +2223,9 @@ impl<'db> TyChecker<'db> {
                     .last()
                     .expect("a pushed choice is the last item");
                 let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
+                if let Some((first, common)) =
+                    earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
+                {
                     self.push_diag(BodyDiag::DuplicateWithChoice {
                         primary: span,
                         first,
@@ -2277,7 +2279,9 @@ impl<'db> TyChecker<'db> {
                             .last()
                             .expect("a pushed choice is the last item");
                         let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                        if let Some((first, common)) = earlier_answer(self.db, &listed, entry) {
+                        if let Some((first, common)) =
+                            earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
+                        {
                             self.push_diag(BodyDiag::DuplicateWithChoice {
                                 primary: span,
                                 first,
@@ -5992,11 +5996,12 @@ impl<'db> TyChecker<'db> {
 /// goal that `entry` also answers: that operand's span and the goal.
 fn earlier_answer<'db>(
     db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
     listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
     entry: ChosenImpl<'db>,
 ) -> Option<(DynLazySpan<'db>, TraitInstId<'db>)> {
     listed.iter().find_map(|(earlier, span)| {
-        crate::analysis::ty::trait_resolution::common_choice_goal(db, *earlier, entry)
+        crate::analysis::ty::trait_resolution::common_choice_goal(db, solve_cx, *earlier, entry)
             .map(|common| (span.clone(), common))
     })
 }

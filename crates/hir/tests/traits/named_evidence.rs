@@ -1895,3 +1895,109 @@ where
     );
     assert!(default_param_codes.is_empty(), "{default_param_codes:?}");
 }
+
+const PROJECTED_PICK: &str = r#"
+trait Source { type Out }
+struct Z {}
+impl Source for Z { type Out = u8 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl Pick<u8> for Wrap<Z> { const fn n() -> usize { 1 } }
+impl Pick<u16> for Wrap<Z> { const fn n() -> usize { 1 } }
+impl<T: Source> Pick<T::Out> for Wrap<T> as Projected { const fn n() -> usize { 2 } }
+impl Pick<u8> for Wrap<Z> as Direct { const fn n() -> usize { 3 } }
+impl Pick<u16> for Wrap<Z> as Disjoint { const fn n() -> usize { 4 } }
+"#;
+
+#[test]
+fn projected_openings_select_at_the_whole_header() {
+    let source = format!(
+        r#"{PROJECTED_PICK}
+const fn explicit() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn bare() -> usize {{ with (Projected) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn nearest() -> usize {{ with (Direct) {{ with (Projected) {{ <Wrap<Z> as Pick<u8>>::n() }} }} }}
+const fn disjoint() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u16>>::n() }} }}
+const fn together() -> usize {{ with (Projected, Disjoint) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn generic<U: Source<Out = u8>>() -> usize {{ with (Projected<U>) {{ <Wrap<U> as Pick<u8>>::n() }} }}
+const fn through_caller_bound() -> usize {{ generic<Z>() }}
+trait Later<A, B> {{ const fn n() -> usize }}
+impl Later<u8, Z> for Wrap<Z> {{ const fn n() -> usize {{ 1 }} }}
+impl<T: Source> Later<T::Out, T> for Wrap<Z> as LaterProjected {{ const fn n() -> usize {{ 2 }} }}
+const fn anchor_after_projection() -> usize {{ with (LaterProjected) {{ <Wrap<Z> as Later<u8, Z>>::n() }} }}
+"#
+    );
+    values(
+        &source,
+        &[
+            ("explicit", 2),
+            ("bare", 2),
+            ("nearest", 2),
+            ("disjoint", 1),
+            ("together", 2),
+            ("through_caller_bound", 2),
+            ("anchor_after_projection", 2),
+        ],
+    );
+}
+
+#[test]
+fn overlapping_projected_openings_in_one_with_are_rejected() {
+    for openings in [
+        "Projected<Z>, Direct",
+        "Direct, Projected<Z>",
+        "Projected, Direct",
+        "Direct, Projected",
+    ] {
+        let source = format!("{PROJECTED_PICK}fn reject() {{ with ({openings}) {{}} }}");
+        assert_eq!(diagnostics(&source), vec!["8-0160"], "{openings}");
+    }
+}
+
+#[test]
+fn failure_of_the_selected_projected_opening_does_not_fall_back() {
+    let source = PROJECTED_PICK.replace(
+        "impl<T: Source> Pick<T::Out>",
+        "trait Ready {}\nimpl<T: Source + Ready> Pick<T::Out>",
+    );
+    let source = format!(
+        r#"{source}
+fn reject() -> usize {{
+    with (Direct) {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+}}
+"#
+    );
+    let codes = diagnostics(&source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+#[test]
+fn projected_named_outputs_must_agree_with_the_ordinary_representative() {
+    for (declaration, ordinary, disjoint, changed) in [
+        (
+            "type Out",
+            "type Out = u8",
+            "type Out = u16",
+            "type Out = bool",
+        ),
+        (
+            "const N: usize",
+            "const N: usize = 1",
+            "const N: usize = 3",
+            "const N: usize = 2",
+        ),
+    ] {
+        for (named, expected) in [(ordinary, vec![]), (changed, vec!["5-0005"])] {
+            let source = format!(
+                r#"
+trait Source {{ type Out }}
+struct Wrap<T> {{ value: T }}
+trait Output<A> {{ {declaration} }}
+impl<T> Output<u8> for Wrap<T> {{ {ordinary} }}
+impl<T> Output<u16> for Wrap<T> {{ {disjoint} }}
+impl<T: Source<Out = u8>> Output<T::Out> for Wrap<T> as Projected {{ {named} }}
+"#
+            );
+            assert_eq!(diagnostics(&source), expected, "{source}");
+        }
+    }
+}
