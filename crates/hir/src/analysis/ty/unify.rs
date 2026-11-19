@@ -123,7 +123,7 @@ where
     /// Compare trait header arguments while retaining ordinary variable binding.
     /// Header equality neither coerces the never type nor infers the receiver
     /// of an unresolved projection from equality of its output.
-    pub(super) fn unify_header_arg(&mut self, lhs: TyId<'db>, rhs: TyId<'db>) -> UnificationResult {
+    pub(super) fn unify_header<T: Unifiable<'db>>(&mut self, lhs: T, rhs: T) -> UnificationResult {
         let previous = std::mem::replace(&mut self.comparing_header, true);
         let result = self.unify(lhs, rhs);
         self.comparing_header = previous;

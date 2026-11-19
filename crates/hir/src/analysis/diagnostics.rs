@@ -3808,21 +3808,34 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 first,
                 goal,
+                possible,
             } => {
-                let goal_str = goal.pretty_print(db, true);
+                let (message, current, earlier) = if *possible {
+                    (
+                        "these openings may choose the same trait goal".to_string(),
+                        "the header here may overlap".to_string(),
+                        "an earlier operand has this header".to_string(),
+                    )
+                } else {
+                    let goal = goal.pretty_print(db, true);
+                    (
+                        format!("`{goal}` is chosen twice in one `with`"),
+                        format!("this operand also answers `{goal}`"),
+                        "an earlier operand of the same `with` answers it here".to_string(),
+                    )
+                };
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: format!("`{goal_str}` is chosen twice in one `with`"),
+                    message,
                     sub_diagnostics: vec![
                         SubDiagnostic {
                             style: LabelStyle::Primary,
-                            message: format!("this operand also answers `{goal_str}`"),
+                            message: current,
                             span: primary.resolve(db),
                         },
                         SubDiagnostic {
                             style: LabelStyle::Secondary,
-                            message: "an earlier operand of the same `with` answers it here"
-                                .to_string(),
+                            message: earlier,
                             span: first.resolve(db),
                         },
                     ],

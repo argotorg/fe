@@ -1986,6 +1986,70 @@ impl<T> Pick<u8> for Wrap<T> as Other {
 }
 
 #[test]
+fn unresolved_projected_overlap_is_rejected_before_obligations() {
+    let declarations = r#"
+trait Source { type Out }
+struct Item {}
+impl Source for Item { type Out = u16 }
+struct Wrap<T> {}
+trait Pick<A> { const fn n() -> usize }
+impl<T: Source<Out = u8>> Pick<T::Out> for Wrap<T> as Projected {
+    const fn n() -> usize { 2 }
+}
+impl<T> Pick<u16> for Wrap<T> as Other { const fn n() -> usize { 3 } }
+"#;
+    for (openings, expected) in [
+        (
+            "Projected, Other",
+            "these openings may choose the same trait goal",
+        ),
+        (
+            "Other, Projected",
+            "these openings may choose the same trait goal",
+        ),
+        (
+            "Projected<Item>, Other<Item>",
+            "`Wrap<Item>: Pick<u16>` is chosen twice in one `with`",
+        ),
+        (
+            "Other<Item>, Projected<Item>",
+            "`Wrap<Item>: Pick<u16>` is chosen twice in one `with`",
+        ),
+    ] {
+        let source = format!("{declarations}fn run() {{ with ({openings}) {{}} }}");
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("projected_overlap.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let errors = fe_hir::analysis::initialize_analysis_pass().run_on_module(&db, module);
+        assert_eq!(errors.len(), 1, "{openings}: {:?}", diagnostics(&source));
+        assert_eq!(errors[0].to_complete(&db).message, expected, "{openings}");
+    }
+}
+
+#[test]
+fn repeated_projections_and_rigid_arguments_can_prove_disjointness() {
+    let declarations = r#"
+trait Source { type Out }
+struct Wrap<T> {}
+trait Pick<A, B, C> {}
+impl<T: Source> Pick<T::Out, T::Out, bool> for Wrap<T> as Projected {}
+impl<T> Pick<u8, u16, bool> for Wrap<T> as DifferentOutputs {}
+impl<T> Pick<u8, u8, u256> for Wrap<T> as DifferentMarker {}
+impl<T> Pick<u8, u8, bool> for Wrap<T> as SameOutputs {}
+"#;
+    for (other, expected) in [
+        ("DifferentOutputs", vec![]),
+        ("DifferentMarker", vec![]),
+        ("SameOutputs", vec!["8-0160"]),
+    ] {
+        for openings in [format!("Projected, {other}"), format!("{other}, Projected")] {
+            let source = format!("{declarations}fn run() {{ with ({openings}) {{}} }}");
+            assert_eq!(diagnostics(&source), expected, "{openings}");
+        }
+    }
+}
+
+#[test]
 fn projection_prediction_later_arguments_determine_earlier_projections() {
     let declarations = r#"
 trait Source { type Out }
@@ -2046,6 +2110,137 @@ fn check() -> [u8; {expected}] {{ [0; run()] }}
         }
     }
     assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn ordinary_trait_matching_keeps_never_distinct_from_other_types() {
+    let argument = r#"
+struct Item {}
+trait Pick<A> { const fn n() -> usize }
+impl Pick<!> for Item { const fn n() -> usize { 2 } }
+fn check() -> usize { <Item as Pick<u8>>::n() }
+"#;
+    let binding = r#"
+struct Item {}
+trait Pick { type Out }
+impl Pick for Item { type Out = ! }
+fn accepts<T: Pick<Out = u8>>(_ value: T) {}
+fn check() { accepts(Item {}) }
+"#;
+    for (source, exact) in [
+        (argument, argument.replace("as Pick<u8>", "as Pick<!>")),
+        (binding, binding.replace("Out = u8", "Out = !")),
+    ] {
+        let codes = diagnostics(source);
+        assert!(codes.iter().any(|code| code == "6-0003"), "{codes:?}");
+        assert!(diagnostics(&exact).is_empty(), "{exact}");
+    }
+}
+
+#[test]
+fn ordinary_projected_header_is_matched_after_binding_the_receiver() {
+    values(
+        r#"
+trait Source { type Out }
+struct Item {}
+impl Source for Item { type Out = u8 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl<T: Source> Pick<T::Out> for Wrap<T> { const fn n() -> usize { 2 } }
+const fn result() -> usize { <Wrap<Item> as Pick<u8>>::n() }
+"#,
+        &[("result", 2)],
+    );
+}
+
+#[test]
+fn a_nonmatching_projected_header_does_not_use_its_own_prerequisite() {
+    let declarations = r#"
+trait Source { type Out }
+struct Item {}
+impl Source for Item { type Out = u16 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl<T: Source<Out = u8>> Pick<T::Out> for Wrap<T> as Projected {
+    const fn n() -> usize { 2 }
+}
+impl Pick<u8> for Wrap<Item> { const fn n() -> usize { 1 } }
+impl Pick<u16> for Wrap<Item> { const fn n() -> usize { 1 } }
+"#;
+    for opening in ["Projected", "Projected<Item>"] {
+        let source = format!(
+            "{declarations}const fn run() -> usize {{ with ({opening}) {{ <Wrap<Item> as Pick<u8>>::n() }} }}"
+        );
+        values(&source, &[("run", 1)]);
+        let reached = source.replace("as Pick<u8>", "as Pick<u16>");
+        let codes = diagnostics(&reached);
+        assert!(codes.iter().any(|code| code == "6-0003"), "{codes:?}");
+
+        let matched = source.replace("type Out = u16", "type Out = u8");
+        values(&matched, &[("run", 2)]);
+    }
+}
+
+#[test]
+fn local_projected_openings_keep_the_enclosing_type_equality() {
+    let declarations = r#"
+trait Source { type Out }
+struct Item {}
+impl Source for Item { type Out = u8 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+"#;
+    let source = format!(
+        r#"{declarations}
+const fn run<T: Source<Out = u8>>() -> usize {{
+    impl Pick<<T as Source>::Out> for Wrap<T> as Local where T: Source<Out = u8> {{
+        const fn n() -> usize {{ 2 }}
+    }}
+    with (Local) {{ <Wrap<T> as Pick<u8>>::n() }}
+}}
+const fn result() -> usize {{ run<Item>() }}
+"#
+    );
+    values(&source, &[("result", 2)]);
+    let overlap = source.replace(
+        "with (Local) { <Wrap<T> as Pick<u8>>::n() }",
+        "impl Pick<u8> for Wrap<T> as Other where T: Source<Out = u8> { const fn n() -> usize { 3 } }\n    with (Local, Other) { 0 }",
+    );
+    let codes = diagnostics(&overlap);
+    assert!(codes.iter().any(|code| code == "8-0160"), "{codes:?}");
+}
+
+#[test]
+fn named_output_comparison_normalizes_both_header_argument_orders() {
+    let declarations = r#"
+trait Source { type Out }
+trait Reveal<A> { type Val }
+struct Token {}
+impl<T> Reveal<T> for Token { type Val = T }
+struct Wrap<K> {}
+trait Pick<A, B> { type Result }
+"#;
+    for (ordinary, named) in [
+        ("T::Out, T", "T::Out, <Token as Reveal<T>>::Val"),
+        ("T, T::Out", "<Token as Reveal<T>>::Val, T::Out"),
+    ] {
+        let source = format!(
+            r#"{declarations}
+impl<T: Source> Pick<{ordinary}> for Wrap<Token> {{ type Result = u8 }}
+impl<T: Source> Pick<{named}> for Wrap<Token> as Named {{ type Result = bool }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("projected_outputs.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let errors = fe_hir::analysis::initialize_analysis_pass().run_on_module(&db, module);
+        assert_eq!(errors.len(), 1, "{source}");
+        assert_eq!(
+            errors[0].to_complete(&db).message,
+            "named implementation changes an ordinary associated type"
+        );
+        assert!(diagnostics(&source.replace("type Result = bool", "type Result = u8")).is_empty());
+    }
 }
 
 #[test]

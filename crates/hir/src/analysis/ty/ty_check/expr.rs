@@ -2557,13 +2557,14 @@ impl<'db> TyChecker<'db> {
                     .and_then(|entry| entry.implementation())
                     .expect("a pushed choice is the last item");
                 let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                if let Some((first, common)) =
+                if let Some((first, goal, possible)) =
                     earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
                 {
                     self.push_diag(BodyDiag::DuplicateWithChoice {
                         primary: span,
                         first,
-                        goal: common,
+                        goal,
+                        possible,
                     });
                     self.env.named_impl_operands.insert(binding.value);
                     self.env
@@ -2614,13 +2615,14 @@ impl<'db> TyChecker<'db> {
                             .and_then(|entry| entry.implementation())
                             .expect("a pushed choice is the last item");
                         let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                        if let Some((first, common)) =
+                        if let Some((first, goal, possible)) =
                             earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
                         {
                             self.push_diag(BodyDiag::DuplicateWithChoice {
                                 primary: span,
                                 first,
-                                goal: common,
+                                goal,
+                                possible,
                             });
                         } else {
                             // The opened implementation's conditions are proved
@@ -6813,17 +6815,17 @@ impl<'db> TyChecker<'db> {
     }
 }
 
-/// An earlier operand of the same `with` list whose implementation answers a
-/// goal that `entry` also answers: that operand's span and the goal.
+/// An earlier operand of this list whose header overlaps `entry`, with the
+/// overlap goal and whether some projections remain unknown.
 fn earlier_answer<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
     entry: ChosenImpl<'db>,
-) -> Option<(DynLazySpan<'db>, TraitInstId<'db>)> {
+) -> Option<(DynLazySpan<'db>, TraitInstId<'db>, bool)> {
     listed.iter().find_map(|(earlier, span)| {
         crate::analysis::ty::trait_resolution::common_choice_goal(db, solve_cx, *earlier, entry)
-            .map(|common| (span.clone(), common))
+            .map(|(goal, possible)| (span.clone(), goal, possible))
     })
 }
 

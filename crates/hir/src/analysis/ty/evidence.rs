@@ -1459,7 +1459,7 @@ fn prove_in<'db>(
             let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
             let goal =
                 normalize_trait_inst_preserving_validity(db, goal, scope, solve_cx.assumptions());
-            instantiate_selected_impl(db, selected, goal)
+            instantiate_selected_impl(db, solve_cx, selected, goal)
                 .map_or(Selection::NotFound, Selection::Unique)
         } else {
             let selected = resolve_trait_impl_instance(db, solve_cx, goal);

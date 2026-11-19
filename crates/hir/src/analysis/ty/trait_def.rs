@@ -510,6 +510,7 @@ impl<'db> TyVisitable<'db> for ResolvedImplInstance<'db> {
 
 pub(crate) fn instantiate_selected_impl<'db>(
     db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
     selected: ImplementorId<'db>,
     inst: TraitInstId<'db>,
 ) -> Option<ResolvedImplInstance<'db>> {
@@ -526,14 +527,17 @@ pub(crate) fn instantiate_selected_impl<'db>(
     // from the trait's.
     let mut table = UnificationTable::new(db);
     let instantiated = table.instantiate_with_fresh_vars(selected);
-    for (&impl_arg, &arg) in instantiated
-        .trait_inst(db)
-        .args(db)
-        .iter()
-        .zip(inst.args(db))
-    {
-        table.unify(impl_arg, arg).ok()?;
-    }
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
+    let assumptions = solve_cx.assumptions().extend_all_bounds(db);
+    match_header_args(
+        db,
+        &mut table,
+        instantiated.trait_(db),
+        inst,
+        scope,
+        [assumptions; 2],
+    )
+    .ok()?;
     Some(ResolvedImplInstance {
         selected,
         instantiated: instantiated.fold_with(db, &mut table),
@@ -635,11 +639,15 @@ pub(crate) fn ordinary_trait_impl_candidates<'db>(
             norm_scope,
             assumptions,
         );
-        if normalized_candidate
-            .args(db)
-            .iter()
-            .zip(inst.args(db))
-            .any(|(&cand_arg, &goal_arg)| table.unify(cand_arg, goal_arg).is_err())
+        if match_header_args(
+            db,
+            &mut table,
+            normalized_candidate,
+            inst,
+            norm_scope,
+            [assumptions; 2],
+        )
+        .is_err()
         {
             continue;
         }
@@ -662,7 +670,7 @@ pub(crate) fn ordinary_trait_impl_candidates<'db>(
                     norm_scope,
                     assumptions,
                 );
-                table.unify(cand_assoc_ty, goal_assoc_ty).is_ok()
+                table.unify_header(cand_assoc_ty, goal_assoc_ty).is_ok()
             });
         if !assoc_ok {
             continue;
@@ -674,8 +682,10 @@ pub(crate) fn ordinary_trait_impl_candidates<'db>(
         let Some(selected) = complete_selected_impl(db, implementor) else {
             continue;
         };
-        let Some(resolved) = instantiate_selected_impl(db, selected, inst) else {
-            continue;
+        let resolved = ResolvedImplInstance {
+            selected,
+            instantiated: selected.reapply(db, instantiated.fold_with(db, &mut table)),
+            trait_inst: matched_goal,
         };
         if resolved
             .instantiated()
@@ -721,7 +731,7 @@ fn resolve_trait_impl_instance_query<'db>(
                     trait_inst: solution.inst,
                 });
             }
-            instantiate_selected_impl(db, selected, inst)
+            instantiate_selected_impl(db, solve_cx, selected, inst)
                 .map_or(ImplSelection::NotFound, ImplSelection::Unique)
         }
         // There is deliberately no resolved instance for a non-unique
