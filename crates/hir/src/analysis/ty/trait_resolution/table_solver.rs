@@ -108,6 +108,18 @@ pub(crate) fn match_header_args<'db, U: UnificationStore<'db>>(
     compare_headers(db, table, left, right, scope, assumptions, false).map(|_| ())
 }
 
+/// Compare positional trait identity during normalization. Bind structural
+/// arguments before checking projection identities in the current table.
+/// Starting another normalizer here would restart the active cycle guards.
+pub(crate) fn match_prepared_header<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+) -> UnificationResult {
+    compare_header_pairs(db, table, left, right, |_, pair| pair, false).map(|_| ())
+}
+
 #[derive(Clone, Copy)]
 enum HeaderMatch {
     Exact,
@@ -130,6 +142,36 @@ fn compare_headers<'db, U: UnificationStore<'db>>(
     right: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: [PredicateListId<'db>; 2],
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
+    compare_header_pairs(
+        db,
+        table,
+        left,
+        right,
+        |table, (left, right)| {
+            let [left_assumptions, right_assumptions] =
+                assumptions.map(|assumptions| assumptions.fold_with(db, table));
+            (
+                normalize_assoc_binding(db, table, left, scope, left_assumptions),
+                normalize_assoc_binding(db, table, right, scope, right_assumptions),
+            )
+        },
+        allow_possible,
+    )
+}
+
+type HeaderPair<'db> = (TyId<'db>, TyId<'db>);
+
+fn compare_header_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    mut normalize_pair: impl FnMut(
+        &mut UnificationTableBase<'db, U>,
+        HeaderPair<'db>,
+    ) -> HeaderPair<'db>,
     allow_possible: bool,
 ) -> Result<HeaderMatch, UnificationError> {
     if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
@@ -166,14 +208,6 @@ fn compare_headers<'db, U: UnificationStore<'db>>(
 
     // An equality discharged by normalization can itself bind a variable
     // used by another deferred pair. Retry failures only after such progress.
-    let normalize_pair = |table: &mut UnificationTableBase<'db, U>, (left, right)| {
-        let [left_assumptions, right_assumptions] =
-            assumptions.map(|assumptions| assumptions.fold_with(db, table));
-        (
-            normalize_assoc_binding(db, table, left, scope, left_assumptions),
-            normalize_assoc_binding(db, table, right, scope, right_assumptions),
-        )
-    };
     while !deferred.is_empty() {
         let before = deferred.len();
         deferred.retain(|&pair| {
