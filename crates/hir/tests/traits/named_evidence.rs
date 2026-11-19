@@ -2243,6 +2243,8 @@ fn ordinary_coherence_can_use_equal_projection_receivers_as_an_overlap_witness()
 trait Source { type Out }
 trait Pick<A, B, C> {}
 struct Receiver {}
+struct Leaf {}
+impl Source for Leaf { type Out = u8 }
 "#;
     let left = "impl<T: Source, U> Pick<T::Out, T, U> for Receiver {}";
     let right = "impl<X, Y: Source> Pick<Y::Out, X, Y> for Receiver {}";
