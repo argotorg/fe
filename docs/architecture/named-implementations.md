@@ -97,6 +97,10 @@ and a body that stays deferred by its canonical semantic form. A written
 type, alias or anonymous constant whose formation reads a choice is refused
 (`type_choice_read`, `const_requirements`).
 
+An overlap used to compare outputs binds the structural arguments first.
+It then uses the declared equalities from both implementations to normalize
+the projected arguments at that application.
+
 ## Storage
 
 `PlaceEntryCalls` (`ty_check`) records the `StateIndex::locate` and

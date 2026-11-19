@@ -1396,15 +1396,19 @@ fn at_overlap<'db>(
     let mut table = PersistentUnificationTable::new(db);
     let own_fresh = table.instantiate_with_fresh_vars(own);
     let other_fresh = table.instantiate_with_fresh_vars(other);
-    let assumptions =
-        [own_fresh, other_fresh].map(|side| side.constraints(db).extend_all_bounds(db));
+    // The witness is a common application. Once structural arguments bind
+    // the fresh parameters, either declaration can supply its equalities.
+    let assumptions = own_fresh
+        .constraints(db)
+        .merge(db, other_fresh.constraints(db))
+        .extend_all_bounds(db);
     match_header_args(
         db,
         &mut table,
         own_fresh.trait_(db),
         other_fresh.trait_(db),
         scope,
-        assumptions,
+        [assumptions; 2],
     )
     .ok()?;
     // The parameters left open by the overlap are rigid for output comparison.

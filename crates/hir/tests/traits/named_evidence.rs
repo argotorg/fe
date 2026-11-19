@@ -2189,6 +2189,40 @@ impl Pick<u16> for Wrap<Item> { const fn n() -> usize { 1 } }
 }
 
 #[test]
+fn generic_associated_outputs_wait_for_later_header_arguments() {
+    for arguments in ["T::Out, T", "T, T::Out"] {
+        let target = arguments.replace('T', "U");
+        for (declaration, receiver, trait_ref) in [
+            (
+                "trait Pick { type Result }",
+                format!("Pair<{arguments}>"),
+                "Pick".to_string(),
+            ),
+            (
+                "trait Pick<A, B> { type Result }",
+                "Receiver".to_string(),
+                format!("Pick<{arguments}>"),
+            ),
+        ] {
+            let target_receiver = receiver.replace('T', "U");
+            let target_trait = trait_ref.replace(arguments, &target);
+            let source = format!(
+                r#"
+trait Source {{ type Out }}
+struct Pair<A, B> {{}}
+struct Receiver {{}}
+{declaration}
+impl<T: Source> {trait_ref} for {receiver} {{ type Result = u16 }}
+fn same<U: Source>(value: <{target_receiver} as {target_trait}>::Result) -> u16 {{ value }}
+"#
+            );
+            let codes = diagnostics(&source);
+            assert!(codes.is_empty(), "{source}\n{codes:?}");
+        }
+    }
+}
+
+#[test]
 fn projection_evidence_keeps_never_distinct_from_other_trait_arguments() {
     let declarations = r#"
 trait Source<A> { type Out }
@@ -2216,11 +2250,18 @@ fn check<T: {bounds}>() -> [u8; 21] {{ [0; probe<T>()] }}
         );
         assert_eq!(diagnostics(&source), Vec::<String>::new(), "{bounds}");
     }
-    let unspecified = r#"
-trait Source<A> { type Out }
-fn wrong<T: Source<!, Out = u8> + Source<u16>>(x: <T as Source<u16>>::Out) -> u8 { x }
-"#;
-    assert_eq!(diagnostics(unspecified), vec!["8-0000"]);
+    for bounds in [
+        "Source<!, Out = u8> + Source<u16>",
+        "Source<u16> + Source<!, Out = u8>",
+    ] {
+        let unspecified = format!(
+            r#"
+trait Source<A> {{ type Out }}
+fn wrong<T: {bounds}>(x: <T as Source<u16>>::Out) -> u8 {{ x }}
+"#
+        );
+        assert_eq!(diagnostics(&unspecified), vec!["8-0000"]);
+    }
 }
 
 #[test]
@@ -2315,6 +2356,54 @@ impl<T: Source> Pick<{named}> for Wrap<Token> as Named {{ type Result = bool }}
             "named implementation changes an ordinary associated type"
         );
         assert!(diagnostics(&source.replace("type Result = bool", "type Result = u8")).is_empty());
+    }
+}
+
+#[test]
+fn named_outputs_agree_at_the_overlap_under_both_declarations_bounds() {
+    for (direct, projected) in [("u8, T", "T::Out, T"), ("T, u8", "T, T::Out")] {
+        for (output, agreed, changed, expected) in [
+            (
+                "type Result",
+                "type Result = u8",
+                "type Result = bool",
+                "named implementation changes an ordinary associated type",
+            ),
+            (
+                "const RESULT: u8",
+                "const RESULT: u8 = 1",
+                "const RESULT: u8 = 2",
+                "named implementation changes a type-readable associated constant",
+            ),
+        ] {
+            let source = format!(
+                r#"
+trait Source {{ type Out }}
+trait Extra {{}}
+struct Wrap<T> {{}}
+trait Output<A, B> {{ {output} }}
+impl<T> Output<{direct}> for Wrap<T> {{ {agreed} }}
+impl<T: Source + Extra> Output<{projected}> for Wrap<T> {{ {changed} }}
+impl<T: Source<Out = u8>> Output<{projected}> for Wrap<T> as Named {{ {agreed} }}
+struct Item {{}}
+impl Source for Item {{ type Out = u8 }}
+impl Extra for Item {{}}
+"#
+            );
+            let mut db = HirAnalysisTestDb::default();
+            let file = db.new_stand_alone("overlapping_outputs.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            let messages = fe_hir::analysis::initialize_analysis_pass()
+                .run_on_module(&db, module)
+                .into_iter()
+                .map(|diagnostic| diagnostic.to_complete(&db).message)
+                .collect::<Vec<_>>();
+            assert_eq!(messages, vec![expected], "{source}");
+            assert!(
+                diagnostics(&source.replace(changed, agreed)).is_empty(),
+                "{source}"
+            );
+        }
     }
 }
 
