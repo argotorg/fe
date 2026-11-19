@@ -55,6 +55,7 @@ struct UseLookup<'db> {
     target: ScopeId<'db>,
     root: ScopeId<'db>,
     suffix_producer: Option<AuthoredScope<'db>>,
+    local_type_only: bool,
 }
 
 pub(crate) struct ImportResolver<'db> {
@@ -508,9 +509,43 @@ impl<'db> ImportResolver<'db> {
             target: root,
             root,
             suffix_producer: None,
+            local_type_only: false,
         };
         for (idx, segment) in segments[..segments.len() - 1].iter().enumerate() {
-            let bucket = self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?;
+            let quote = path.quote_origin(db).filter(|_| {
+                idx == 0
+                    && authored_root.is_none()
+                    && segment
+                        .to_opt()
+                        .and_then(UsePathSegment::ident)
+                        .is_some_and(|name| {
+                            !matches!(name.data(db).as_str(), "ingot" | "self" | "super")
+                        })
+            });
+            let mut resolved_at_producer = false;
+            let bucket = if let Some(quote) = quote {
+                let local = UseLookup {
+                    local_type_only: true,
+                    ..lookup
+                };
+                match self.lookup(use_, local, idx, segment, NameDomain::TYPE, forced) {
+                    Err(Stop::Failed((_, NameResolutionError::NotFound))) => {
+                        // A value at the root does not bind the type domain.
+                        // The local lookup already waited for any pending use.
+                        let producer = quote.producer.resolve(db);
+                        lookup = UseLookup {
+                            target: producer,
+                            root: producer,
+                            ..lookup
+                        };
+                        resolved_at_producer = true;
+                        self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?
+                    }
+                    result => result?,
+                }
+            } else {
+                self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?
+            };
             let res = bucket
                 .pick(NameDomain::TYPE)
                 .as_ref()
@@ -523,7 +558,7 @@ impl<'db> ImportResolver<'db> {
             }
             lookup.target = res.scope().unwrap();
             trace.push(lookup.target);
-            if idx == 0 && authored_root.is_none() {
+            if idx == 0 && authored_root.is_none() && !resolved_at_producer {
                 lookup.suffix_producer = path
                     .quote_origin(db)
                     .filter(|&origin| res.quoted_module_alias(db, origin))
@@ -571,7 +606,9 @@ impl<'db> ImportResolver<'db> {
                 NameRes::new_from_scope(root, NameDomain::TYPE, NameDerivation::External).into(),
             );
         }
-        let directive = if idx == 0 {
+        let directive = if lookup.local_type_only {
+            QueryDirective::new().disallow_external()
+        } else if idx == 0 {
             QueryDirective::new()
         } else {
             QueryDirective::new().disallow_lex().disallow_external()
@@ -579,6 +616,9 @@ impl<'db> ImportResolver<'db> {
         let query = EarlyNameQueryId::new(db, name, scope, directive);
         let mut bucket =
             NameResolver::new(db, self, self.tier.hides(self.ingot)).resolve_query(query);
+        if lookup.local_type_only {
+            bucket.bucket.retain(|(found, _)| found.intersects(domain));
+        }
 
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {

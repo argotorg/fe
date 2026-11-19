@@ -1737,6 +1737,9 @@ fn scoped_quotation_uses_the_producers_dependency_edges() {
     let library = r#"
 use core::meta::{Code, Item}
 
+pub const fn helper() -> u8 { 9 }
+pub mod local_rules { pub const fn score() -> u8 { 4 } }
+
 pub const fn fragment() -> Code<Item> {
     quote {
         const fn score() -> u8 {
@@ -1777,22 +1780,45 @@ pub const fn result() -> u8 { with (Provider) { Target::score() } }
         ]);
         prepare_ingots(&db, &[url("app/")])
     };
-    for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
-        let prepared = check(&lib_with_rules, manifest, library)
-            .expect("the producer can use its dependency")
+    let import = "use rules::score as imported";
+    for value_binding in [
+        "",
+        "const rules: u8 = 0\n",
+        "const fn rules() -> u8 { 0 }\n",
+        "use ingot::helper as rules\n",
+    ] {
+        let library = library.replace(import, &format!("{value_binding}{import}"));
+        for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
+            let prepared = check(&lib_with_rules, manifest, &library)
+                .expect("the producer can use its dependency")
+                .expect("the scoped request generated a method");
+            assert_eq!(ingot_errors(&prepared, "app/"), "", "{value_binding}");
+            assert_eq!(
+                eval(&prepared, "app/src/lib.fe", "result"),
+                "6",
+                "{value_binding}"
+            );
+        }
+
+        let prepared = check(LIB_TOML, &app_with_shadow, &library)
+            .expect("body diagnostics are reported on the prepared package")
             .expect("the scoped request generated a method");
-        assert_eq!(ingot_errors(&prepared, "app/"), "");
-        assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "6");
+        let diagnostics = ingot_errors(&prepared, "app/");
+        assert!(
+            diagnostics.contains("`rules` is not found"),
+            "{value_binding}: {diagnostics}"
+        );
     }
 
-    let prepared = check(LIB_TOML, &app_with_shadow, library)
-        .expect("body diagnostics are reported on the prepared package")
-        .expect("the scoped request generated a method");
-    let diagnostics = ingot_errors(&prepared, "app/");
-    assert!(
-        diagnostics.contains("`rules` is not found"),
-        "{diagnostics}"
+    let local = library.replace(
+        import,
+        &format!("use ingot::local_rules as rules\n{import}"),
     );
+    let prepared = check(LIB_TOML, &app_with_shadow, &local)
+        .expect("the local module alias is valid")
+        .expect("the scoped request generated a method");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "8");
 
     let glob = library
         .replace("use rules::score as imported", "use rules::*")

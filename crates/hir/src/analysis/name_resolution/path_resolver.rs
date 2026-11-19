@@ -641,11 +641,9 @@ pub(crate) fn resolve_type_path_definition<'db>(
         }
         let query_scope =
             parent_scope.unwrap_or_else(|| segment.hygiene_scope(db).unwrap_or(scope));
-        let query = make_query(db, segment, query_scope);
-        let resolved = resolve_query(db, query)
-            .pick(NameDomain::TYPE)
-            .as_ref()
-            .ok()?;
+        let (bucket, _) =
+            path_name_bucket(db, segment, query_scope, |query| resolve_query(db, query));
+        let resolved = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
         if segment.hygiene_scope(db).is_some()
             && matches!(
                 resolved.kind,
@@ -780,6 +778,39 @@ fn make_query<'db>(
         .to_opt()
         .unwrap_or_else(|| IdentId::new(db, "_".to_string()));
     EarlyNameQueryId::new(db, name, scope, directive)
+}
+
+/// A syntactically local name can be a value or an import whose domain becomes
+/// known only at resolution. A qualifier needs the type domain. Its quote
+/// supplies external names when no lexical type binding answers.
+fn path_name_bucket<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    resolve: impl Fn(EarlyNameQueryId<'db>) -> &'db NameResBucket<'db>,
+) -> (&'db NameResBucket<'db>, Option<AuthoredScope<'db>>) {
+    let query = make_query(db, path, scope);
+    let Some(origin) = path.local_quote_origin(db) else {
+        return (resolve(query), None);
+    };
+    let local = EarlyNameQueryId::new(
+        db,
+        path.ident(db).unwrap(),
+        scope,
+        QueryDirective::new().disallow_external(),
+    );
+    let local = resolve(local);
+    if !matches!(
+        local.pick(NameDomain::TYPE),
+        Err(NameResolutionError::NotFound)
+    ) {
+        return (local, None);
+    }
+    let producer = origin.producer;
+    (
+        resolve(make_query(db, path, producer.resolve(db))),
+        Some(producer),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -1447,6 +1478,8 @@ where
         &mut false,
         (root_origin.is_some() || suffix_producer.is_some()).then_some(&mut name_res),
     )?;
+    let (name_res, authored_root) =
+        name_res.map_or((None, None), |(name, origin)| (Some(name), origin));
     let alias_producer = root_origin
         .filter(|&origin| {
             name_res
@@ -1454,7 +1487,7 @@ where
                 .is_some_and(|name| name.quoted_module_alias(db, origin))
         })
         .map(|origin| origin.producer);
-    let visibility_scope = if let Some(producer) = suffix_producer {
+    let visibility_scope = if let Some(producer) = suffix_producer.or(authored_root) {
         Some(producer.resolve(db))
     } else {
         alias_producer.map(|_| scope)
@@ -1463,8 +1496,10 @@ where
         .zip(visibility_scope)
         .map(|(name, scope)| name.is_visible(db, scope));
     observer(path, &res, quoted_visibility);
-    Ok((res, suffix_producer.or(alias_producer)))
+    Ok((res, suffix_producer.or(authored_root).or(alias_producer)))
 }
+
+type ResolvedBinding<'db> = (NameRes<'db>, Option<AuthoredScope<'db>>);
 
 /// Resolves the last segment of `path`, given its parent's resolution. Sets
 /// `decided_by_value` when a branch that only the value namespace takes
@@ -1480,7 +1515,7 @@ fn resolve_segment<'db>(
     is_tail: bool,
     lowering_cx: &LoweringContext<'db>,
     decided_by_value: &mut bool,
-    selected_name: Option<&mut Option<NameRes<'db>>>,
+    selected_name: Option<&mut Option<ResolvedBinding<'db>>>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     // A bound path names its item or ingot directly. Like every other
     // resolution it is reported to the observer by the caller.
@@ -1954,22 +1989,20 @@ fn resolve_segment<'db>(
         Some(PathRes::Const(..) | PathRes::Mod(_)) | None => {}
     };
 
-    let query = make_query(db, path, parent_scope);
-    let bucket = if lowering_cx.names_are_authored_only() {
-        resolve_query_in(db, query, Tier::Authored)
-    } else if parent_res.is_some() && parent_scope.ingot(db) != scope.ingot(db) {
-        // A name inside another ingot's module is read as that ingot's
-        // dependents read it: its generated items are sealed, ordinary items
-        // there, so no tier demotes them. This is the meaning a glob import of
-        // the module gives the same name.
-        resolve_query_in(db, query, Tier::All)
-    } else {
-        resolve_query(db, query)
-    };
+    let (bucket, authored_root) = path_name_bucket(db, path, parent_scope, |query| {
+        if lowering_cx.names_are_authored_only() {
+            resolve_query_in(db, query, Tier::Authored)
+        } else if parent_res.is_some() && parent_scope.ingot(db) != scope.ingot(db) {
+            // Generated items in another ingot are already sealed.
+            resolve_query_in(db, query, Tier::All)
+        } else {
+            resolve_query(db, query)
+        }
+    });
 
     // A path bound to a scope never names a parameter of a function.
     let is_disallowed_hygiene_res = |res: &NameRes<'db>| {
-        path.hygiene_scope(db).is_some()
+        (path.hygiene_scope(db).is_some() || authored_root.is_some())
             && matches!(
                 res.kind,
                 NameResKind::Scope(
@@ -2013,7 +2046,7 @@ fn resolve_segment<'db>(
     };
     let resolved = resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx);
     if let Some(selected_name) = selected_name {
-        *selected_name = Some(res);
+        *selected_name = Some((res, authored_root));
     }
     resolved
 }
