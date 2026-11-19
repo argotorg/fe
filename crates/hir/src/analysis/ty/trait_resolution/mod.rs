@@ -36,7 +36,7 @@ mod table_solver;
 
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
-    match_header_args,
+    match_header_args, match_prepared_header, match_prepared_type,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;

@@ -161,12 +161,25 @@ where
         self.table.unify(U::unbrand(lhs), U::unbrand(rhs))
     }
 
-    pub(crate) fn unify_trait_header(
+    pub(crate) fn match_projection_header(
         &mut self,
         lhs: ScratchTraitInst<'q, 'db>,
         rhs: ScratchTraitInst<'q, 'db>,
     ) -> UnificationResult {
-        self.table.unify_header(lhs.raw, rhs.raw)
+        super::trait_resolution::match_prepared_header(self.db, &mut self.table, lhs.raw, rhs.raw)
+    }
+
+    pub(crate) fn match_projection_receiver(
+        &mut self,
+        lhs: ScratchTy<'q, 'db>,
+        candidate: ScratchTraitInst<'q, 'db>,
+    ) -> UnificationResult {
+        super::trait_resolution::match_prepared_type(
+            self.db,
+            &mut self.table,
+            lhs.raw,
+            candidate.raw.self_ty(self.db),
+        )
     }
 
     pub(crate) fn try_extract<U>(&mut self, value: U::Branded<'q>) -> Option<U>
@@ -224,29 +237,16 @@ where
     pub(crate) fn with_impl_assoc_ty<R>(
         &mut self,
         implementor: ImplementorId<'db>,
-        receiver: ScratchTy<'q, 'db>,
         name: IdentId<'db>,
         f: impl FnOnce(&mut Self, ScratchTraitInst<'q, 'db>, ScratchTy<'q, 'db>) -> R,
     ) -> Option<R> {
         let snapshot = self.snapshot();
         let implementor = self.table.instantiate_with_fresh_vars(implementor);
-        let result = if self
-            .table
-            .unify_header(receiver.raw, implementor.self_ty(self.db))
-            .is_ok()
-        {
-            implementor.assoc_ty(self.db, name).map(|assoc_ty| {
-                let inst = ScratchTraitInst::new(
-                    implementor
-                        .trait_(self.db)
-                        .fold_with(self.db, &mut self.table),
-                );
-                let assoc_ty = ScratchTy::new(assoc_ty.fold_with(self.db, &mut self.table));
-                f(self, inst, assoc_ty)
-            })
-        } else {
-            None
-        };
+        let result = implementor.assoc_ty(self.db, name).map(|assoc_ty| {
+            let inst = ScratchTraitInst::new(implementor.trait_(self.db));
+            let assoc_ty = ScratchTy::new(assoc_ty);
+            f(self, inst, assoc_ty)
+        });
         self.rollback_to(snapshot);
         result
     }

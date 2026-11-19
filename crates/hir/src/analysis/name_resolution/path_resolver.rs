@@ -2847,7 +2847,8 @@ fn find_associated_type_in_mode<'db>(
                         }
                     };
                     if let Some(Some((inst, assoc_ty))) =
-                        cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
+                        cx.with_impl_assoc_ty(impl_, name, |cx, inst, assoc_ty| {
+                            cx.match_projection_receiver(lhs_ty, inst).ok()?;
                             Some((
                                 cx.try_extract::<TraitInstId<'db>>(inst)?,
                                 cx.try_extract::<TyId<'db>>(assoc_ty)?,

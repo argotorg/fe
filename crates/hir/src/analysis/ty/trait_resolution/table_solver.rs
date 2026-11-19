@@ -213,6 +213,30 @@ pub(crate) fn match_header_args<'db, U: UnificationStore<'db>>(
     compare_headers(db, table, left, right, scope, assumptions, false).map(|_| ())
 }
 
+/// Compare positional trait identity during normalization. Bind structural
+/// arguments before checking projection identities in the current table.
+/// Starting another normalizer here would restart the active cycle guards.
+pub(crate) fn match_prepared_header<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+) -> UnificationResult {
+    compare_header_pairs(db, table, left, right, |_, pair| pair, false).map(|_| ())
+}
+
+pub(crate) fn match_prepared_type<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TyId<'db>,
+    right: TyId<'db>,
+) -> UnificationResult {
+    if !left.has_projection(db) && !right.has_projection(db) {
+        return table.unify_header(left, right);
+    }
+    compare_type_pairs(db, table, vec![(left, right)], |_, pair| pair, false).map(|_| ())
+}
+
 #[derive(Clone, Copy)]
 enum HeaderMatch {
     Exact,
@@ -237,6 +261,33 @@ fn compare_headers<'db, U: UnificationStore<'db>>(
     assumptions: [PredicateListId<'db>; 2],
     allow_possible: bool,
 ) -> Result<HeaderMatch, UnificationError> {
+    compare_header_pairs(
+        db,
+        table,
+        left,
+        right,
+        |table, (left, right)| {
+            let [left_assumptions, right_assumptions] =
+                assumptions.map(|assumptions| assumptions.fold_with(db, table));
+            (
+                normalize_assoc_binding(db, table, left, scope, left_assumptions),
+                normalize_assoc_binding(db, table, right, scope, right_assumptions),
+            )
+        },
+        allow_possible,
+    )
+}
+
+type HeaderPair<'db> = (TyId<'db>, TyId<'db>);
+
+fn compare_header_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    normalize_pair: impl FnMut(&mut UnificationTableBase<'db, U>, HeaderPair<'db>) -> HeaderPair<'db>,
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
     if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
         return Err(UnificationError::TypeMismatch);
     }
@@ -247,12 +298,25 @@ fn compare_headers<'db, U: UnificationStore<'db>>(
         table.unify_header(trait_inst_head(db, left), trait_inst_head(db, right))?;
         return Ok(HeaderMatch::Exact);
     }
-    let mut pairs = left
+    let pairs = left
         .args(db)
         .iter()
         .copied()
         .zip(right.args(db).iter().copied())
         .collect::<Vec<_>>();
+    compare_type_pairs(db, table, pairs, normalize_pair, allow_possible)
+}
+
+fn compare_type_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    mut pairs: Vec<HeaderPair<'db>>,
+    mut normalize_pair: impl FnMut(
+        &mut UnificationTableBase<'db, U>,
+        HeaderPair<'db>,
+    ) -> HeaderPair<'db>,
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
     let mut deferred = Vec::new();
     while let Some((left, right)) = pairs.pop() {
         if !left.has_projection(db) && !right.has_projection(db) {
@@ -271,14 +335,6 @@ fn compare_headers<'db, U: UnificationStore<'db>>(
 
     // An equality discharged by normalization can itself bind a variable
     // used by another deferred pair. Retry failures only after such progress.
-    let normalize_pair = |table: &mut UnificationTableBase<'db, U>, (left, right)| {
-        let [left_assumptions, right_assumptions] =
-            assumptions.map(|assumptions| assumptions.fold_with(db, table));
-        (
-            normalize_assoc_binding(db, table, left, scope, left_assumptions),
-            normalize_assoc_binding(db, table, right, scope, right_assumptions),
-        )
-    };
     while !deferred.is_empty() {
         let before = deferred.len();
         deferred.retain(|&pair| {
