@@ -24,6 +24,7 @@ use super::{
     subst::substitute_complete,
     trait_def::{
         ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId,
+        instantiate_selected_choice, instantiate_selected_impl, ordinary_trait_impl_candidates,
         resolve_trait_impl_instance,
     },
     trait_lower::lower_impl_trait,
@@ -324,16 +325,20 @@ pub struct DeferredProofBounds<'db> {
     entries: EvidenceList<'db>,
 }
 
+enum SourceProof<'db> {
+    Bound(EvidenceId<'db>),
+    Choice(usize),
+    Implementation(ImplementorId<'db>),
+    Open,
+}
+
 impl<'db> DeferredProofBounds<'db> {
     fn capture(
         db: &'db dyn HirAnalysisDb,
         source_goal: TraitInstId<'db>,
         cx: TraitSolveCx<'db>,
-    ) -> Option<Self> {
+    ) -> Self {
         let slots = cx.assumptions().extend_all_bounds(db);
-        if slots.is_empty(db) {
-            return None;
-        }
         let schema = BoundSchemaId::context(db, slots);
         let entries = EvidenceList::of(
             db,
@@ -341,22 +346,58 @@ impl<'db> DeferredProofBounds<'db> {
                 .map(|index| Some(schema.assumption(db, index)))
                 .collect(),
         );
-        Some(Self {
+        Self {
             source_goal,
             source_choices: cx.choices(),
             source_slots: slots,
             applied_slots: slots,
             entries,
-        })
+        }
     }
 
     fn map_entries(self, entries: EvidenceList<'db>) -> Self {
         Self { entries, ..self }
     }
 
+    fn source_proof(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
+        goal: TraitInstId<'db>,
+    ) -> Result<SourceProof<'db>, ()> {
+        let source_cx = cx
+            .with_assumptions(self.source_slots)
+            .with_choices(self.source_choices);
+        if let Some(choice) = source_cx.matching_choice(db, self.source_goal) {
+            return Ok(SourceProof::Choice(choice.index()));
+        }
+        let exact = self.source_slots.list(db).contains(&self.source_goal);
+        if !exact
+            && let Selection::Unique(resolved) =
+                resolve_trait_impl_instance(db, source_cx, self.source_goal)
+        {
+            let selected = resolved.selected();
+            match selected.origin(db) {
+                ImplementorOrigin::Assumption => {}
+                ImplementorOrigin::Structural
+                    if super::sol_codec::sol_codec_proof_is_deferred(db, resolved.trait_inst()) =>
+                {
+                    return Ok(SourceProof::Open);
+                }
+                _ => return Ok(SourceProof::Implementation(selected)),
+            }
+        }
+        match self.proof_for(db, source_cx, cx, goal)? {
+            Some(proof) => Ok(SourceProof::Bound(proof)),
+            None if exact => Err(()),
+            None => Ok(SourceProof::Open),
+        }
+    }
+
     fn proof_for(
         self,
         db: &'db dyn HirAnalysisDb,
+        source_cx: TraitSolveCx<'db>,
         cx: TraitSolveCx<'db>,
         goal: TraitInstId<'db>,
     ) -> Result<Option<EvidenceId<'db>>, ()> {
@@ -365,27 +406,11 @@ impl<'db> DeferredProofBounds<'db> {
             .list(db)
             .iter()
             .zip(self.applied_slots.list(db));
-        let source_cx = cx
-            .with_assumptions(self.source_slots)
-            .with_choices(self.source_choices);
         let source_answers = assumption_matcher(db, source_cx, self.source_goal);
         let applied_answers = assumption_matcher(db, cx, goal);
         let mut answer = None;
         for (index, (&source, &applied)) in matching.enumerate() {
             if source_answers(source) && applied_answers(applied) {
-                // Exact declared predicates have priority in proof production.
-                // Otherwise a stronger slot is used only when the source
-                // proof did not already select an implementation.
-                if answer.is_none()
-                    && !self.source_slots.list(db).contains(&self.source_goal)
-                    && matches!(
-                        resolve_trait_impl_instance(db, source_cx, self.source_goal),
-                        Selection::Unique(resolved)
-                            if resolved.selected().origin(db) != ImplementorOrigin::Assumption
-                    )
-                {
-                    return Ok(None);
-                }
                 let proof = self.entries.get(db, index).ok_or(())?;
                 if answer.is_some_and(|other| other != proof) {
                     return Err(());
@@ -1373,24 +1398,67 @@ fn prove_in<'db>(
     goal: TraitInstId<'db>,
     bounds: Option<DeferredProofBounds<'db>>,
 ) -> ProofOutcome<'db> {
-    let settled = |flags: TyFlags| !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID);
-    if !settled(collect_flags(db, goal)) {
+    if !proof_inputs_settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
     }
-    let chosen = bounds.and_then(|_| solve_cx.matching_choice(db, goal));
-    if let Some(bounds) = bounds
-        && chosen.is_none()
-    {
-        match bounds.proof_for(db, solve_cx, goal) {
-            Ok(Some(proof)) => return ProofOutcome::Proven(proof),
-            Ok(None) => {}
+    let (selection, chosen) = if let Some(bounds) = bounds {
+        let source = match bounds.source_proof(db, solve_cx, goal) {
+            Ok(SourceProof::Bound(proof)) => return ProofOutcome::Proven(proof),
+            Ok(source) => source,
             Err(()) => return ProofOutcome::Unavailable,
-        }
-    }
-    let resolved = match resolve_trait_impl_instance(db, solve_cx, goal) {
+        };
+        let matching = match source {
+            SourceProof::Choice(index) => {
+                let Some(choice) = solve_cx.matching_choice_at(db, goal, index) else {
+                    return ProofOutcome::Unavailable;
+                };
+                Some(choice)
+            }
+            SourceProof::Open => solve_cx.matching_choice(db, goal),
+            _ => None,
+        };
+        let (choice, chosen) = match matching {
+            Some(ChoiceMatch::Implementation(index, choice)) => (Some(choice), Some(index)),
+            Some(ChoiceMatch::NeedsGeneration(_, request)) => {
+                return ProofOutcome::NeedsGeneration(request);
+            }
+            Some(ChoiceMatch::Unsettled(_)) => return ProofOutcome::Deferred,
+            None => (None, None),
+        };
+        let selection = if let Some(choice) = choice {
+            instantiate_selected_choice(db, solve_cx, choice, goal)
+                .map_or(Selection::NotFound, Selection::Unique)
+        } else if let SourceProof::Implementation(selected) = source {
+            let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
+            let goal =
+                normalize_trait_inst_preserving_validity(db, goal, scope, solve_cx.assumptions());
+            instantiate_selected_impl(db, selected, goal)
+                .map_or(Selection::NotFound, Selection::Unique)
+        } else {
+            let selected = resolve_trait_impl_instance(db, solve_cx, goal);
+            if matches!(selected, Selection::NotFound) {
+                // Applied choices can make the table reject a parent before
+                // the children's source proofs are consulted. Count viable
+                // implementations, including blanket implementations, only
+                // after checking their prerequisites with source evidence.
+                let candidates = ordinary_trait_impl_candidates(db, solve_cx, goal);
+                if !candidates.is_empty() {
+                    return prove_deferred_candidates(db, solve_cx, goal, bounds, candidates);
+                }
+            }
+            selected
+        };
+        (selection, chosen)
+    } else {
+        (resolve_trait_impl_instance(db, solve_cx, goal), None)
+    };
+    let resolved = match selection {
         Selection::Unique(resolved) => resolved,
         Selection::NeedsGeneration(request) => return ProofOutcome::NeedsGeneration(request),
         Selection::NotFound | Selection::Ambiguous(_) => {
+            if chosen.is_some() {
+                return ProofOutcome::Unavailable;
+            }
             return if collect_flags(db, goal)
                 .intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
                 && !solve_cx.has_matching_choice(db, goal)
@@ -1401,7 +1469,55 @@ fn prove_in<'db>(
             };
         }
     };
-    if !settled(collect_flags(db, resolved)) {
+    prove_selected(db, solve_cx, goal, bounds, chosen, resolved)
+}
+
+fn proof_inputs_settled(flags: TyFlags) -> bool {
+    !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID)
+}
+
+fn prove_deferred_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    bounds: DeferredProofBounds<'db>,
+    candidates: impl IntoIterator<Item = ResolvedImplInstance<'db>>,
+) -> ProofOutcome<'db> {
+    let mut proof = None;
+    let mut deferred = false;
+    let mut request = None;
+    for candidate in candidates {
+        match prove_selected(db, solve_cx, goal, Some(bounds), None, candidate) {
+            ProofOutcome::Proven(candidate) => {
+                if proof.replace(candidate).is_some() {
+                    return ProofOutcome::Unavailable;
+                }
+            }
+            ProofOutcome::Deferred => deferred = true,
+            ProofOutcome::NeedsGeneration(candidate) => {
+                request.get_or_insert(candidate);
+            }
+            ProofOutcome::Unavailable => {}
+        }
+    }
+    if let Some(request) = request {
+        return ProofOutcome::NeedsGeneration(request);
+    }
+    if deferred {
+        return ProofOutcome::Deferred;
+    }
+    proof.map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+}
+
+fn prove_selected<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    bounds: Option<DeferredProofBounds<'db>>,
+    chosen: Option<usize>,
+    resolved: ResolvedImplInstance<'db>,
+) -> ProofOutcome<'db> {
+    if !proof_inputs_settled(collect_flags(db, resolved)) {
         return ProofOutcome::Deferred;
     }
     if matches!(
@@ -1415,7 +1531,7 @@ fn prove_in<'db>(
                 goal: resolved.trait_inst(),
                 scope: solve_cx.origin_scope(db),
                 choices: solve_cx.choices(),
-                bounds: DeferredProofBounds::capture(db, goal, solve_cx),
+                bounds: Some(DeferredProofBounds::capture(db, goal, solve_cx)),
             },
         ));
     }
@@ -1427,14 +1543,15 @@ fn prove_in<'db>(
             BorrowKind::Ref
         });
         let source_conditions = bounds.and_then(|bounds| {
-            let applied = match chosen {
-                Some(ChoiceMatch::Implementation(index, _)) => bounds.source_choices?.items(db)
-                    [index]
+            let applied = chosen.and_then(|index| {
+                bounds
+                    .source_choices?
+                    .items(db)
+                    .get(index)?
                     .implementation()
                     .filter(|choice| choice.template.origin(db) == resolved.selected().origin(db))
-                    .and_then(|choice| choice.applied),
-                _ => None,
-            };
+                    .and_then(|choice| choice.applied)
+            });
             if let Some(applied) = applied {
                 Some((applied.constraints(db), bounds))
             } else {
@@ -1455,10 +1572,12 @@ fn prove_in<'db>(
             let condition = condition.at_mode(db, mode);
             let source = source_conditions.and_then(|(conditions, bounds)| {
                 let source_goal = conditions.list(db).get(index)?.at_mode(db, mode);
-                settled(collect_flags(db, source_goal)).then_some(DeferredProofBounds {
-                    source_goal,
-                    ..bounds
-                })
+                proof_inputs_settled(collect_flags(db, source_goal)).then_some(
+                    DeferredProofBounds {
+                        source_goal,
+                        ..bounds
+                    },
+                )
             });
             let outcome = match source {
                 Some(bounds) => prove_in(db, solve_cx, condition, Some(bounds)),

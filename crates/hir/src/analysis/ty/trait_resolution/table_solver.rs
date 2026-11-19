@@ -96,8 +96,18 @@ fn impl_header_may_match<'db>(
 #[derive(Clone, Copy)]
 pub(crate) enum ChoiceMatch<'db> {
     Implementation(usize, super::ChosenImpl<'db>),
-    NeedsGeneration(super::generation::GenerationRequest<'db>),
-    Unsettled,
+    NeedsGeneration(usize, super::generation::GenerationRequest<'db>),
+    Unsettled(usize),
+}
+
+impl ChoiceMatch<'_> {
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Implementation(index, _)
+            | Self::NeedsGeneration(index, _)
+            | Self::Unsettled(index) => index,
+        }
+    }
 }
 
 /// One priority scan serves proof shortcuts and solver candidate availability.
@@ -107,57 +117,75 @@ fn matching_choice_in<'db>(
     goal: TraitInstId<'db>,
     table: &PersistentUnificationTable<'db>,
 ) -> Option<ChoiceMatch<'db>> {
-    let choices = choices?;
-    for (index, &entry) in choices.items(db).iter().enumerate().rev() {
-        let choice = match entry {
-            super::ChoiceEntry::Impl(choice) => choice,
-            super::ChoiceEntry::Provider(opening) => {
-                if opening.offered_trait(db) != goal.def(db) {
-                    continue;
-                }
-                if super::super::visitor::collect_flags(db, goal)
-                    .intersects(super::super::ty_def::TyFlags::HAS_VAR)
-                {
-                    return Some(ChoiceMatch::Unsettled);
-                }
-                let Some(implementation) =
-                    crate::core::meta::scoped_derive_implementation(db, opening, goal)
-                else {
-                    return Some(ChoiceMatch::NeedsGeneration(
-                        super::generation::GenerationRequest::new(db, opening, goal),
-                    ));
-                };
-                super::ChosenImpl {
-                    template: implementation,
-                    applied: Some(implementation),
-                }
+    choices?
+        .items(db)
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, &entry)| match_choice_entry(db, index, entry, goal, table))
+}
+
+fn match_choice_entry<'db>(
+    db: &'db dyn HirAnalysisDb,
+    index: usize,
+    entry: super::ChoiceEntry<'db>,
+    goal: TraitInstId<'db>,
+    table: &PersistentUnificationTable<'db>,
+) -> Option<ChoiceMatch<'db>> {
+    let choice = match entry {
+        super::ChoiceEntry::Impl(choice) => choice,
+        super::ChoiceEntry::Provider(opening) => {
+            if opening.offered_trait(db) != goal.def(db) {
+                return None;
             }
-        };
-        let implementation = choice.implementation();
-        if implementation.trait_inst(db).def(db) != goal.def(db)
-            || !impl_header_may_match(db, implementation, goal)
-        {
-            continue;
-        }
-        let mut table = table.clone();
-        let candidate = choice.instantiate(&mut table);
-        if table
-            .unify(
-                trait_inst_head(db, candidate.trait_inst(db)),
-                trait_inst_head(db, goal),
-            )
-            .is_ok()
-        {
-            let matched_goal = goal.fold_with(db, &mut table);
-            if Canonicalized::new(db, goal).canonical()
-                != Canonicalized::new(db, matched_goal).canonical()
+            if super::super::visitor::collect_flags(db, goal)
+                .intersects(super::super::ty_def::TyFlags::HAS_VAR)
             {
-                return Some(ChoiceMatch::Unsettled);
+                return Some(ChoiceMatch::Unsettled(index));
             }
-            return Some(ChoiceMatch::Implementation(index, choice));
+            let Some(implementation) =
+                crate::core::meta::scoped_derive_implementation(db, opening, goal)
+            else {
+                return Some(ChoiceMatch::NeedsGeneration(
+                    index,
+                    super::generation::GenerationRequest::new(db, opening, goal),
+                ));
+            };
+            super::ChosenImpl {
+                template: implementation,
+                applied: Some(implementation),
+            }
         }
+    };
+    let implementation = choice.implementation();
+    if implementation.trait_inst(db).def(db) != goal.def(db)
+        || !impl_header_may_match(db, implementation, goal)
+    {
+        return None;
     }
-    None
+    let mut table = table.clone();
+    let candidate = choice.instantiate(&mut table);
+    table
+        .unify(
+            trait_inst_head(db, candidate.trait_inst(db)),
+            trait_inst_head(db, goal),
+        )
+        .ok()?;
+    let matched_goal = goal.fold_with(db, &mut table);
+    if Canonicalized::new(db, goal).canonical() != Canonicalized::new(db, matched_goal).canonical()
+    {
+        return Some(ChoiceMatch::Unsettled(index));
+    }
+    Some(ChoiceMatch::Implementation(index, choice))
+}
+
+pub(super) fn matching_choice_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    index: usize,
+    entry: super::ChoiceEntry<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<ChoiceMatch<'db>> {
+    match_choice_entry(db, index, entry, goal, &PersistentUnificationTable::new(db))
 }
 
 pub(crate) fn matching_choice<'db>(
@@ -222,6 +250,43 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     }
 
     Ok(())
+}
+
+/// Instantiate the specified lexical opening at an already attributed goal.
+/// The caller proves its conditions with that goal's source evidence.
+pub(crate) fn match_chosen_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    choice: super::ChosenImpl<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<(ImplementorId<'db>, TraitInstId<'db>)> {
+    let assumptions = solve_cx.assumptions().extend_all_bounds(db);
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
+    let goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
+    let mut table = PersistentUnificationTable::new(db);
+    let implementation = choice.instantiate(&mut table);
+    if goal.is_mut(db) && !implementation.gives_mut(db) {
+        return None;
+    }
+    let header = normalize_trait_inst_preserving_validity(
+        db,
+        implementation.trait_inst(db),
+        scope,
+        assumptions,
+    );
+    unify_trait_inst_with_normalized_assoc_bindings(
+        db,
+        &mut table,
+        header,
+        goal,
+        scope,
+        assumptions,
+    )
+    .ok()?;
+    Some((
+        implementation.fold_with(db, &mut table),
+        goal.fold_with(db, &mut table),
+    ))
 }
 
 /// Whether `assumption` answers the normalized `goal`: a `mut` goal holds
@@ -592,10 +657,10 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             Some(ChoiceMatch::Implementation(_, choice)) => {
                 return Ok(CallbackOutcome::Continue(vec![Clause::Chosen(choice)]));
             }
-            Some(ChoiceMatch::NeedsGeneration(request)) => {
+            Some(ChoiceMatch::NeedsGeneration(_, request)) => {
                 return Ok(CallbackOutcome::Stop(StopReason::NeedsGeneration(request)));
             }
-            Some(ChoiceMatch::Unsettled) => {
+            Some(ChoiceMatch::Unsettled(_)) => {
                 return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
             }
             None => {}

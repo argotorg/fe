@@ -35,7 +35,8 @@ pub mod generation;
 mod table_solver;
 
 pub(crate) use table_solver::{
-    ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, matching_choice,
+    ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
+    matching_choice,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
@@ -359,6 +360,18 @@ impl<'db> TraitSolveCx<'db> {
         let scope = self.normalization_scope_for_trait_inst(db, goal);
         let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
         table_solver::matching_choice(db, self.choices, goal)
+    }
+
+    pub(super) fn matching_choice_at(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+        index: usize,
+    ) -> Option<ChoiceMatch<'db>> {
+        let entry = *self.choices?.items(db).get(index)?;
+        let scope = self.normalization_scope_for_trait_inst(db, goal);
+        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
+        table_solver::matching_choice_at(db, index, entry, goal)
     }
 
     pub(crate) fn matching_named_choice(
