@@ -44,6 +44,8 @@ Header matching uses the associated types of those arguments. For example, if
 `T::Out` is `u16`, the header `Pick<T::Out>` matches `Pick<u16>`. A condition
 requiring `T::Out = u8` is checked after that match. A call to `Pick<u8>` can
 still use its ordinary implementation.
+Trait headers compare the never type `!` only with itself. Expressions of
+type `!` still coerce in expression positions.
 
 Calls pass proofs only for the bounds the callee declares. Thus a call to
 `ordinary_helper()` inside `with (Wholesale)` still returns 100. A generic

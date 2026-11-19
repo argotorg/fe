@@ -60,6 +60,13 @@ impl<'db, U> UnificationStore<'db> for U where
 {
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeComparison {
+    Expression,
+    Header,
+    Overlap,
+}
+
 #[derive(Clone)]
 pub struct UnificationTableBase<'db, U>
 where
@@ -67,7 +74,7 @@ where
 {
     pub db: &'db dyn HirAnalysisDb,
     table: ena::unify::UnificationTable<U>,
-    comparing_header: bool,
+    comparison: TypeComparison,
 }
 
 impl<'db, U> UnificationTableBase<'db, U>
@@ -78,7 +85,7 @@ where
         Self {
             db,
             table: ena::unify::UnificationTable::new(),
-            comparing_header: false,
+            comparison: TypeComparison::Expression,
         }
     }
 
@@ -124,9 +131,28 @@ where
     /// Header equality neither coerces the never type nor infers the receiver
     /// of an unresolved projection from equality of its output.
     pub(super) fn unify_header<T: Unifiable<'db>>(&mut self, lhs: T, rhs: T) -> UnificationResult {
-        let previous = std::mem::replace(&mut self.comparing_header, true);
+        self.unify_with_comparison(lhs, rhs, TypeComparison::Header)
+    }
+
+    /// Search for a common trait application during ordinary impl candidate lookup or coherence.
+    /// Equating receivers of identical projections can witness an overlap.
+    pub(super) fn unify_for_overlap<T: Unifiable<'db>>(
+        &mut self,
+        lhs: T,
+        rhs: T,
+    ) -> UnificationResult {
+        self.unify_with_comparison(lhs, rhs, TypeComparison::Overlap)
+    }
+
+    fn unify_with_comparison<T: Unifiable<'db>>(
+        &mut self,
+        lhs: T,
+        rhs: T,
+        comparison: TypeComparison,
+    ) -> UnificationResult {
+        let previous = std::mem::replace(&mut self.comparison, comparison);
         let result = self.unify(lhs, rhs);
-        self.comparing_header = previous;
+        self.comparison = previous;
         result
     }
 
@@ -229,7 +255,11 @@ where
                 Ok(())
             }
 
-            (TyData::Never, _) | (_, TyData::Never) if !self.comparing_header => Ok(()),
+            (TyData::Never, _) | (_, TyData::Never)
+                if self.comparison == TypeComparison::Expression =>
+            {
+                Ok(())
+            }
 
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
                 let const_ty1 = match normalize_const_tys_for_comparison(
@@ -297,7 +327,10 @@ where
             (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
                 if a1 == a2 {
                     Ok(())
-                } else if !self.comparing_header && a1.name == a2.name && a1.mode == a2.mode {
+                } else if self.comparison != TypeComparison::Header
+                    && a1.name == a2.name
+                    && a1.mode == a2.mode
+                {
                     self.unify(a1.trait_, a2.trait_)
                 } else {
                     Err(UnificationError::TypeMismatch)

@@ -426,7 +426,7 @@ impl<'db> TypeNormalizer<'db> {
             return false;
         }
         UnificationTable::new(self.db)
-            .unify::<TraitRefId<'db>>(target, candidate)
+            .unify_header(target, candidate)
             .is_ok()
     }
 
@@ -465,7 +465,7 @@ impl<'db> TypeNormalizer<'db> {
                         target_inst.self_ty(self.db),
                         assoc.name,
                         |cx, inst, assoc_ty| {
-                            cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                            cx.unify_trait_header(inst, target_inst).ok()?;
                             if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
                                 return None;
                             }

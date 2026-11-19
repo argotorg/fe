@@ -982,12 +982,12 @@ fn impls_with_constraint_mode<'db>(
             // The constraints are checked under the target's arguments too:
             // `impl<T, R: Read<T>> Read<T> for Buf<R>` needs its `T`.
             let unifies =
-                table.unify(impl_ty, ty_term).is_ok()
+                table.unify_for_overlap(impl_ty, ty_term).is_ok()
                     && trait_inst.is_none_or(|target| {
                         inst.trait_(db).args(db).iter().zip(target.args(db)).all(
                             |(&impl_arg, &arg)| {
                                 let arg = table.instantiate_to_term(arg);
-                                table.unify(impl_arg, arg).is_ok()
+                                table.unify_for_overlap(impl_arg, arg).is_ok()
                             },
                         )
                     });
@@ -1973,7 +1973,7 @@ impl<'db> ImplementorId<'db> {
 /// Returns `true` if the given two implementors conflict.
 ///
 /// This mirrors the legacy `Implementor`-based semantics:
-/// - instantiate both implementors with fresh vars and unify them;
+/// - instantiate both implementors with fresh vars and look for a common header;
 /// - then check that the merged constraints are satisfiable.
 pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1984,7 +1984,7 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     let a = table.instantiate_with_fresh_vars(a);
     let b = table.instantiate_with_fresh_vars(b);
 
-    if table.unify(a, b).is_err() {
+    if table.unify_for_overlap(a, b).is_err() {
         return false;
     }
 
