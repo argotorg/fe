@@ -364,9 +364,20 @@ pub fn preparation_demands_for_modules<'db>(
     db: &'db dyn HirAnalysisDb,
     modules: impl IntoIterator<Item = crate::hir_def::TopLevelMod<'db>>,
 ) -> Vec<GenerationDemand> {
+    preparation_demands_with_dependencies(db, modules, [])
+}
+
+/// A concrete call can require a scoped provider opened in a dependency.
+/// The driver supplies only modules in this ingot's dependency closure.
+pub fn preparation_demands_with_dependencies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    modules: impl IntoIterator<Item = crate::hir_def::TopLevelMod<'db>>,
+    dependencies: impl IntoIterator<Item = crate::hir_def::TopLevelMod<'db>>,
+) -> Vec<GenerationDemand> {
     use super::super::ty_check::{BodyOwner, checked_body_demands, infer_body, module_body_owners};
 
     let modules: Vec<_> = modules.into_iter().collect();
+    let dependencies: Vec<_> = dependencies.into_iter().collect();
     let owners: Vec<_> = modules
         .iter()
         .flat_map(|&module| module_body_owners(db, module))
@@ -377,7 +388,13 @@ pub fn preparation_demands_for_modules<'db>(
     }
     if owners
         .iter()
-        .any(|&owner| infer_body(db, owner).1.has_scoped_provider_openings())
+        .copied()
+        .chain(
+            dependencies
+                .iter()
+                .flat_map(|&module| module_body_owners(db, module)),
+        )
+        .any(|owner| infer_body(db, owner).1.has_scoped_provider_openings())
     {
         let roots = owners.into_iter().filter_map(|owner| {
             if owner.body(db).is_none()
@@ -394,9 +411,10 @@ pub fn preparation_demands_for_modules<'db>(
         });
         let files: std::collections::HashSet<_> = modules
             .iter()
+            .chain(&dependencies)
             .filter_map(|module| module.file(db).url(db))
             .collect();
-        // The package transaction owns the openings written in its files.
+        // An unrelated workspace root contributes no openings.
         for demand in instance_demands(db, roots).into_vec() {
             if files.contains(&demand.opening.file) {
                 demands.push(demand);

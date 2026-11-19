@@ -3,13 +3,19 @@
 //! and admits the generated items into one prepared view, which checks, builds
 //! and the language server read in place of the written file.
 use crate::DriverDataBase;
-use common::{InputDb, file::File, ingot::IngotKind};
+use common::{
+    InputDb,
+    file::File,
+    generation::{FrozenGenerationRequest, ScopedDeriveDemand},
+    ingot::IngotKind,
+};
 use hir::{
     analysis::{
         diagnostics::DiagnosticVoucher,
         semantic::{CtfeError, EvalFailure, EvalOutcome, SemConstValue, SemOrigin},
         ty::{
             corelib::resolve_lib_type_path,
+            trait_resolution::generation::GenerationDemand,
             ty_check::{BodyOwner, check_func_body, checked_body_demands},
             ty_def::TyId,
         },
@@ -377,18 +383,23 @@ fn prepare_file_within(
         return Ok(None);
     }
     let root_range = found.root_range;
-    admit_requests(
+    match admit_requests(
         db,
         &Transaction {
             basis: ViewBasis::Standalone(file),
             modules: &[url],
+            dependency_openings: &[],
             standalone_root: Some(root_range),
             max_rounds,
         },
         Vec::new(),
         &[found],
-    )
-    .map(|(output, _)| Some(output))
+    )? {
+        Preparation::Complete(output, _) => Ok(Some(output)),
+        Preparation::NeedsDependencies(_) => {
+            unreachable!("standalone preparation has no dependencies")
+        }
+    }
 }
 
 /// One ingot to prepare: its authored source files and the ingots it depends
@@ -495,8 +506,9 @@ pub fn prepare_ingots(
     // holds now, and none of these is recorded with it. A seal kept for a
     // later call would need a key that holds all of them, such as the hashes of
     // the files, the keys of the dependencies' seals and the settings.
-    let mut seals: Vec<Option<Vec<common::generation::FrozenGenerationRequest>>> =
-        vec![None; plans.len()];
+    let mut seals = vec![Vec::new(); plans.len()];
+    let mut additions = vec![Vec::new(); plans.len()];
+    let mut opening_files = vec![Vec::new(); plans.len()];
     let mut last = None;
     for (index, plan) in plans.iter().enumerate() {
         // A first look at the text decides which ingots can need preparing
@@ -511,14 +523,18 @@ pub fn prepare_ingots(
                 syntaxes.push((url.clone(), syntax));
             }
         }
-        if syntaxes.is_empty() {
+        opening_files[index] = syntaxes
+            .iter()
+            .filter(|(_, syntax)| syntax.may_open_provider)
+            .map(|(url, _)| url.clone())
+            .collect();
+        let dependency_openings: Vec<_> = plan
+            .dependencies
+            .iter()
+            .flat_map(|&index| opening_files[index].iter().cloned())
+            .collect();
+        if syntaxes.is_empty() && dependency_openings.is_empty() {
             continue;
-        }
-        let mut sealed = Vec::new();
-        for &dependency in &plan.dependencies {
-            if let Some(requests) = &seals[dependency] {
-                sealed.extend(requests.iter().cloned());
-            }
         }
         // The one view this ingot's providers are admitted and evaluated in:
         // authored text, the sealed output of its dependencies, and the
@@ -527,69 +543,177 @@ pub fn prepare_ingots(
         // name what a dependency generated. Without a sealed dependency and
         // without a request of its own, the authored view shows the same
         // blocks and no copy is made until a block needs preparing.
-        let wants_view =
-            !sealed.is_empty() || syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
-        let mut input_db = wants_view.then(|| input_view(db, &ViewBasis::Package, &sealed));
-        let scanned_in = input_db.as_ref().unwrap_or(db);
-        let has_scoped_demands = syntaxes.iter().any(|(_, syntax)| syntax.may_open_provider)
-            && !package_preparation_demands(scanned_in, &plan.files).is_empty();
-        let scans: Vec<_> = syntaxes
-            .into_iter()
-            .filter_map(|(url, syntax)| {
-                let has_scoped_opening = syntax.may_open_provider && has_scoped_demands;
-                (syntax.has_requests || has_scoped_opening).then_some((
-                    url,
-                    FileScan {
-                        root: syntax.root,
-                        has_scoped_opening,
-                    },
-                ))
-            })
-            .collect();
-        if scans.is_empty() {
-            continue;
+        let transaction = Transaction {
+            basis: ViewBasis::Package,
+            modules: &plan.files,
+            dependency_openings: &dependency_openings,
+            standalone_root: None,
+            max_rounds: MAX_PREPARATION_ROUNDS,
+        };
+        let mut retries = 0;
+        loop {
+            let sealed = sealed_dependencies(plan, &seals, &additions);
+            let writes_headers = syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
+            let wants_view = !sealed.is_empty() || writes_headers;
+            let input_db = wants_view.then(|| input_view(db, &ViewBasis::Package, &sealed));
+            let scanned_in = input_db.as_ref().unwrap_or(db);
+            let pending = if opening_files[index].is_empty() && dependency_openings.is_empty() {
+                Vec::new()
+            } else {
+                package_preparation_demands(scanned_in, &plan.files, &dependency_openings)
+            };
+            let dependency_demands: Vec<_> = if pending.iter().all(|pending| pending.demand.is_ok())
+            {
+                pending
+                    .iter()
+                    .filter(|pending| dependency_openings.contains(&pending.opening.file))
+                    .filter_map(|pending| pending.demand.as_ref().ok().cloned())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let waiting = if !dependency_demands.is_empty() {
+                dependency_demands
+            } else {
+                if !writes_headers && pending.is_empty() {
+                    break;
+                }
+                let input_db =
+                    input_db.unwrap_or_else(|| input_view(db, &ViewBasis::Package, &sealed));
+                let found_requests = syntaxes
+                    .iter()
+                    .filter(|(_, syntax)| syntax.has_requests)
+                    .map(|(url, syntax)| {
+                        let file = input_db
+                            .workspace()
+                            .get(&input_db, url)
+                            .expect("the input view holds every authored file");
+                        file_requests(
+                            &input_db,
+                            file,
+                            FileScan {
+                                root: syntax.root.clone(),
+                                has_scoped_opening: false,
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                match admit_requests(&input_db, &transaction, sealed, &found_requests)? {
+                    Preparation::Complete(output, own) => {
+                        seals[index] = own;
+                        last = Some(output);
+                        break;
+                    }
+                    Preparation::NeedsDependencies(waiting) => waiting,
+                }
+            };
+            if retries == MAX_PREPARATION_ROUNDS {
+                return Err(scoped_request_error(
+                    &waiting[0],
+                    "scoped dependency preparation did not converge",
+                ));
+            }
+            retries += 1;
+            prepare_dependency_requests(db, &plans, plan, &seals, &mut additions, waiting)?;
         }
-        let input_db = input_db
-            .take()
-            .unwrap_or_else(|| input_view(db, &ViewBasis::Package, &sealed));
-        let view = &input_db;
-        let mut found_requests = Vec::new();
-        for (url, scan) in scans {
-            let file = view
-                .workspace()
-                .get(view, &url)
-                .expect("the input view holds every authored file");
-            found_requests.push(file_requests(view, file, scan)?);
-        }
-        let (output, own) = admit_requests(
-            view,
-            &Transaction {
-                basis: ViewBasis::Package,
-                modules: &plan.files,
-                standalone_root: None,
-                max_rounds: MAX_PREPARATION_ROUNDS,
-            },
-            sealed,
-            &found_requests,
-        )?;
-        seals[index] = Some(own);
-        last = Some(output);
     }
     // No ingot needed preparing: consumers keep using the authored view.
-    let Some(output) = last else {
+    let total = seals.iter().chain(&additions).map(Vec::len).sum::<usize>();
+    if total == 0 {
         return Ok(None);
-    };
-    let total = seals.iter().flatten().map(Vec::len).sum::<usize>();
+    }
     // The last view holds the output of its own ingot and of the ones it
     // depends on. Other ingots (several roots) need a view of everything.
-    if output.generation_inputs().requests(&output).len() == total {
+    if let Some(output) = last
+        && output.generation_inputs().requests(&output).len() == total
+    {
         return Ok(Some(output));
     }
     let mut everything = Vec::new();
-    for requests in seals.iter().flatten() {
-        everything.extend(requests.iter().cloned());
+    for (seal, extra) in seals.into_iter().zip(additions) {
+        everything.extend(seal);
+        everything.extend(extra);
     }
     Ok(Some(prepared_view(db, &ViewBasis::Package, &everything)))
+}
+
+fn sealed_dependencies(
+    plan: &IngotPlan,
+    seals: &[Vec<FrozenGenerationRequest>],
+    additions: &[Vec<FrozenGenerationRequest>],
+) -> Vec<FrozenGenerationRequest> {
+    plan.dependencies
+        .iter()
+        .flat_map(|&index| seals[index].iter().chain(&additions[index]).cloned())
+        .collect()
+}
+
+fn prepare_dependency_requests(
+    db: &DriverDataBase,
+    plans: &[IngotPlan],
+    consumer: &IngotPlan,
+    seals: &[Vec<FrozenGenerationRequest>],
+    additions: &mut [Vec<FrozenGenerationRequest>],
+    demands: Vec<ScopedDeriveDemand>,
+) -> Result<(), GenerationError> {
+    let mut batch = std::collections::HashSet::new();
+    for demand in demands {
+        if !batch.insert(demand.clone()) {
+            continue;
+        }
+        let index = consumer
+            .dependencies
+            .iter()
+            .copied()
+            .find(|&index| {
+                plans[index]
+                    .files
+                    .binary_search(&demand.opening.file)
+                    .is_ok()
+            })
+            .ok_or_else(|| {
+                scoped_request_error(
+                    &demand,
+                    "the provider is outside this package's dependencies",
+                )
+            })?;
+        if seals[index].iter().chain(&additions[index]).any(|request| {
+            request
+                .scoped_impl
+                .as_ref()
+                .is_some_and(|scoped| scoped.demand == demand)
+        }) {
+            return Err(scoped_request_error(
+                &demand,
+                "generated dependency implementation did not discharge its preparation dependency",
+            ));
+        }
+
+        let owner = &plans[index];
+        let mut requests = sealed_dependencies(owner, seals, additions);
+        // The provider can read sealed dependencies. The owner's existing
+        // generated implementations are visible only for output admission.
+        let input = input_view(db, &ViewBasis::Package, &requests);
+        let added = evaluate_scoped_request(&input, demand)?;
+        requests.extend(seals[index].iter().cloned());
+        requests.extend(additions[index].iter().cloned());
+        requests.push(added.clone());
+        let output = prepared_view(&input, &ViewBasis::Package, &requests);
+        for url in &owner.files {
+            check_preparation_module(&output, url)?;
+        }
+        check_scoped_implementation(&output, &added)?;
+        check_conservative_extension(
+            &output,
+            &owner.files,
+            &Requested {
+                requests: &[],
+                sites: &[],
+            },
+        )?;
+        additions[index].push(added);
+    }
+    Ok(())
 }
 
 /// Replace an authored database with the prepared view of `roots` when they
@@ -732,21 +856,24 @@ fn scan_standalone_file(
 fn package_preparation_demands(
     db: &DriverDataBase,
     files: &[url::Url],
-) -> Vec<hir::analysis::ty::trait_resolution::generation::GenerationDemand> {
-    let modules: Vec<_> = files
-        .iter()
-        .map(|url| {
-            let file = db
-                .workspace()
-                .get(db, url)
-                .expect("the view holds every authored file");
-            db.top_mod(file)
-        })
-        .collect();
+    dependency_openings: &[url::Url],
+) -> Vec<GenerationDemand> {
+    let module = |url: &url::Url| {
+        let file = db
+            .workspace()
+            .get(db, url)
+            .expect("the view holds every authored file");
+        db.top_mod(file)
+    };
+    let modules: Vec<_> = files.iter().map(module).collect();
     if let Some(&first) = modules.first() {
         analyze_type_definitions_first(db, first);
     }
-    hir::analysis::ty::trait_resolution::generation::preparation_demands_for_modules(db, modules)
+    hir::analysis::ty::trait_resolution::generation::preparation_demands_with_dependencies(
+        db,
+        modules,
+        dependency_openings.iter().map(module),
+    )
 }
 
 /// Collect and validate the explicit requests of one scanned file in the view the
@@ -966,8 +1093,139 @@ const MAX_PREPARATION_ROUNDS: usize = 128;
 struct Transaction<'a> {
     basis: ViewBasis,
     modules: &'a [url::Url],
+    dependency_openings: &'a [url::Url],
     standalone_root: Option<parser::TextRange>,
     max_rounds: usize,
+}
+
+enum Preparation {
+    Complete(DriverDataBase, Vec<FrozenGenerationRequest>),
+    NeedsDependencies(Vec<ScopedDeriveDemand>),
+}
+
+fn scoped_request_error(demand: &ScopedDeriveDemand, cause: impl Into<String>) -> GenerationError {
+    GenerationError {
+        file: demand.opening.file.clone(),
+        range: demand.opening.binding_range,
+        cause: cause.into(),
+    }
+}
+
+fn evaluate_scoped_request(
+    db: &DriverDataBase,
+    demand: ScopedDeriveDemand,
+) -> Result<FrozenGenerationRequest, GenerationError> {
+    let request = hir::core::meta::rebind_generation_request(db, &demand)
+        .map_err(|cause| scoped_request_error(&demand, cause))?;
+    if !hir::analysis::ty::trait_resolution::generation::admission_demands(db, request).is_empty() {
+        return Err(scoped_request_error(
+            &demand,
+            format!(
+                "a body that decides whether the provider applies (a condition or the derive function) needs a generated implementation; {PROVIDER_VIEW_RULE}"
+            ),
+        ));
+    }
+    let opening = request.opening(db);
+    let origin = opening.scope(db).item();
+    let (key, input) = hir::core::meta::scoped_derive_provider(
+        db,
+        opening,
+        request.goal(db),
+        origin,
+        origin.span().into(),
+    )
+    .map_err(|cause| {
+        provider_error(
+            db,
+            cause,
+            "scoped derive target admission failed",
+            scoped_request_error(&demand, "scoped derive provider admission failed"),
+        )
+    })?;
+    let file = db
+        .workspace()
+        .get(db, &demand.opening.file)
+        .expect("the authored view keeps every authored file");
+    let mut output =
+        evaluate_provider_instance(db, file, key, input, demand.opening.binding_range)?;
+    output.scoped_impl = Some(common::generation::FrozenScopedImpl {
+        selection_name: scoped_selection_name(&demand),
+        demand,
+    });
+    Ok(output)
+}
+
+fn check_preparation_module(db: &DriverDataBase, url: &url::Url) -> Result<(), GenerationError> {
+    let file = db
+        .workspace()
+        .get(db, url)
+        .expect("prepared view keeps every authored file");
+    let module = db.top_mod(file);
+    let _ = module.scope_graph(db);
+    let errors = hir::lower::generation_lowering_errors(db, module);
+    if let Some(first) = errors.first() {
+        return Err(GenerationError {
+            file: first.file.url(db).unwrap_or_else(|| url.clone()),
+            range: first.primary_range,
+            cause: first.message.clone(),
+        });
+    }
+    analyze_type_definitions_first(db, module);
+    Ok(())
+}
+
+fn check_scoped_implementation(
+    db: &DriverDataBase,
+    request: &FrozenGenerationRequest,
+) -> Result<(), GenerationError> {
+    use hir::diagnosable::Diagnosable;
+    let Some(scoped) = request.scoped_impl.as_ref() else {
+        return Ok(());
+    };
+    let file = db
+        .workspace()
+        .get(db, &request.target_file)
+        .expect("prepared view keeps every authored file");
+    let implementation = db
+        .top_mod(file)
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .find(|implementation| {
+            implementation
+                .selection_name(db)
+                .is_some_and(|name| name.data(db) == &scoped.selection_name)
+        })
+        .ok_or_else(|| {
+            scoped_request_error(
+                &scoped.demand,
+                "generated scoped implementation was not constructed",
+            )
+        })?;
+    let mut complete = implementation
+        .diags(db)
+        .into_iter()
+        .map(|diagnostic| diagnostic.to_complete(db))
+        .collect::<Vec<_>>();
+    for method in implementation.methods(db) {
+        complete.extend(
+            method
+                .diags(db)
+                .into_iter()
+                .map(|diagnostic| diagnostic.to_complete(db)),
+        );
+    }
+    if complete
+        .iter()
+        .any(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
+    {
+        return Err(diagnostic_error(
+            db,
+            &complete,
+            scoped_request_error(&scoped.demand, "generated implementation admission failed"),
+        ));
+    }
+    Ok(())
 }
 
 /// One preparation transaction over its modules. `sealed` is the output of the
@@ -987,13 +1245,7 @@ fn admit_requests(
     transaction: &Transaction<'_>,
     sealed: Vec<common::generation::FrozenGenerationRequest>,
     authored: &[FileRequests],
-) -> Result<
-    (
-        DriverDataBase,
-        Vec<common::generation::FrozenGenerationRequest>,
-    ),
-    GenerationError,
-> {
+) -> Result<Preparation, GenerationError> {
     let basis = &transaction.basis;
     let modules = transaction.modules;
     let (standalone_root, max_rounds) = (transaction.standalone_root, transaction.max_rounds);
@@ -1052,71 +1304,15 @@ fn admit_requests(
             (file, output.top_mod(file))
         };
         for url in modules {
-            let (_, module) = output_module(url);
-            let _ = module.scope_graph(&output);
-            let lowering_errors = hir::lower::generation_lowering_errors(&output, module);
-            if let Some(first) = lowering_errors.first() {
-                return Err(GenerationError {
-                    file: first.file.url(&output).unwrap_or_else(|| url.clone()),
-                    range: first.primary_range,
-                    cause: first.message.clone(),
-                });
-            }
-            analyze_type_definitions_first(&output, module);
+            check_preparation_module(&output, url)?;
         }
         // A generated header is not eligible merely because it was lowered.
         // Validate conformance before retrying any goal against the new plan.
-        use hir::diagnosable::Diagnosable;
         for request in &requests[sealed_len..] {
-            let Some(scoped) = request.scoped_impl.as_ref() else {
-                continue;
-            };
-            let (_, module) = output_module(&request.target_file);
-            let implementation = module
-                .all_impl_traits(&output)
-                .iter()
-                .copied()
-                .find(|implementation| {
-                    implementation
-                        .selection_name(&output)
-                        .is_some_and(|name| name.data(&output) == &scoped.selection_name)
-                })
-                .ok_or_else(|| {
-                    error_at(
-                        &scoped.demand.opening.file,
-                        scoped.demand.opening.binding_range,
-                        "generated scoped implementation was not constructed".into(),
-                    )
-                })?;
-            let mut complete = implementation
-                .diags(&output)
-                .into_iter()
-                .map(|diagnostic| diagnostic.to_complete(&output))
-                .collect::<Vec<_>>();
-            for method in implementation.methods(&output) {
-                complete.extend(
-                    method
-                        .diags(&output)
-                        .into_iter()
-                        .map(|diagnostic| diagnostic.to_complete(&output)),
-                );
-            }
-            if complete
-                .iter()
-                .any(|diagnostic| diagnostic.severity == common::diagnostics::Severity::Error)
-            {
-                return Err(diagnostic_error(
-                    &output,
-                    &complete,
-                    error_at(
-                        &scoped.demand.opening.file,
-                        scoped.demand.opening.binding_range,
-                        "generated implementation admission failed".into(),
-                    ),
-                ));
-            }
+            check_scoped_implementation(&output, request)?;
         }
-        let pending = package_preparation_demands(&output, modules);
+        let pending =
+            package_preparation_demands(&output, modules, transaction.dependency_openings);
         if !pending.is_empty() {
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
@@ -1132,6 +1328,18 @@ fn admit_requests(
                     })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            let dependency_demands: Vec<_> = pending
+                .iter()
+                .filter(|demand| {
+                    transaction
+                        .dependency_openings
+                        .contains(&demand.opening.file)
+                })
+                .cloned()
+                .collect();
+            if !dependency_demands.is_empty() {
+                return Ok(Preparation::NeedsDependencies(dependency_demands));
+            }
             // The prepared view only reports which implementations are wanted.
             // Every provider is admitted and run in the input view, the same one
             // that header providers run in, so no provider reads
@@ -1152,51 +1360,8 @@ fn admit_requests(
                             .into(),
                     ));
                 }
-                let request = hir::core::meta::rebind_generation_request(db, &demand)
-                    .map_err(|cause| error_at(&file, range, cause))?;
-                if !hir::analysis::ty::trait_resolution::generation::admission_demands(db, request)
-                    .is_empty()
-                {
-                    return Err(error_at(
-                        &file,
-                        range,
-                        format!(
-                            "a body that decides whether the provider applies (a condition or the derive function) needs a generated implementation; {PROVIDER_VIEW_RULE}"
-                        ),
-                    ));
-                }
-                let opening = request.opening(db);
-                let origin = opening.scope(db).item();
-                let (key, input) = hir::core::meta::scoped_derive_provider(
-                    db,
-                    opening,
-                    request.goal(db),
-                    origin,
-                    origin.span().into(),
-                )
-                .map_err(|cause| {
-                    provider_error(
-                        db,
-                        cause,
-                        "scoped derive target admission failed",
-                        error_at(
-                            &file,
-                            range,
-                            "scoped derive provider admission failed".into(),
-                        ),
-                    )
-                })?;
-                let opening_file = db
-                    .workspace()
-                    .get(db, &file)
-                    .expect("the authored view keeps every authored file");
-                let mut plan = evaluate_provider_instance(db, opening_file, key, input, range)?;
                 completed.insert(demand.clone());
-                plan.scoped_impl = Some(common::generation::FrozenScopedImpl {
-                    selection_name: scoped_selection_name(&demand),
-                    demand,
-                });
-                new_requests.push(plan);
+                new_requests.push(evaluate_scoped_request(db, demand)?);
             }
             last_round_first = examined
                 .first()
@@ -1232,7 +1397,10 @@ fn admit_requests(
             }
             drop(diagnostics);
         }
-        return Ok((output, requests.split_off(sealed_len)));
+        return Ok(Preparation::Complete(
+            output,
+            requests.split_off(sealed_len),
+        ));
     }
     // A round rebuilds the whole view, so the limit bounds the work spent.
     let (file, range) = last_round_first.unwrap_or_else(|| (fallback_file.clone(), whole_input));
