@@ -2115,7 +2115,7 @@ fn thaw_decl<'db>(
     let file = db
         .workspace()
         .get(db, &decl.file)
-        .ok_or("a frozen declaration's file is missing")?;
+        .ok_or("a scoped target argument names a declaration outside the provider's input files")?;
     let module = crate::lower::map_file_to_mod_impl(db, file);
     let written_at = |origin: Option<ast::SyntaxNodePtr>| {
         origin.is_some_and(|pointer| pointer.text_range() == decl.range)

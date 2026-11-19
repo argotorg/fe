@@ -691,9 +691,20 @@ fn prepare_dependency_requests(
 
         let owner = &plans[index];
         let mut requests = sealed_dependencies(owner, seals, additions);
-        // The provider can read sealed dependencies. The owner's existing
-        // generated implementations are visible only for output admission.
-        let input = input_view(db, &ViewBasis::Package, &requests);
+        let owner_sources = owner
+            .files
+            .iter()
+            .chain(
+                owner
+                    .dependencies
+                    .iter()
+                    .flat_map(|&index| &plans[index].files),
+            )
+            .collect();
+        // Rebind the downstream demand in the owner's source view before it
+        // can supply type identities to the provider. Its own generated
+        // implementations are visible only for output admission.
+        let input = input_view(db, &ViewBasis::DependencyOwner(&owner_sources), &requests);
         let added = evaluate_scoped_request(&input, demand)?;
         requests.extend(seals[index].iter().cloned());
         requests.extend(additions[index].iter().cloned());
@@ -1072,11 +1083,13 @@ fn header_provider_ty<'db>(
 }
 
 /// Where a prepared view takes its authored inputs from.
-enum ViewBasis {
+enum ViewBasis<'a> {
     /// Only the one standalone file, over the builtin libraries.
     Standalone(File),
     /// Every authored input of the database, including dependencies.
     Package,
+    /// Sources owned by one dependency and the ingots it depends on.
+    DependencyOwner(&'a std::collections::HashSet<&'a url::Url>),
 }
 
 /// The most views one transaction builds. The providers of the derive headers
@@ -1091,7 +1104,7 @@ const MAX_PREPARATION_ROUNDS: usize = 128;
 /// What one preparation transaction prepares: the authored modules, and how it
 /// publishes its view.
 struct Transaction<'a> {
-    basis: ViewBasis,
+    basis: ViewBasis<'a>,
     modules: &'a [url::Url],
     dependency_openings: &'a [url::Url],
     standalone_root: Option<parser::TextRange>,
@@ -1959,7 +1972,7 @@ fn provider_error(
 /// the caller's authored view is unchanged.
 fn input_view(
     db: &DriverDataBase,
-    basis: &ViewBasis,
+    basis: &ViewBasis<'_>,
     sealed: &[common::generation::FrozenGenerationRequest],
 ) -> DriverDataBase {
     let mut view = prepared_view(db, basis, sealed);
@@ -1971,7 +1984,7 @@ fn input_view(
 
 fn prepared_view(
     db: &DriverDataBase,
-    basis: &ViewBasis,
+    basis: &ViewBasis<'_>,
     requests: &[common::generation::FrozenGenerationRequest],
 ) -> DriverDataBase {
     let mut output = match basis {
@@ -1992,6 +2005,15 @@ fn prepared_view(
             output
         }
         ViewBasis::Package => db.fork_inputs(),
+        ViewBasis::DependencyOwner(sources) => db.fork_inputs_selecting(|url, file| {
+            // Keep manifests and resolution settings. Source identities past
+            // this boundary must belong to the owner's dependency frontier.
+            !url.path().ends_with(".fe")
+                || sources.contains(url)
+                || file
+                    .containing_ingot(db)
+                    .is_some_and(|ingot| matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std))
+        }),
     };
     output
         .compilation_settings()

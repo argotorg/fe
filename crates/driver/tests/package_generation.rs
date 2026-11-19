@@ -133,6 +133,50 @@ fn two_consumers_share_one_deferred_codec_specialization() {
 }
 
 #[test]
+fn deferred_dependency_codec_rebinds_arguments_in_the_provider_view() {
+    let library =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/codec.fe")
+            .replace(
+                "pub struct Arg { value: u8 }",
+                "pub struct Arg<T> { value: T }",
+            )
+            .replace("impl Gate for Arg {", "impl<T> Gate for Arg<T> {")
+            .replace(
+                "pub fn write<K>(array: mut SolArray<Elem<K, Arg>>)",
+                "pub fn write<K, T>(array: mut SolArray<Elem<K, Arg<T>>>)",
+            );
+    let template =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/lib.fe")
+            .replace("use ingot::codec::", "use lib::")
+            .replace("msg M {", "struct PrivateArgument { value: u8 }\n\nmsg M {");
+    for arg in ["u8", "(u8, [PrivateArgument; 1])"] {
+        let caller = template
+            .replace("Elem<u8, Arg>", &format!("Elem<u8, Arg<{arg}>>"))
+            .replace("write<u8>", &format!("write<u8, {arg}>"));
+        let files = [
+            ("lib/fe.toml", LIB_TOML),
+            ("lib/src/lib.fe", library.as_str()),
+            ("app/fe.toml", APP_WITH_LIB_TOML),
+            ("app/src/lib.fe", caller.as_str()),
+        ];
+        let db = project(&files);
+        let result = prepare_ingots(&db, &[url("app/")]);
+        if arg == "u8" {
+            let prepared = result.unwrap().expect("the dependency codec is prepared");
+            assert_eq!(ingot_errors(&prepared, "app/"), "");
+        } else {
+            let error = result.err().expect("the consumer type is outside the view");
+            assert_eq!(error.file, url("lib/src/lib.fe"));
+            assert_eq!(
+                error.cause,
+                "a scoped target argument names a declaration outside the provider's input files"
+            );
+        }
+        assert_authored_unchanged(&db, &files);
+    }
+}
+
+#[test]
 fn quoted_ingot_path_uses_the_dependency_producers_scope() {
     let library = r#"
 trait Gate { const fn code(_ value: u8) -> u8 }

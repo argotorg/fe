@@ -60,6 +60,10 @@ impl DriverDataBase {
     /// Generation inputs start empty. Database-local identities do not carry
     /// over; resolve them again in the new view.
     pub fn fork_inputs(&self) -> Self {
+        self.fork_inputs_selecting(|_, _| true)
+    }
+
+    pub(crate) fn fork_inputs_selecting(&self, include: impl Fn(&url::Url, File) -> bool) -> Self {
         use common::InputDb;
         use salsa::Setter;
 
@@ -76,9 +80,11 @@ impl DriverDataBase {
             target.workspace().remove(&mut target, &url);
         }
         for (url, file) in self.workspace().all_files(self).iter() {
-            target
-                .workspace()
-                .update(&mut target, url.clone(), file.text(self).clone());
+            if include(url, *file) {
+                target
+                    .workspace()
+                    .update(&mut target, url.clone(), file.text(self).clone());
+            }
         }
         self.dependency_graph().copy_into(self, &mut target);
         target
