@@ -48,7 +48,12 @@ impl<'db> PathId<'db> {
                     if path.is_none()
                         && ctxt.quote_names_resolve_at_producer()
                         && let Some(frame) = ctxt.quote_frames.last()
-                        && !quote_declaration_is_bound(&seg, ident.text(), frame.is_sub_quote) =>
+                        && !quote_name_is_bound(
+                            seg.syntax(),
+                            ident.text(),
+                            frame.is_sub_quote,
+                            None,
+                        ) =>
                 {
                     let display_ident = IdentId::lower_token(ctxt, ident.clone());
                     let local_ident = if ctxt
@@ -157,13 +162,16 @@ impl<'db> PathId<'db> {
 /// become items of that block, so they bind the fragment's own uses as well.
 /// The members of a fragment spliced into an `impl` are not in scope as bare
 /// names, so they do not.
-fn quote_declaration_is_bound(
-    segment: &ast::PathSegment,
+pub(super) fn quote_name_is_bound(
+    syntax: &parser::SyntaxNode,
     name: &str,
     spliced_into_body: bool,
+    except_item: Option<&parser::SyntaxNode>,
 ) -> bool {
-    segment
-        .syntax()
+    let binds = |item: ast::Item| {
+        except_item.is_none_or(|except| item.syntax() != except) && item_declares_name(&item, name)
+    };
+    syntax
         .ancestors()
         .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
         .any(|node| {
@@ -217,10 +225,10 @@ fn quote_declaration_is_bound(
                     .syntax()
                     .children()
                     .filter_map(ast::Item::cast)
-                    .any(|item| item_declares_name(&item, name));
+                    .any(binds);
             }
             if let Some(block) = ast::BlockExpr::cast(node) {
-                return block.items().any(|item| item_declares_name(&item, name));
+                return block.items().any(binds);
             }
             false
         })

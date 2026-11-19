@@ -1,10 +1,13 @@
-use super::IdentId;
+use super::{AuthoredScope, IdentId};
 use crate::{HirDb, hir_def::Partial};
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct UsePathId<'db> {
     pub data: Vec<Partial<UsePathSegment<'db>>>,
+    /// The producer scope of a free name in a quoted import's path.
+    #[returns(copy)]
+    pub authored_scope: Option<AuthoredScope<'db>>,
 }
 
 impl<'db> UsePathId<'db> {

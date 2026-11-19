@@ -490,7 +490,7 @@ impl<'db> ImportResolver<'db> {
     ) -> Result<ScopeId<'db>, Stop<'db>> {
         let segments = use_path(self.db, use_)?;
         segments[..segments.len() - 1].iter().enumerate().try_fold(
-            use_scope(self.db, use_),
+            use_lookup_scope(self.db, use_),
             |target, (idx, segment)| {
                 let bucket = self.lookup(use_, target, idx, segment, NameDomain::TYPE, forced)?;
                 let res = bucket
@@ -524,7 +524,7 @@ impl<'db> ImportResolver<'db> {
         forced: &Forced<'db>,
     ) -> Result<NameResBucket<'db>, Stop<'db>> {
         let db = self.db;
-        let use_scope = use_scope(db, use_);
+        let lookup_scope = use_lookup_scope(db, use_);
         let name = segment
             .to_opt()
             .and_then(UsePathSegment::ident)
@@ -556,7 +556,7 @@ impl<'db> ImportResolver<'db> {
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
             Ok(res) if !res.is_importable() => false,
-            Ok(res) if !res.is_visible(db, use_scope) => {
+            Ok(res) if !res.is_visible(db, lookup_scope) => {
                 if invisible.is_none() {
                     invisible = res.derived_from(db);
                 }
@@ -604,11 +604,11 @@ impl<'db> ImportResolver<'db> {
         let glob_shadows_external = idx == 0
             && bucket.pick(NameDomain::TYPE).as_ref().is_ok_and(|res| {
                 matches!(res.derivation.origin(), NameDerivation::GlobImported(_))
-                    && !res.is_external(db, self.ingot)
+                    && !res.is_external(db, lookup_scope.ingot(db))
             })
             && (PrimTy::from_name(db, name).is_some()
-                || self
-                    .ingot
+                || lookup_scope
+                    .ingot(db)
                     .resolved_external_ingots(db)
                     .iter()
                     .any(|(ingot_name, _)| *ingot_name == name));
@@ -748,6 +748,15 @@ impl<'db> ImportResolver<'db> {
 /// The scope that `use_` imports into.
 fn use_scope<'db>(db: &'db dyn HirAnalysisDb, use_: Use<'db>) -> ScopeId<'db> {
     ScopeId::from_item(use_.into()).lex_parent(db).unwrap()
+}
+
+/// The origin of the path of `use_`. A quoted import contributes its binding
+/// to the generated block, with its free path looked up at the producer.
+fn use_lookup_scope<'db>(db: &'db dyn HirAnalysisDb, use_: Use<'db>) -> ScopeId<'db> {
+    use_.path(db)
+        .to_opt()
+        .and_then(|path| path.authored_scope(db))
+        .map_or_else(|| use_scope(db, use_), |authored| authored.resolve(db))
 }
 
 /// The segments of the path of `use_`, of which there is at least one.

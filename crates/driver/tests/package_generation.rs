@@ -208,6 +208,73 @@ foundation = { path = "../foundation" }
 }
 
 #[test]
+fn quoted_import_paths_keep_the_producer_scope_after_dependency_edits() {
+    let library = r#"
+pub mod tuning {
+    pub const fn delta() -> u8 { 2 }
+}
+
+pub mod producer {
+    use core::derive::{Derive, Inherent}
+    use core::meta::{Code, Item, Record}
+
+    use super::tuning
+    const fn delta() -> u8 { 9 }
+
+    pub struct Provider {}
+    impl Derive<Inherent> for Provider {
+        const fn derive(_ record: Record) -> Code<Item> {
+            quote {
+                pub const fn code(self) -> u8 {
+                    use ingot::{tuning::{delta as from_ingot}}
+                    use super::tuning::delta as from_parent
+                    use tuning::delta as from_lexical_scope
+                    use ingot::tuning as origin
+                    use origin::delta
+                    from_ingot() + from_parent() + from_lexical_scope() + delta()
+                }
+            }
+        }
+    }
+}
+"#;
+    let app = r#"
+use lib::producer::Provider
+
+pub mod tuning {
+    pub const fn delta() -> u8 { 5 }
+}
+
+struct Target {}
+impl Target with (Provider)
+pub const fn result() -> u8 { Target {}.code() }
+"#;
+    let mut warm = project(&[
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", app),
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", library),
+    ]);
+    let edited = library.replace("u8 { 2 }", "u8 { 3 }");
+
+    for (source, expected) in [(library, "8"), (edited.as_str(), "12"), (library, "8")] {
+        warm.workspace()
+            .update(&mut warm, url("lib/src/lib.fe"), source.to_owned());
+        let fresh = project(&[
+            ("app/fe.toml", APP_WITH_LIB_TOML),
+            ("app/src/lib.fe", app),
+            ("lib/fe.toml", LIB_TOML),
+            ("lib/src/lib.fe", source),
+        ]);
+        for db in [&warm, &fresh] {
+            let prepared = prepare(db, "app/");
+            assert_eq!(ingot_errors(&prepared, "app/"), "");
+            assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), expected);
+        }
+    }
+}
+
+#[test]
 fn quoted_ingot_path_uses_the_dependency_producers_scope() {
     let library = r#"
 trait Gate { const fn code(_ value: u8) -> u8 }
@@ -1545,5 +1612,74 @@ impl X with (P2)
     assert!(
         errors.contains("conflicting method implementations"),
         "{errors}"
+    );
+}
+#[test]
+fn quoted_imports_use_the_producers_dependency_edges() {
+    let library = r#"
+pub use rules::delta as reexported
+
+pub mod producer {
+    use core::derive::{Derive, Inherent}
+    use core::meta::{Code, Item, Record}
+
+    pub struct Provider {}
+    impl Derive<Inherent> for Provider {
+        const fn derive(_ record: Record) -> Code<Item> {
+            quote {
+                pub const fn code(self) -> u8 {
+                    use ingot::reexported
+                    use rules::delta
+                    reexported() + delta()
+                }
+            }
+        }
+    }
+}
+"#;
+    let app = r#"
+use lib::producer::Provider
+struct Target {}
+impl Target with (Provider)
+pub const fn result() -> u8 { Target {}.code() }
+"#;
+    let dependency = "rules = { path = \"../rules\" }\n";
+    let lib_with_rules = format!("{LIB_TOML}\n[dependencies]\n{dependency}");
+    let app_with_rules = format!("{APP_WITH_LIB_TOML}{dependency}");
+    let rules_toml = "[ingot]\nname = \"rules\"\nversion = \"0.1.0\"\n";
+    let rules = "pub const fn delta() -> u8 { 2 }";
+    let files = [
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", app),
+        ("lib/fe.toml", lib_with_rules.as_str()),
+        ("lib/src/lib.fe", library),
+        ("rules/fe.toml", rules_toml),
+        ("rules/src/lib.fe", rules),
+    ];
+    let db = project(&files);
+    let prepared = prepare(&db, "app/");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "4");
+
+    // The provider can no longer see rules, although the app can. Remove the
+    // authored re-export so only the quoted import tries to resolve rules.
+    let no_lib_rule = library
+        .replace("pub use rules::delta as reexported", "")
+        .replace("use ingot::reexported", "")
+        .replace("reexported() + delta()", "delta()");
+    let files = [
+        ("app/fe.toml", app_with_rules.as_str()),
+        ("app/src/lib.fe", app),
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", no_lib_rule.as_str()),
+        ("rules/fe.toml", rules_toml),
+        ("rules/src/lib.fe", rules),
+    ];
+    let db = project(&files);
+    let prepared = prepare(&db, "app/");
+    let diagnostics = ingot_errors(&prepared, "app/");
+    assert!(
+        diagnostics.contains("`rules` is not found"),
+        "{diagnostics}"
     );
 }
