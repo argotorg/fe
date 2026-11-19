@@ -2145,9 +2145,16 @@ trait Source { type Out }
 struct Item {}
 impl Source for Item { type Out = u8 }
 struct Wrap<T> { value: T }
-trait Pick<A> { const fn n() -> usize }
-impl<T: Source> Pick<T::Out> for Wrap<T> { const fn n() -> usize { 2 } }
+trait Pick<A> {
+    type Result
+    const fn n() -> usize
+}
+impl<T: Source> Pick<T::Out> for Wrap<T> {
+    type Result = u16
+    const fn n() -> usize { 2 }
+}
 const fn result() -> usize { <Wrap<Item> as Pick<u8>>::n() }
+fn output(value: <Wrap<Item> as Pick<u8>>::Result) -> u16 { value }
 "#,
         &[("result", 2)],
     );
@@ -2178,6 +2185,72 @@ impl Pick<u16> for Wrap<Item> { const fn n() -> usize { 1 } }
 
         let matched = source.replace("type Out = u16", "type Out = u8");
         values(&matched, &[("run", 2)]);
+    }
+}
+
+#[test]
+fn projection_evidence_keeps_never_distinct_from_other_trait_arguments() {
+    let declarations = r#"
+trait Source<A> { type Out }
+struct Wrap<T> {}
+trait Pick<A> { const fn n() -> usize }
+impl<T> Pick<u8> for Wrap<T> { const fn n() -> usize { 1 } }
+impl<T> Pick<u16> for Wrap<T> { const fn n() -> usize { 1 } }
+impl<T: Source<u16>> Pick<<T as Source<u16>>::Out> for Wrap<T> as Projected {
+    const fn n() -> usize { 2 }
+}
+"#;
+    for bounds in [
+        "Source<!, Out = u8> + Source<u16, Out = u16>",
+        "Source<u16, Out = u16> + Source<!, Out = u8>",
+    ] {
+        let source = format!(
+            r#"{declarations}
+const fn probe<T: {bounds}>() -> usize {{
+    with (Projected<T>) {{
+        <Wrap<T> as Pick<u16>>::n() * 10 + <Wrap<T> as Pick<u8>>::n()
+    }}
+}}
+fn check<T: {bounds}>() -> [u8; 21] {{ [0; probe<T>()] }}
+"#
+        );
+        assert_eq!(diagnostics(&source), Vec::<String>::new(), "{bounds}");
+    }
+    let unspecified = r#"
+trait Source<A> { type Out }
+fn wrong<T: Source<!, Out = u8> + Source<u16>>(x: <T as Source<u16>>::Out) -> u8 { x }
+"#;
+    assert_eq!(diagnostics(unspecified), vec!["8-0000"]);
+}
+
+#[test]
+fn ordinary_projection_lookup_and_coherence_use_exact_never_arguments() {
+    let source = r#"
+trait Source<A> { type Out }
+struct Item {}
+impl Source<!> for Item { type Out = u8 }
+impl Source<u16> for Item { type Out = u16 }
+
+fn for_never(value: <Item as Source<!>>::Out) -> u8 { value }
+fn for_u16(value: <Item as Source<u16>>::Out) -> u16 { value }
+"#;
+    assert_eq!(diagnostics(source), Vec::<String>::new());
+}
+
+#[test]
+fn ordinary_coherence_can_use_equal_projection_receivers_as_an_overlap_witness() {
+    let declarations = r#"
+trait Source { type Out }
+trait Pick<A, B, C> {}
+struct Receiver {}
+"#;
+    let left = "impl<T: Source, U> Pick<T::Out, T, U> for Receiver {}";
+    let right = "impl<X, Y: Source> Pick<Y::Out, X, Y> for Receiver {}";
+    for (first, second) in [(left, right), (right, left)] {
+        assert_eq!(
+            diagnostics(&format!("{declarations}{first}\n{second}")),
+            vec!["5-0001"],
+        );
     }
 }
 

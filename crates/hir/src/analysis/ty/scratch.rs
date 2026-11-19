@@ -161,6 +161,14 @@ where
         self.table.unify(U::unbrand(lhs), U::unbrand(rhs))
     }
 
+    pub(crate) fn unify_trait_header(
+        &mut self,
+        lhs: ScratchTraitInst<'q, 'db>,
+        rhs: ScratchTraitInst<'q, 'db>,
+    ) -> UnificationResult {
+        self.table.unify_header(lhs.raw, rhs.raw)
+    }
+
     pub(crate) fn try_extract<U>(&mut self, value: U::Branded<'q>) -> Option<U>
     where
         U: TyFoldable<'db>
@@ -224,7 +232,7 @@ where
         let implementor = self.table.instantiate_with_fresh_vars(implementor);
         let result = if self
             .table
-            .unify(receiver.raw, implementor.self_ty(self.db))
+            .unify_header(receiver.raw, implementor.self_ty(self.db))
             .is_ok()
         {
             implementor.assoc_ty(self.db, name).map(|assoc_ty| {
