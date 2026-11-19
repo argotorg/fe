@@ -559,6 +559,7 @@ impl<'db> TyFoldable<'db> for TraitGoalSolution<'db> {
         Self {
             inst: self.inst.fold_with(db, folder),
             implementor: self.implementor.fold_with(db, folder),
+            chosen: self.chosen.map(|chosen| chosen.fold_with(db, folder)),
         }
     }
 }

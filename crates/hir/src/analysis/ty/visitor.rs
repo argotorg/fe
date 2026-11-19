@@ -373,6 +373,9 @@ impl<'db> TyVisitable<'db> for TraitGoalSolution<'db> {
     {
         self.inst.visit_with(visitor);
         self.implementor.visit_with(visitor);
+        if let Some(chosen) = self.chosen {
+            chosen.visit_with(visitor);
+        }
     }
 }
 

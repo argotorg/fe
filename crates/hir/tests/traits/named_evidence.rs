@@ -1895,3 +1895,204 @@ where
     );
     assert!(default_param_codes.is_empty(), "{default_param_codes:?}");
 }
+
+const PROJECTED_PICK: &str = r#"
+trait Source { type Out }
+struct Z {}
+impl Source for Z { type Out = u8 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl Pick<u8> for Wrap<Z> { const fn n() -> usize { 1 } }
+impl Pick<u16> for Wrap<Z> { const fn n() -> usize { 1 } }
+impl<T: Source> Pick<T::Out> for Wrap<T> as Projected { const fn n() -> usize { 2 } }
+impl Pick<u8> for Wrap<Z> as Direct { const fn n() -> usize { 3 } }
+impl Pick<u16> for Wrap<Z> as Disjoint { const fn n() -> usize { 4 } }
+"#;
+
+#[test]
+fn projected_openings_select_at_the_whole_header() {
+    let source = format!(
+        r#"{PROJECTED_PICK}
+const fn explicit() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn bare() -> usize {{ with (Projected) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn nearest() -> usize {{ with (Direct) {{ with (Projected) {{ <Wrap<Z> as Pick<u8>>::n() }} }} }}
+const fn disjoint() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u16>>::n() }} }}
+const fn together() -> usize {{ with (Projected, Disjoint) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+const fn generic<U: Source<Out = u8>>() -> usize {{ with (Projected<U>) {{ <Wrap<U> as Pick<u8>>::n() }} }}
+const fn through_caller_bound() -> usize {{ generic<Z>() }}
+trait Later<A, B> {{ const fn n() -> usize }}
+impl Later<u8, Z> for Wrap<Z> {{ const fn n() -> usize {{ 1 }} }}
+impl<T: Source> Later<T::Out, T> for Wrap<Z> as LaterProjected {{ const fn n() -> usize {{ 2 }} }}
+const fn anchor_after_projection() -> usize {{ with (LaterProjected) {{ <Wrap<Z> as Later<u8, Z>>::n() }} }}
+"#
+    );
+    values(
+        &source,
+        &[
+            ("explicit", 2),
+            ("bare", 2),
+            ("nearest", 2),
+            ("disjoint", 1),
+            ("together", 2),
+            ("through_caller_bound", 2),
+            ("anchor_after_projection", 2),
+        ],
+    );
+}
+
+#[test]
+fn overlapping_projected_openings_in_one_with_are_rejected() {
+    for openings in [
+        "Projected<Z>, Direct",
+        "Direct, Projected<Z>",
+        "Projected, Direct",
+        "Direct, Projected",
+    ] {
+        let source = format!("{PROJECTED_PICK}fn reject() {{ with ({openings}) {{}} }}");
+        assert_eq!(diagnostics(&source), vec!["8-0160"], "{openings}");
+    }
+}
+
+#[test]
+fn projection_prediction_duplicate_bare_headers() {
+    let declarations = r#"
+trait Source { type Out }
+struct Z {}
+struct W {}
+impl Source for Z { type Out = u8 }
+impl Source for W { type Out = u16 }
+struct Wrap<T> { value: T }
+trait Pick<A> { const fn n() -> usize }
+impl<T: Source<Out = u8>> Pick<T::Out> for Wrap<T> as Projected {
+    const fn n() -> usize { 2 }
+}
+impl<T> Pick<u8> for Wrap<T> as Other {
+    const fn n() -> usize { 1 }
+}
+"#;
+    let checked = |openings| {
+        diagnostics(&format!(
+            "{declarations}fn run() {{ with ({openings}) {{}} }}"
+        ))
+    };
+    assert_eq!(
+        [
+            checked("Projected, Other"),
+            checked("Other, Projected"),
+            checked("Projected<W>, Other<W>"),
+        ],
+        [vec!["8-0160"], vec!["8-0160"], vec![]],
+    );
+}
+
+#[test]
+fn projection_prediction_later_arguments_determine_earlier_projections() {
+    let declarations = r#"
+trait Source { type Out }
+trait Reveal<A> { type Val }
+struct Token {}
+struct Z<X> {}
+struct Leaf {}
+struct Other {}
+impl Source for Leaf { type Out = u8 }
+impl Source for Other { type Out = u16 }
+impl<X: Source> Source for Z<X> { type Out = X::Out }
+impl<X> Reveal<X> for Token { type Val = X }
+impl<X> Reveal<X> for Other { type Val = bool }
+struct Wrap<K> {}
+trait Pick<A, B> { const fn n() -> usize }
+impl<A, B> Pick<A, B> for Wrap<Token> { const fn n() -> usize { 1 } }
+"#;
+    let mut failures = Vec::new();
+    for (header, goal) in [
+        ("T::Out, <K as Reveal<T>>::Val", "Y::Out, Z<Y>"),
+        ("<K as Reveal<T>>::Val, T::Out", "Z<Y>, Y::Out"),
+    ] {
+        for opening in ["Named", "Named<Token, Z<Y>>"] {
+            let source = format!(
+                r#"{declarations}
+impl<K: Reveal<T>, T: Source> Pick<{header}> for Wrap<K> as Named {{
+    const fn n() -> usize {{ 2 }}
+}}
+const fn run<Y: Source>() -> usize {{
+    with ({opening}) {{ <Wrap<Token> as Pick<{goal}>>::n() }}
+}}
+fn check() -> [u8; 2] {{ [0; run<Leaf>()] }}
+"#
+            );
+            let codes = diagnostics(&source);
+            if !codes.is_empty() {
+                failures.push((header, opening, codes));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn projection_prediction_never_is_distinct_in_a_header() {
+    let mut failures = Vec::new();
+    for (output, expected) in [("!", 1), ("u8", 2), ("u16", 1)] {
+        let declarations = PROJECTED_PICK.replace("type Out = u8", &format!("type Out = {output}"));
+        let source = format!(
+            r#"{declarations}
+const fn run() -> usize {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+fn check() -> [u8; {expected}] {{ [0; run()] }}
+"#
+        );
+        let codes = diagnostics(&source);
+        if !codes.is_empty() {
+            failures.push((output, expected, codes));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn failure_of_the_selected_projected_opening_does_not_fall_back() {
+    let source = PROJECTED_PICK.replace(
+        "impl<T: Source> Pick<T::Out>",
+        "trait Ready {}\nimpl<T: Source + Ready> Pick<T::Out>",
+    );
+    let source = format!(
+        r#"{source}
+fn reject() -> usize {{
+    with (Direct) {{ with (Projected<Z>) {{ <Wrap<Z> as Pick<u8>>::n() }} }}
+}}
+"#
+    );
+    let codes = diagnostics(&source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+#[test]
+fn projected_named_outputs_must_agree_with_the_ordinary_representative() {
+    for (declaration, ordinary, disjoint, changed) in [
+        (
+            "type Out",
+            "type Out = u8",
+            "type Out = u16",
+            "type Out = bool",
+        ),
+        (
+            "const N: usize",
+            "const N: usize = 1",
+            "const N: usize = 3",
+            "const N: usize = 2",
+        ),
+    ] {
+        for (named, expected) in [(ordinary, vec![]), (changed, vec!["5-0005"])] {
+            let source = format!(
+                r#"
+trait Source {{ type Out }}
+struct Wrap<T> {{ value: T }}
+trait Output<A> {{ {declaration} }}
+impl<T> Output<u8> for Wrap<T> {{ {ordinary} }}
+impl<T> Output<u16> for Wrap<T> {{ {disjoint} }}
+impl<T: Source<Out = u8>> Output<T::Out> for Wrap<T> as Projected {{ {named} }}
+"#
+            );
+            assert_eq!(diagnostics(&source), expected, "{source}");
+        }
+    }
+}

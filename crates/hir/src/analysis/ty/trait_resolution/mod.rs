@@ -36,7 +36,7 @@ mod table_solver;
 
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
-    matching_choice,
+    match_header_args,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
@@ -357,9 +357,19 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         goal: TraitInstId<'db>,
     ) -> Option<ChoiceMatch<'db>> {
-        let scope = self.normalization_scope_for_trait_inst(db, goal);
-        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
-        table_solver::matching_choice(db, self.choices, goal)
+        self.choices?;
+        let (query, mut table) = self.prepare_goal(db, goal);
+        let scope = self.normalization_scope_for_trait_inst(db, query.goal);
+        let goal =
+            normalize_trait_inst_preserving_validity(db, query.goal, scope, query.assumptions);
+        table_solver::matching_choice_in(
+            db,
+            query.choices,
+            goal,
+            &mut table,
+            scope,
+            query.assumptions,
+        )
     }
 
     pub(super) fn matching_choice_at(
@@ -368,10 +378,37 @@ impl<'db> TraitSolveCx<'db> {
         goal: TraitInstId<'db>,
         index: usize,
     ) -> Option<ChoiceMatch<'db>> {
-        let entry = *self.choices?.items(db).get(index)?;
-        let scope = self.normalization_scope_for_trait_inst(db, goal);
-        let goal = normalize_trait_inst_preserving_validity(db, goal, scope, self.assumptions);
-        table_solver::matching_choice_at(db, index, entry, goal)
+        self.choices?;
+        let (query, mut table) = self.prepare_goal(db, goal);
+        let entry = *query.choices?.items(db).get(index)?;
+        let scope = self.normalization_scope_for_trait_inst(db, query.goal);
+        let goal =
+            normalize_trait_inst_preserving_validity(db, query.goal, scope, query.assumptions);
+        table_solver::match_choice_entry(
+            db,
+            index,
+            entry,
+            goal,
+            &mut table,
+            scope,
+            query.assumptions,
+        )
+    }
+
+    pub(super) fn prepare_goal(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> (
+        TraitSolverQuery<'db>,
+        super::unify::PersistentUnificationTable<'db>,
+    ) {
+        let mut table = super::unify::PersistentUnificationTable::new(db);
+        let query = self
+            .query(db, goal)
+            .canonical()
+            .extract_identity(&mut table);
+        (query, table)
     }
 
     pub(crate) fn matching_named_choice(
@@ -437,42 +474,63 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> Selection<'db, ImplementorId<'db>> {
+        match self.select_impl_solution(db, inst) {
+            Selection::Unique(solution) => Selection::Unique(solution.implementor),
+            Selection::Ambiguous(solutions) => Selection::Ambiguous(
+                solutions
+                    .iter()
+                    .map(|solution| solution.implementor)
+                    .collect(),
+            ),
+            Selection::NotFound => Selection::NotFound,
+            Selection::NeedsGeneration(request) => Selection::NeedsGeneration(request),
+        }
+    }
+
+    pub(super) fn select_impl_solution(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        inst: TraitInstId<'db>,
+    ) -> Selection<'db, TraitGoalSolution<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
         let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
         // An assumption proves a bound; it is not a second implementation.
         // Keep inference goals on the ordinary proof query: an assumption may
         // select a different substitution from the implementations in scope.
-        let result = if inst.args(db).iter().any(|ty| ty.has_var(db))
-            || inst
+        let require_impl = !inst.args(db).iter().any(|ty| ty.has_var(db))
+            && !inst
                 .assoc_type_bindings(db)
                 .values()
-                .any(|ty| ty.has_var(db))
-        {
-            is_goal_satisfiable(db, self, inst)
-        } else {
-            let query = CanonicalGoalQuery::from_query(
-                db,
-                TraitSolverQuery {
-                    goal: inst,
-                    assumptions: self.assumptions.extend_all_bounds(db),
-                    require_impl: true,
-                    choices: self.choices,
-                },
-            );
-            match is_goal_query_satisfiable(db, self, &query) {
-                // A bound with no provable implementation can still be supplied
-                // by the caller. Incomplete searches cannot establish this.
-                GoalSatisfiability::UnSat(_) => is_goal_satisfiable(db, self, inst),
-                result => result,
-            }
-        };
+                .any(|ty| ty.has_var(db));
+        let mut query = CanonicalGoalQuery::from_query(
+            db,
+            TraitSolverQuery {
+                goal: inst,
+                assumptions: self.assumptions.extend_all_bounds(db),
+                require_impl,
+                choices: self.choices,
+            },
+        );
+        let mut result = is_goal_query_satisfiable(db, self, &query);
+        // A bound with no provable implementation can still be supplied by
+        // the caller. Incomplete searches cannot establish this.
+        if require_impl && matches!(result, GoalSatisfiability::UnSat(_)) {
+            query = self.query(db, inst);
+            result = is_goal_query_satisfiable(db, self, &query);
+        }
         match result {
             GoalSatisfiability::NeedsGeneration(request) => Selection::NeedsGeneration(request),
             GoalSatisfiability::Satisfied(solution) => {
-                Selection::Unique(solution.value.implementor)
+                let solution = if solution.value.chosen.is_some() {
+                    let mut table = super::unify::UnificationTable::new(db);
+                    query.extract_solution(&mut table, solution)
+                } else {
+                    solution.value
+                };
+                Selection::Unique(solution)
             }
             GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
-                Selection::Ambiguous(solutions.iter().map(|s| s.value.implementor).collect())
+                Selection::Ambiguous(solutions.iter().map(|s| s.value).collect())
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 Selection::NotFound
@@ -1153,6 +1211,8 @@ pub(crate) fn mentions_ty<'db>(
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
+    /// The application of an opening selected before proving its conditions.
+    pub(super) chosen: Option<ImplementorId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
