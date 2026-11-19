@@ -1,0 +1,38 @@
+mod inner {
+    trait Hidden {}
+    pub trait Open {}
+    pub(super) trait Parent {}
+
+    pub struct Local {}
+    // Inside the defining module: allowed.
+    impl Hidden for Local {}
+
+    pub mod child {
+        // A child module sees its parent's private items: allowed.
+        pub struct ChildLocal {}
+        impl super::Hidden for ChildLocal {}
+    }
+}
+
+pub struct S {}
+
+// Outside the defining module: each use is refused.
+impl inner::Hidden for S {}
+
+fn param_bound<T: inner::Hidden>(_ x: T) {}
+
+fn where_bound<T>(_ x: T)
+where
+    T: inner::Hidden,
+{}
+
+trait Sub: inner::Hidden {}
+
+trait WithAssoc {
+    type Out: inner::Hidden
+}
+
+// Allowed: public, and `pub(super)` seen from the parent.
+impl inner::Open for S {}
+impl inner::Parent for S {}
+fn ok_bound<T: inner::Open + inner::Parent>(_ x: T) {}

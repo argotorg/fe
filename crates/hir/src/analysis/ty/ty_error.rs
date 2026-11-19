@@ -49,7 +49,8 @@ pub(crate) fn path_generic_args<'db>(
 }
 
 /// Diagnostics for the types a trait reference writes as generic arguments,
-/// each at its own span. The reference's own checks cover the
+/// each at its own span, and for a trait (or a module on its path) that is
+/// not visible from `scope`. The reference's own checks cover the
 /// well-formedness of the arguments it lowers.
 pub(crate) fn trait_ref_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -59,8 +60,45 @@ pub(crate) fn trait_ref_arg_diags<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     tr.path(db).to_opt().map_or_else(Vec::new, |path| {
-        path_arg_diags(db, path, span.path(), scope, assumptions)
+        let mut diags: Vec<_> =
+            trait_path_visibility_diag(db, path, span.clone().path(), scope, assumptions)
+                .into_iter()
+                .collect();
+        diags.extend(path_arg_diags(db, path, span.path(), scope, assumptions));
+        diags
     })
+}
+
+/// `2-0003` for the first segment of a trait path that is not visible from
+/// `scope`. Trait-ref lowering resolves the path without a visibility check,
+/// so every place that names a trait (an `impl` header, a bound, a
+/// super-trait) reports it here; a private trait is otherwise usable from
+/// anywhere, including one used as a seal. A path that does not resolve is
+/// reported by lowering instead.
+fn trait_path_visibility_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    let mut invisible = None;
+    let resolved = resolve_trait_path_with_observer_and_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        &mut |p: PathId<'db>, reso: &PathRes<'db>| {
+            if invisible.is_none() && !reso.is_visible_from(db, scope) {
+                invisible = Some((p, reso.name_span(db)));
+            }
+        },
+        &LoweringContext::for_const_bodies(ConstBodyLowering::Eager),
+    );
+    let (p, deriv_span) = invisible.filter(|_| resolved.is_ok())?;
+    let ident = p.ident(db).to_opt()?;
+    let span = path_span.segment(p.segment_index(db)).ident();
+    Some(PathResDiag::Invisible(span.into(), ident, deriv_span).into())
 }
 
 /// Diagnostics for the types `path`'s last segment writes as generic

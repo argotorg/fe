@@ -1,0 +1,49 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/trait_ref_visibility.fe
+---
+error[2-0003]: `Hidden` is not visible
+   ┌─ trait_ref_visibility.fe:20:13
+   │
+ 2 │     trait Hidden {}
+   │           ------ `Hidden` is defined here
+   ·
+20 │ impl inner::Hidden for S {}
+   │             ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ trait_ref_visibility.fe:22:26
+   │
+ 2 │     trait Hidden {}
+   │           ------ `Hidden` is defined here
+   ·
+22 │ fn param_bound<T: inner::Hidden>(_ x: T) {}
+   │                          ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ trait_ref_visibility.fe:26:15
+   │
+ 2 │     trait Hidden {}
+   │           ------ `Hidden` is defined here
+   ·
+26 │     T: inner::Hidden,
+   │               ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ trait_ref_visibility.fe:29:19
+   │
+ 2 │     trait Hidden {}
+   │           ------ `Hidden` is defined here
+   ·
+29 │ trait Sub: inner::Hidden {}
+   │                   ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ trait_ref_visibility.fe:32:22
+   │
+ 2 │     trait Hidden {}
+   │           ------ `Hidden` is defined here
+   ·
+32 │     type Out: inner::Hidden
+   │                      ^^^^^^ `Hidden` is not visible
