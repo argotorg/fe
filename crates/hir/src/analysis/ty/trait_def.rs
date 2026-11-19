@@ -1646,10 +1646,14 @@ impl<'db> ImplementorId<'db> {
                 collect_candidate_constraints(db, impl_trait.into())
                     .instantiate(db, self.params(db))
             }
+            ImplementorOrigin::Structural => {
+                let prerequisites =
+                    super::clearable::clearable_prerequisites(db, self.trait_inst(db));
+                PredicateListId::new(db, prerequisites.unwrap_or_default())
+            }
             ImplementorOrigin::VirtualContract(_)
             | ImplementorOrigin::Assumption
-            | ImplementorOrigin::Callable
-            | ImplementorOrigin::Structural => PredicateListId::empty_list(db),
+            | ImplementorOrigin::Callable => PredicateListId::empty_list(db),
         }
     }
 

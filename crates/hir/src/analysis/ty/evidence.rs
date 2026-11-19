@@ -1415,7 +1415,12 @@ fn prove_in<'db>(
                 // the children's source proofs are consulted. Count viable
                 // implementations, including blanket implementations, only
                 // after checking their prerequisites with source evidence.
-                let candidates = ordinary_trait_impl_candidates(db, solve_cx, goal);
+                let mut candidates = ordinary_trait_impl_candidates(db, solve_cx, goal);
+                // Compiler-provided clauses keep the decisions that were
+                // made by the table solver itself.
+                candidates.retain(|candidate| {
+                    matches!(candidate.selected().origin(db), ImplementorOrigin::Hir(_))
+                });
                 if !candidates.is_empty() {
                     return prove_deferred_candidates(db, solve_cx, goal, bounds, candidates);
                 }
@@ -1504,7 +1509,7 @@ fn prove_selected<'db>(
                 BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
                     .slot(db, answering_assumption(db, solve_cx, goal)?)?,
             ),
-            ImplementorOrigin::Hir(_) => {
+            ImplementorOrigin::Hir(_) | ImplementorOrigin::Structural => {
                 // A `mut` goal's conditions are its implementation's `mut?`
                 // bounds at `mut`.
                 let mode = Some(if goal.is_mut(db) {
@@ -1563,9 +1568,7 @@ fn prove_selected<'db>(
                 }
             }
 
-            ImplementorOrigin::VirtualContract(_)
-            | ImplementorOrigin::Callable
-            | ImplementorOrigin::Structural => Evidence::Impl {
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Callable => Evidence::Impl {
                 selected: resolved.selected(),
                 instantiated: resolved.instantiated(),
                 conds: Vec::new(),
@@ -1918,6 +1921,51 @@ mod schema_tests {
     use super::super::ty_def::TyId;
     use super::*;
     use crate::test_db::{HirAnalysisTestDb, find_func};
+
+    #[test]
+    fn deferred_structural_proof_respects_aggregate_prerequisites() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "structural_prerequisites.fe".into(),
+            "struct Protected { unsafe invariant: u8 }",
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let protected = module
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::Struct(protected) => Some(protected),
+                _ => None,
+            })
+            .unwrap();
+        let clearable = super::super::corelib::resolve_core_trait(
+            &db,
+            module.scope(),
+            &["marker", "Clearable"],
+        )
+        .unwrap();
+        let cx = TraitSolveCx::new(&db, module.scope());
+        for (field, expected) in [
+            (TyId::u256(&db), true),
+            (TyId::adt(&db, protected.into()), false),
+        ] {
+            let aggregate = TyId::tuple_with_elems(&db, &[field]);
+            let goal = TraitInstId::new_simple(&db, clearable, vec![aggregate]);
+            assert!(super::super::clearable::clearable_implementor(&db, goal).is_some());
+            assert_eq!(
+                matches!(
+                    resolve_trait_impl_instance(&db, cx, goal),
+                    Selection::Unique(_)
+                ),
+                expected,
+            );
+            let bounds = DeferredProofBounds::capture(&db, goal, cx);
+            assert_eq!(
+                prove_in(&db, cx, goal, Some(bounds)).evidence().is_some(),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn implied_projection_keeps_declaration_slot_after_parameter_collapse() {
