@@ -38,7 +38,13 @@ implementation. An operand whose implementation could answer a goal that
 an earlier operand of the same list answers
 (`common_choice_goal`, the header test of `matching_choice`) is
 reported (`DuplicateWithChoice`) and not added, so the order inside one
-list never decides a selection.
+list never decides a selection. The overlap check compares structural
+arguments and resolves projections using the caller's bounds. If unresolved
+outputs could still make both headers match, it reports a possible overlap.
+
+Normalize associated types using the arguments and evidence available at the
+goal. A candidate's own conditions are proof obligations after header
+selection. They cannot make a different concrete header match.
 
 A qualified operand `<Type as Trait>` opens the ordinary implementation
 that its header alone selects (`resolve_ordinary_trait_impl_instance`).

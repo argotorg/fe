@@ -27,12 +27,15 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
         closure::callable_implementor,
-        fold::TyFoldable,
+        fold::{TyFoldable, TyFolder},
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, ShapeCon, TyBase, TyData, TyId},
-        unify::{PersistentUnificationTable, UnificationError, UnificationResult},
+        ty_def::{BorrowKind, ShapeCon, TyBase, TyData, TyId, TyVarSort},
+        unify::{
+            PersistentUnificationTable, UnificationError, UnificationResult, UnificationStore,
+            UnificationTableBase,
+        },
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -94,42 +97,50 @@ fn impl_header_may_match<'db>(
 /// Match the entire head before consulting mode, associated bindings, or
 /// prerequisites. Projections may depend on substitutions found later in the
 /// head, including in another part of the same type application.
-pub(crate) fn match_header_args<'db>(
+pub(crate) fn match_header_args<'db, U: UnificationStore<'db>>(
     db: &'db dyn HirAnalysisDb,
-    table: &mut PersistentUnificationTable<'db>,
+    table: &mut UnificationTableBase<'db, U>,
     left: TraitInstId<'db>,
     right: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: [PredicateListId<'db>; 2],
 ) -> UnificationResult {
-    match_header_args_with_overlap_assumptions(
-        db,
-        table,
-        left,
-        right,
-        scope,
-        assumptions,
-        [None; 2],
-    )
+    compare_headers(db, table, left, right, scope, assumptions, false).map(|_| ())
 }
 
-fn match_header_args_with_overlap_assumptions<'db>(
-    db: &'db dyn HirAnalysisDb,
-    table: &mut PersistentUnificationTable<'db>,
-    left: TraitInstId<'db>,
-    right: TraitInstId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: [PredicateListId<'db>; 2],
-    overlap_assumptions: [Option<PredicateListId<'db>>; 2],
-) -> UnificationResult {
-    if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
-        return Err(UnificationError::TypeMismatch);
-    }
-    fn is_shape_projection(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
-        matches!(
+#[derive(Clone, Copy)]
+enum HeaderMatch {
+    Exact,
+    Possible,
+}
+
+fn is_shape_projection(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    // The bare constructor is a type function. Its applications are queries.
+    matches!(ty.data(db), TyData::TyApp(..))
+        && matches!(
             ty.base_ty(db).data(db),
             TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
         )
+}
+
+fn compare_headers<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: [PredicateListId<'db>; 2],
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
+    if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
+        return Err(UnificationError::TypeMismatch);
+    }
+    if ![left, right]
+        .iter()
+        .any(|head| head.args(db).iter().any(|ty| ty.has_projection(db)))
+    {
+        table.unify_header(trait_inst_head(db, left), trait_inst_head(db, right))?;
+        return Ok(HeaderMatch::Exact);
     }
     let mut pairs = left
         .args(db)
@@ -140,7 +151,7 @@ fn match_header_args_with_overlap_assumptions<'db>(
     let mut deferred = Vec::new();
     while let Some((left, right)) = pairs.pop() {
         if !left.has_projection(db) && !right.has_projection(db) {
-            table.unify_header_arg(left, right)?;
+            table.unify_header(left, right)?;
         } else if let (TyData::TyApp(left_abs, left_arg), TyData::TyApp(right_abs, right_arg)) =
             (left.data(db), right.data(db))
             && !is_shape_projection(db, left)
@@ -155,36 +166,71 @@ fn match_header_args_with_overlap_assumptions<'db>(
 
     // An equality discharged by normalization can itself bind a variable
     // used by another deferred pair. Retry failures only after such progress.
+    let normalize_pair = |table: &mut UnificationTableBase<'db, U>, (left, right)| {
+        let [left_assumptions, right_assumptions] =
+            assumptions.map(|assumptions| assumptions.fold_with(db, table));
+        (
+            normalize_assoc_binding(db, table, left, scope, left_assumptions),
+            normalize_assoc_binding(db, table, right, scope, right_assumptions),
+        )
+    };
     while !deferred.is_empty() {
         let before = deferred.len();
-        deferred.retain(|&(left, right)| {
-            let mut normalize = |index: usize, ty| {
-                let assumptions = assumptions[index].fold_with(db, table);
-                let ty = normalize_assoc_binding(db, table, ty, scope, assumptions);
-                // In a bare overlap comparison, a remaining symbolic
-                // projection may be witnessed by its declaration's equality.
-                // An already resolved output keeps its caller-side meaning.
-                if let Some(overlap) = overlap_assumptions[index]
-                    && ty.has_projection(db)
-                    && ty.has_var(db)
-                {
-                    let overlap = overlap.fold_with(db, table);
-                    crate::analysis::ty::normalize::normalize_from_assumptions(
-                        db, ty, scope, overlap,
-                    )
-                } else {
-                    ty
-                }
-            };
-            let left = normalize(0, left);
-            let right = normalize(1, right);
-            table.unify_header_arg(left, right).is_err()
+        deferred.retain(|&pair| {
+            let (left, right) = normalize_pair(table, pair);
+            table.unify_header(left, right).is_err()
         });
         if deferred.len() == before {
-            return Err(UnificationError::TypeMismatch);
+            if !allow_possible {
+                return Err(UnificationError::TypeMismatch);
+            }
+            let residual = deferred
+                .into_iter()
+                .map(|pair| normalize_pair(table, pair))
+                .collect::<Vec<_>>();
+            return possible_header_overlap(db, table, residual);
         }
     }
-    Ok(())
+    Ok(HeaderMatch::Exact)
+}
+
+fn possible_header_overlap<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    mut pairs: Vec<(TyId<'db>, TyId<'db>)>,
+) -> Result<HeaderMatch, UnificationError> {
+    struct UnknownProjections<'a, 'db, U: UnificationStore<'db>> {
+        table: &'a mut UnificationTableBase<'db, U>,
+        outputs: FxHashMap<TyId<'db>, TyId<'db>>,
+    }
+
+    impl<'db, U: UnificationStore<'db>> TyFolder<'db> for UnknownProjections<'_, 'db, U> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if matches!(ty.data(db), TyData::AssocTy(_)) || is_shape_projection(db, ty) {
+                *self
+                    .outputs
+                    .entry(ty)
+                    .or_insert_with(|| self.table.new_var(TyVarSort::General, &ty.kind(db)))
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+
+    // The exact comparison already used the caller's facts. Approximate each
+    // unknown output consistently so repeated projections still impose equality.
+    let mut unknown = UnknownProjections {
+        table,
+        outputs: FxHashMap::default(),
+    };
+    for (left, right) in &mut pairs {
+        *left = left.fold_with(db, &mut unknown);
+        *right = right.fold_with(db, &mut unknown);
+    }
+    for (left, right) in pairs {
+        table.unify_header(left, right)?;
+    }
+    Ok(HeaderMatch::Possible)
 }
 
 pub(super) fn matching_choice<'db>(
@@ -227,51 +273,30 @@ pub(crate) fn common_choice_goal<'db>(
     solve_cx: TraitSolveCx<'db>,
     left: ChosenImpl<'db>,
     right: ChosenImpl<'db>,
-) -> Option<TraitInstId<'db>> {
+) -> Option<(TraitInstId<'db>, bool)> {
     if left.implementation().trait_(db).def(db) != right.implementation().trait_(db).def(db) {
         return None;
     }
     let mut table = PersistentUnificationTable::new(db);
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let mut instantiate = |choice: ChosenImpl<'db>| {
-        let implementation = choice.instantiate(&mut table);
-        let overlap = (choice.applied.is_none()
-            && implementation
-                .trait_(db)
-                .args(db)
-                .iter()
-                .any(|ty| ty.has_projection(db)))
-        .then(|| assumptions.merge(db, implementation.constraints(db).extend_all_bounds(db)));
-        (implementation, overlap)
-    };
-    let (left, left_overlap) = instantiate(left);
-    let (right, right_overlap) = instantiate(right);
+    let left = left.instantiate(&mut table);
+    let right = right.instantiate(&mut table);
     let scope = solve_cx.normalization_scope_for_trait_inst(db, left.trait_(db));
     let left = trait_inst_head(db, left.trait_(db));
     let right = trait_inst_head(db, right.trait_(db));
-    match_header_args_with_overlap_assumptions(
-        db,
-        &mut table,
-        left,
-        right,
-        scope,
-        [assumptions; 2],
-        [left_overlap, right_overlap],
-    )
-    .ok()?;
+    let matched =
+        compare_headers(db, &mut table, left, right, scope, [assumptions; 2], true).ok()?;
     let assumptions = assumptions.fold_with(db, &mut table);
     let left = left.fold_with(db, &mut table);
-    Some(normalize_trait_inst_preserving_validity(
-        db,
-        left,
-        scope,
-        assumptions,
+    Some((
+        normalize_trait_inst_preserving_validity(db, left, scope, assumptions),
+        matches!(matched, HeaderMatch::Possible),
     ))
 }
 
-fn normalize_assoc_binding<'db>(
+fn normalize_assoc_binding<'db, U: UnificationStore<'db>>(
     db: &'db dyn HirAnalysisDb,
-    table: &mut PersistentUnificationTable<'db>,
+    table: &mut UnificationTableBase<'db, U>,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
@@ -288,7 +313,7 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
 ) -> UnificationResult {
-    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+    match_header_args(db, table, candidate, goal, scope, [assumptions; 2])?;
 
     unify_assoc_bindings(db, table, candidate, goal, scope, assumptions)
 }
@@ -309,7 +334,7 @@ fn unify_assoc_bindings<'db>(
         let candidate_assoc_ty =
             normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
         let goal_assoc_ty = normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
-        table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+        table.unify_header(candidate_assoc_ty, goal_assoc_ty)?;
     }
     Ok(())
 }

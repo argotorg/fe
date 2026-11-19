@@ -33,10 +33,17 @@ conditions of other implementations. The nearest matching operand wins: an
 inner `with` overrides an outer one. One `with` gives each trait goal at most
 one implementation, so two operands that could answer the same goal, in
 either order and even if they name the same implementation, are rejected.
+The compiler also rejects openings in one list when unresolved associated
+types prevent it from proving that their headers are disjoint. Use separate
+nested `with` blocks to give the openings an explicit priority.
 The chosen implementation's conditions must hold: failure does not fall back
 to an ordinary implementation. Leaving the block restores the enclosing choices.
 An unapplied generic name can match any application of its header;
 `with (Name<T>)` restricts it to the written arguments.
+Header matching uses the associated types of those arguments. For example, if
+`T::Out` is `u16`, the header `Pick<T::Out>` matches `Pick<u16>`. A condition
+requiring `T::Out = u8` is checked after that match. A call to `Pick<u8>` can
+still use its ordinary implementation.
 
 Calls pass proofs only for the bounds the callee declares. Thus a call to
 `ordinary_helper()` inside `with (Wholesale)` still returns 100. A generic
