@@ -1902,7 +1902,7 @@ impl Derive<Score> for Provider {
 impl Score for Target with (Provider)
 pub const fn result() -> u8 { Target::score() }
 "#;
-    let prepare_library = |library| {
+    let prepare_library = |library: &str| {
         let db = project(&[
             ("app/fe.toml", APP_WITH_LIB_TOML),
             ("app/src/lib.fe", app),
