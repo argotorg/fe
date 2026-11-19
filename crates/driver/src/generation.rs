@@ -8,6 +8,7 @@ use common::{
     file::File,
     generation::{FrozenGenerationRequest, ScopedDeriveDemand},
     ingot::IngotKind,
+    stdlib::is_embedded_builtin,
 };
 use hir::{
     analysis::{
@@ -21,6 +22,7 @@ use hir::{
         },
     },
     core::meta::RecordInput,
+    hir_def::HirIngot,
     span::LazySpan,
 };
 use parser::ast::{self, prelude::*};
@@ -414,7 +416,6 @@ struct IngotPlan {
 /// first. The builtin libraries carry no generation requests; standalone files
 /// are prepared one at a time by `prepare_file`.
 fn plan_ingots(db: &DriverDataBase, roots: &[url::Url]) -> Vec<IngotPlan> {
-    use hir::hir_def::HirIngot;
     fn visit<'db>(
         db: &'db DriverDataBase,
         ingot: common::ingot::Ingot<'db>,
@@ -691,15 +692,13 @@ fn prepare_dependency_requests(
 
         let owner = &plans[index];
         let mut requests = sealed_dependencies(owner, seals, additions);
-        let owner_sources = owner
-            .files
-            .iter()
-            .chain(
-                owner
-                    .dependencies
-                    .iter()
-                    .flat_map(|&index| &plans[index].files),
-            )
+        let owner_ingot = db
+            .workspace()
+            .containing_ingot(db, demand.opening.file.clone())
+            .expect("the planned opening belongs to an ingot");
+        let owner_sources = std::iter::once(owner_ingot)
+            .chain(owner_ingot.transitive_dependencies(db).iter().copied())
+            .flat_map(|ingot| ingot.files(db).iter().map(|(url, _)| url))
             .collect();
         // Rebind the downstream demand in the owner's source view before it
         // can supply type identities to the provider. Its own generated
@@ -1089,7 +1088,7 @@ enum ViewBasis<'a> {
     /// Every authored input of the database, including dependencies.
     Package,
     /// Sources owned by one dependency and the ingots it depends on.
-    DependencyOwner(&'a std::collections::HashSet<&'a url::Url>),
+    DependencyOwner(&'a std::collections::HashSet<url::Url>),
 }
 
 /// The most views one transaction builds. The providers of the derive headers
@@ -2005,14 +2004,11 @@ fn prepared_view(
             output
         }
         ViewBasis::Package => db.fork_inputs(),
-        ViewBasis::DependencyOwner(sources) => db.fork_inputs_selecting(|url, file| {
+        ViewBasis::DependencyOwner(sources) => db.fork_inputs_selecting(|url| {
             // Keep manifests and resolution settings. Source identities past
-            // this boundary must belong to the owner's dependency frontier.
-            !url.path().ends_with(".fe")
-                || sources.contains(url)
-                || file
-                    .containing_ingot(db)
-                    .is_some_and(|ingot| matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std))
+            // this boundary must be compiler-provided or belong to the owner's
+            // resolved dependency closure.
+            !url.path().ends_with(".fe") || is_embedded_builtin(url) || sources.contains(url)
         }),
     };
     output

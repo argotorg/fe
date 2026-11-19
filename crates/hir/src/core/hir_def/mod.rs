@@ -43,6 +43,7 @@ pub trait HirIngot<'db> {
     fn all_modules(self, db: &'db dyn HirDb) -> &'db Vec<TopLevelMod<'db>>;
     fn root_mod(self, db: &'db dyn HirDb) -> TopLevelMod<'db>;
     fn resolved_external_ingots(self, db: &'db dyn HirDb) -> &'db Vec<(IdentId<'db>, Ingot<'db>)>;
+    fn transitive_dependencies(self, db: &'db dyn HirDb) -> &'db Vec<Ingot<'db>>;
     fn all_enums(self, db: &'db dyn HirDb) -> &'db Vec<Enum<'db>>;
     fn all_impl_traits(self, db: &'db dyn HirDb) -> &'db Vec<ImplTrait<'db>>;
     fn all_funcs(self, db: &'db dyn HirDb) -> &'db Vec<Func<'db>>;
@@ -91,6 +92,29 @@ impl<'db> HirIngot<'db> for Ingot<'db> {
                     .map(|ingot_description| (IdentId::new(db, name.as_str()), ingot_description))
             })
             .collect()
+    }
+
+    /// Each resolved dependency once, after the dependencies it uses.
+    #[salsa::tracked]
+    fn transitive_dependencies(self, db: &'db dyn HirDb) -> Vec<Ingot<'db>> {
+        fn visit<'db>(
+            db: &'db dyn HirDb,
+            ingot: Ingot<'db>,
+            seen: &mut rustc_hash::FxHashSet<Ingot<'db>>,
+            order: &mut Vec<Ingot<'db>>,
+        ) {
+            for (_, external) in ingot.resolved_external_ingots(db) {
+                if seen.insert(*external) {
+                    visit(db, *external, seen, order);
+                    order.push(*external);
+                }
+            }
+        }
+        let mut seen = rustc_hash::FxHashSet::default();
+        seen.insert(self);
+        let mut order = Vec::new();
+        visit(db, self, &mut seen, &mut order);
+        order
     }
 
     #[salsa::tracked]

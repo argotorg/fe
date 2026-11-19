@@ -149,23 +149,54 @@ fn deferred_dependency_codec_rebinds_arguments_in_the_provider_view() {
         include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/lib.fe")
             .replace("use ingot::codec::", "use lib::")
             .replace("msg M {", "struct PrivateArgument { value: u8 }\n\nmsg M {");
-    for arg in ["u8", "(u8, [PrivateArgument; 1])"] {
-        let caller = template
+    let standin_dependency = "standin = { path = \"../standin\" }\n";
+    let app_manifest = format!("{APP_WITH_LIB_TOML}{standin_dependency}");
+    let library_with_standin = format!("{LIB_TOML}\n[dependencies]\n{standin_dependency}");
+    let standin_manifest = r#"
+[ingot]
+name = "std"
+version = "0.1.0"
+[dependencies]
+foundation = { path = "../foundation" }
+"#;
+    let standin = "pub struct Outside { value: u8 }\npub use foundation::FoundationType\n";
+    let foundation_manifest = &LIB_TOML.replace("\"lib\"", "\"foundation\"");
+    for (arg, imports, library_manifest, accepted) in [
+        ("u8", "", LIB_TOML, true),
+        ("(u8, [PrivateArgument; 1])", "", LIB_TOML, false),
+        ("Outside", "use standin::Outside\n", LIB_TOML, false),
+        (
+            "FoundationType",
+            "use standin::FoundationType\n",
+            library_with_standin.as_str(),
+            true,
+        ),
+    ] {
+        let caller = format!("{imports}{template}")
             .replace("Elem<u8, Arg>", &format!("Elem<u8, Arg<{arg}>>"))
             .replace("write<u8>", &format!("write<u8, {arg}>"));
         let files = [
-            ("lib/fe.toml", LIB_TOML),
+            ("lib/fe.toml", library_manifest),
             ("lib/src/lib.fe", library.as_str()),
-            ("app/fe.toml", APP_WITH_LIB_TOML),
+            ("app/fe.toml", app_manifest.as_str()),
             ("app/src/lib.fe", caller.as_str()),
+            ("standin/fe.toml", standin_manifest),
+            ("standin/src/lib.fe", standin),
+            ("foundation/fe.toml", foundation_manifest.as_str()),
+            (
+                "foundation/src/lib.fe",
+                "pub struct FoundationType { value: u8 }",
+            ),
         ];
         let db = project(&files);
         let result = prepare_ingots(&db, &[url("app/")]);
-        if arg == "u8" {
-            let prepared = result.unwrap().expect("the dependency codec is prepared");
+        if accepted {
+            let prepared = result
+                .unwrap_or_else(|error| panic!("{arg}: {error}"))
+                .expect("the dependency codec is prepared");
             assert_eq!(ingot_errors(&prepared, "app/"), "");
         } else {
-            let error = result.err().expect("the consumer type is outside the view");
+            let error = result.err().expect("the argument is outside the view");
             assert_eq!(error.file, url("lib/src/lib.fe"));
             assert_eq!(
                 error.cause,
