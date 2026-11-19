@@ -102,6 +102,26 @@ pub(crate) fn match_header_args<'db>(
     scope: ScopeId<'db>,
     assumptions: [PredicateListId<'db>; 2],
 ) -> UnificationResult {
+    match_header_args_with_overlap_assumptions(
+        db,
+        table,
+        left,
+        right,
+        scope,
+        assumptions,
+        [None; 2],
+    )
+}
+
+fn match_header_args_with_overlap_assumptions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: [PredicateListId<'db>; 2],
+    overlap_assumptions: [Option<PredicateListId<'db>>; 2],
+) -> UnificationResult {
     if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
         return Err(UnificationError::TypeMismatch);
     }
@@ -120,7 +140,7 @@ pub(crate) fn match_header_args<'db>(
     let mut deferred = Vec::new();
     while let Some((left, right)) = pairs.pop() {
         if !left.has_projection(db) && !right.has_projection(db) {
-            table.unify(left, right)?;
+            table.unify_header_arg(left, right)?;
         } else if let (TyData::TyApp(left_abs, left_arg), TyData::TyApp(right_abs, right_arg)) =
             (left.data(db), right.data(db))
             && !is_shape_projection(db, left)
@@ -138,11 +158,27 @@ pub(crate) fn match_header_args<'db>(
     while !deferred.is_empty() {
         let before = deferred.len();
         deferred.retain(|&(left, right)| {
-            let [left_assumptions, right_assumptions] =
-                assumptions.map(|list| list.fold_with(db, table));
-            let left = normalize_assoc_binding(db, table, left, scope, left_assumptions);
-            let right = normalize_assoc_binding(db, table, right, scope, right_assumptions);
-            table.unify(left, right).is_err()
+            let mut normalize = |index: usize, ty| {
+                let assumptions = assumptions[index].fold_with(db, table);
+                let ty = normalize_assoc_binding(db, table, ty, scope, assumptions);
+                // In a bare overlap comparison, a remaining symbolic
+                // projection may be witnessed by its declaration's equality.
+                // An already resolved output keeps its caller-side meaning.
+                if let Some(overlap) = overlap_assumptions[index]
+                    && ty.has_projection(db)
+                    && ty.has_var(db)
+                {
+                    let overlap = overlap.fold_with(db, table);
+                    crate::analysis::ty::normalize::normalize_from_assumptions(
+                        db, ty, scope, overlap,
+                    )
+                } else {
+                    ty
+                }
+            };
+            let left = normalize(0, left);
+            let right = normalize(1, right);
+            table.unify_header_arg(left, right).is_err()
         });
         if deferred.len() == before {
             return Err(UnificationError::TypeMismatch);
@@ -196,13 +232,33 @@ pub(crate) fn common_choice_goal<'db>(
         return None;
     }
     let mut table = PersistentUnificationTable::new(db);
-    let left = left.instantiate(&mut table);
-    let right = right.instantiate(&mut table);
-    let scope = solve_cx.normalization_scope_for_trait_inst(db, left.trait_(db));
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
+    let mut instantiate = |choice: ChosenImpl<'db>| {
+        let implementation = choice.instantiate(&mut table);
+        let overlap = (choice.applied.is_none()
+            && implementation
+                .trait_(db)
+                .args(db)
+                .iter()
+                .any(|ty| ty.has_projection(db)))
+        .then(|| assumptions.merge(db, implementation.constraints(db).extend_all_bounds(db)));
+        (implementation, overlap)
+    };
+    let (left, left_overlap) = instantiate(left);
+    let (right, right_overlap) = instantiate(right);
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, left.trait_(db));
     let left = trait_inst_head(db, left.trait_(db));
     let right = trait_inst_head(db, right.trait_(db));
-    match_header_args(db, &mut table, left, right, scope, [assumptions; 2]).ok()?;
+    match_header_args_with_overlap_assumptions(
+        db,
+        &mut table,
+        left,
+        right,
+        scope,
+        [assumptions; 2],
+        [left_overlap, right_overlap],
+    )
+    .ok()?;
     let assumptions = assumptions.fold_with(db, &mut table);
     let left = left.fold_with(db, &mut table);
     Some(normalize_trait_inst_preserving_validity(
