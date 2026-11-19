@@ -292,7 +292,7 @@ pub(super) fn lower_generated_item_code<'db>(ctxt: &mut FileLowerCtxt<'db>, code
     }
 }
 
-/// Lower the bounded explicit-derive function inside its authored impl header.
+/// Lower the bounded function supplied by a scoped provider.
 pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &FrozenCode) {
     let FrozenCode::Template {
         kind: FrozenCodeKind::Item,
@@ -309,7 +309,7 @@ pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &Fro
         );
         return;
     };
-    let (quote, frame) = ctxt.resolve_quote_template(
+    let (quote, mut frame) = ctxt.resolve_quote_template(
         quote_file,
         *quote_range,
         *producer_module,
@@ -317,6 +317,7 @@ pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &Fro
         false,
         holes.clone(),
     );
+    frame.is_member_quote = true;
     let producer = frame.producer;
     // Admission covers the complete output, not just the children that happen
     // to cast to items. In particular, a sibling item hole must not disappear

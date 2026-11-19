@@ -1731,3 +1731,75 @@ pub const fn result() -> u8 { Target {}.code() }
         "{diagnostics}"
     );
 }
+
+#[test]
+fn scoped_quotation_uses_the_producers_dependency_edges() {
+    let library = r#"
+use core::meta::{Code, Item}
+
+pub const fn fragment() -> Code<Item> {
+    quote {
+        const fn score() -> u8 {
+            use rules::score as imported
+            imported() + rules::score()
+        }
+    }
+}
+"#;
+    let app = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Score { const fn score() -> u8 }
+struct Target {}
+struct Provider {}
+
+impl Derive<Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> { lib::fragment() }
+}
+
+pub const fn result() -> u8 { with (Provider) { Target::score() } }
+"#;
+    let lib_with_rules = format!("{LIB_TOML}\n[dependencies]\nrules = {{ path = \"../rules\" }}\n");
+    let app_with_shadow = format!("{APP_WITH_LIB_TOML}rules = {{ path = \"../shadow\" }}\n");
+    let shadow_toml = LIB_TOML.replace("\"lib\"", "\"shadow\"");
+    let rules_toml = LIB_TOML.replace("\"lib\"", "\"rules\"");
+    let check = |lib_manifest: &str, app_manifest: &str, library: &str| {
+        let db = project(&[
+            ("app/fe.toml", app_manifest),
+            ("app/src/lib.fe", app),
+            ("lib/fe.toml", lib_manifest),
+            ("lib/src/lib.fe", library),
+            ("rules/fe.toml", &rules_toml),
+            ("rules/src/lib.fe", "pub const fn score() -> u8 { 3 }"),
+            ("shadow/fe.toml", &shadow_toml),
+            ("shadow/src/lib.fe", "pub const fn score() -> u8 { 5 }"),
+        ]);
+        prepare_ingots(&db, &[url("app/")])
+    };
+    for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
+        let prepared = check(&lib_with_rules, manifest, library)
+            .expect("the producer can use its dependency")
+            .expect("the scoped request generated a method");
+        assert_eq!(ingot_errors(&prepared, "app/"), "");
+        assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "6");
+    }
+
+    let refusal = check(LIB_TOML, &app_with_shadow, library)
+        .err()
+        .expect("the producer cannot use a consumer-only dependency");
+    assert!(refusal.cause.contains("`rules` is not found"), "{refusal}");
+
+    let glob = library
+        .replace("use rules::score as imported", "use rules::*")
+        .replace("imported()", "score()");
+    let refusal = check(&lib_with_rules, APP_WITH_LIB_TOML, &glob)
+        .err()
+        .expect("glob imports in a scoped quotation are refused");
+    assert!(
+        refusal
+            .cause
+            .contains("a glob import is not supported inside a quotation"),
+        "{refusal}"
+    );
+}
