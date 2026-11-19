@@ -23,8 +23,8 @@ use super::{
     subst::substitute_complete,
     trait_def::{
         ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId,
-        instantiate_selected_choice, instantiate_selected_impl,
-        resolve_ordinary_trait_impl_instance, resolve_trait_impl_instance,
+        instantiate_selected_choice, instantiate_selected_impl, ordinary_trait_impl_candidates,
+        resolve_trait_impl_instance,
     },
     trait_lower::lower_impl_trait,
     trait_resolution::{
@@ -1381,8 +1381,7 @@ fn prove_in<'db>(
     goal: TraitInstId<'db>,
     bounds: Option<DeferredProofBounds<'db>>,
 ) -> ProofOutcome<'db> {
-    let settled = |flags: TyFlags| !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID);
-    if !settled(collect_flags(db, goal)) {
+    if !proof_inputs_settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
     }
     let (selection, chosen) = if let Some(bounds) = bounds {
@@ -1410,13 +1409,18 @@ fn prove_in<'db>(
             instantiate_selected_impl(db, selected, goal)
                 .map_or(Selection::NotFound, Selection::Unique)
         } else {
-            match resolve_trait_impl_instance(db, solve_cx, goal) {
-                // The ordinary table can reject a parent because it sees an
-                // applied choice before a child's source proof. A unique
-                // compatible header can still be checked by those proofs.
-                Selection::NotFound => resolve_ordinary_trait_impl_instance(db, solve_cx, goal),
-                result => result,
+            let selected = resolve_trait_impl_instance(db, solve_cx, goal);
+            if matches!(selected, Selection::NotFound) {
+                // Applied choices can make the table reject a parent before
+                // the children's source proofs are consulted. Count viable
+                // implementations, including blanket implementations, only
+                // after checking their prerequisites with source evidence.
+                let candidates = ordinary_trait_impl_candidates(db, solve_cx, goal);
+                if !candidates.is_empty() {
+                    return prove_deferred_candidates(db, solve_cx, goal, bounds, candidates);
+                }
             }
+            selected
         };
         (selection, chosen)
     } else {
@@ -1434,7 +1438,48 @@ fn prove_in<'db>(
             ProofOutcome::Unavailable
         };
     };
-    if !settled(collect_flags(db, resolved)) {
+    prove_selected(db, solve_cx, goal, bounds, chosen, resolved)
+}
+
+fn proof_inputs_settled(flags: TyFlags) -> bool {
+    !flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID)
+}
+
+fn prove_deferred_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    bounds: DeferredProofBounds<'db>,
+    candidates: impl IntoIterator<Item = ResolvedImplInstance<'db>>,
+) -> ProofOutcome<'db> {
+    let mut proof = None;
+    let mut deferred = false;
+    for candidate in candidates {
+        match prove_selected(db, solve_cx, goal, Some(bounds), None, candidate) {
+            ProofOutcome::Proven(candidate) => {
+                if proof.replace(candidate).is_some() {
+                    return ProofOutcome::Unavailable;
+                }
+            }
+            ProofOutcome::Deferred => deferred = true,
+            ProofOutcome::Unavailable => {}
+        }
+    }
+    if deferred {
+        return ProofOutcome::Deferred;
+    }
+    proof.map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+}
+
+fn prove_selected<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    bounds: Option<DeferredProofBounds<'db>>,
+    chosen: Option<usize>,
+    resolved: ResolvedImplInstance<'db>,
+) -> ProofOutcome<'db> {
+    if !proof_inputs_settled(collect_flags(db, resolved)) {
         return ProofOutcome::Deferred;
     }
     if matches!(
@@ -1494,7 +1539,7 @@ fn prove_in<'db>(
                                 && let Some(&source) = conditions.list(db).get(index)
                             {
                                 let source_goal = source.at_mode(db, mode);
-                                if settled(collect_flags(db, source_goal)) {
+                                if proof_inputs_settled(collect_flags(db, source_goal)) {
                                     return prove_in(
                                         db,
                                         solve_cx,

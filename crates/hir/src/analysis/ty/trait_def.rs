@@ -508,6 +508,20 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> Selection<ResolvedImplInstance<'db>> {
+    let matched = ordinary_trait_impl_candidates(db, solve_cx, inst);
+    match matched.len() {
+        1 => Selection::Unique(*matched.iter().next().unwrap()),
+        0 => Selection::NotFound,
+        _ => Selection::Ambiguous(matched),
+    }
+}
+
+/// Compatible implementation headers whose prerequisites have yet to be proved.
+pub(crate) fn ordinary_trait_impl_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    inst: TraitInstId<'db>,
+) -> IndexSet<ResolvedImplInstance<'db>> {
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);
@@ -600,11 +614,7 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
         }
         matched.insert(resolved);
     }
-    match matched.len() {
-        1 => Selection::Unique(*matched.iter().next().unwrap()),
-        0 => Selection::NotFound,
-        _ => Selection::Ambiguous(matched),
-    }
+    matched
 }
 
 /// An implementation selection, without candidates for an ambiguous one.
