@@ -80,10 +80,10 @@ impl DriverDataBase {
             target.workspace().remove(&mut target, &url);
         }
         for (url, file) in self.workspace().all_files(self).iter() {
-            if include(url, *file) {
+            if include(&url, file) {
                 target
                     .workspace()
-                    .update(&mut target, url.clone(), file.text(self).clone());
+                    .update(&mut target, url, file.text(self).clone());
             }
         }
         self.dependency_graph().copy_into(self, &mut target);
