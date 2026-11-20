@@ -785,6 +785,18 @@ mod tests {
 
     #[test]
     #[wasm_bindgen_test]
+    fn trait_family_tokens_distinguish_declarations_and_where_predicates() {
+        for source in [
+            "struct S<T> where T: Copy, { value: T }\ntrait Next: Parent {}",
+            "struct S<T> where { true }, trait Family: Bound { value: T }",
+        ] {
+            let (_, errors) = crate::parse_source_file(source, RecoveryMode::NoRecover);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+        }
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
     fn generic_param() {
         let source = r#"<T: Trait + Trait2<X, Y>, U, const N: usize>"#;
         let gp = parse_generic_params(source);

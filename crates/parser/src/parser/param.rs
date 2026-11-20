@@ -782,8 +782,11 @@ impl WhereClauseScope {
             (ItemBlock::Required | ItemBlock::Optional, _) => parser.dry_run(|parser| {
                 skip_braces(parser)
                     && parser.current_kind().is_some_and(|kind| {
+                        // Treat a following trait declaration as an item
+                        // boundary. A trait-family bound
+                        // after a braced condition starts with a comma.
                         matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace)
-                            || starts_predicate(kind)
+                            || (kind != SyntaxKind::TraitKw && starts_predicate(kind))
                     })
             }),
         }
