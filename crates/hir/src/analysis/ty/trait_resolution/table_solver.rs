@@ -17,21 +17,25 @@ use tablesolve::{
 };
 
 use super::{
-    CanonicalGoalQuery, GoalSatisfiability, TRAIT_SOLVER_ROOT_ANSWER_LIMIT, TraitGoalSolution,
-    TraitSolveCompletion, TraitSolveCx, TraitSolverQuery, normalize_trait_inst_preserving_validity,
+    CanonicalGoalQuery, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
+    TRAIT_SOLVER_ROOT_ANSWER_LIMIT, TraitGoalSolution, TraitSolveCompletion, TraitSolveCx,
+    TraitSolverQuery, normalize_trait_inst_preserving_validity,
 };
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        canonical::{Canonical, Solution},
+        canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
         closure::callable_implementor,
-        fold::TyFoldable,
+        fold::{TyFoldable, TyFolder},
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, TyData, TyId},
-        unify::{PersistentUnificationTable, UnificationError, UnificationResult},
+        ty_def::{BorrowKind, ShapeCon, TyBase, TyData, TyId, TyVarSort},
+        unify::{
+            PersistentUnificationTable, UnificationError, UnificationResult, UnificationStore,
+            UnificationTableBase,
+        },
         visitor::{TyVisitable, TyVisitor},
     },
 };
@@ -90,9 +94,265 @@ fn impl_header_may_match<'db>(
             .all(|(&header, &goal)| may_unify(db, header, goal))
 }
 
-fn normalize_assoc_binding<'db>(
+/// Match the entire head before consulting mode, associated bindings, or
+/// prerequisites. Projections may depend on substitutions found later in the
+/// head, including in another part of the same type application.
+pub(crate) fn match_header_args<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: [PredicateListId<'db>; 2],
+) -> UnificationResult {
+    compare_headers(db, table, left, right, scope, assumptions, false).map(|_| ())
+}
+
+/// Compare positional trait identity during normalization. Bind structural
+/// arguments before checking projection identities in the current table.
+/// Starting another normalizer here would restart the active cycle guards.
+pub(crate) fn match_prepared_header<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+) -> UnificationResult {
+    compare_header_pairs(db, table, left, right, |_, pair| pair, false).map(|_| ())
+}
+
+pub(crate) fn match_prepared_type<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TyId<'db>,
+    right: TyId<'db>,
+) -> UnificationResult {
+    if !left.has_projection(db) && !right.has_projection(db) {
+        return table.unify_header(left, right);
+    }
+    compare_type_pairs(db, table, vec![(left, right)], |_, pair| pair, false).map(|_| ())
+}
+
+#[derive(Clone, Copy)]
+enum HeaderMatch {
+    Exact,
+    Possible,
+}
+
+fn is_shape_projection(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
+    // The bare constructor is a type function. Its applications are queries.
+    matches!(ty.data(db), TyData::TyApp(..))
+        && matches!(
+            ty.base_ty(db).data(db),
+            TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
+        )
+}
+
+fn compare_headers<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: [PredicateListId<'db>; 2],
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
+    compare_header_pairs(
+        db,
+        table,
+        left,
+        right,
+        |table, (left, right)| {
+            let [left_assumptions, right_assumptions] =
+                assumptions.map(|assumptions| assumptions.fold_with(db, table));
+            (
+                normalize_assoc_binding(db, table, left, scope, left_assumptions),
+                normalize_assoc_binding(db, table, right, scope, right_assumptions),
+            )
+        },
+        allow_possible,
+    )
+}
+
+type HeaderPair<'db> = (TyId<'db>, TyId<'db>);
+
+fn compare_header_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    normalize_pair: impl FnMut(&mut UnificationTableBase<'db, U>, HeaderPair<'db>) -> HeaderPair<'db>,
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
+    if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
+        return Err(UnificationError::TypeMismatch);
+    }
+    if ![left, right]
+        .iter()
+        .any(|head| head.args(db).iter().any(|ty| ty.has_projection(db)))
+    {
+        table.unify_header(trait_inst_head(db, left), trait_inst_head(db, right))?;
+        return Ok(HeaderMatch::Exact);
+    }
+    let pairs = left
+        .args(db)
+        .iter()
+        .copied()
+        .zip(right.args(db).iter().copied())
+        .collect::<Vec<_>>();
+    compare_type_pairs(db, table, pairs, normalize_pair, allow_possible)
+}
+
+fn compare_type_pairs<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    mut pairs: Vec<HeaderPair<'db>>,
+    mut normalize_pair: impl FnMut(
+        &mut UnificationTableBase<'db, U>,
+        HeaderPair<'db>,
+    ) -> HeaderPair<'db>,
+    allow_possible: bool,
+) -> Result<HeaderMatch, UnificationError> {
+    let mut deferred = Vec::new();
+    while let Some((left, right)) = pairs.pop() {
+        if !left.has_projection(db) && !right.has_projection(db) {
+            table.unify_header(left, right)?;
+        } else if let (TyData::TyApp(left_abs, left_arg), TyData::TyApp(right_abs, right_arg)) =
+            (left.data(db), right.data(db))
+            && !is_shape_projection(db, left)
+            && !is_shape_projection(db, right)
+        {
+            pairs.push((*left_abs, *right_abs));
+            pairs.push((*left_arg, *right_arg));
+        } else {
+            deferred.push((left, right));
+        }
+    }
+
+    // An equality discharged by normalization can itself bind a variable
+    // used by another deferred pair. Retry failures only after such progress.
+    while !deferred.is_empty() {
+        let before = deferred.len();
+        deferred.retain(|&pair| {
+            let (left, right) = normalize_pair(table, pair);
+            table.unify_header(left, right).is_err()
+        });
+        if deferred.len() == before {
+            if !allow_possible {
+                return Err(UnificationError::TypeMismatch);
+            }
+            let residual = deferred
+                .into_iter()
+                .map(|pair| normalize_pair(table, pair))
+                .collect::<Vec<_>>();
+            return possible_header_overlap(db, table, residual);
+        }
+    }
+    Ok(HeaderMatch::Exact)
+}
+
+fn possible_header_overlap<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    mut pairs: Vec<(TyId<'db>, TyId<'db>)>,
+) -> Result<HeaderMatch, UnificationError> {
+    struct UnknownProjections<'a, 'db, U: UnificationStore<'db>> {
+        table: &'a mut UnificationTableBase<'db, U>,
+        outputs: FxHashMap<TyId<'db>, TyId<'db>>,
+    }
+
+    impl<'db, U: UnificationStore<'db>> TyFolder<'db> for UnknownProjections<'_, 'db, U> {
+        fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+            if matches!(ty.data(db), TyData::AssocTy(_)) || is_shape_projection(db, ty) {
+                *self
+                    .outputs
+                    .entry(ty)
+                    .or_insert_with(|| self.table.new_var(TyVarSort::General, ty.kind(db)))
+            } else {
+                ty.super_fold_with(db, self)
+            }
+        }
+    }
+
+    // The exact comparison already used the caller's facts. Approximate each
+    // unknown output consistently so repeated projections still impose equality.
+    let mut unknown = UnknownProjections {
+        table,
+        outputs: FxHashMap::default(),
+    };
+    for (left, right) in &mut pairs {
+        *left = left.fold_with(db, &mut unknown);
+        *right = right.fold_with(db, &mut unknown);
+    }
+    for (left, right) in pairs {
+        table.unify_header(left, right)?;
+    }
+    Ok(HeaderMatch::Possible)
+}
+
+pub(super) fn matching_choice<'db>(
     db: &'db dyn HirAnalysisDb,
     table: &mut PersistentUnificationTable<'db>,
+    choices: Option<ChosenImpls<'db>>,
+    goal: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<(usize, ImplementorId<'db>)> {
+    choices?
+        .items(db)
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, &choice)| {
+            let implementation = choice.implementation();
+            if implementation.trait_(db).def(db) != goal.def(db) {
+                return None;
+            }
+            let mut probe = table.clone();
+            let application = choice.instantiate(&mut probe);
+            match_header_args(
+                db,
+                &mut probe,
+                application.trait_(db),
+                goal,
+                scope,
+                [assumptions; 2],
+            )
+            .ok()?;
+            *table = probe;
+            Some((index, application))
+        })
+}
+
+/// The trait goal either operand of a single with could answer.
+pub(crate) fn common_choice_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    left: ChosenImpl<'db>,
+    right: ChosenImpl<'db>,
+) -> Option<(TraitInstId<'db>, bool)> {
+    if left.implementation().trait_(db).def(db) != right.implementation().trait_(db).def(db) {
+        return None;
+    }
+    let mut table = PersistentUnificationTable::new(db);
+    let assumptions = solve_cx.assumptions().extend_all_bounds(db);
+    let left = left.instantiate(&mut table);
+    let right = right.instantiate(&mut table);
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, left.trait_(db));
+    let left = trait_inst_head(db, left.trait_(db));
+    let right = trait_inst_head(db, right.trait_(db));
+    let matched =
+        compare_headers(db, &mut table, left, right, scope, [assumptions; 2], true).ok()?;
+    let assumptions = assumptions.fold_with(db, &mut table);
+    let left = left.fold_with(db, &mut table);
+    Some((
+        normalize_trait_inst_preserving_validity(db, left, scope, assumptions),
+        matches!(matched, HeaderMatch::Possible),
+    ))
+}
+
+fn normalize_assoc_binding<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
     ty: TyId<'db>,
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
@@ -109,10 +369,20 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
     scope: ScopeId<'db>,
     assumptions: super::PredicateListId<'db>,
 ) -> UnificationResult {
-    table.unify(trait_inst_head(db, candidate), trait_inst_head(db, goal))?;
+    match_header_args(db, table, candidate, goal, scope, [assumptions; 2])?;
 
-    // Each of the goal's equalities holds by the candidate's, which may bind
-    // an associated shape at every mode where the goal names one.
+    unify_assoc_bindings(db, table, candidate, goal, scope, assumptions)
+}
+
+fn unify_assoc_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    candidate: TraitInstId<'db>,
+    goal: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> UnificationResult {
+    // Each required equality holds by the candidate's binding at that mode.
     for (&binding, &goal_assoc_ty) in goal.assoc_type_bindings(db) {
         let candidate_assoc_ty = candidate
             .bound_assoc_ty(db, binding)
@@ -120,10 +390,64 @@ fn unify_trait_inst_with_normalized_assoc_bindings<'db>(
         let candidate_assoc_ty =
             normalize_assoc_binding(db, table, candidate_assoc_ty, scope, assumptions);
         let goal_assoc_ty = normalize_assoc_binding(db, table, goal_assoc_ty, scope, assumptions);
-        table.unify(candidate_assoc_ty, goal_assoc_ty)?;
+        table.unify_header(candidate_assoc_ty, goal_assoc_ty)?;
     }
-
     Ok(())
+}
+
+/// Instantiate the specified lexical opening at an already attributed goal.
+/// The caller proves its conditions with that goal's source evidence.
+pub(crate) fn match_chosen_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    choice: ChosenImpl<'db>,
+    complete: ImplementorId<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<(ImplementorId<'db>, TraitInstId<'db>)> {
+    let solve_cx = solve_cx.with_choices(Some(ChosenImpls::new(db, vec![choice])));
+    let (query, mut table) = solve_cx.prepare_goal(db, goal);
+    let choice = query.choices?.items(db)[0];
+    let mut application = choice.instantiate(&mut table);
+    let scope = solve_cx.normalization_scope_for_trait_inst(db, query.goal);
+    let goal = normalize_trait_inst_preserving_validity(db, query.goal, scope, query.assumptions);
+    match_header_args(
+        db,
+        &mut table,
+        application.trait_(db),
+        goal,
+        scope,
+        [query.assumptions; 2],
+    )
+    .ok()?;
+    application = complete.reapply(db, application);
+    check_chosen_bindings(db, &mut table, application, goal, scope, query.assumptions)?;
+    Some((
+        application.fold_with(db, &mut table),
+        goal.fold_with(db, &mut table),
+    ))
+}
+
+fn check_chosen_bindings<'db>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut PersistentUnificationTable<'db>,
+    candidate: ImplementorId<'db>,
+    goal: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<()> {
+    if goal.is_mut(db) && !candidate.gives_mut(db) {
+        return None;
+    }
+    let assumptions = assumptions.fold_with(db, table);
+    unify_assoc_bindings(
+        db,
+        table,
+        candidate.trait_inst(db),
+        goal,
+        scope,
+        assumptions,
+    )
+    .ok()
 }
 
 /// Whether `assumption` answers the normalized `goal`: a `mut` goal holds
@@ -148,17 +472,27 @@ fn assumption_answers<'db>(
         .is_ok()
 }
 
-/// The position, in `solve_cx`'s extended assumption list, of the first
-/// assumption that answers `goal`, in the order the solver tries them.
-pub(crate) fn answering_assumption<'db>(
+/// Whether a declared bound can answer this use in its normalization context.
+/// Callers address the matching declaration slot in their own order.
+pub(crate) fn assumption_matcher<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
-) -> Option<usize> {
+) -> impl Fn(TraitInstId<'db>) -> bool + 'db {
     let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    let goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
-    assumptions.list(db).iter().position(|&assumption| {
+    let normalized_goal = normalize_trait_inst_preserving_validity(db, goal, scope, assumptions);
+    move |assumption| {
+        if assumption == goal {
+            return true;
+        }
+        // A stronger predicate can name the same symbolic projection. Keep
+        // that shared head while checking mode and the required equalities.
+        let goal = if assumption.def(db) == goal.def(db) && assumption.args(db) == goal.args(db) {
+            goal
+        } else {
+            normalized_goal
+        };
         assumption_answers(
             db,
             &mut PersistentUnificationTable::new(db),
@@ -167,11 +501,27 @@ pub(crate) fn answering_assumption<'db>(
             scope,
             assumptions,
         )
-    })
+    }
+}
+
+/// The first matching slot in the extended assumption list.
+pub(crate) fn answering_assumption<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<usize> {
+    solve_cx
+        .assumptions()
+        .extend_all_bounds(db)
+        .list(db)
+        .iter()
+        .copied()
+        .position(assumption_matcher(db, solve_cx, goal))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StopReason {
+    UnresolvedChoice,
     MaximumTypeDepth,
     TargetFound,
 }
@@ -189,9 +539,13 @@ pub(crate) enum TargetSolutionMatch {
     NotEqual,
 }
 
-#[derive(Clone, Copy)]
 enum Clause<'db> {
     Implementor(ImplementorId<'db>),
+    Chosen {
+        selected: ImplementorId<'db>,
+        application: ImplementorId<'db>,
+        table: PersistentUnificationTable<'db>,
+    },
     Assumption(usize),
     /// The builtin implementation of the callable value, a closure or a
     /// function item, that is the goal's self type (`ty::closure`), built
@@ -211,6 +565,7 @@ struct Branch<'db> {
     root_goal: TraitInstId<'db>,
     remaining_goals: Vec<TraitInstId<'db>>,
     selected_impl: ImplementorId<'db>,
+    chosen: Option<ImplementorId<'db>>,
 }
 
 #[derive(Clone)]
@@ -329,6 +684,7 @@ impl<'db> TraitResolutionContext<'db> {
             TraitGoalSolution {
                 inst: goal,
                 implementor: branch.selected_impl,
+                chosen: branch.chosen,
             },
         )
     }
@@ -356,26 +712,83 @@ impl<'db> TraitResolutionContext<'db> {
         }
     }
 
+    fn impl_branch(
+        &self,
+        mut table: PersistentUnificationTable<'db>,
+        root_goal: TraitInstId<'db>,
+        goal_mode: Option<BorrowKind>,
+        selected_impl: ImplementorId<'db>,
+        candidate: ImplementorId<'db>,
+        chosen: Option<ImplementorId<'db>>,
+    ) -> Branch<'db> {
+        let remaining_goals = candidate
+            .constraints(self.db)
+            .list(self.db)
+            .iter()
+            .map(|constraint| {
+                constraint
+                    .at_mode(self.db, goal_mode)
+                    .fold_with(self.db, &mut table)
+            })
+            .collect();
+        Branch {
+            table,
+            root_goal,
+            remaining_goals,
+            selected_impl,
+            chosen,
+        }
+    }
+
     fn continue_branch(
         &self,
         parent: &Query<'db>,
         mut branch: Branch<'db>,
         assumptions: super::PredicateListId<'db>,
     ) -> ContextTransition<Self> {
-        let Some(next_goal) = branch.remaining_goals.pop() else {
+        if branch.remaining_goals.is_empty() {
             return self.finish_branch(parent, branch);
-        };
+        }
+        let next_index = parent
+            .value()
+            .choices
+            .and_then(|choices| {
+                branch.remaining_goals.iter().rposition(|goal| {
+                    let goal = goal.fold_with(self.db, &mut branch.table);
+                    !goal.args(self.db).iter().any(|ty| ty.has_var(self.db))
+                        || !choices.items(self.db).iter().any(|choice| {
+                            let implementation = choice
+                                .implementation()
+                                .fold_with(self.db, &mut branch.table);
+                            implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
+                                && impl_header_may_match(self.db, implementation, goal)
+                        })
+                })
+            })
+            .unwrap_or(branch.remaining_goals.len() - 1);
+        let next_goal = branch.remaining_goals.remove(next_index);
 
         // `tablesolve` keys a suspension before retaining its branch state. Fold
         // through every substitution accumulated so far so table sharing never
         // sees a stale, pre-unification subgoal.
         let next_goal = next_goal.fold_with(self.db, &mut branch.table);
         let assumptions = assumptions.fold_with(self.db, &mut branch.table);
+        let choices = parent.value().choices.map(|choices| {
+            super::ChosenImpls::new(
+                self.db,
+                choices
+                    .items(self.db)
+                    .iter()
+                    .map(|item| item.fold_with(self.db, &mut branch.table))
+                    .collect::<Vec<_>>(),
+            )
+        });
         Transition::Suspend {
             goal: TraitSolverQuery {
                 goal: next_goal,
                 assumptions,
                 require_impl: false,
+                choices,
             },
             state: branch,
         }
@@ -419,6 +832,30 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
         let prepared = self.prepare_query(*key);
+        let mut table = prepared.table;
+        if let Some((index, application)) = matching_choice(
+            self.db,
+            &mut table,
+            prepared.query.choices,
+            prepared.normalized_goal,
+            prepared.scope,
+            prepared.query.assumptions,
+        ) {
+            let matched_goal = prepared.normalized_goal.fold_with(self.db, &mut table);
+            if Canonicalized::new(self.db, prepared.normalized_goal).canonical()
+                != Canonicalized::new(self.db, matched_goal).canonical()
+            {
+                // Header priority is selection at known arguments, not
+                // permission to pick those arguments before other bounds.
+                return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
+            }
+            let choices = prepared.query.choices.expect("matched lexical choices");
+            return Ok(CallbackOutcome::Continue(vec![Clause::Chosen {
+                selected: choices.items(self.db)[index].template,
+                application,
+                table,
+            }]));
+        }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
         // `P: Copy`, whose impl is in `P`'s ingot, not `Option`'s.
@@ -480,7 +917,46 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         } else {
             BorrowKind::Ref
         });
+        let complete_for_goal = |selected_impl| {
+            normalized_goal
+                .assoc_type_bindings(self.db)
+                .keys()
+                .try_fold(selected_impl, |implementor, binding| {
+                    complete_candidate_impl_assoc_ty(self.db, implementor, binding.name)
+                })
+        };
         let selected_impl = match clause {
+            Clause::Chosen {
+                selected,
+                application,
+                table: mut matched_table,
+            } => {
+                let Some(complete) = complete_for_goal(selected) else {
+                    return Ok(Transition::Reject);
+                };
+                let candidate = complete.reapply(self.db, application);
+                if check_chosen_bindings(
+                    self.db,
+                    &mut matched_table,
+                    candidate,
+                    normalized_goal,
+                    scope,
+                    query.assumptions,
+                )
+                .is_none()
+                {
+                    return Ok(Transition::Reject);
+                }
+                let branch = self.impl_branch(
+                    matched_table,
+                    query.goal,
+                    goal_mode,
+                    selected,
+                    candidate,
+                    Some(application),
+                );
+                return Ok(self.continue_branch(key, branch, query.assumptions));
+            }
             Clause::Implementor(selected_impl) => {
                 if !impl_header_may_match(self.db, selected_impl, normalized_goal)
                     || normalized_goal.is_mut(self.db) && !selected_impl.gives_mut(self.db)
@@ -488,14 +964,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     return Ok(Transition::Reject);
                 }
                 // Candidates are headers; lower only the associated types
-                // the goal binds (see `impls_for_trait_def`).
-                let Some(candidate) = normalized_goal
-                    .assoc_type_bindings(self.db)
-                    .keys()
-                    .try_fold(selected_impl, |implementor, binding| {
-                        complete_candidate_impl_assoc_ty(self.db, implementor, binding.name)
-                    })
-                else {
+                // the goal binds (see impls_for_trait_def).
+                let Some(candidate) = complete_for_goal(selected_impl) else {
                     return Ok(Transition::Reject);
                 };
                 let candidate = table.instantiate_with_fresh_vars(candidate);
@@ -517,23 +987,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 {
                     return Ok(Transition::Reject);
                 }
-
-                let constraints = candidate.constraints(self.db);
-                let remaining_goals = constraints
-                    .list(self.db)
-                    .iter()
-                    .map(|constraint| {
-                        constraint
-                            .at_mode(self.db, goal_mode)
-                            .fold_with(self.db, &mut table)
-                    })
-                    .collect();
-                let branch = Branch {
-                    table,
-                    root_goal: query.goal,
-                    remaining_goals,
-                    selected_impl,
-                };
+                let branch =
+                    self.impl_branch(table, query.goal, goal_mode, selected_impl, candidate, None);
                 return Ok(self.continue_branch(key, branch, query.assumptions));
             }
             Clause::Assumption(index) => {
@@ -563,6 +1018,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     root_goal: query.goal,
                     remaining_goals,
                     selected_impl,
+                    chosen: None,
                 };
                 return Ok(self.continue_branch(key, branch, query.assumptions));
             }
@@ -599,6 +1055,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             root_goal: query.goal,
             remaining_goals: Vec::new(),
             selected_impl,
+            chosen: None,
         };
         Ok(self.finish_branch(key, branch))
     }
@@ -654,6 +1111,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 goal: resumed_root,
                 assumptions: resumed_assumptions,
                 require_impl: parent.value().require_impl,
+                choices: parent.value().choices,
             },
         ) {
             return Ok(Transition::Stop(StopReason::MaximumTypeDepth));
@@ -776,6 +1234,7 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::StepLimit { limit } => TraitSolveCompletion::StepLimit { limit },
         Completion::TableLimit { limit } => TraitSolveCompletion::TableLimit { limit },
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
+        Completion::Adapter(StopReason::UnresolvedChoice) => TraitSolveCompletion::UnresolvedChoice,
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
@@ -862,7 +1321,8 @@ pub(super) fn has_solution<'db>(
         | Completion::StepLimit { .. }
         | Completion::TableLimit { .. }
         | Completion::PendingWorkLimit { .. }
-        | Completion::Adapter(StopReason::MaximumTypeDepth) => TargetSolutionStatus::Incomplete,
+        | Completion::Adapter(StopReason::MaximumTypeDepth)
+        | Completion::Adapter(StopReason::UnresolvedChoice) => TargetSolutionStatus::Incomplete,
     }
 }
 

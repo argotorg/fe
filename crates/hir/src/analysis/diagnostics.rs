@@ -975,6 +975,17 @@ pub trait LazyDiagnostic<'db> {
     fn to_complete(&self, db: &'db dyn SpannedHirAnalysisDb) -> CompleteDiagnostic;
 }
 
+/// The span of the name that two definitions share. A named trait
+/// implementation is named by its selection name.
+fn conflict_name_span<'db>(item: &crate::hir_def::ItemKind<'db>) -> DynLazySpan<'db> {
+    match item {
+        crate::hir_def::ItemKind::ImplTrait(implementation) => {
+            implementation.span().selection_name().into()
+        }
+        item => item.name_span().unwrap(),
+    }
+}
+
 impl DiagnosticVoucher for DefConflictError<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let mut items = self.0.iter();
@@ -987,13 +998,13 @@ impl DiagnosticVoucher for DefConflictError<'_> {
                 let mut subs = vec![SubDiagnostic::new(
                     LabelStyle::Primary,
                     format!("`{name}` is defined here"),
-                    first.name_span().unwrap().resolve(db),
+                    conflict_name_span(first).resolve(db),
                 )];
                 subs.extend(items.map(|item| {
                     SubDiagnostic::new(
                         LabelStyle::Secondary,
                         format!("`{name}` is redefined here"),
-                        item.name_span().unwrap().resolve(db),
+                        conflict_name_span(item).resolve(db),
                     )
                 }));
                 subs
@@ -3780,6 +3791,64 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::DuplicateWithChoice {
+                primary,
+                first,
+                goal,
+                possible,
+            } => {
+                let (message, current, earlier) = if *possible {
+                    (
+                        "these openings may choose the same trait goal".to_string(),
+                        "the header here may overlap".to_string(),
+                        "an earlier operand has this header".to_string(),
+                    )
+                } else {
+                    let goal = goal.pretty_print(db, true);
+                    (
+                        format!("`{goal}` is chosen twice in one `with`"),
+                        format!("this operand also answers `{goal}`"),
+                        "an earlier operand of the same `with` answers it here".to_string(),
+                    )
+                };
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message,
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: current,
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: earlier,
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "one `with` gives each trait goal one implementation; to override an outer choice, write a nested `with`"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::UnknownWithOperand { primary, name } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: format!(
+                    "no implementation or value named `{}` is in scope",
+                    name.data(db)
+                ),
+                sub_diagnostics: vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: "a `with` operand names an implementation, such as `Name`, `Name<Args>` or `<Type as Trait>`, or a value that provides an effect".to_string(),
+                    span: primary.resolve(db),
+                }],
+                notes: vec![],
+                error_code,
+            },
+
             Self::WithEffectTypeUnsatisfied {
                 primary,
                 key,
@@ -6113,6 +6182,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
 
+            BodyDiag::ChosenTypeRead { primary, goal } => primary_diag(
+                Severity::Error,
+                "this written type reads a chosen implementation",
+                format!("`{}` requires type normalization through evidence, which is not supported yet", goal.pretty_print(db, true)),
+                primary.resolve(db), error_code,
+            ),
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)
@@ -6147,6 +6222,124 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
         let error_code =
             GlobalErrorCode::new(DiagnosticPass::ImplTraitDefinition, self.local_code());
         match self {
+            Self::UnchoosableNamedImplementation {
+                primary,
+                name,
+                reason,
+            } => primary_diag(
+                Severity::Error,
+                format!("`{}` cannot have a named implementation", name.data(db)),
+                match reason {
+                    crate::analysis::ty::trait_def::UnchoosableReason::Presence => {
+                        "the compiler uses whether a type implements it, not a choice made with `with`"
+                    }
+                },
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedOutputsNeedOrdinary { primary } => primary_diag(
+                Severity::Error,
+                "named associated outputs require an ordinary implementation",
+                "types normalize through ordinary implementations until normalization consumes evidence",
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedAssociatedConstMismatch {
+                primary,
+                with,
+                name,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementation changes a type-readable associated constant",
+                    format!(
+                        "`{}` must agree across implementations of this slot",
+                        name.data(db)
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+            Self::NamedAssociatedTypeMismatch {
+                primary,
+                name,
+                expected,
+                given,
+            } => primary_diag(
+                Severity::Error,
+                "named implementation changes an ordinary associated type",
+                format!(
+                    "`{}` must remain `{}`, but this implementation defines `{}`",
+                    name.data(db),
+                    expected.pretty_print(db),
+                    given.pretty_print(db)
+                ),
+                primary.span().resolve(db),
+                error_code,
+            ),
+            Self::NamedAssociatedTypeDisagreement {
+                primary,
+                with,
+                name,
+                expected,
+                given,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementations of one slot give different associated types",
+                    format!(
+                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`",
+                        name.data(db),
+                        expected.pretty_print(db),
+                        given.pretty_print(db)
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+            Self::NamedAssociatedRowMismatch {
+                primary,
+                with,
+                ordinary,
+                name,
+            } => {
+                let mut diag = primary_diag(
+                    Severity::Error,
+                    "named implementation changes an associated effect row or result space",
+                    format!(
+                        "`{}` must be what the {} implementation of this slot gives",
+                        name.data(db),
+                        if *ordinary { "ordinary" } else { "other named" }
+                    ),
+                    primary.span().resolve(db),
+                    error_code,
+                );
+                if let Some(span) = with.span().resolve(db) {
+                    diag.sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "the other implementation".to_string(),
+                        Some(span),
+                    ));
+                }
+                diag
+            }
+
             Self::ExternalTraitForExternalType(impl_trait) => primary_diag(
                 Severity::Error,
                 "external trait cannot be implemented for external type",

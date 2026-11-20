@@ -290,7 +290,10 @@ impl<'db> ScopeGraphBuilder<'db> {
                 );
                 self.graph
                     .add_edge(item_node, item_node, EdgeKind::self_ty());
-                EdgeKind::anon()
+                // A named implementation's name is an item name.
+                inner
+                    .selection_name(self.db)
+                    .map_or_else(EdgeKind::anon, EdgeKind::impl_)
             }
 
             Const(inner) => {

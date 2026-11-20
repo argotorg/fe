@@ -319,6 +319,7 @@ impl ModuleAnalysisPass for DefConflictAnalysisPass {
 
         walk(db, graph, top_mod.scope())
             .into_iter()
+            .chain(local_implementation_name_conflicts(db, top_mod))
             .map(|d| Box::new(d) as _)
             .collect()
     }
@@ -335,6 +336,8 @@ fn walk<'db>(
     enum Domain {
         Type,
         Val,
+        /// The names of named trait implementations.
+        Impl,
     }
 
     let mut defs = FxHashMap::<(Domain, IdentId<'db>), SmallVec<[ItemKind<'db>; 2]>>::default();
@@ -352,11 +355,13 @@ fn walk<'db>(
                 | ItemKind::TypeAlias(_)
                 | ItemKind::Trait(_) => Domain::Type,
 
+                // Only a named implementation has a name here.
+                ItemKind::ImplTrait(_) => Domain::Impl,
+
                 ItemKind::TopMod(_)
                 | ItemKind::StaticAssert(_)
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
-                | ItemKind::ImplTrait(_)
                 | ItemKind::Body(_) => continue,
             };
             defs.entry((domain, item.name(db).unwrap()))
@@ -373,6 +378,39 @@ fn walk<'db>(
         )
     }
     diags
+}
+
+/// Two named implementations with one name in one block of a body: the
+/// declaration rule of the implementation-name domain, which `walk` checks
+/// for module scopes, applied to the scopes of bodies.
+fn local_implementation_name_conflicts<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<DefConflictError<'db>> {
+    let mut defs = common::indexmap::IndexMap::<
+        (ScopeId<'db>, IdentId<'db>),
+        SmallVec<[ItemKind<'db>; 2]>,
+    >::default();
+    for item in top_mod.all_items(db) {
+        if !matches!(item, ItemKind::ImplTrait(_)) {
+            continue;
+        }
+        let (Some(name), Some(parent)) = (item.name(db), item.scope().parent(db)) else {
+            continue;
+        };
+        if matches!(
+            parent,
+            ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_))
+        ) {
+            continue;
+        }
+        defs.entry((parent, name)).or_default().push(*item);
+    }
+    defs.into_iter()
+        .map(|(_, items)| items)
+        .filter(|items| items.len() > 1)
+        .map(DefConflictError)
+        .collect()
 }
 
 pub struct BodyAnalysisPass {}

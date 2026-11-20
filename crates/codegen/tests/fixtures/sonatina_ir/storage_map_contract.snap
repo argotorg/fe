@@ -39,29 +39,7 @@ func private %abi_encode(v0.i256) {
         jump block4;
 }
 
-func inline(always) private %core__lib__ptr__alloc_bytes_7e7d(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i1 = gt v0 18446744073709551615.i256;
-        br v3 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 65.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        jump block4;
-
-    block4:
-        v10.*i8 = evm_malloc v0;
-        v11.i256 = ptr_to_int v10 i256;
-        return v11;
-}
-
-func inline(always) private %core__lib__ptr__alloc_bytes_8b3e(v0.i256) -> i256 {
+func inline(always) private %alloc_bytes(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -154,7 +132,7 @@ func private %codecopy(noalias nocapture v0.objref<@layout_0>, v1.i256, v2.i256,
         evm_revert 0.i256 36.i256;
 
     block9:
-        v21.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_a1c3 v15;
+        v21.i256 = call %downcast_unchecked v15;
         v23.i256 = call %impl_MemBuffer__len v0;
         v24.i1 = gt v21 v23;
         br v24 block5 block6;
@@ -165,7 +143,7 @@ func private %downcast_saturate(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_e517 v0;
+        v2.i256 = call %to_word v0;
         br 1.i1 block2 block3;
 
     block2:
@@ -200,7 +178,7 @@ func private %downcast_saturate(v0.i256) -> i256 {
         jump block11;
 
     block10:
-        v24.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v16;
+        v24.i256 = call %from_word v16;
         jump block11;
 
     block11:
@@ -233,11 +211,11 @@ func private %downcast_saturate(v0.i256) -> i256 {
         jump block14;
 
     block18:
-        v39.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v39.i256 = call %from_word v9;
         jump block20;
 
     block19:
-        v41.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v41.i256 = call %from_word v2;
         jump block20;
 
     block20:
@@ -245,7 +223,7 @@ func private %downcast_saturate(v0.i256) -> i256 {
         jump block17;
 
     block21:
-        v44.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v44.i256 = call %from_word v9;
         jump block23;
 
     block22:
@@ -257,11 +235,11 @@ func private %downcast_saturate(v0.i256) -> i256 {
         jump block14;
 
     block24:
-        v50.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v9;
+        v50.i256 = call %from_word v9;
         jump block26;
 
     block25:
-        v52.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
+        v52.i256 = call %from_word v2;
         jump block26;
 
     block26:
@@ -277,23 +255,13 @@ func private %downcast_saturate(v0.i256) -> i256 {
         br 0.i1 block12 block13;
 }
 
-func private %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491(v0.i256) -> i256 {
+func private %downcast_unchecked(v0.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_e517 v0;
-        v3.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_c59e v2;
-        return v3;
-}
-
-func private %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_a1c3(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %core__lib__num__impl_trait_u256_7874__to_word_0e7b v0;
-        v3.i256 = call %core__lib__num__impl_trait_usize_95da__from_word_af04 v2;
+        v2.i256 = call %to_word v0;
+        v3.i256 = call %from_word v2;
         return v3;
 }
 
@@ -305,15 +273,7 @@ func private %encoded_len(v0.i256) -> i256 {
         return 32.i256;
 }
 
-func private %core__lib__num__impl_trait_usize_95da__from_word_af04(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %core__lib__num__impl_trait_usize_95da__from_word_c59e(v0.i256) -> i256 {
+func private %from_word(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -369,7 +329,7 @@ func private %init() {
     block1:
         v2.i256 = sym_size &__BalanceMap_runtime;
         v3.i256 = sym_addr &__BalanceMap_runtime;
-        v4.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_a1c3 v2;
+        v4.i256 = call %downcast_unchecked v2;
         v5.@layout_0 = call %new v4;
         obj.store v0 v5;
         call %codecopy v0 0.i256 v3 v2;
@@ -401,8 +361,8 @@ func private %keccak256(noalias nocapture readonly v0.objref<@layout_1>) -> i256
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321 v0;
-        v3.i256 = call %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe v0;
+        v2.i256 = call %ptr__g79ff v0;
+        v3.i256 = call %len__g79ff v0;
         v4.i256 = evm_keccak256 v2 v3;
         return v4;
 }
@@ -417,17 +377,7 @@ func private %impl_MemBuffer__len(noalias nocapture readonly v0.objref<@layout_0
         return v4;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_68fe(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
-func private %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_dde1(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -499,17 +449,17 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
 
     block7:
         v13.i256 = call %downcast_saturate v6;
-        v14.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d v13;
-        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8 v14;
+        v14.@layout_0 = call %new_uninit v13;
+        v15.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_8731 v14;
         call %write_key v15 v1;
-        v19.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
+        v19.i256 = call %downcast_unchecked v4;
         v20.i256 = add v15 v19;
         mstore v20 v0 i256;
         (v23.i256, v24.i1) = uaddo v4 32.i256;
         br v24 block6 block8;
 
     block8:
-        v25.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v23;
+        v25.i256 = call %downcast_unchecked v23;
         jump block3;
 }
 
@@ -518,30 +468,18 @@ func private %new(v0.i256) -> @layout_0 {
         jump block1;
 
     block1:
-        v2.@layout_0 = call %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_9d8c v0;
+        v2.@layout_0 = call %new_uninit v0;
         v4.i256 = extract_value v2 0.i256;
         call %zero_bytes v4 v0;
         return v2;
 }
 
-func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d(v0.i256) -> @layout_0 {
+func private %new_uninit(v0.i256) -> @layout_0 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__ptr__alloc_bytes_8b3e v0;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v7.@layout_0 = insert_value v5 1.i256 v0;
-        v9.@layout_0 = insert_value v7 2.i256 v0;
-        return v9;
-}
-
-func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_9d8c(v0.i256) -> @layout_0 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %core__lib__ptr__alloc_bytes_7e7d v0;
+        v2.i256 = call %alloc_bytes v0;
         v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
         v7.@layout_0 = insert_value v5 1.i256 v0;
         v9.@layout_0 = insert_value v7 2.i256 v0;
@@ -586,7 +524,7 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_0>, v
 
     block8:
         v35.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_fc09 v0;
-        v37.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_a1c3 v1;
+        v37.i256 = call %downcast_unchecked v1;
         v38.i256 = add v35 v37;
         return v38;
 
@@ -605,19 +543,9 @@ func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_0>, v
         br v22 block2 block3;
 
     block12:
-        v31.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_a1c3 v29;
+        v31.i256 = call %downcast_unchecked v29;
         call %zero_bytes v26 v31;
         jump block8;
-}
-
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_2321(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 0.i256;
-        v4.i256 = obj.load v3;
-        return v4;
 }
 
 func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_8731(v0.@layout_0) -> i256 {
@@ -629,7 +557,7 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_8731(v0.@layout_0) -> i25
         return v3;
 }
 
-func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_8e81(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
+func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
 
@@ -637,15 +565,6 @@ func private %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_8e81(noalias nocapt
         v3.objref<i256> = obj.proj v0 0.i256;
         v4.i256 = obj.load v3;
         return v4;
-}
-
-func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_cde8(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 0.i256;
-        return v3;
 }
 
 func private %core__lib__ptr__impl_MemBuffer_2cdf__ptr_fc09(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
@@ -663,8 +582,8 @@ func private %return_data(noalias nocapture readonly v0.objref<@layout_1>) {
         jump block1;
 
     block1:
-        v2.i256 = call %core__lib__ptr__impl_MemSlice_aa77__ptr__g79ff_8e81 v0;
-        v3.i256 = call %core__lib__ptr__impl_MemSlice_aa77__len__g79ff_dde1 v0;
+        v2.i256 = call %ptr__g79ff v0;
+        v3.i256 = call %len__g79ff v0;
         evm_return v2 v3;
 }
 
@@ -860,7 +779,7 @@ func private %runtime() {
         unreachable;
 
     block54:
-        v70.i256 = call %core__lib__ptr__alloc_bytes_7e7d 0.i256;
+        v70.i256 = call %alloc_bytes 0.i256;
         v71.i256 = call %cast__gf0ab v70;
         jump block56;
 
@@ -936,15 +855,7 @@ func private %store_word(v0.i256, v1.i256) {
         return;
 }
 
-func private %core__lib__num__impl_trait_u256_7874__to_word_0e7b(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
-func private %core__lib__num__impl_trait_u256_7874__to_word_e517(v0.i256) -> i256 {
+func private %to_word(v0.i256) -> i256 {
     block0:
         jump block1;
 

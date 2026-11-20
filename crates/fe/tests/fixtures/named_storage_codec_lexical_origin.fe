@@ -1,0 +1,70 @@
+use std::evm::{Evm, Wei, SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+trait Missing {}
+impl Missing for u8 {}
+impl Gate for u8 {
+    fn code(_ value: u8) -> u8 { value }
+}
+impl<T: Missing> Gate for T as Encoded {
+    fn code(_ value: u8) -> u8 { value ^ 1 }
+}
+
+struct Elem<K, T> {
+    value: u8,
+}
+
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+fn write_late<K, A: Missing, T: Gate + Missing>(array: mut SolArray<Elem<K, T>>) {
+    with (Encoded<A>) { array[0] = Elem { value: 7 } }
+}
+
+fn write_known<A: Missing, T: Gate + Missing>(array: mut SolArray<Elem<u8, T>>) {
+    with (Encoded<A>) { array[0] = Elem { value: 7 } }
+}
+
+msg M {
+    #[selector = 1]
+    Late -> u8,
+    #[selector = 2]
+    Known -> u8,
+}
+
+pub contract C {
+    mut array: SolArray<Elem<u8, u8>>
+    recv M {
+        Late -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            write_late<u8, u8, u8>(array: mut array)
+            array[0].value
+        }
+        Known -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            write_known<u8, u8>(array: mut array)
+            array[0].value
+        }
+    }
+}
+
+#[test]
+fn deferred_key_preserves_the_source_choice_scope() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Late {})
+    assert!(raw == 7)
+}
+
+#[test]
+fn known_key_preserves_the_source_choice_scope() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Known {})
+    assert!(raw == 7)
+}

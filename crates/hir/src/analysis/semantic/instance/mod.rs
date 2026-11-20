@@ -5,7 +5,7 @@ mod template;
 pub use const_ref::{core_method_callee_key, generated_callee_key};
 pub(crate) use const_ref::{
     provisional_semantic_callee_key, resolve_semantic_const_ref,
-    semantic_callee_key_with_effect_providers,
+    resolve_semantic_const_ref_with_policy, semantic_callee_key_with_effect_providers,
 };
 pub use semantic::{
     CallEffectArg, CallSiteLowering, ForLoopCallSites, InstantiatedEffectEnv,
@@ -15,7 +15,8 @@ pub use semantic::{
     root_semantic_instance_key, validate_instantiated_effect_env_key,
 };
 pub(crate) use semantic::{
-    CallSiteProviderRefinement, LayoutDemandBody, RefinedInput, SemanticBodyAdmissionError,
+    CallSiteProviderRefinement, InstanceEvidencePolicy, LayoutDemandBody, RefinedInput,
+    SemanticBodyAdmissionError,
 };
 pub(crate) use semantic::{
     instance_limit_violation, provisional_provider_binding_for_instance_effect,

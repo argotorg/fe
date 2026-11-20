@@ -396,11 +396,13 @@ impl<'db> TyChecker<'db> {
             && func.containing_trait(self.db).is_some()
         {
             let obligation = TraitObligation {
+                choices: self.env.choices,
                 goal: inst.mut_goal(self.db),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,
             };
-            if let TraitObligationOutcome::Requeue(obligation) =
+            if let TraitObligationOutcome::Requeue(obligation)
+            | TraitObligationOutcome::RequeueProgressed(obligation) =
                 self.process_trait_obligation(obligation, false)
             {
                 self.env.register_trait_obligation(obligation);
