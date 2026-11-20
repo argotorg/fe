@@ -2123,6 +2123,8 @@ pub fn emit_test_suite_sonatina(
             selector: arm.selector,
             expected_revert: metadata.expected_revert,
             initial_balance: metadata.initial_balance,
+            timestamp: metadata.timestamp,
+            block_number: metadata.block_number,
         });
     }
 
