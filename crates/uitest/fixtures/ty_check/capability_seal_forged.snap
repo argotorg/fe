@@ -1,0 +1,26 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/capability_seal_forged.fe
+---
+error[2-0003]: `EvmCapabilitySeal` is not visible
+    ┌─ capability_seal_forged.fe:7:25
+    │
+  7 │ impl std::evm::effects::EvmCapabilitySeal for Forged {}
+    │                         ^^^^^^^^^^^^^^^^^ `EvmCapabilitySeal` is not visible
+    │
+    ┌─ src/evm/effects.fe:201:7
+    │
+201 │ trait EvmCapabilitySeal {}
+    │       ----------------- `EvmCapabilitySeal` is defined here
+
+error[2-0003]: `HostCapabilitySeal` is not visible
+   ┌─ capability_seal_forged.fe:8:19
+   │
+ 8 │ impl std::native::HostCapabilitySeal for Forged {}
+   │                   ^^^^^^^^^^^^^^^^^^ `HostCapabilitySeal` is not visible
+   │
+   ┌─ src/native.fe:13:18
+   │
+13 │ pub(ingot) trait HostCapabilitySeal {}
+   │                  ------------------ `HostCapabilitySeal` is defined here
