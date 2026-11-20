@@ -173,9 +173,9 @@ fn trait_path_visibility_diag<'db>(
         path,
         scope,
         assumptions,
-        &mut |p: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+        &mut |p: PathId<'db>, reso: &PathRes<'db>, binding_visibility: Option<bool>| {
             if invisible.is_none()
-                && !quoted_visibility.unwrap_or_else(|| {
+                && !binding_visibility.unwrap_or_else(|| {
                     reso.is_visible_from(db, p.hygiene_scope(db).unwrap_or(scope))
                 })
             {

@@ -1072,10 +1072,8 @@ where
         assumptions,
         resolve_tail_as_value,
         true,
-        &mut |path, res, quoted_visibility| {
-            lowering_cx.record_resolution(path, res);
-            observer(path, res, quoted_visibility)
-        },
+        false,
+        observer,
         lowering_cx,
     )
     .map(|(res, _)| res)
@@ -1136,7 +1134,7 @@ where
     {
         let res = resolve_name_res_with_minter(db, outer, path, scope, assumptions, lowering_cx)?;
         lowering_cx.record_resolution(path, &res);
-        observer(path, &res, None);
+        observer(path, &res, Some(outer.is_visible(db, query_scope)));
         return Ok(res);
     }
 
@@ -1144,15 +1142,18 @@ where
         Some(kind) if !is_trait(kind) => path.strip_generic_args(db),
         _ => path,
     };
-    resolve_path_with_observer_and_minter(
+    resolve_path_impl(
         db,
         path,
         scope,
         assumptions,
         false,
+        true,
+        true,
         observer,
         lowering_cx,
     )
+    .map(|(res, _)| res)
 }
 
 /// How a path written where a type is expected chooses between the type and
@@ -1178,8 +1179,6 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
     position: TypePosition,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
-    let mut observer =
-        |path: PathId<'db>, res: &PathRes<'db>, _| lowering_cx.record_resolution(path, res);
     let parent_res = path
         .parent(db)
         .map(|parent| {
@@ -1190,7 +1189,8 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
                 assumptions,
                 false,
                 false,
-                &mut observer,
+                false,
+                &mut |_, _, _| {},
                 lowering_cx,
             )
             .map(|(res, _)| res)
@@ -1435,6 +1435,7 @@ fn resolve_path_impl<'db, F>(
     assumptions: PredicateListId<'db>,
     resolve_tail_as_value: bool,
     is_tail: bool,
+    observe_written_bindings: bool,
     observer: &mut F,
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, (PathRes<'db>, Option<AuthoredScope<'db>>)>
@@ -1449,6 +1450,7 @@ where
             assumptions,
             resolve_tail_as_value,
             false,
+            observe_written_bindings,
             observer,
             lowering_cx,
         )?;
@@ -1459,8 +1461,8 @@ where
         (None, None)
     };
     let root_origin = path.local_quote_origin(db);
-    // Retain the selected binding for quoted module paths. It may be a
-    // private local alias to a module with its own visibility.
+    // Trait paths check the selected binding's visibility. Quoted module
+    // paths also use the binding to find the producer for their suffix.
     let mut name_res = None;
     let res = resolve_segment(
         db,
@@ -1472,7 +1474,8 @@ where
         is_tail,
         lowering_cx,
         &mut false,
-        (root_origin.is_some() || suffix_producer.is_some()).then_some(&mut name_res),
+        (observe_written_bindings || root_origin.is_some() || suffix_producer.is_some())
+            .then_some(&mut name_res),
     )?;
     let (name_res, authored_root) =
         name_res.map_or((None, None), |(name, origin)| (Some(name), origin));
@@ -1485,13 +1488,16 @@ where
         .map(|origin| origin.producer);
     let visibility_scope = if let Some(producer) = suffix_producer.or(authored_root) {
         Some(producer.resolve(db))
+    } else if observe_written_bindings {
+        Some(path.hygiene_scope(db).unwrap_or(scope))
     } else {
         alias_producer.map(|_| scope)
     };
-    let quoted_visibility = name_res
+    let binding_visibility = name_res
         .zip(visibility_scope)
         .map(|(name, scope)| name.is_visible(db, scope));
-    observer(path, &res, quoted_visibility);
+    lowering_cx.record_resolution(path, &res);
+    observer(path, &res, binding_visibility);
     Ok((res, suffix_producer.or(authored_root).or(alias_producer)))
 }
 
