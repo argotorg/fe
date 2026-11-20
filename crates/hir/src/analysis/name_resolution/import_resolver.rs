@@ -656,6 +656,7 @@ impl<'db> ImportResolver<'db> {
         } else if lookup.quote_lookup == QuoteLookup::Producer
             || use_
                 .path(db)
+                .to_opt()
                 .is_some_and(|path| path.authored_scope(db).is_some())
         {
             QueryDirective::new().disallow_enclosing_item_bindings()

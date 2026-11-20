@@ -2004,7 +2004,7 @@ fn resolve_segment<'db>(
         *decided_by_value = true;
         res.clone()
     } else {
-        let res = match pick_type_domain_from_bucket(parent_res.clone(), bucket, path) {
+        match pick_type_domain_from_bucket(parent_res.clone(), bucket, path) {
             // A value that can't be told apart is the error when no type has
             // the name: the name isn't missing.
             Err(PathResError {
@@ -2018,8 +2018,7 @@ fn resolve_segment<'db>(
                 return Err(PathResError::from_name_res_error(err.clone(), path));
             }
             res => res?,
-        };
-        res
+        }
     };
     let resolved = resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx);
     if let Some(selected_name) = selected_name {
