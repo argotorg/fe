@@ -1,3 +1,7 @@
+#[path = "common/prepared_source.rs"]
+mod prepared_source;
+
+#[cfg(target_family = "wasm")]
 use common::InputDb;
 use driver::DriverDataBase;
 use test_utils::{fixture_shards, fixtures::Fixture, snap_test};
@@ -16,13 +20,12 @@ fixture_shards!(
 );
 
 fn run_ty(db: &mut DriverDataBase, fixture: &Fixture) {
-    let file = db.workspace().touch(
+    let diags = prepared_source::diagnostics(
         db,
         Url::from_file_path(fixture.path()).expect("path should be absolute"),
-        Some(fixture.content().to_string()),
+        fixture.content(),
+        |db, file| db.run_on_top_mod(db.top_mod(file)).format_diags(db),
     );
-    let top_mod = db.top_mod(file);
-    let diags = db.run_on_top_mod(top_mod).format_diags(db);
     snap_test!(diags, fixture.path());
 }
 

@@ -146,6 +146,87 @@ impl Derive<trait Match> for Recipe {
 }
 
 #[test]
+fn reflected_field_types_preserve_order_and_header_parameters() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record, field_types}
+
+trait Fields { type Shape }
+struct MirrorFields {}
+impl Derive<trait Fields> for MirrorFields {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let shape = field_types(record)
+        quote { type Shape = ${shape} }
+    }
+}
+
+struct Empty {}
+impl Fields for Empty with (MirrorFields)
+
+struct Single<T> { first: T }
+impl<T> Fields for Single<T> with (MirrorFields)
+
+struct Three<T> { first: T, second: u16, third: bool }
+impl<T> Fields for Three<T> with (MirrorFields)
+
+trait Pick { type Out }
+impl<T> Pick for T { type Out = u8 }
+struct Projected<T> { value: <T as Pick>::Out }
+impl<U> Fields for Projected<U> with (MirrorFields)
+
+fn empty(_ shape: <Empty as Fields>::Shape) -> () { shape }
+fn single<T>(_ shape: <Single<T> as Fields>::Shape) -> (T,) { shape }
+fn three<T>(_ shape: <Three<T> as Fields>::Shape) -> (((T,), (u16,)), (bool,)) {
+    shape
+}
+fn projected<T>(_ shape: <Projected<T> as Fields>::Shape) -> (u8,) { shape }
+"#;
+    prepare(source).unwrap();
+}
+
+#[test]
+fn reflected_field_statements_run_once_in_order_and_return_unit() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, for_each_field}
+
+struct AppendDigit {}
+impl FieldInit for AppendDigit {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let digit = (index as u256) + 1
+        quote(sum) { sum = sum * 10 + ${digit} }
+    }
+}
+
+trait Trace { const fn trace() -> u256 }
+struct Visit {}
+impl Derive<trait Trace> for Visit {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let statements = for_each_field<AppendDigit>(record)
+        quote(sum) {
+            const fn trace() -> u256 {
+                var sum: u256 = 0
+                let _: () = ${statements}
+                sum
+            }
+        }
+    }
+}
+
+struct Empty {}
+struct Three { first: bool, second: u16, third: u256 }
+impl Trace for Empty with (Visit)
+impl Trace for Three with (Visit)
+
+const fn empty_trace() -> u256 { Empty::trace() }
+const fn three_trace() -> u256 { Three::trace() }
+"#;
+    let output = prepare(source).unwrap();
+    assert_eq!(eval(&output, "empty_trace"), "0");
+    assert_eq!(eval(&output, "three_trace"), "123");
+}
+
+#[test]
 fn a_quoted_opening_uses_the_producers_named_implementation() {
     let source = r#"
 trait Gate { const fn code(_ value: u8) -> u8 }
@@ -1942,4 +2023,65 @@ const fn wide() -> u256 {
     let output = prepare(&generic_header).unwrap_or_else(|cause| panic!("{cause}"));
     assert_eq!(eval(&output, "narrow"), "42");
     assert_eq!(eval(&output, "wide"), "84");
+}
+
+#[test]
+fn a_nested_field_must_implement_the_selected_abi() {
+    let source = include_str!("../../fe/tests/fixtures/fe_test/typed_abi_record_provider.fe");
+    let start = source.find("impl Decode<Alt> for Inner {").unwrap();
+    let end = start + source[start..].find("\n\nstruct Packet").unwrap();
+    let mut missing = source.to_string();
+    missing.replace_range(start..end, "");
+    let cause = prepared_diagnostics(&missing).unwrap_or_else(|cause| cause);
+    assert!(cause.contains("Decode<Alt>"), "{cause}");
+    assert!(cause.contains("Inner"), "{cause}");
+}
+
+#[test]
+fn event_attributes_prepare_one_checked_fe_provider() {
+    let source = r#"
+#[event]
+pub struct Swap {
+    #[indexed]
+    pub trader: u256,
+    pub amount: u256,
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    let requests = output.generation_inputs().requests(&output);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].request_slot, Some(0));
+    assert!(requests[0].request_impl.is_some());
+}
+
+#[test]
+fn each_message_variant_prepares_its_own_codec_headers() {
+    let source = r#"
+msg Requests {
+    #[selector = 0x01020304]
+    Empty {} -> u256,
+    #[selector = 0x01020305]
+    Value { amount: u256 } -> u256,
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    let requests = output.generation_inputs().requests(&output);
+    assert_eq!(requests.len(), 6);
+    let mut sites = std::collections::BTreeMap::new();
+    for request in requests {
+        let range = request
+            .request_impl
+            .expect("message variant's authored name");
+        let name = &source[usize::from(range.start())..usize::from(range.end())];
+        let slot = request.request_slot.expect("codec trait slot");
+        assert!(
+            sites
+                .entry(name)
+                .or_insert_with(std::collections::BTreeSet::new)
+                .insert(slot)
+        );
+    }
+    let slots = std::collections::BTreeSet::from([0, 1, 2]);
+    assert_eq!(sites["Empty"], slots);
+    assert_eq!(sites["Value"], slots);
 }

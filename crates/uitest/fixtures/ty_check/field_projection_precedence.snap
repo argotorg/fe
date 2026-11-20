@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_precedence.fe
+---
+error[8-0000]: type mismatch
+   ┌─ field_projection_precedence.fe:44:20
+   │
+44 │     let _a: bool = v.tag
+   │                    ^^^^^ expected `bool`, but `u256` is given
+
+error[8-0000]: type mismatch
+   ┌─ field_projection_precedence.fe:46:20
+   │
+46 │     let _b: u256 = v.base
+   │                    ^^^^^^ expected `u256`, but `bool` is given
+
+error[8-0000]: type mismatch
+   ┌─ field_projection_precedence.fe:48:20
+   │
+48 │     let _c: u256 = v.other
+   │                    ^^^^^^^ expected `u256`, but `bool` is given

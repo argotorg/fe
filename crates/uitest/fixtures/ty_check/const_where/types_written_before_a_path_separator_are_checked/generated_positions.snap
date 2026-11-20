@@ -3,6 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/generated_positions.fe
 ---
+308..311: derive target admission failed: declaration is not admitted: const requirement is not satisfied; condition evaluated to `false`; required by this predicate
 error[8-0093]: const requirement is not satisfied
   ┌─ generated_positions.fe:9:5
   │
@@ -12,6 +13,8 @@ error[8-0093]: const requirement is not satisfied
 9 │     Get { x: Positive<0>::Out } -> u256,
   │     ^^^ condition evaluated to `false`
 
+
+file://<project>/crates/uitest/fixtures/ty_check/const_where/types_written_before_a_path_separator_are_checked/generated_positions.fe:412..460: derive target admission failed: declaration is not admitted: const requirement is not satisfied; condition evaluated to `false`; required by this predicate
 error[8-0093]: const requirement is not satisfied
    ┌─ generated_positions.fe:13:1
    │

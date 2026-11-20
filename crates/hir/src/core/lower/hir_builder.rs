@@ -437,9 +437,35 @@ where
         consts: Vec<AssocConstDef<'db>>,
         origin: HirOrigin<ast::ImplTrait>,
     ) -> ImplTrait<'db> {
-        let attrs = self.empty_attrs();
         let generic_params = self.empty_generic_params();
         let where_clause = self.empty_where_clause();
+        self.new_impl_trait_with_generics(
+            id,
+            trait_ref,
+            ty,
+            generic_params,
+            where_clause,
+            types,
+            consts,
+            origin,
+        )
+    }
+
+    /// `new_impl_trait` for an impl with generic parameters and a where
+    /// clause.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_impl_trait_with_generics(
+        &mut self,
+        id: TrackedItemId<'db>,
+        trait_ref: Partial<TraitRefId<'db>>,
+        ty: Partial<TypeId<'db>>,
+        generic_params: GenericParamListId<'db>,
+        where_clause: WhereClauseId<'db>,
+        types: Vec<AssocTyDef<'db>>,
+        consts: Vec<AssocConstDef<'db>>,
+        origin: HirOrigin<ast::ImplTrait>,
+    ) -> ImplTrait<'db> {
+        let attrs = self.empty_attrs();
 
         ImplTrait::new(
             self.db(),

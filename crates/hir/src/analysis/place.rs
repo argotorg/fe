@@ -96,19 +96,23 @@ impl<'db> Place<'db> {
     }
 
     /// `is_entry` tells which index expressions name an entry of a
-    /// collection whose elements are places.
-    pub fn from_expr_in_body<F, G, H>(
+    /// collection whose elements are places. `is_call` tells which field
+    /// expressions are projection calls (`core::ops::Project`), which name no
+    /// place.
+    pub fn from_expr_in_body<F, G, H, H2>(
         db: &'db dyn HirAnalysisDb,
         body: Body<'db>,
         expr: ExprId,
         mut expr_binding: F,
         mut expr_ty: G,
         mut is_entry: H,
+        mut is_call: H2,
     ) -> Option<Self>
     where
         F: FnMut(ExprId) -> Option<LocalBinding<'db>>,
         G: FnMut(ExprId) -> TyId<'db>,
         H: FnMut(ExprId) -> bool,
+        H2: FnMut(ExprId) -> bool,
     {
         Self::from_expr_in_body_with(
             db,
@@ -117,6 +121,7 @@ impl<'db> Place<'db> {
             &mut expr_binding,
             &mut expr_ty,
             &mut is_entry,
+            &mut is_call,
         )
     }
 
@@ -127,6 +132,7 @@ impl<'db> Place<'db> {
         expr_binding: &mut dyn FnMut(ExprId) -> Option<LocalBinding<'db>>,
         expr_ty: &mut dyn FnMut(ExprId) -> TyId<'db>,
         is_entry: &mut dyn FnMut(ExprId) -> bool,
+        is_call: &mut dyn FnMut(ExprId) -> bool,
     ) -> Option<Self> {
         let Partial::Present(expr_data) = expr.data(db, body) else {
             return None;
@@ -138,7 +144,15 @@ impl<'db> Place<'db> {
                 Some(Place::new(PlaceBase::Binding(binding)))
             }
             Expr::Un(base, UnOp::Mut | UnOp::MaybeMut | UnOp::Ref) => {
-                Place::from_expr_in_body_with(db, body, *base, expr_binding, expr_ty, is_entry)
+                Place::from_expr_in_body_with(
+                    db,
+                    body,
+                    *base,
+                    expr_binding,
+                    expr_ty,
+                    is_entry,
+                    is_call,
+                )
             }
             Expr::Un(base, UnOp::Deref) => {
                 let base_ty = expr_ty(*base);
@@ -153,6 +167,7 @@ impl<'db> Place<'db> {
                     expr_binding,
                     expr_ty,
                     is_entry,
+                    is_call,
                 )?;
                 place.push_projection(PlaceProjection::Deref {
                     result_ty: expr_ty(expr),
@@ -160,6 +175,9 @@ impl<'db> Place<'db> {
                 Some(place)
             }
             Expr::Field(base, field) => {
+                if is_call(expr) {
+                    return None;
+                }
                 let field = field.to_opt()?;
                 let mut place = Place::from_expr_in_body_with(
                     db,
@@ -168,6 +186,7 @@ impl<'db> Place<'db> {
                     expr_binding,
                     expr_ty,
                     is_entry,
+                    is_call,
                 )?;
                 let resolved = resolve_place_field(db, expr_ty(*base), field)?;
                 if let Some(result_ty) = resolved.implicit_deref_ty {
@@ -187,6 +206,7 @@ impl<'db> Place<'db> {
                     expr_binding,
                     expr_ty,
                     is_entry,
+                    is_call,
                 )?;
                 let result_ty = expr_ty(expr);
                 place.push_projection(if is_entry(expr) {
@@ -225,7 +245,11 @@ pub fn is_grant_place_expr(
     match expr.data(db, body) {
         // A `?` on a sum shape grants its payload's access, as the call does.
         Partial::Present(
-            Expr::Call(..) | Expr::MethodCall(..) | Expr::Bin(_, _, BinOp::Index) | Expr::Try(_),
+            Expr::Call(..)
+            | Expr::MethodCall(..)
+            | Expr::Bin(_, _, BinOp::Index)
+            | Expr::Field(..)
+            | Expr::Try(_),
         ) if is_access(expr) => true,
         Partial::Present(Expr::Field(base, _) | Expr::Bin(base, _, BinOp::Index)) => {
             is_grant_place_expr(db, body, *base, is_access)
@@ -296,7 +320,7 @@ pub fn resolve_place_field<'db>(
     })
 }
 
-fn field_index<'db>(
+pub(crate) fn field_index<'db>(
     db: &'db dyn HirAnalysisDb,
     base_ty: TyId<'db>,
     field: FieldIndex<'db>,

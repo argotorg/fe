@@ -23,43 +23,58 @@ mod InnerMsg {
         const SELECTOR: u32 = 1
     }
 
+    impl std::abi::AbiFields for Inner {
+    }
+
     impl core::abi::AbiSize for Inner {
-        const HEAD_SIZE: u256 = 0 + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<Bytes>()
-        const IS_DYNAMIC: bool = false || <u256 as core::abi::AbiSize>::IS_DYNAMIC || <Bytes as core::abi::AbiSize>::IS_DYNAMIC
+        const HEAD_SIZE: u256 = <((u256), (Bytes)) as HeadsBefore>::SIZE
+        const IS_DYNAMIC: bool = <((u256), (Bytes)) as HasDynamicFields>::IS_DYNAMIC
 
         #[inline(always)]
         fn payload_size(self) -> u256 {
-            return <Self as core::abi::AbiSize>::HEAD_SIZE + core::abi::dynamic_payload_size(self.marker) + core::abi::dynamic_payload_size(self.data)
+            var size = PayloadSize { bytes: <Self as AbiSize>::HEAD_SIZE }
+            {
+                size.add(self.marker)
+                size.add(self.data)
+                ()
+            }
+            size.bytes
         }
     }
 
     impl core::abi::Encode<std::abi::Sol> for Inner {
 
         #[inline(always)]
-        fn encode(self, _ __fe_out: core::abi::AbiFrame) {
-            var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
-            var __fe_head_pos = 0
-            __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.marker, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-            __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-            core::abi::encode_field<std::abi::Sol, Bytes>(self.data, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        fn encode(self, _ out: AbiFrame) {
+            var writer: RecordWriter<Sol> = RecordWriter { out: out.tail(0), tails: out.tail(<Self as AbiSize>::HEAD_SIZE), head: 0, remaining: 2 as usize }
+            {
+                writer.push(self.marker)
+                writer.push(self.data)
+                ()
+            }
         }
     }
 
     impl core::abi::Decode<std::abi::Sol> for Inner {
 
         #[inline(always)]
-        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_msg_decode_decoder: mut __fe_D, _ __fe_msg_decode_input: __fe_I) -> Self {
-            let __fe_field_0: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_msg_decode_decoder, __fe_msg_decode_input)
-            let __fe_field_1: Bytes = core::abi::decode_field<std::abi::Sol, Bytes, __fe_D, __fe_I>(mut __fe_msg_decode_decoder, __fe_msg_decode_input)
-            return Self { marker: __fe_field_0, data: __fe_field_1 }
+        fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+            Inner { marker: d.read_record_field(input), data: d.read_record_field(input) }
         }
 
         #[inline(always)]
-        fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_msg_decode_input: __fe_I, _ __fe_msg_decode_base: u256) -> Self {
-            let __fe_msg_decode_input_len: u256 = __fe_msg_decode_input.len()
-            let __fe_field_0: u256 = core::abi::decode_msg_field_from<std::abi::Sol, u256, __fe_I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base, input_len: __fe_msg_decode_input_len)
-            let __fe_field_1: Bytes = core::abi::decode_msg_field_from<std::abi::Sol, Bytes, __fe_I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base + core::abi::abi_field_head_size<u256>(), input_len: __fe_msg_decode_input_len)
-            return Self { marker: __fe_field_0, data: __fe_field_1 }
+        fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+            var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
+            <Self as Decode<Sol> >::decode_payload(mut reader, input)
+        }
+
+        fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+            let input_len: u256 = input.len()
+            decode_frame_from<Sol, Self, I>(input, pos, input_len)
+        }
+
+        fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+            decode_frame_from<Sol, Self, I>(input, pos, input_len)
         }
     }
 }
@@ -78,39 +93,56 @@ mod OuterMsg {
         const SELECTOR: u32 = 2
     }
 
+    impl std::abi::AbiFields for Outer {
+    }
+
     impl core::abi::AbiSize for Outer {
-        const HEAD_SIZE: u256 = 0 + core::abi::abi_field_head_size<InnerMsg::Inner>()
-        const IS_DYNAMIC: bool = false || <InnerMsg::Inner as core::abi::AbiSize>::IS_DYNAMIC
+        const HEAD_SIZE: u256 = <(InnerMsg::Inner) as HeadsBefore>::SIZE
+        const IS_DYNAMIC: bool = <(InnerMsg::Inner) as HasDynamicFields>::IS_DYNAMIC
 
         #[inline(always)]
         fn payload_size(self) -> u256 {
-            return <Self as core::abi::AbiSize>::HEAD_SIZE + core::abi::dynamic_payload_size(self.inner)
+            var size = PayloadSize { bytes: <Self as AbiSize>::HEAD_SIZE }
+            {
+                size.add(self.inner)
+                ()
+            }
+            size.bytes
         }
     }
 
     impl core::abi::Encode<std::abi::Sol> for Outer {
 
         #[inline(always)]
-        fn encode(self, _ __fe_out: core::abi::AbiFrame) {
-            var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
-            var __fe_head_pos = 0
-            core::abi::encode_field<std::abi::Sol, InnerMsg::Inner>(self.inner, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+        fn encode(self, _ out: AbiFrame) {
+            var writer: RecordWriter<Sol> = RecordWriter { out: out.tail(0), tails: out.tail(<Self as AbiSize>::HEAD_SIZE), head: 0, remaining: 1 as usize }
+            {
+                writer.push(self.inner)
+                ()
+            }
         }
     }
 
     impl core::abi::Decode<std::abi::Sol> for Outer {
 
         #[inline(always)]
-        fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_msg_decode_decoder: mut __fe_D, _ __fe_msg_decode_input: __fe_I) -> Self {
-            let __fe_field_0: InnerMsg::Inner = core::abi::decode_field<std::abi::Sol, InnerMsg::Inner, __fe_D, __fe_I>(mut __fe_msg_decode_decoder, __fe_msg_decode_input)
-            return Self { inner: __fe_field_0 }
+        fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+            Outer { inner: d.read_record_field(input) }
         }
 
         #[inline(always)]
-        fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_msg_decode_input: __fe_I, _ __fe_msg_decode_base: u256) -> Self {
-            let __fe_msg_decode_input_len: u256 = __fe_msg_decode_input.len()
-            let __fe_field_0: InnerMsg::Inner = core::abi::decode_msg_field_from<std::abi::Sol, InnerMsg::Inner, __fe_I>(__fe_msg_decode_input, base: __fe_msg_decode_base, head_pos: __fe_msg_decode_base, input_len: __fe_msg_decode_input_len)
-            return Self { inner: __fe_field_0 }
+        fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+            var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
+            <Self as Decode<Sol> >::decode_payload(mut reader, input)
+        }
+
+        fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+            let input_len: u256 = input.len()
+            decode_frame_from<Sol, Self, I>(input, pos, input_len)
+        }
+
+        fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+            decode_frame_from<Sol, Self, I>(input, pos, input_len)
         }
     }
 }

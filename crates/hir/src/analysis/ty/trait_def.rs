@@ -1092,11 +1092,6 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     resolved: ResolvedImplInstance<'db>,
     const_name: IdentId<'db>,
 ) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
-    // A written header does not say what the implementation's constants are,
-    // and the trait's default is not a stand-in.
-    if resolved.selected().members_unknown(db) {
-        return None;
-    }
     let explicit = match resolved.selected().origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait
             .assoc_consts(db)
@@ -1120,6 +1115,11 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
         ImplementorOrigin::Assumption => return None,
     };
     explicit.or_else(|| {
+        // A short form may supply a constant in its authored header.
+        // A still-pending member cannot borrow the trait's default.
+        if resolved.selected().members_unknown(db) {
+            return None;
+        }
         let inst = resolved.trait_inst();
         let trait_ = inst.def(db);
         let constant = trait_.const_(db, const_name)?;
@@ -1167,6 +1167,8 @@ pub enum UnchoosableReason {
     Presence,
     /// Field queries run outside lexical implementation openings.
     FieldQuery,
+    /// `core::meta::FieldInit` runs outside lexical implementation openings.
+    FieldInit,
 }
 
 /// The name of the trait of a named implementation that no use can choose,
@@ -1180,8 +1182,14 @@ pub(crate) fn unchoosable_named_trait<'db>(
     candidate: ImplementorId<'db>,
 ) -> Option<(IdentId<'db>, UnchoosableReason)> {
     let def = candidate.trait_(db).def(db);
-    if super::corelib::is_ordinary_field_query_trait(db, def) {
-        return Some((def.name(db).to_opt()?, UnchoosableReason::FieldQuery));
+    match super::corelib::reflection_callback_trait(db, def) {
+        Some(super::corelib::ReflectionCallback::FieldQuery) => {
+            return Some((def.name(db).to_opt()?, UnchoosableReason::FieldQuery));
+        }
+        Some(super::corelib::ReflectionCallback::FieldInit) => {
+            return Some((def.name(db).to_opt()?, UnchoosableReason::FieldInit));
+        }
+        None => {}
     }
     let scope = implementation.scope();
     let by_presence = [

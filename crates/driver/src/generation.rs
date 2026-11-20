@@ -28,7 +28,7 @@ use hir::{
 use parser::ast::{self, prelude::*};
 use salsa::Setter;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GenerationError {
     pub file: url::Url,
     pub range: parser::TextRange,
@@ -315,7 +315,7 @@ fn evaluation_error<'db>(
 /// The authored requests of one source file. Explicit requests are validated
 /// against the authored view and kept as syntax; each is frozen later, against
 /// the output view of the transaction that admits it.
-struct FileRequests {
+struct FileRequests<'db> {
     url: url::Url,
     /// Each trait header `impl Trait for Type with (Provider)`, with its range
     /// and the range of its provider path.
@@ -323,13 +323,16 @@ struct FileRequests {
     /// Each inherent header `impl Type with (Provider)`, with its range and
     /// the range of its provider path.
     inherent_requests: Vec<(ast::Impl, parser::TextRange, parser::TextRange)>,
+    short_form_requests: Vec<(hir::hir_def::ImplTrait<'db>, parser::TextRange, u8)>,
     has_scoped_opening: bool,
     root_range: parser::TextRange,
 }
 
-impl FileRequests {
+impl FileRequests<'_> {
     fn is_empty(&self) -> bool {
-        self.explicit_requests.is_empty() && self.inherent_requests.is_empty()
+        self.explicit_requests.is_empty()
+            && self.inherent_requests.is_empty()
+            && self.short_form_requests.is_empty()
     }
 }
 
@@ -340,6 +343,20 @@ pub fn prepare_file(
     file: File,
 ) -> Result<Option<DriverDataBase>, GenerationError> {
     prepare_file_within(db, file, MAX_PREPARATION_ROUNDS)
+}
+
+/// Install the prepared view and return its handle for the source file.
+pub fn prepare_file_in_place(db: &mut DriverDataBase, file: File) -> Result<File, GenerationError> {
+    let Some(prepared) = prepare_file(db, file)? else {
+        return Ok(file);
+    };
+    let url = file.url(db).expect("indexed generation input");
+    let prepared_file = prepared
+        .workspace()
+        .get(&prepared, &url)
+        .expect("prepared view keeps the source file");
+    *db = prepared;
+    Ok(prepared_file)
 }
 
 /// `prepare_file` with the number of rounds a transaction may build.
@@ -362,7 +379,7 @@ fn prepare_file_within(
             "generation requires the authored input view; output is checked once".into(),
         ));
     }
-    let Some(syntax) = scan_syntax(&url, file.text(db))? else {
+    let Some(syntax) = scan_syntax(db, file)? else {
         return Ok(None);
     };
     // A standalone file has no dependencies whose output could be read, so the
@@ -520,7 +537,7 @@ pub fn prepare_ingots(
                 .workspace()
                 .get(db, url)
                 .expect("a planned ingot file is in the database");
-            if let Some(syntax) = scan_syntax(url, file.text(db))? {
+            if let Some(syntax) = scan_syntax(db, file)? {
                 syntaxes.push((url.clone(), syntax));
             }
         }
@@ -758,13 +775,18 @@ struct FileScan {
 /// Look for generation syntax in the text of one authored file, before any
 /// view is built. `None` means the file contains none outside quotations, so
 /// nothing needs preparing.
-fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<FileSyntax>, GenerationError> {
-    // Every request form spells `with`; other files need no parse.
-    if !text.contains("with") {
+fn scan_syntax(db: &DriverDataBase, file: File) -> Result<Option<FileSyntax>, GenerationError> {
+    let text = file.text(db);
+    // Skip the parse when none of the request forms can occur in this file.
+    if !["with", "abi", "event", "msg"]
+        .into_iter()
+        .any(|spelling| text.contains(spelling))
+    {
         return Ok(None);
     }
-    let (green, parse_errors) = parser::parse_source_file(text, parser::RecoveryMode::Recover);
-    let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
+    let parsed = hir::lower::parse_file_impl(db, db.top_mod(file));
+    let root = ast::Root::cast(parser::SyntaxNode::new_root(parsed.root.clone())).unwrap();
+    let parse_errors = &parsed.errors;
     let has_scoped_syntax = root
         .syntax()
         .descendants()
@@ -786,7 +808,18 @@ fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<FileSyntax>, Generat
             .any(|request| {
                 request.derive_provider().is_some() && outside_quotation(request.syntax())
             });
-    if !has_requests {
+    let has_short_forms = root.syntax().descendants().any(|node| {
+        (ast::Msg::can_cast(node.kind())
+            || ast::Struct::cast(node.clone()).is_some_and(|item| {
+                item.attr_list().is_some_and(|attrs| {
+                    ["abi", "event"]
+                        .into_iter()
+                        .any(|name| attrs.normal_attrs_named(name).next().is_some())
+                })
+            }))
+            && outside_quotation(&node)
+    });
+    if !has_requests && !has_short_forms {
         // A file with parse errors is not searched for provider openings.
         return Ok(
             (has_scoped_syntax && parse_errors.is_empty()).then_some(FileSyntax {
@@ -797,15 +830,23 @@ fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<FileSyntax>, Generat
         );
     }
     if !parse_errors.is_empty() {
-        return Err(GenerationError {
-            file: url.clone(),
-            range: parser::TextRange::empty(0.into()),
-            cause: format!("authored parse errors: {parse_errors:?}"),
-        });
+        let diagnostics: Vec<_> = parse_errors
+            .iter()
+            .map(|error| error.to_complete(db))
+            .collect();
+        return Err(diagnostic_error(
+            db,
+            &diagnostics,
+            GenerationError {
+                file: file.url(db).expect("indexed generation input"),
+                range: parser::TextRange::empty(0.into()),
+                cause: "authored parse errors".into(),
+            },
+        ));
     }
     Ok(Some(FileSyntax {
         root,
-        has_requests,
+        has_requests: has_requests || has_short_forms,
         may_open_provider: has_scoped_syntax,
     }))
 }
@@ -888,11 +929,11 @@ fn package_preparation_demands(
 
 /// Collect and validate the explicit requests of one scanned file in the view the
 /// providers run in.
-fn file_requests(
-    db: &DriverDataBase,
+fn file_requests<'db>(
+    db: &'db DriverDataBase,
     file: File,
     scan: FileScan,
-) -> Result<FileRequests, GenerationError> {
+) -> Result<FileRequests<'db>, GenerationError> {
     let url = file.url(db).expect("indexed generation input");
     let error = |range, cause| GenerationError {
         file: url.clone(),
@@ -1007,10 +1048,22 @@ fn file_requests(
         provider?;
         inherent_requests.push((request_ast, range, path.syntax().text_range()));
     }
+    let short_form_requests = module
+        .all_impl_traits(db)
+        .iter()
+        .copied()
+        .filter(|header| header.scope().syntax_top_mod(db) == module)
+        .filter_map(|header| {
+            let (range, slot) = header.short_form_derive_site(db)?;
+            (!hir::analysis::ty::abi_short_form_has_authored_errors(db, header))
+                .then_some((header, range, slot))
+        })
+        .collect();
     Ok(FileRequests {
         url: url.clone(),
         explicit_requests,
         inherent_requests,
+        short_form_requests,
         has_scoped_opening,
         root_range: root.syntax().text_range(),
     })
@@ -1233,7 +1286,7 @@ fn check_scoped_implementation(
 /// round then discovers scoped demands in the output view and serves them.
 /// Every provider, whichever
 /// channel names it, is admitted and evaluated in the input view `db`, so the
-/// order of the channels decides only which refusal is reported first. A
+/// order of the channels affects only how refusals are reported. A
 /// standalone transaction also admits the whole output once, as before; a
 /// package view is returned with its ordinary diagnostics for consumers to
 /// report. The result is the output view and the requests the transaction
@@ -1242,7 +1295,7 @@ fn admit_requests(
     db: &DriverDataBase,
     transaction: &Transaction<'_>,
     sealed: Vec<common::generation::FrozenGenerationRequest>,
-    authored: &[FileRequests],
+    authored: &[FileRequests<'_>],
 ) -> Result<Preparation, GenerationError> {
     let basis = &transaction.basis;
     let modules = transaction.modules;
@@ -1279,6 +1332,7 @@ fn admit_requests(
             request.site.range,
         )?;
         plan.request_impl = Some(request.site.range);
+        plan.request_slot = request.slot;
         requests.push(plan);
         sites.push(request.site.clone());
     }
@@ -1417,6 +1471,7 @@ fn admit_requests(
 struct AdmittedRequest<'db> {
     file: File,
     site: RequestSite,
+    slot: Option<u8>,
     input: RecordInput<'db>,
     provider: hir::analysis::semantic::SemanticInstanceKey<'db>,
 }
@@ -1426,9 +1481,10 @@ struct AdmittedRequest<'db> {
 /// each derive header. No provider code runs.
 fn admit_authored_requests<'db>(
     db: &'db DriverDataBase,
-    authored: &[FileRequests],
+    authored: &[FileRequests<'db>],
 ) -> Result<Vec<AdmittedRequest<'db>>, GenerationError> {
     let mut admitted = Vec::new();
+    let mut short_form_errors = Vec::new();
     for found in authored {
         let error = |range, cause| GenerationError {
             file: found.url.clone(),
@@ -1444,20 +1500,12 @@ fn admit_authored_requests<'db>(
             .get(db, &found.url)
             .expect("the authored view keeps every authored file");
         let authored_module = db.top_mod(authored_file);
-        for (request_ast, range, path_range) in &found.explicit_requests {
-            let request =
-                hir::core::meta::authored_derive_request(db, authored_module, request_ast)
-                    .ok_or_else(|| {
-                        error(
-                            *range,
-                            "cannot recover authored derive header identity".into(),
-                        )
-                    })?;
+        let admit_trait = |request: hir::hir_def::ImplTrait<'db>, range, path_range, slot| {
             let provider_ty = header_provider_ty(
                 db,
                 request.scope(),
                 request.derive_provider(db),
-                *path_range,
+                path_range,
                 &error,
             )?;
             let (provider, input) =
@@ -1467,16 +1515,28 @@ fn admit_authored_requests<'db>(
                             db,
                             cause,
                             "derive target admission failed",
-                            error(*range, String::new()),
+                            error(range, String::new()),
                         )
                     },
                 )?;
-            admitted.push(AdmittedRequest {
+            Ok::<_, GenerationError>(AdmittedRequest {
                 file: authored_file,
-                site: site(*range),
+                site: site(range),
+                slot,
                 input,
                 provider,
-            });
+            })
+        };
+        for (request_ast, range, path_range) in &found.explicit_requests {
+            let request =
+                hir::core::meta::authored_derive_request(db, authored_module, request_ast)
+                    .ok_or_else(|| {
+                        error(
+                            *range,
+                            "cannot recover authored derive header identity".into(),
+                        )
+                    })?;
+            admitted.push(admit_trait(request, *range, *path_range, None)?);
         }
         for (request_ast, range, path_range) in &found.inherent_requests {
             let request =
@@ -1507,10 +1567,31 @@ fn admit_authored_requests<'db>(
             admitted.push(AdmittedRequest {
                 file: authored_file,
                 site: site(*range),
+                slot: None,
                 input,
                 provider,
             });
         }
+        for &(header, range, slot) in &found.short_form_requests {
+            match admit_trait(header, range, range, Some(slot)) {
+                Ok(request) => admitted.push(request),
+                Err(error) => {
+                    // Several slots can report the same invalid declaration.
+                    // Keep that report once and still check independent forms.
+                    if !short_form_errors.contains(&error) {
+                        short_form_errors.push(error);
+                    }
+                }
+            }
+        }
+    }
+    let mut short_form_errors = short_form_errors.into_iter();
+    if let Some(mut first) = short_form_errors.next() {
+        use std::fmt::Write;
+        for error in short_form_errors {
+            write!(first.cause, "\n{error}").unwrap();
+        }
+        return Err(first);
     }
     Ok(admitted)
 }
@@ -1538,20 +1619,24 @@ impl Requested<'_> {
             source: &(url::Url, parser::TextRange),
         ) -> bool {
             use common::generation::{FrozenCode, FrozenHoleValue};
-            let FrozenCode::Template {
-                quote_file,
-                quote_range,
-                holes,
-                ..
-            } = code
-            else {
-                return false;
-            };
-            (quote_file == &source.0 && quote_range.contains_range(source.1))
-                || holes.iter().any(|hole| match hole {
-                    FrozenHoleValue::Code(nested) => holds(nested, source),
-                    _ => false,
-                })
+            match code {
+                FrozenCode::Template {
+                    quote_file,
+                    quote_range,
+                    holes,
+                    ..
+                } => {
+                    (quote_file == &source.0 && quote_range.contains_range(source.1))
+                        || holes.iter().any(|hole| match hole {
+                            FrozenHoleValue::Code(nested) => holds(nested, source),
+                            _ => false,
+                        })
+                }
+                FrozenCode::Construct { fields, .. } | FrozenCode::FieldStatements { fields } => {
+                    fields.iter().any(|field| holds(field, source))
+                }
+                _ => false,
+            }
         }
         self.requests
             .iter()

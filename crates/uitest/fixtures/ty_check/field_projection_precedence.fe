@@ -1,0 +1,49 @@
+// `h.f` names the handle's own field where that field is visible, and
+// otherwise the field of the record the handle stands for
+// (`core::ops::Project`). Each read below is given the wrong type, so the
+// reported type shows which field was chosen.
+mod handle {
+    use core::ops::{Field, Project, ProjectField}
+
+    /// A handle with a public field `tag` and a private field `base`.
+    pub struct View<T> {
+        pub tag: u256,
+        base: u256,
+    }
+
+    impl<T> Copy for View<T> {}
+
+    impl<T> View<T> {
+        /// Inside its module, `self.base` is the handle's own field.
+        pub fn own_base(self) -> u256 {
+            self.base
+        }
+    }
+
+    impl<T> Project for View<T> {
+        type Target = T
+    }
+
+    impl<T, F, B> ProjectField<Field<T, F, B>> for View<T> {
+        type Output = bool
+
+        fn project(self) -> ref bool {
+            self.base == 0
+        }
+    }
+}
+
+pub struct Rec {
+    pub tag: bool,
+    pub base: bool,
+    pub other: bool,
+}
+
+fn reads(_ v: handle::View<Rec>) {
+    // The handle's visible field, a `u256`.
+    let _a: bool = v.tag
+    // The handle's `base` is private here, so `base` is the record's, a `bool`.
+    let _b: u256 = v.base
+    // A field only the record has, a `bool`.
+    let _c: u256 = v.other
+}

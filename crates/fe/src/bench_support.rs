@@ -532,6 +532,8 @@ fn with_fe_ingot<T>(
     if had_errors {
         return Err(format!("fe ingot init errors for {name}"));
     }
+    driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
+        .map_err(|error| format!("fe generation error for {name}: {error}"))?;
 
     let ingot = db
         .workspace()

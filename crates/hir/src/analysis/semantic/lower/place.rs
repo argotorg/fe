@@ -43,7 +43,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // Retain its dereference while selecting fields/elements, so an owned
         // projection consumes the original storage rather than a read snapshot.
         match expr.data(self.db, self.body) {
-            Partial::Present(Expr::Field(base, _)) => {
+            Partial::Present(Expr::Field(base, _))
+                if self.typed_body.semantic_expr_lowering(expr).is_none() =>
+            {
                 let field = self.typed_body.resolved_field_index(expr)?;
                 // A field of a pointer is selected through an implicit `(*base).field`.
                 let base_ty = self.projectable_place_ty(self.expr_ty(*base));

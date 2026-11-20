@@ -731,27 +731,6 @@ func inline(always) private %decode_field(noalias nocapture v0.objref<@layout_1>
         return v17;
 }
 
-func inline(always) private %decode_field_from(v0.@layout_3, v1.i256, v2.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        br 0.i1 block2 block3;
-
-    block2:
-        v6.i256 = call %impl_trait_CallData__word_at v0 v2;
-        v8.i256 = call %checked_tail v1 v6;
-        v9.i256 = call %decode_from__gc8cd v0 v8;
-        return v9;
-
-    block3:
-        jump block4;
-
-    block4:
-        v12.i256 = call %decode_from__gc8cd v0 v2;
-        return v12;
-}
-
 func inline(always) private %decode_field_from_prechecked_head(v0.@layout_3, v1.i256, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
@@ -769,53 +748,11 @@ func inline(always) private %decode_field_from_prechecked_head(v0.@layout_3, v1.
         jump block4;
 
     block4:
-        v14.i256 = call %decode_from__gc8cd v0 v2;
+        v14.i256 = call %decode_from v0 v2;
         return v14;
 }
 
-func inline(always) private %impl_trait_Deploy2__decode_from__g8f43(v0.@layout_3, v1.i256) -> @layout_6 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %len__g8f43 v0;
-        v5.i256 = call %decode_msg_field_from v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        v17.i256 = call %decode_msg_field_from v0 v1 v7 v3;
-        (v18.i256, v19.i1) = uaddo v1 32.i256;
-        br v19 block2 block4;
-
-    block4:
-        (v20.i256, v21.i1) = uaddo v18 32.i256;
-        br v21 block2 block5;
-
-    block5:
-        v25.i256 = call %decode_msg_field_from v0 v1 v20 v3;
-        v28.@layout_6 = insert_value undef.@layout_6 0.i256 v5;
-        v31.@layout_6 = insert_value v28 1.i256 v17;
-        v33.@layout_6 = insert_value v31 2.i256 v25;
-        return v33;
-}
-
-func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v6.i256 = call %checked_frame_end v1 32.i256 v2;
-        v8.i256 = call %decode_from__gc8cd v0 v1;
-        return v8;
-}
-
-func inline(always) private %decode_from__gc8cd(v0.@layout_3, v1.i256) -> i256 {
+func inline(always) private %decode_from(v0.@layout_3, v1.i256) -> i256 {
     block0:
         jump block1;
 
@@ -824,15 +761,54 @@ func inline(always) private %decode_from__gc8cd(v0.@layout_3, v1.i256) -> i256 {
         return v4;
 }
 
-func inline(always) private %impl_trait_Deploy__decode_from__g8f43(v0.@layout_3, v1.i256) -> @layout_1 {
+func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
     block0:
         jump block1;
 
     block1:
-        v3.i256 = call %len__g8f43 v0;
-        v5.i256 = call %decode_msg_field_from v0 v1 v1 v3;
-        (v7.i256, v8.i1) = uaddo v1 32.i256;
-        br v8 block2 block3;
+        v6.i256 = call %checked_frame_end v1 32.i256 v2;
+        v8.i256 = call %decode_from v0 v1;
+        return v8;
+}
+
+func inline(always) private %impl_trait_Deploy__decode_from_prechecked_head__g8f43(v0.@layout_3, v1.i256, v2.i256) -> @layout_1 {
+    block0:
+        v3.objref<@layout_6> = obj.alloc @layout_6;
+        jump block1;
+
+    block1:
+        v8.@layout_6 = insert_value undef.@layout_6 0.i256 v1;
+        v10.@layout_6 = insert_value v8 1.i256 v1;
+        v12.@layout_6 = insert_value v10 2.i256 v2;
+        obj.store v3 v12;
+        v14.@layout_1 = call %impl_trait_Deploy__decode_payload__g76e1 v3 v0;
+        return v14;
+}
+
+func inline(always) private %impl_trait_Deploy2__decode_from_prechecked_head__g8f43(v0.@layout_3, v1.i256, v2.i256) -> @layout_6 {
+    block0:
+        v3.objref<@layout_6> = obj.alloc @layout_6;
+        jump block1;
+
+    block1:
+        v8.@layout_6 = insert_value undef.@layout_6 0.i256 v1;
+        v10.@layout_6 = insert_value v8 1.i256 v1;
+        v12.@layout_6 = insert_value v10 2.i256 v2;
+        obj.store v3 v12;
+        v14.@layout_6 = call %impl_trait_Deploy2__decode_payload__g76e1 v3 v0;
+        return v14;
+}
+
+func inline(always) private %decode_next_field(noalias nocapture v0.objref<i256>, v1.@layout_3, v2.i256, v3.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i256 = obj.load v0;
+        v9.i256 = call %decode_field_from_prechecked_head v1 v2 v5 v3;
+        v10.i256 = obj.load v0;
+        (v12.i256, v13.i1) = uaddo v10 32.i256;
+        br v13 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -840,47 +816,8 @@ func inline(always) private %impl_trait_Deploy__decode_from__g8f43(v0.@layout_3,
         evm_revert 0.i256 36.i256;
 
     block3:
-        v17.i256 = call %decode_msg_field_from v0 v1 v7 v3;
-        v20.@layout_1 = insert_value undef.@layout_1 0.i256 v5;
-        v22.@layout_1 = insert_value v20 1.i256 v17;
-        return v22;
-}
-
-func inline(always) private %decode_from_prechecked_head__gdea7(v0.@layout_3, v1.i256, v2.i256) -> @layout_6 {
-    block0:
-        jump block1;
-
-    block1:
-        v5.@layout_6 = call %impl_trait_Deploy2__decode_from__g8f43 v0 v1;
-        return v5;
-}
-
-func inline(always) private %decode_from_prechecked_head__g71a6(v0.@layout_3, v1.i256, v2.i256) -> @layout_1 {
-    block0:
-        jump block1;
-
-    block1:
-        v5.@layout_1 = call %impl_trait_Deploy__decode_from__g8f43 v0 v1;
-        return v5;
-}
-
-func inline(always) private %decode_msg_field_from(v0.@layout_3, v1.i256, v2.i256, v3.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        br 0.i1 block2 block3;
-
-    block2:
-        v9.i256 = call %decode_field_from_prechecked_head v0 v1 v2 v3;
+        obj.store v0 v12;
         return v9;
-
-    block3:
-        jump block4;
-
-    block4:
-        v13.i256 = call %decode_field_from v0 v1 v2;
-        return v13;
 }
 
 func inline(always) private %decode_payload__gdc8c(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> i256 {
@@ -890,6 +827,32 @@ func inline(always) private %decode_payload__gdc8c(noalias nocapture v0.objref<@
     block1:
         v4.i256 = call %read_word v0 v1;
         return v4;
+}
+
+func inline(always) private %impl_trait_Deploy2__decode_payload__g76e1(noalias nocapture v0.objref<@layout_6>, v1.@layout_3) -> @layout_6 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %read_record_field v0 v1;
+        v5.i256 = call %read_record_field v0 v1;
+        v6.i256 = call %read_record_field v0 v1;
+        v9.@layout_6 = insert_value undef.@layout_6 0.i256 v4;
+        v11.@layout_6 = insert_value v9 1.i256 v5;
+        v13.@layout_6 = insert_value v11 2.i256 v6;
+        return v13;
+}
+
+func inline(always) private %impl_trait_Deploy__decode_payload__g76e1(noalias nocapture v0.objref<@layout_6>, v1.@layout_3) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %read_record_field v0 v1;
+        v5.i256 = call %read_record_field v0 v1;
+        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
+        v10.@layout_1 = insert_value v8 1.i256 v5;
+        return v10;
 }
 
 func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> @layout_1 {
@@ -912,7 +875,7 @@ func inline(always) private %decode_runtime_args__gadcc(noalias nocapture v0.obj
         v1.@layout_3 = call %input;
         v3.i256 = call %len__g8f43 v1;
         call %validate_runtime_head v3 4.i256 96.i256;
-        v6.@layout_6 = call %decode_from_prechecked_head__gdea7 v1 4.i256 v3;
+        v6.@layout_6 = call %impl_trait_Deploy2__decode_from_prechecked_head__g8f43 v1 4.i256 v3;
         return v6;
 }
 
@@ -924,7 +887,7 @@ func inline(always) private %decode_runtime_args__gbdfb(noalias nocapture v0.obj
         v1.@layout_3 = call %input;
         v3.i256 = call %len__g8f43 v1;
         call %validate_runtime_head v3 4.i256 64.i256;
-        v6.@layout_1 = call %decode_from_prechecked_head__g71a6 v1 4.i256 v3;
+        v6.@layout_1 = call %impl_trait_Deploy__decode_from_prechecked_head__g8f43 v1 4.i256 v3;
         return v6;
 }
 
@@ -1395,6 +1358,20 @@ func inline(always) private %ptr_offset(v0.i256, v1.i256) -> i256 {
         return v5;
 }
 
+func inline(always) private %read_record_field(noalias nocapture v0.objref<@layout_6>, v1.@layout_3) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 1.i256;
+        v6.objref<i256> = obj.proj v0 0.i256;
+        v7.i256 = obj.load v6;
+        v9.objref<i256> = obj.proj v0 2.i256;
+        v10.i256 = obj.load v9;
+        v12.i256 = call %decode_next_field v4 v1 v7 v10;
+        return v12;
+}
+
 func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
@@ -1607,29 +1584,14 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block1:
         v1.i256 = evm_calldata_size;
         v4.i256 = extract_value v0 0.i256;
-        v5.i1 = gt v4 v1;
-        br v5 block2 block3;
-
-    block2:
-        jump block4;
-
-    block3:
-        v8.i256 = extract_value v0 0.i256;
-        (v10.i256, v11.i1) = usubo v1 v8;
-        br v11 block5 block6;
-
-    block4:
-        v17.i64 = phi (0.i64 block2) (v16 block6);
-        return v17;
-
-    block5:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block6:
-        v16.i64 = call %downcast_truncate__gaa81 v10;
-        jump block4;
+        v5.i256 = sub v1 v4;
+        v6.i256 = extract_value v0 0.i256;
+        v7.i1 = gt v6 v1;
+        v8.i1 = is_zero v7;
+        v9.i256 = zext v8 i256;
+        v10.i256 = mul v5 v9;
+        v11.i64 = call %downcast_truncate__gaa81 v10;
+        return v11;
 }
 
 func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_5>) -> i64 {

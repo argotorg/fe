@@ -102,7 +102,7 @@ use crate::analysis::{
         },
         resolve_name_res_with_minter, resolve_query_in,
     },
-    place::resolve_place_field,
+    place::{field_index, projectable_place_ty, resolve_place_field},
     semantic::{
         BinaryOp, CtfeConfig, EvalOutcome, Overflow, SemConstScalar, SemConstValue, SemOrigin,
         UnaryOp, eval_const_ref, force_const_term_value, instance::resolve_semantic_const_ref,
@@ -152,6 +152,16 @@ enum AssignLhsStatus {
     Assignable,
     Immutable,
     NonAssignable,
+}
+
+/// What `check_projected_field` made of `h.f`.
+enum Projected<'db> {
+    /// The type of `h` does not implement `core::ops::Project`.
+    NotProject,
+    /// It does, and the target type has no field `f`.
+    NoSuchField(TyId<'db>),
+    /// The field expression is checked, as a projection call or as an error.
+    Done(ExprProp<'db>),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -647,6 +657,7 @@ impl<'db> TyChecker<'db> {
                 | Expr::Call(..)
                 | Expr::MethodCall(..)
                 | Expr::Bin(_, _, BinOp::Index)
+                | Expr::Field(..)
                 | Expr::Block(..)
                 | Expr::Try(..)
         ) {
@@ -779,10 +790,7 @@ impl<'db> TyChecker<'db> {
             {
                 call = *inner;
             }
-            if matches!(
-                self.env.expr_data(call),
-                Partial::Present(Expr::Call(..) | Expr::MethodCall(..))
-            ) && let Some(CallableDef::Func(func)) = self
+            if let Some(CallableDef::Func(func)) = self
                 .env
                 .callable_expr(call)
                 .map(|callable| callable.callable_def)
@@ -5712,6 +5720,9 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        // An own or pointee field that is not visible here does not hide the
+        // field of a `Project` target of the same name.
+        let mut hidden = None;
         if let Some(resolved_field) = resolve_place_field(self.db, lhs_place_ty, *field) {
             let (ty_base, ty_args) = resolved_field.base_ty.decompose_ty_app(self.db);
             // An access part of a product parameter is as writable as its
@@ -5743,18 +5754,16 @@ impl<'db> TyChecker<'db> {
                             && !is_scope_visible_from(self.db, scope, self.env.scope())
                         {
                             // Check the visibility of the field.
-                            let diag = PathResDiag::Invisible(
+                            hidden = Some(PathResDiag::Invisible(
                                 expr.span(self.body()).into_field_expr().accessor().into(),
                                 label,
                                 scope.name_span(self.db),
-                            );
-
-                            self.push_diag(diag);
-                            return ExprProp::invalid(self.db);
+                            ));
+                        } else {
+                            self.env
+                                .register_resolved_field_index(expr, resolved_field.index);
+                            return ExprProp::new(field_ty, is_mut);
                         }
-                        self.env
-                            .register_resolved_field_index(expr, resolved_field.index);
-                        return ExprProp::new(field_ty, is_mut);
                     }
                 }
 
@@ -5769,14 +5778,122 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        let given_ty = match self.check_projected_field(expr, *lhs, lhs_place_ty, *field) {
+            Projected::Done(prop) => return prop,
+            Projected::NoSuchField(target) => target,
+            Projected::NotProject => lhs_place_ty,
+        };
+        if let Some(diag) = hidden {
+            self.push_diag(diag);
+            return ExprProp::invalid(self.db);
+        }
+
         let diag = BodyDiag::AccessedFieldNotFound {
             primary: expr.span(self.body()).into(),
-            given_ty: lhs_place_ty,
+            given_ty,
             index: *field,
         };
         self.push_diag(diag);
 
         ExprProp::invalid(self.db)
+    }
+
+    /// `h.f` for an `h` whose type implements `core::ops::Project` and has
+    /// no visible field `f`: the call of `ProjectField::project` with the
+    /// descriptor `Field<Target, F, Before>` of the field `f` of `Target`,
+    /// where `Before` holds the types of the fields declared before `f` as a
+    /// tree (`fields_before_ty`). The checking of the call
+    /// is the tail of `check_ops_trait`.
+    fn check_projected_field(
+        &mut self,
+        expr: ExprId,
+        lhs: ExprId,
+        lhs_ty: TyId<'db>,
+        field: FieldIndex<'db>,
+    ) -> Projected<'db> {
+        let base_ty = self.normalize_ty(projectable_place_ty(self.db, lhs_ty));
+        let Some(target) = crate::analysis::ty::project_target_ty(
+            self.db,
+            self.env.scope(),
+            base_ty,
+            self.env.assumptions(),
+        ) else {
+            return Projected::NotProject;
+        };
+        if target.is_ty_var(self.db) {
+            self.push_diag(BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into()));
+            return Projected::Done(ExprProp::invalid(self.db));
+        }
+        let Some(position) = field_index(self.db, target, field) else {
+            return Projected::NoSuchField(target);
+        };
+
+        // Tuple struct fields are named by their position.
+        let label = match field {
+            FieldIndex::Ident(label) => Some(label),
+            FieldIndex::Index(index) if target.as_tuple_struct(self.db).is_some() => {
+                Some(IdentId::new(self.db, index.data(self.db).to_string()))
+            }
+            FieldIndex::Index(_) => None,
+        };
+        if let Some(label) = label
+            && let Some(scope) = RecordLike::from_ty(target).record_field_scope(self.db, label)
+            && !is_scope_visible_from(self.db, scope, self.env.scope())
+        {
+            let diag = PathResDiag::Invisible(
+                expr.span(self.body()).into_field_expr().accessor().into(),
+                label,
+                scope.name_span(self.db),
+            );
+            self.push_diag(diag);
+            return Projected::Done(ExprProp::invalid(self.db));
+        }
+
+        let field_tys = target.field_types(self.db);
+        let position = usize::from(position);
+        let before = crate::analysis::ty::fields_before_ty(self.db, &field_tys[..position]);
+        let Some(field_ctor) = resolve_lib_type_path(self.db, self.env.scope(), "core::ops::Field")
+        else {
+            return Projected::NotProject;
+        };
+        let descriptor = TyId::foldl(self.db, field_ctor, &[target, field_tys[position], before]);
+        let Some(trait_def) =
+            resolve_core_trait(self.db, self.env.scope(), &["ops", "ProjectField"])
+        else {
+            return Projected::NotProject;
+        };
+        let inst = TraitInstId::new_simple(self.db, trait_def, vec![base_ty, descriptor]);
+        self.env.register_trait_obligation(TraitObligation {
+            choices: self.env.choices,
+            goal: inst,
+            origin: TraitObligationOrigin::GenericConfirmation,
+            span: expr.span(self.body()).into(),
+        });
+        if matches!(
+            is_goal_satisfiable(self.db, self.env.solve_cx(), inst),
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
+        ) {
+            return Projected::Done(ExprProp::invalid(self.db));
+        }
+
+        let method = trait_def.method_defs(self.db)[&IdentId::new(self.db, "project".to_string())];
+        let func_ty = self.instantiate_trait_method_to_term(method, base_ty, inst);
+        let mut callable =
+            Callable::new(self.db, func_ty, expr.span(self.body()).into(), Some(inst))
+                .expect("ProjectField::project is callable");
+        callable.set_checked_input_tys(vec![self.normalize_ty(lhs_ty)]);
+        self.check_callable_effects(expr, &mut callable);
+
+        let ret_ty = self.normalize_ty(callable.ret_ty(self.db));
+        let shape = callable
+            .ret_shape(self.db)
+            .map(|shape| shape.map_tys(self.db, &mut |ty| self.normalize_ty(ty)));
+        self.env.register_semantic_call(expr, callable);
+        Projected::Done(ExprProp {
+            is_mut: matches!(shape, None | Some(Shape::Access(BorrowKind::Mut, _))),
+            shape,
+            ..ExprProp::new(ret_ty, true)
+        })
     }
 
     fn check_tuple(

@@ -2658,6 +2658,7 @@ contract C uses (log: mut Log) {
 }
 "#,
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2679,6 +2680,7 @@ fn by_ref_trait_provider_storage_bug_fixture_keeps_callables_on_all_typed_calls(
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2728,6 +2730,7 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2777,6 +2780,7 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2841,6 +2845,7 @@ fn use_ctx_semantic_body_keeps_receiver_as_effect_binding_local() {
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2890,6 +2895,7 @@ fn zero_effect_arg_method_calls_finalize_under_forwarded_witnesses() {
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -2994,6 +3000,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
         Utf8PathBuf::from("by_ref_trait_provider_storage_bug.fe"),
         include_str!("../../../codegen/tests/fixtures/by_ref_trait_provider_storage_bug.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -3063,6 +3070,7 @@ fn pointer_values_are_direct_values() {
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
         include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -3139,6 +3147,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
         Utf8PathBuf::from("effect_handle_field_deref.fe"),
         include_str!("../../../codegen/tests/fixtures/effect_handle_field_deref.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -3349,6 +3358,7 @@ fn root_trait_effect_bindings_specialize_call_to_concrete_evm() {
         Utf8PathBuf::from("address_call_method.fe"),
         include_str!("../../../fe/tests/fixtures/fe_test/address_call_method.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 
@@ -3651,6 +3661,7 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
         Utf8PathBuf::from("storage_map_contract.fe"),
         include_str!("../../../codegen/tests/fixtures/storage_map_contract.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, storage_map_file);
     let (top_mod, _) = db.top_mod(storage_map_file);
     db.assert_no_diags(top_mod);
     for name in ["init", "runtime"] {
@@ -3668,6 +3679,7 @@ fn root_semantic_instance_keys_are_closed_under_root_provider_subst() {
         Utf8PathBuf::from("contract_init_fixed_array_arg.fe"),
         include_str!("../../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, test_file);
     let (top_mod, _) = db.top_mod(test_file);
     db.assert_no_diags(top_mod);
     let test_func = find_func(&db, top_mod, "test_contract_init_fixed_array_arg");

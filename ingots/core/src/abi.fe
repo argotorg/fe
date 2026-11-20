@@ -28,6 +28,10 @@ pub enum AbiError {
 /// must use `len()` to enforce bounds/canonicality. Inputs are passed by view;
 /// only `Copy` inputs can be stored, as in `Cursor` and `BytesView`.
 pub trait ByteSource {
+    /// Word reads at every offset return a value without trapping or changing
+    /// the source. Readers may perform such a read before validating its range.
+    const PADDED_WORD_AT: bool = false
+
     /// The input's length in bytes. Like any calldata, returndata or memory,
     /// an input is shorter than `2**64` bytes, so the offset and length words
     /// that fit it are below `2**64`, as Solidity requires of them.
@@ -163,6 +167,12 @@ pub trait Abi {
     /// the structural `base + head_size <= input_len` requirement.
     fn validate_runtime_head(input_len: u256, base: u256, head_size: u256)
 
+    /// Apply the ABI policy when the caller checks the physical head range.
+    #[inline(always)]
+    fn validate_runtime_head_policy(input_len: u256, base: u256, head_size: u256) {
+        Self::validate_runtime_head(input_len: input_len, base: base, head_size: head_size)
+    }
+
     fn decoder_new() -> Self::Decoder
     fn decoder_with_base(_ base: u256) -> Self::Decoder
 }
@@ -181,6 +191,14 @@ pub trait AbiDecoder<A: Abi> {
     fn read_u8<I: ByteInput>(mut self, _ input: I) -> u8
     fn read_word<I: ByteInput>(mut self, _ input: I) -> u256
     fn peek_word<I: ByteInput>(self, _ input: I, _ at: u256) -> u256
+
+    /// Read the next field of an ABI record. Ordinary decoders use the shared
+    /// cursor path. A decoder of an already-checked record can use its known
+    /// input extent instead.
+    #[inline(always)]
+    fn read_record_field<T: Decode<A>, I: ByteInput>(mut self, _ input: I) -> T {
+        decode_field<A, T, Self, I>(mut self, input)
+    }
 }
 
 /// ABI payload layout metadata and exact runtime payload size.
@@ -739,18 +757,57 @@ fn decode_string_payload_after_head<A: Abi, I: ByteInput, const N: usize>(_ inpu
         if data_len == 32 {
             input.word_at(data_start)
         } else {
-            // The input may end immediately after the last string byte.
-            // Load from a full scratch word only after a bounded copy.
-            let scratch = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
-            unsafe {
-                store_word(ptr: scratch.ptr(), value: 0)
-                input.copy_to_memory(dest: scratch.ptr(), src_offset: data_start, len: data_len)
-                mem_word_at(base: scratch.ptr(), offset: 0) >> ((32 - data_len) * 8)
-            }
+            read_word_prefix(input, start: data_start, len: data_len) >> ((32 - data_len) * 8)
         }
     }
 
     packed as String<N>
+}
+
+// The caller has checked a range shorter than one word. Copy just that range
+// so the backing source can stop exactly at the last payload byte.
+#[inline(always)]
+fn read_word_prefix<I: ByteInput>(_ input: I, start: u256, len: u256) -> u256 {
+    let scratch = unsafe { ptr::FixedMemBuffer<32>::alloc_uninit() }
+    unsafe {
+        store_word(ptr: scratch.ptr(), value: 0)
+        input.copy_to_memory_unchecked(dest: scratch.ptr(), src_offset: start, len: len)
+        mem_word_at(base: scratch.ptr(), offset: 0)
+    }
+}
+
+/// A byte input and its length observed at the start of a read.
+/// The backing bytes must remain valid for as long as the extent or any
+/// derived view is used.
+pub struct InputExtent<I> {
+    input: I,
+    end: u256,
+}
+
+impl<I: Copy> Copy for InputExtent<I> {}
+
+impl<I: ByteInput + Copy> InputExtent<I> {
+    #[inline(always)]
+    pub fn new(input: I) -> Self {
+        Self { input, end: input.len() }
+    }
+
+    pub fn input(self) -> I {
+        self.input
+    }
+
+    pub fn end(self) -> u256 {
+        self.end
+    }
+
+    /// Make a view within the captured length.
+    #[inline(always)]
+    pub fn try_view(self, start: u256, len: usize) -> Option<BytesView<I>> {
+        if start > self.end || len as u256 > self.end - start {
+            return Option::None
+        }
+        Option::Some(BytesView { input: self.input, start, len })
+    }
 }
 
 pub struct BytesView<I> {
@@ -767,11 +824,7 @@ impl<I> BytesView<I>
     where I: ByteInput + Copy
 {
     pub fn try_new(input: I, start: u256, len: usize) -> Option<Self> {
-        let input_len = input.len()
-        if start > input_len || len as u256 > input_len - start {
-            return Option::None
-        }
-        Option::Some(Self { input, start, len })
+        InputExtent::new(input).try_view(start: start, len: len)
     }
 
     pub fn new(input: I, start: u256, len: usize) -> Self {
@@ -849,13 +902,12 @@ impl<I> BytesView<I>
             return Option::None
         }
 
-        let word = self.input.word_at(self.start + offset as u256)
+        let start = self.start + offset as u256
         let remaining = (self.len - offset) as u256
         if remaining < 32 {
-            let shift = (32 - remaining) * 8
-            return Option::Some(word >> shift << shift)
+            return Option::Some(read_word_prefix(self.input, start: start, len: remaining))
         }
-        Option::Some(word)
+        Option::Some(self.input.word_at(start))
     }
 
     /// Read a word beginning at `offset`, zeroing bytes beyond this view.

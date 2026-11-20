@@ -1037,6 +1037,15 @@ pub enum RuntimeInputPlan<'db> {
         decode_args_fn: RuntimeInstance<'db>,
         projected_fields: Box<[u32]>,
     },
+    /// The message read where it lies. `reads` names the fields in source
+    /// pattern order. `projected_fields` names the values passed to the handler.
+    ReadHostPayloadInPlace {
+        msg_ty: TyId<'db>,
+        host: TargetRootProviderBinding<'db>,
+        args_fn: RuntimeInstance<'db>,
+        reads: Box<[(u32, RuntimeInstance<'db>)]>,
+        projected_fields: Box<[u32]>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]

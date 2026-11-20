@@ -1,0 +1,62 @@
+// The descriptor that `h.f` passes to `ProjectField`: the types of the fields
+// before `f`, in declaration order, as a tree of pairs with each type in a
+// one-element tuple (`core::ops::Field`). The implementation below demands a
+// bound that no type has, so each read reports the descriptor it was given.
+use core::ops::{Field, Project, ProjectField}
+
+pub trait Shown {}
+
+pub struct View<T> {
+    base: u256,
+}
+
+impl<T> Copy for View<T> {}
+
+impl<T> Project for View<T> {
+    type Target = T
+}
+
+impl<T, F, B> ProjectField<Field<T, F, B>> for View<T>
+    where B: Shown
+{
+    type Output = u256
+
+    fn project(self) -> ref u256 {
+        self.base
+    }
+}
+
+pub struct Rec {
+    pub a0: u8,
+    pub a1: u16,
+    pub a2: u32,
+    pub a3: u64,
+    pub a4: u128,
+    pub a5: u256,
+    pub a6: bool,
+    pub a7: i8,
+}
+
+fn first(_ v: View<Rec>) -> u256 {
+    v.a0
+}
+
+fn second(_ v: View<Rec>) -> u256 {
+    v.a1
+}
+
+fn third(_ v: View<Rec>) -> u256 {
+    v.a2
+}
+
+fn fourth(_ v: View<Rec>) -> u256 {
+    v.a3
+}
+
+fn sixth(_ v: View<Rec>) -> u256 {
+    v.a5
+}
+
+fn last(_ v: View<Rec>) -> u256 {
+    v.a7
+}

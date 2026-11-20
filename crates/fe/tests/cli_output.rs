@@ -3936,7 +3936,9 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "abi_decode_field_names",
     "abi_decode_input_len_bound",
     "abi_dynamic_payload",
+    "abi_encoded_cost",
     "abi_nested_msg_decode_bounds",
+    "abi_record_view_calldata",
     "abi_signed_int_boundary",
     "abi_struct",
     "abi_unpadded_dynamic_payload",
@@ -3994,6 +3996,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "event_dyn_array_u256",
     "event_dyn_string",
     "event_dynamic_mixed",
+    "event_in_function_module",
     "event_many_fields",
     "event_zero_fields",
     "evm_init_code_hash",
@@ -4067,6 +4070,8 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "recv_arm_variant_paths",
     "recv_fallback",
     "recv_field_patterns",
+    "recv_ref_fields",
+    "recv_ref_fields_wide",
     "recv_short_calldata_selector_guard",
     "reentrancy_mutex",
     "reentrancy_mutex_storage_map",
@@ -5077,6 +5082,34 @@ fn test_cli_test_unsafe_trust_follows_the_codec_a_dispatcher_runs() {
         output.contains("call reaches unsafe code in `u`, which is not allowed to use it")
             && output.contains("init(w: WI)"),
         "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_follows_the_reads_of_an_in_place_arm() {
+    // A `recv` arm that names a field with `ref` reads it with `Part::read`
+    // of the field's type in the dispatcher, and no call names it. `u` wrote
+    // the unsafe code of that implementation, and nothing trusts `u`.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_in_place_arm");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert_eq!(
+        output
+            .matches("call reaches unsafe code in `u`, which is not allowed to use it")
+            .count(),
+        1,
+        "one error for the arm:\n{output}"
+    );
+    assert!(
+        output.contains("Get { ref r }"),
+        "the error names the arm:\n{output}"
+    );
+    assert!(
+        output.contains(
+            "to trust `u`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml"
+        ),
+        "unexpected remedy:\n{output}"
     );
 }
 

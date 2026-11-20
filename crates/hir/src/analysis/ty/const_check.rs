@@ -274,10 +274,13 @@ impl<'db, 'a> ConstFnChecker<'db, 'a> {
                 self.check_call_target(expr);
             }
 
-            Expr::Field(inner, _)
-            | Expr::ArrayRep(inner, _)
-            | Expr::Cast(inner, _)
-            | Expr::Try(inner) => {
+            // A projected field is a call.
+            Expr::Field(inner, _) => {
+                self.check_expr(*inner);
+                self.check_call_target(expr);
+            }
+
+            Expr::ArrayRep(inner, _) | Expr::Cast(inner, _) | Expr::Try(inner) => {
                 self.check_expr(*inner);
             }
 

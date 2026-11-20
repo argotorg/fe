@@ -1,0 +1,384 @@
+// A Seaport-shaped order read lazily from calldata: an order with arrays of
+// item records and a nested static record. A contract arm with a raw selector
+// reads one amount of one offer item through `CallData::record_view` and
+// ordinary field syntax, without decoding the rest of the order.
+use core::abi::{AbiSize, ByteSource, Bytes, BytesView, store_word}
+use core::ptr::{self, MemBuffer, MemSpan}
+use core::ops::{Field, ProjectField}
+use std::abi::{Bytes32, DynArray, FieldKey, HeadsBefore, Keys, RecordView, Sol, decode_part_at, decode_record_from, decode_record_view_at, dyn_array_from, keys}
+use std::evm::{Address, Call, CallData, Evm}
+
+#[abi]
+pub struct OfferItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+}
+
+#[abi]
+pub struct ConsiderationItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+    pub recipient: Address,
+}
+
+#[abi]
+pub struct Window { pub start_time: u256, pub end_time: u256 }
+
+#[abi]
+pub struct OrderParams {
+    pub offerer: Address,
+    pub zone: Address,
+    pub offer: DynArray<OfferItem>,
+    pub consideration: DynArray<ConsiderationItem>,
+    pub order_type: u8,
+    pub window: Window,
+    pub zone_hash: Bytes32,
+    pub salt: u256,
+    pub conduit_key: Bytes32,
+}
+
+fn offer_item(_ n: u256) -> OfferItem {
+    OfferItem { item_type: 2, token: Address::new(0x700 + n), identifier: n, start_amount: 1000 + n, end_amount: 2000 + n }
+}
+
+fn consideration_item(_ n: u256) -> ConsiderationItem {
+    ConsiderationItem {
+        item_type: 0, token: Address::new(0), identifier: 0, start_amount: 3000 + n, end_amount: 3000 + n,
+        recipient: Address::new(0x900 + n),
+    }
+}
+
+fn order_params() -> OrderParams {
+    OrderParams {
+        offerer: Address::new(0x111),
+        zone: Address::new(0x222),
+        offer: dyn_array_from([offer_item(0), offer_item(1), offer_item(2)]),
+        consideration: dyn_array_from([consideration_item(0), consideration_item(1)]),
+        order_type: 3,
+        window: Window { start_time: 50, end_time: 60 },
+        zone_hash: Bytes32 { val: 0x5a },
+        salt: 77,
+        conduit_key: Bytes32 { val: 0xc0 },
+    }
+}
+
+msg Exchange {
+    /// startAmount((address,address,(uint8,address,uint256,uint256,uint256)[],(uint8,address,uint256,uint256,uint256,address)[],uint8,(uint256,uint256),bytes32,uint256,bytes32),uint256),
+    /// read lazily
+    #[selector = 0x01]
+    StartAmount -> u256,
+    /// endTime(order), read lazily
+    #[selector = 0x02]
+    EndTime -> u256,
+    /// The same as `StartAmount`, with the order decoded eagerly.
+    #[selector = 0x03]
+    EagerStartAmount { order: OrderParams, index: u256 } -> u256,
+}
+
+// Typed counterpart used to let the compiler encode valid calldata.
+msg TypedExchange {
+    #[selector = 0x01]
+    StartAmount { order: OrderParams, index: u256 } -> u256,
+    #[selector = 0x02]
+    EndTime { order: OrderParams } -> u256,
+}
+
+pub contract Market {
+    recv Exchange {
+        StartAmount {} -> u256 {
+            let args = CallData::with_base(4)
+            let index: usize = args.word_at(32).downcast_unchecked()
+            args.record_view<OrderParams>(0).offer[index].start_amount
+        }
+
+        EndTime {} -> u256 {
+            CallData::with_base(4).record_view<OrderParams>(0).window.end_time
+        }
+
+        EagerStartAmount { order, index } -> u256 {
+            order.offer.get(index.downcast_unchecked()).start_amount
+        }
+    }
+}
+
+fn deploy() -> Address uses (evm: mut Evm) {
+    evm.create2<Market>(value: Wei::zero(), args: (), salt: 0)
+}
+
+#[test]
+fn seaport_reads_one_amount_of_one_item_from_calldata() uses (evm: mut Evm) {
+    let market = deploy()
+    let amount: u256 = evm.call(addr: market, gas: 1000000, value: Wei::zero(), message: TypedExchange::StartAmount { order: order_params(), index: 1 })
+    assert!(amount == 1001)
+    let end: u256 = evm.call(addr: market, gas: 1000000, value: Wei::zero(), message: TypedExchange::EndTime { order: order_params() })
+    assert!(end == 60)
+}
+
+#[test]
+fn seaport_layout_facts() {
+    assert!(<OrderParams as AbiSize>::HEAD_SIZE == 320)
+    assert!(<OfferItem as AbiSize>::HEAD_SIZE == 160 && <ConsiderationItem as AbiSize>::HEAD_SIZE == 192)
+    let layout = keys<OrderParams>()
+    assert!(layout.window.offset() == 160 && layout.salt.offset() == 256)
+}
+
+/// A memory input.
+struct MemInput { ptr: *u8, len: u256 }
+
+struct WideHead {}
+impl AbiSize for WideHead {
+    const HEAD_SIZE: u256 = (1 as u256) << 255
+    const IS_DYNAMIC: bool = false
+}
+
+struct ManualHead {}
+impl HeadsBefore for ManualHead { const SIZE: u256 = !(0 as u256) }
+
+msg FrameCheck {
+    #[selector = 1]
+    Array -> u256,
+    #[selector = 2]
+    Payload -> u256,
+    #[selector = 3]
+    Manual { offset: u256 } -> u256,
+    #[selector = 4]
+    ExplicitProjection -> u256,
+    #[selector = 5]
+    ZeroStrideArray -> u256,
+}
+
+pub contract FrameReceiver {
+    recv FrameCheck {
+        Array {} -> u256 {
+            let input = CallData::with_base(4)
+            decode_part_at<Sol, DynArray<WideHead>, CallData>(input, base: 0, head_pos: 0).len() as u256
+        }
+        Payload {} -> u256 {
+            let input = BytesView::new(input: CallData::with_base(4), start: 0, len: 32)
+            decode_part_at<Sol, Bytes, BytesView<CallData>>(input, base: 0, head_pos: 0).len() as u256
+        }
+        Manual { offset } -> u256 {
+            let record = decode_record_from<Sol, Window, CallData>(CallData::with_base(4), 32)
+            record.at(FieldKey<Window, u256>::new(offset))
+        }
+        ExplicitProjection {} -> u256 {
+            let record = decode_record_from<Sol, Window, CallData>(CallData::with_base(4), 32)
+            let key = <Keys<Window> as ProjectField<Field<Window, u256, ManualHead>>>::project(keys<Window>())
+            record.at(key)
+        }
+        ZeroStrideArray {} -> u256 {
+            let input = CallData::with_base(4)
+            decode_part_at<Sol, DynArray<()>, CallData>(input, base: 0, head_pos: 0).len() as u256
+        }
+    }
+}
+
+#[test]
+fn typed_frames_check_capacity_and_read_bounds() uses (evm: mut Evm) {
+    let receiver = evm.create2<FrameReceiver>(value: Wei::zero(), args: (), salt: 0)
+    let data = MemBuffer::new(64)
+    let array = MemInput { ptr: data.ptr(), len: 64 }
+    unsafe { store_word(ptr: data.ptr(), value: 32) }
+    let empty = call_raw(receiver, selector: 1, payload: array)
+    assert!(empty.success && empty.word0 == 0)
+    unsafe { store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 2) }
+    let large_head = call_raw(receiver, selector: 1, payload: array)
+    assert!(!large_head.success && large_head.ret_len == 0)
+
+    let bytes = MemInput { ptr: data.ptr(), len: 32 }
+    let missing_length = call_raw(receiver, selector: 2, payload: bytes)
+    assert!(!missing_length.success && missing_length.ret_len == 0)
+}
+
+#[test]
+fn padded_array_read_checks_the_length_word_and_zero_stride_count() uses (evm: mut Evm) {
+    let receiver = evm.create2<FrameReceiver>(value: Wei::zero(), args: (), salt: 0)
+    let data = MemBuffer::new(64)
+    let length = ptr::offset_bytes(data.ptr(), 32)
+    let full = MemInput { ptr: data.ptr(), len: 64 }
+    unsafe {
+        store_word(ptr: data.ptr(), value: 32)
+        store_word(ptr: length, value: (1 as u256) << 63)
+    }
+    let fits = call_raw(receiver, selector: 5, payload: full)
+    assert!(fits.success && fits.word0 == (1 as u256) << 63)
+
+    unsafe { store_word(ptr: length, value: (1 as u256) << 64) }
+    let too_many = call_raw(receiver, selector: 5, payload: full)
+    assert!(!too_many.success && too_many.ret_len == 0)
+
+    unsafe { store_word(ptr: length, value: 0) }
+    let partial = MemInput { ptr: data.ptr(), len: 63 }
+    let short = call_raw(receiver, selector: 5, payload: partial)
+    assert!(!short.success && short.ret_len == 0)
+
+    unsafe { store_word(ptr: data.ptr(), value: !(0 as u256)) }
+    let wrapped = call_raw(receiver, selector: 5, payload: full)
+    assert!(!wrapped.success && wrapped.ret_len == 0)
+}
+
+#[test]
+fn manual_keys_keep_source_bounds() uses (evm: mut Evm) {
+    let receiver = evm.create2<FrameReceiver>(value: Wei::zero(), args: (), salt: 0)
+    let data = MemBuffer::new(128)
+    let payload = MemInput { ptr: data.ptr(), len: 128 }
+    unsafe {
+        store_word(ptr: data.ptr(), value: 64)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 96), value: 99)
+    }
+    let outside_record = call_raw(receiver, selector: 3, payload: payload)
+    assert!(outside_record.success && outside_record.word0 == 99)
+    unsafe { store_word(ptr: data.ptr(), value: !(0 as u256)) }
+    let outside_source = call_raw(receiver, selector: 3, payload: payload)
+    assert!(!outside_source.success && outside_source.ret_len == 0)
+    let explicit = call_raw(receiver, selector: 4, payload: payload)
+    assert!(!explicit.success && explicit.ret_len == 0)
+}
+
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+/// The arguments `(order_params(), index)` as encoded in calldata after the
+/// selector, in a raw allocation that no drop frees.
+fn args(_ index: u256) -> MemInput {
+    let buf = core::abi::encode_alloc<Sol, (OrderParams, u256)>((order_params(), index))
+    let data = ptr::alloc_bytes(buf.len())
+    unsafe { ptr::copy_raw(data, source: buf.ptr(), len: buf.len()) }
+    MemInput { ptr: data, len: buf.len() as u256 }
+}
+
+/// An input that allows reads only inside up to four byte ranges
+/// `[lo, hi)` and reverts on any other read.
+struct Watch { ptr: *u8, len: u256, allow: [u256; 8] }
+impl Copy for Watch {}
+impl Watch {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+    fn guard(self, _ start: u256, _ n: u256) {
+        if n == 0 {
+            return
+        }
+        var k: usize = 0
+        while k < 4 {
+            if self.allow[2 * k] <= start && start + n <= self.allow[2 * k + 1] {
+                return
+            }
+            k += 1
+        }
+        assert!(false)
+    }
+}
+impl ByteSource for Watch {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 {
+        self.guard(offset, 32)
+        self.span().word_at(offset)
+    }
+    fn byte_at(self, _ offset: u256) -> u8 {
+        self.guard(offset, 1)
+        self.span().byte_at(offset.downcast_unchecked())
+    }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.guard(src_offset, len)
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+#[test]
+fn seaport_read_touches_only_what_it_reads() {
+    let input = args(1)
+    let order_at = input.word_at(0)
+    let offer_at = order_at + input.word_at(order_at + 64)
+    // The order's offset word, the head word of `offer`, its length word and
+    // the `start_amount` word of item 1 (items are 160 bytes, after the length).
+    let start_amount_at = offer_at + 32 + 160 + 96
+    let allowed = [0, 32, order_at + 64, order_at + 96, offer_at, offer_at + 32, start_amount_at, start_amount_at + 32]
+    let watched = Watch { ptr: input.ptr, len: input.len, allow: allowed }
+    let order: RecordView<Watch, OrderParams> = decode_record_view_at(watched, base: 0, head_pos: 0)
+    assert!(order.offer[1].start_amount == 1001)
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+/// Call `addr` with `selector` followed by `payload`.
+fn call_raw(_ addr: Address, selector: u256, payload: MemInput) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + payload.len
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data.ptr(), value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data.ptr(), 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    var ret = MemBuffer::new(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: Wei::zero(),
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+#[test]
+fn seaport_lazy_read_ignores_a_malformed_other_field() uses (evm: mut Evm) {
+    let market = deploy()
+    let input = args(1)
+    // Both arms accept the well-formed arguments.
+    let lazy = call_raw(market, selector: 1, payload: input)
+    let eager = call_raw(market, selector: 3, payload: input)
+    assert!(lazy.success && lazy.word0 == 1001)
+    assert!(eager.success && eager.word0 == 1001)
+    // A `consideration` length that runs past the end of the calldata: the
+    // eager decoder refuses the order, the lazy read of the offer item does
+    // not look at `consideration`.
+    let order_at = input.word_at(0)
+    let consideration_at = order_at + input.word_at(order_at + 96)
+    let bad = MemInput { ptr: ptr::alloc_bytes(input.len.downcast_unchecked()), len: input.len }
+    unsafe {
+        ptr::copy_raw(bad.ptr, source: input.ptr, len: input.len.downcast_unchecked())
+        store_word(ptr: ptr::offset_bytes(bad.ptr, consideration_at.downcast_unchecked()), value: 1000)
+    }
+    let lazy_bad = call_raw(market, selector: 1, payload: bad)
+    let eager_bad = call_raw(market, selector: 3, payload: bad)
+    assert!(lazy_bad.success && lazy_bad.word0 == 1001)
+    assert!(!eager_bad.success && eager_bad.ret_len == 0)
+
+    // The same malformed length in the reached offer returns the ABI error.
+    let offer_at = order_at + input.word_at(order_at + 64)
+    unsafe {
+        store_word(ptr: ptr::offset_bytes(bad.ptr, offer_at.downcast_unchecked()), value: 1000)
+    }
+    let reached_bad = call_raw(market, selector: 1, payload: bad)
+    assert!(!reached_bad.success && reached_bad.ret_len == 0)
+}

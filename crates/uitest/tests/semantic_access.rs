@@ -1,3 +1,6 @@
+#[path = "common/prepared_source.rs"]
+mod prepared_source;
+
 use common::{InputDb, compilation::Target};
 use driver::DriverDataBase;
 use salsa::Setter;
@@ -25,19 +28,21 @@ fn run_semantic_access(db: &mut DriverDataBase, fixture: &Fixture) {
 /// The diagnostics of a program checked as a standalone file: its HIR
 /// errors, or else its semantic access errors.
 fn diagnostics(db: &mut DriverDataBase, path: &str, content: &str) -> String {
-    let file = db.workspace().touch(
+    prepared_source::diagnostics(
         db,
         Url::from_file_path(path).expect("path should be absolute"),
-        Some(content.to_string()),
-    );
-    let top_mod = db.top_mod(file);
-    let hir = db.run_on_top_mod(top_mod);
-    if hir.has_errors(db) {
-        hir.format_diags(db)
-    } else {
-        let diags = db.mir_diagnostics_for_top_mod(top_mod);
-        db.format_complete_diagnostics(&diags)
-    }
+        content,
+        |db, file| {
+            let top_mod = db.top_mod(file);
+            let hir = db.run_on_top_mod(top_mod);
+            if hir.has_errors(db) {
+                hir.format_diags(db)
+            } else {
+                let diags = db.mir_diagnostics_for_top_mod(top_mod);
+                db.format_complete_diagnostics(&diags)
+            }
+        },
+    )
 }
 
 // A variadic call reads its extra arguments, which only native code makes.

@@ -53,7 +53,7 @@ struct E8Data {
 }
 
 #[event]
-struct E16Data {
+struct E17Data {
     #[indexed]
     who: Address,
     f0: u256,
@@ -72,6 +72,7 @@ struct E16Data {
     f13: u256,
     f14: u256,
     f15: u256,
+    f16: u256,
 }
 
 #[event]
@@ -92,8 +93,8 @@ msg ProbeMsg {
     EmitE7Data -> u256,
     #[selector = sol("emitE8Data()")]
     EmitE8Data -> u256,
-    #[selector = sol("emitE16Data()")]
-    EmitE16Data -> u256,
+    #[selector = sol("emitE17Data()")]
+    EmitE17Data -> u256,
     #[selector = sol("emitE7NoIdx()")]
     EmitE7NoIdx -> u256,
 }
@@ -118,8 +119,8 @@ pub contract Probe uses (log: mut Log) {
             ret
         }
 
-        EmitE16Data -> u256 uses (mut log) {
-            log.emit(E16Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7, f8: 8, f9: 9, f10: 10, f11: 11, f12: 12, f13: 13, f14: 14, f15: 15 })
+        EmitE17Data -> u256 uses (mut log) {
+            log.emit(E17Data { who: Address::zero(), f0: 0, f1: 1, f2: 2, f3: 3, f4: 4, f5: 5, f6: 6, f7: 7, f8: 8, f9: 9, f10: 10, f11: 11, f12: 12, f13: 13, f14: 14, f15: 15, f16: 16 })
             let ret: u256 = 4
             ret
         }
@@ -148,8 +149,8 @@ fn topic0_e8data() {
 }
 
 #[test]
-fn topic0_e16data() {
-    assert!(E16Data::TOPIC0 == 0x7b8ff7a566201b2975dd0fe44b67e5c8c6cfe52a44562086e166c9cdd54d501a)
+fn topic0_e17data() {
+    assert!(E17Data::TOPIC0 == 0xb5a5b71f684b11e35c2f8f12edf172f2c79b2cc06b5d312616d61f88d11c20ba)
 }
 
 #[test]
@@ -166,7 +167,7 @@ fn emit_many_field_events() uses (evm: mut Evm) {
     assert!(r1 == 2)
     let r2: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE8Data {})
     assert!(r2 == 3)
-    let r3: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE16Data {})
+    let r3: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE17Data {})
     assert!(r3 == 4)
     let r4: u256 = evm.call(addr: c, gas: 5000000, value: Wei::zero(), message: ProbeMsg::EmitE7NoIdx {})
     assert!(r4 == 5)

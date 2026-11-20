@@ -57,6 +57,8 @@ pub enum AbiTypeError<'db> {
     Recursive(String),
     /// The type has no supported Solidity ABI representation.
     Unsupported(String),
+    /// The array length has not reduced to a concrete value in this view.
+    UnresolvedArrayLength(String),
     /// A concrete const in the ABI shape failed evaluation at its source.
     InvalidConst {
         cause: InvalidCause<'db>,
@@ -75,6 +77,7 @@ impl fmt::Display for AbiTypeError<'_> {
         match self {
             Self::Recursive(message)
             | Self::Unsupported(message)
+            | Self::UnresolvedArrayLength(message)
             | Self::InvalidConst { message, .. } => message.fmt(f),
         }
     }
@@ -388,12 +391,14 @@ fn array_len_to_string<'db>(
             message: cause.pretty_print(db),
             cause,
         }),
-        Ok(None) | Err(ConcreteArrayLengthError::Mismatch) => {
-            Err(AbiTypeError::unsupported(format!(
-                "array length `{}` is not a concrete integer",
-                ty.pretty_print(db)
-            )))
-        }
+        Ok(None) => Err(AbiTypeError::UnresolvedArrayLength(format!(
+            "array length `{}` is not a concrete integer",
+            ty.pretty_print(db)
+        ))),
+        Err(ConcreteArrayLengthError::Mismatch) => Err(AbiTypeError::unsupported(format!(
+            "array length `{}` is not a concrete integer",
+            ty.pretty_print(db)
+        ))),
     }
 }
 

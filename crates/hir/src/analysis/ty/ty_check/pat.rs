@@ -1318,6 +1318,14 @@ impl<'db> TyChecker<'db> {
                 };
             let field_idx = label.and_then(|label| record_like.record_field_idx(hir_db, label));
 
+            // A `ref` name of a recv arm that reads its message in place binds
+            // the part its field is read as.
+            let expected = rec_checker
+                .tc
+                .recv_in_place
+                .get(&field_pat.pat)
+                .copied()
+                .unwrap_or(expected);
             let result = rec_checker.tc.check_pat(field_pat.pat, expected);
             if let Some(field_idx) = field_idx {
                 field_status_by_idx.insert(field_idx, result.analysis);

@@ -120,14 +120,24 @@ fn two_consumers_share_one_deferred_codec_specialization() {
     let reverse = prepare_ingots(&db, &[url("other/"), url("app/")])
         .unwrap()
         .expect("the concrete calls request a provider");
-    let requests = forward.generation_inputs().requests(&forward);
-    assert_eq!(requests, reverse.generation_inputs().requests(&reverse));
+    let shared_requests = |db: &DriverDataBase| {
+        db.generation_inputs()
+            .requests(db)
+            .iter()
+            .filter(|request| request.scoped_impl.is_some())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let requests = shared_requests(&forward);
+    assert_eq!(requests, shared_requests(&reverse));
     assert_eq!(requests.len(), 1);
     let scoped = requests[0].scoped_impl.as_ref().unwrap();
     assert_eq!(scoped.demand.opening.file, url("lib/src/lib.fe"));
-    for root in ["app/", "other/"] {
-        let diagnostics = ingot_errors(&forward, root);
-        assert!(diagnostics.is_empty(), "{root}: {diagnostics}");
+    for prepared in [&forward, &reverse] {
+        for root in ["app/", "other/"] {
+            let diagnostics = ingot_errors(prepared, root);
+            assert!(diagnostics.is_empty(), "{root}: {diagnostics}");
+        }
     }
     assert_authored_unchanged(&db, &files);
 }

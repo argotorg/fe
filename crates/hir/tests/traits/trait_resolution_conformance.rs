@@ -18,6 +18,7 @@ fn accepts_trait_resolution_conformance_cases(db: &mut HirAnalysisTestDb, fixtur
     let path = Path::new(fixture.path());
     let file_name = path.file_name().and_then(|file| file.to_str()).unwrap();
     let file = db.new_stand_alone(file_name.into(), fixture.content());
+    crate::prepared_fixture::prepare_generation(db, file);
     let (top_mod, _) = db.top_mod(file);
 
     db.assert_no_diags(top_mod);

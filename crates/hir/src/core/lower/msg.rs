@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use num_bigint::BigUint;
 use parser::ast::{self, AttrListOwner as _, prelude::AstNode as _};
 
@@ -86,8 +87,50 @@ fn lower_msg_variant<'db>(
     // Create the impl MsgVariant for this variant
     lower_msg_variant_impl(&mut builder, &variant, struct_);
 
-    // Create `impl Encode<Sol> for Variant` and `impl Decode<Sol> for Variant`.
-    lower_msg_variant_encode_decode_impls(&mut builder, &variant, struct_);
+    let db = builder.db();
+    let self_ty = variant_struct_ty(db, struct_);
+    super::abi_struct::lower_abi_fields_impl(&mut builder, self_ty);
+    if matches!(
+        builder.top_mod().ingot(db).kind(db),
+        IngotKind::Core | IngotKind::Std
+    ) {
+        // Embedded libraries are loaded before the driver prepares user packages.
+        lower_msg_variant_encode_decode_impls(&mut builder, &variant, struct_);
+        return;
+    }
+    let Some(name) = variant.name() else {
+        return;
+    };
+    if struct_
+        .hir_fields(db)
+        .data(db)
+        .iter()
+        .any(|field| field.name.to_opt().is_none() || field.type_ref.to_opt().is_none())
+    {
+        return;
+    }
+    for (slot, trait_ref, provider) in [
+        (0, builder.core_abi_trait_ref("AbiSize"), "StructAbiSize"),
+        (
+            1,
+            builder.core_abi_trait_ref_sol("Encode"),
+            "StructAbiEncode",
+        ),
+        (
+            2,
+            builder.core_abi_trait_ref_sol("Decode"),
+            "StructAbiDecode",
+        ),
+    ] {
+        super::short_form::lower_derive_slot(
+            &mut builder,
+            self_ty,
+            trait_ref,
+            provider,
+            (name.text_range(), slot),
+            |_| Vec::new(),
+        );
+    }
 }
 
 fn variant_struct_ty<'db>(db: &'db dyn HirDb, struct_: Struct<'db>) -> TypeId<'db> {

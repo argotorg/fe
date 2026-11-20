@@ -461,13 +461,20 @@ mod tests {
 
     const SOURCE_URL: &str = "file:///recv_wrapper_verifier.fe";
 
-    fn recv_test_db() -> DriverDataBase {
+    fn test_db(url: &Url, source: &str) -> DriverDataBase {
         let mut db = DriverDataBase::default();
-        db.workspace().touch(
-            &mut db,
-            Url::parse(SOURCE_URL).unwrap(),
-            Some(
-                r#"
+        let file = db
+            .workspace()
+            .touch(&mut db, url.clone(), Some(source.to_string()));
+        driver::generation::prepare_file(&db, file)
+            .expect("prepare fixture")
+            .unwrap_or(db)
+    }
+
+    fn recv_test_db() -> DriverDataBase {
+        test_db(
+            &Url::parse(SOURCE_URL).unwrap(),
+            r#"
 use std::abi::sol
 msg M {
     #[selector = sol("wide()")]
@@ -492,11 +499,8 @@ pub contract C {
         Tip {}
     }
 }
-"#
-                .to_string(),
-            ),
-        );
-        db
+"#,
+        )
     }
 
     type RecvWrapper<'db> = (

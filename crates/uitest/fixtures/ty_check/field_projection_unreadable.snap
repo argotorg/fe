@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_unreadable.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_unreadable.fe:32:16
+   │
+32 │     let _leg = h.leg
+   │                ^^^^^
+   │                │
+   │                `Encoded<CallData, Outer, Sol>` doesn't implement `ProjectField<Field<Outer, Leg, (u256)>>`
+   │                trait bound `Leg: Part<CallData, Sol>` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_unreadable.fe:37:5
+   │
+37 │     h.amount
+   │     ^^^^^^^^
+   │     │
+   │     `Encoded<CallData, Leg, Sol>` doesn't implement `ProjectField<Field<Leg, u256, (u256)>>`
+   │     trait bound `Leg: AbiFields` is not satisfied

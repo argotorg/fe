@@ -1,0 +1,36 @@
+// A field of the record is reached through the handle only where the field
+// itself is visible.
+use core::ops::{Field, Project, ProjectField}
+
+mod records {
+    pub struct Account {
+        pub owner: u256,
+        balance: u256,
+    }
+}
+
+pub struct View<T> {
+    base: u256,
+}
+
+impl<T> Copy for View<T> {}
+
+impl<T> Project for View<T> {
+    type Target = T
+}
+
+impl<T, F, B> ProjectField<Field<T, F, B>> for View<T> {
+    type Output = u256
+
+    fn project(self) -> ref u256 {
+        self.base
+    }
+}
+
+fn owner(_ v: View<records::Account>) -> u256 {
+    v.owner
+}
+
+fn balance(_ v: View<records::Account>) -> u256 {
+    v.balance
+}

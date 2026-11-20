@@ -333,6 +333,8 @@ pub contract Other {
         let file = db
             .workspace()
             .touch(&mut db, file_url, Some(CONTRACTS.to_string()));
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let diagnostics = db.run_on_top_mod(top_mod);
         assert!(

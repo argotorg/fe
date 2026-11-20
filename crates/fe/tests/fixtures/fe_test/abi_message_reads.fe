@@ -1,0 +1,164 @@
+// The reads of a `recv` arm that names a field with `ref`: `message_field`
+// decodes one field of a message in full, `message_part` reads it where it
+// lies, as field syntax does. The input stands for calldata: four bytes of
+// selector, then the arguments `(u8, DynArray<u16>, Address, Bytes, Inner)`.
+// Each read is given the types of the fields before its field, as the
+// compiler gives them (`core::ops::Field`), and is compared with the eager
+// decoder and with field syntax. A read of one field accepts an input whose
+// other fields are malformed; the eager decoder does not.
+use core::abi::{ByteSource, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::{Bytes, DynArray, Encoded, Sol, decode_record_from, dyn_array_from, message_field, message_part}
+use std::evm::Address
+
+/// A memory input. `MemSpan` cannot be stored in a view (it is not `Copy`).
+struct MemInput { ptr: *u8, len: u256 }
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+#[abi]
+pub struct Inner { pub x: u256, pub y: bool }
+
+#[abi]
+pub struct Args { pub a: u8, pub b: DynArray<u16>, pub c: Address, pub d: Bytes, pub e: Inner }
+
+// The types before each field of `Args`, as the compiler builds them.
+type Ba = ()
+type Bb = (u8,)
+type Bc = ((u8,), (DynArray<u16>,))
+type Bd = (((u8,), (DynArray<u16>,)), (Address,))
+type Be = (((u8,), (DynArray<u16>,)), ((Address,), (Bytes,)))
+
+// cast abi-encode "f(uint8,uint16[],address,bytes,(uint256,bool))" 7 "[1,2,3]" 0x00000000000000000000000000000000000000aa 0xbeef "(5,true)"
+const ENCODED: [u256; 12] = [
+    0x0000000000000000000000000000000000000000000000000000000000000007,
+    0x00000000000000000000000000000000000000000000000000000000000000c0,
+    0x00000000000000000000000000000000000000000000000000000000000000aa,
+    0x0000000000000000000000000000000000000000000000000000000000000140,
+    0x0000000000000000000000000000000000000000000000000000000000000005,
+    0x0000000000000000000000000000000000000000000000000000000000000001,
+    0x0000000000000000000000000000000000000000000000000000000000000003,
+    0x0000000000000000000000000000000000000000000000000000000000000001,
+    0x0000000000000000000000000000000000000000000000000000000000000002,
+    0x0000000000000000000000000000000000000000000000000000000000000003,
+    0x0000000000000000000000000000000000000000000000000000000000000002,
+    0xbeef000000000000000000000000000000000000000000000000000000000000,
+]
+
+/// The four bytes of selector `0x11223344`, then the encoding of the
+/// arguments, in a raw allocation that no drop frees. The encoding is checked
+/// against the words of `cast` first.
+fn message() -> MemInput {
+    let args = (
+        7 as u8,
+        dyn_array_from([1 as u16, 2, 3]),
+        Address::new(0xaa),
+        Bytes::from_word_prefix(word: 0xbeef << 240, len: 2),
+        Inner { x: 5, y: true },
+    )
+    let buf = core::abi::encode_alloc<Sol, (u8, DynArray<u16>, Address, Bytes, Inner)>(args)
+    assert!(buf.len() == 12 * 32)
+    let len = 4 + buf.len()
+    let data = ptr::alloc_bytes(len + 32)
+    unsafe {
+        store_word(ptr: data, value: 0x11223344 << 224)
+        ptr::copy_raw(ptr::offset_bytes(data, 4), source: buf.ptr(), len: buf.len())
+    }
+    let input = MemInput { ptr: data, len: len as u256 }
+    var i: usize = 0
+    while i < 12 {
+        assert!(input.word_at(4 + i as u256 * 32) == ENCODED[i])
+        i += 1
+    }
+    input
+}
+
+/// `input` with the word at byte `at` replaced by `value`.
+fn with_word(_ input: MemInput, at: u256, value: u256) -> MemInput {
+    let data = ptr::alloc_bytes(input.len.downcast_unchecked())
+    unsafe { ptr::copy_raw(data, source: input.ptr, len: input.len.downcast_unchecked()) }
+    unsafe { store_word(ptr: ptr::offset_bytes(data, at.downcast_unchecked()), value) }
+    MemInput { ptr: data, len: input.len }
+}
+
+fn handle(_ input: MemInput) -> Encoded<MemInput, Args, Sol> {
+    decode_record_from<Sol, Args, MemInput>(input, 4)
+}
+
+#[test]
+fn message_field_is_the_field_of_the_whole_decode() {
+    let h = handle(message())
+    let whole = h.get()
+    assert!(message_field<MemInput, Args, Sol, u8, Ba>(h) == whole.a)
+    let b = message_field<MemInput, Args, Sol, DynArray<u16>, Bb>(h)
+    assert!(b.len() == whole.b.len() && b.len() == 3)
+    var i: usize = 0
+    while i < b.len() {
+        assert!(b.get(i) == whole.b.get(i))
+        i += 1
+    }
+    assert!(message_field<MemInput, Args, Sol, Address, Bc>(h) == whole.c)
+    let d = message_field<MemInput, Args, Sol, Bytes, Bd>(h)
+    assert!(d.len() == whole.d.len() && d.len() == 2)
+    i = 0
+    while i < d.len() {
+        assert!(d.byte_at(i) == whole.d.byte_at(i))
+        i += 1
+    }
+    let e = message_field<MemInput, Args, Sol, Inner, Be>(h)
+    assert!(e.x == whole.e.x && e.y == whole.e.y && e.x == 5 && e.y)
+}
+
+#[test]
+fn message_part_is_field_syntax() {
+    let h = handle(message())
+    assert!(message_part<MemInput, Args, Sol, u8, Ba>(h) == h.a)
+    let b = message_part<MemInput, Args, Sol, DynArray<u16>, Bb>(h)
+    assert!(b.len() == h.b.len() && b.len() == 3)
+    assert!(b[0] == 1 && b[1] == 2 && b[2] == 3)
+    assert!(b[0] == h.b[0] && b[1] == h.b[1] && b[2] == h.b[2])
+    assert!(message_part<MemInput, Args, Sol, Address, Bc>(h) == h.c)
+    let d = message_part<MemInput, Args, Sol, Bytes, Bd>(h)
+    assert!(d.len() == h.d.len() && d.len() == 2)
+    assert!(d.byte_at(0) == 0xbe && d.byte_at(1) == 0xef)
+    let e = message_part<MemInput, Args, Sol, Inner, Be>(h)
+    assert!(e.x == h.e.x && e.y == h.e.y && e.x == 5 && e.y)
+}
+
+#[test(should_revert)]
+fn message_field_refuses_a_dirty_word_of_its_field() {
+    // The word of `a: u8` is not a canonical `u8`.
+    let h = handle(with_word(message(), at: 4, value: 0x100))
+    let _ = message_field<MemInput, Args, Sol, u8, Ba>(h)
+}
+
+#[test]
+fn message_part_does_not_read_the_dirty_word_of_another_field() {
+    let h = handle(with_word(message(), at: 4, value: 0x100))
+    assert!(message_part<MemInput, Args, Sol, Inner, Be>(h).x == 5)
+}
+
+#[test(should_revert)]
+fn message_part_refuses_an_offset_past_the_input() {
+    // The offset word of `b` is `2**64`.
+    let h = handle(with_word(message(), at: 4 + 32, value: 1 << 64))
+    let _ = message_part<MemInput, Args, Sol, DynArray<u16>, Bb>(h)
+}
+
+#[test]
+fn message_part_does_not_read_the_bad_offset_of_another_field() {
+    let h = handle(with_word(message(), at: 4 + 32, value: 1 << 64))
+    assert!(message_part<MemInput, Args, Sol, Address, Bc>(h) == Address::new(0xaa))
+}

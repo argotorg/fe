@@ -87,6 +87,20 @@ go on the names only: `match ref x`, `if let Some(v) = mut o` and
 (`match x { V(ref v) => … }`). A marker on the scrutinee would hold all of
 it, or make plain names write through.
 
+In a `recv` arm, `ref` on a field of the message, as in `Cancel { ref orders }`,
+reads that field where it lies in the input instead of decoding it, and the arm
+then reads only the fields it names. A plain name, or a nested pattern that
+binds a name, decodes its field in full. A `ref` name binds the field read in
+place: a one-word field is its value, a record or an array is an `Encoded`
+handle, and `Bytes` or a string is a view. A field whose pattern binds no name
+(`_`, `..`, or a nested pattern of `_` and `..` only) is not read. Every field
+the arm names is read before the body runs, whether the body uses it or not.
+An arm with no `ref` on a field of its message decodes the whole message, as
+before, and a `ref` inside the pattern of a field keeps its ordinary meaning, a
+read access into the decoded field. An input shorter than the message's head is
+refused. Making a handle checks its frame and each read checks what it reads,
+so an input whose unread parts are malformed is accepted.
+
 A plain name takes its value as `let x = e` does: a copy of a `Copy` value,
 and otherwise a move where one is possible. A pattern on a place moves only
 what its names take, so `match s.status { Status::A => …, _ => … }` leaves
@@ -438,6 +452,26 @@ reserves the whole collection until its last use. `c[k]` calls it at `mut`
 where the context needs a mutable place, which needs `C: mut Index<K>`. A memory owner such as `MemArray` yields an element through its pointer
 in an `unsafe` block; growing it takes `mut self`, so it cannot reallocate
 under an open element access.
+
+## Field access through a projection
+
+`h.f` has one syntax and two kinds of implementation, as `c[k]` has. A field
+that the type of `h` declares, and that is visible where `h.f` is written, is
+built in. Otherwise, when the type implements `core::ops::Project`, `f` names a
+field of `Project::Target`, and `h.f` calls `ProjectField::project` for that
+field, a `mut?` projection like `Index::index`. The field is described to the
+implementation by its type and the types of the fields declared before it
+(`core::ops::Field`), from which a layout computes where it lies. A handle to
+encoded data, `std::abi::Encoded<I, T, A>`, implements it, so
+`order.offer[i].start_amount` reads one amount of one item and nothing else.
+The record's field must be visible where `h.f` is written; a handle's own
+private field does not hide it. A read-only implementation makes the field
+read-only: `h.f = v` needs `mut ProjectField`.
+
+When the field projection is part of a method receiver or assignment target,
+Fe prepares the root first. The projection opens after the method arguments
+or assigned value. A qualified call to the same `ProjectField::project`
+method follows this order in the same position.
 
 ## Storage collections
 

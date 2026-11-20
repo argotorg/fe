@@ -17,7 +17,25 @@ impl std::evm::Event for Mixed {
     const TOPIC0: u256 = core::keccak(("Mixed", "(", <Address as std::abi::SolCompat>::SOL_TYPE, ",", <bool as std::abi::SolCompat>::SOL_TYPE, ",", <i128 as std::abi::SolCompat>::SOL_TYPE, ")"))
 
     #[inline(always)]
-    fn emit<__fe_L: std::evm::Log>(own self, _ log: mut __fe_L) {
-        log.log2(data: std::evm::encode_abi_payload((self.flag, self.value)).span(), topic0: Self::TOPIC0, topic1: self.from.as_topic())
+    fn emit<L: Log>(own self, _ log: mut L) {
+        let head = 0 as u256 + abi_field_head_size<bool>() + abi_field_head_size<i128>()
+        let total = head + 0 as u256 + dynamic_payload_size<bool>(self.flag) + dynamic_payload_size<i128>(self.value)
+        let buffer = MemBuffer::new(allocation_len(total))
+        let out = unsafe {
+            AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
+        }
+        var head_pos: u256 = 0
+        var tails = out.tail(head)
+        {
+            {
+                ()
+                tails = encode_field<Sol, bool>(self.flag, out, head_pos: head_pos, tails: tails)
+                head_pos = head_pos + abi_field_head_size<bool>()
+            }
+            tails = encode_field<Sol, i128>(self.value, out, head_pos: head_pos, tails: tails)
+            head_pos = head_pos + abi_field_head_size<i128>()
+        }
+        let data = buffer.span()
+        log.log2(data: data, topic0: Self::TOPIC0, topic1: self.from.as_topic())
     }
 }

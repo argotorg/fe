@@ -1,0 +1,47 @@
+use core::ops::{Field, Project, ProjectField}
+
+struct Payload { word: u256 }
+impl Payload {
+    fn combine(self, _ add: u256) -> u256 { self.word + add }
+}
+struct Record { pub payload: Payload }
+struct View { stored: Payload }
+impl Project for View { type Target = Record }
+
+impl ProjectField<Field<Record, Payload, ()>> for View {
+    type Output = Payload
+
+    fn project(self) -> ref Payload {
+        core::panic_code(0x91)
+    }
+}
+
+fn argument() -> u256 { core::panic_code(0x92) }
+
+#[test(should_revert, panic = 0x92)]
+fn field_checks_argument_before_projector() {
+    let v = View { stored: Payload { word: 8 } }
+    let _ = v.payload.combine(argument())
+}
+
+#[test(should_revert, panic = 0x92)]
+fn written_call_checks_argument_before_projector() {
+    let v = View { stored: Payload { word: 8 } }
+    let _ = <View as ProjectField<Field<Record, Payload, ()>>>::project(v).combine(argument())
+}
+
+fn project(_ source: ref View) -> ref Payload {
+    core::panic_code(0x93)
+}
+
+#[test(should_revert, panic = 0x93)]
+fn unrelated_project_keeps_its_eager_entry() {
+    let v = View { stored: Payload { word: 8 } }
+    let _ = project(ref v).combine(argument())
+}
+
+#[test(should_revert, panic = 0x91)]
+fn ordinary_operand_enters_its_projection_at_that_operand() {
+    let v = View { stored: Payload { word: 8 } }
+    let _ = <View as ProjectField<Field<Record, Payload, ()>>>::project(v).word + argument()
+}

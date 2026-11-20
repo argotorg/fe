@@ -1,7 +1,7 @@
 use core::abi::{AbiSize, ByteSource, Decode}
 use core::Copy
 use core::num::IntDowncast
-use ingot::abi::{ArrayView, Sol, decode_array_view_at}
+use ingot::abi::{ArrayView, RecordView, Sol, decode_array_view_at, decode_record_view_at}
 use ingot::abi::sol::{decode_input}
 use ingot::evm::ops::{calldataload, calldatacopy, calldatasize, revert_empty}
 
@@ -42,17 +42,27 @@ impl CallData {
     pub fn array_view<T>(self, _ head_pos: u256) -> ArrayView<CallData, T> where T: AbiSize {
         decode_array_view_at(self, base: 0, head_pos: head_pos)
     }
+
+    /// Lazy view of the ABI record `T` whose head word is at `head_pos`
+    /// (relative to `base`); offsets are resolved relative to `base`.
+    ///
+    /// With `CallData::with_base(4)`, `head_pos: k * 32` is the `k`-th
+    /// argument of an external call, which is how a `recv` arm with a raw
+    /// selector reads a `T calldata` struct argument field by field. See
+    /// `decode_record_view_at` for the validation performed.
+    pub fn record_view<T>(self, _ head_pos: u256) -> RecordView<CallData, T> where T: AbiSize {
+        decode_record_view_at(self, base: 0, head_pos: head_pos)
+    }
 }
 
 impl ByteSource for CallData {
+    const PADDED_WORD_AT: bool = true
+
     #[inline(always)]
+    #[arithmetic(unchecked)]
     fn size(self) -> u64 {
         let total = calldatasize()
-        if self.base > total {
-            0
-        } else {
-            (total - self.base).downcast_truncate()
-        }
+        ((total - self.base) * ((self.base <= total) as u256)).downcast_truncate()
     }
 
     #[arithmetic(unchecked)]
