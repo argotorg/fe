@@ -82,3 +82,79 @@ fn ordinary_type_arguments_and_runtime_positions_keep_their_kinds() {
         assert!(!diagnostics.is_empty(), "{source}");
     }
 }
+
+#[test]
+fn associated_bindings_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "family_binding_order.fe".into(),
+        r#"
+trait HasParts {
+    type Left
+    type Right
+}
+struct Family<P: * -> Constraint> {}
+struct Requirement<G: (Constraint)> {}
+type ForField<P: * -> Constraint, T> = Requirement<P<T>>
+type First = Family<trait HasParts<Left = u8, Right = u16>>
+type Second = Family<trait HasParts<Right = u16, Left = u8>>
+type FirstGoal = ForField<trait HasParts<Left = u8, Right = u16>, bool>
+type SecondGoal = ForField<trait HasParts<Right = u16, Left = u8>, bool>
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let aliases = module.all_type_aliases(&db);
+    assert_eq!(aliases[1].ty(&db), aliases[2].ty(&db));
+    assert_eq!(aliases[3].ty(&db), aliases[4].ty(&db));
+}
+
+#[test]
+fn duplicate_associated_bindings_are_diagnosed_in_aliases_and_calls() {
+    for use_site in [
+        "type Bad = Family<trait HasItem<Item = u8, Item = u16>>",
+        "fn bad() { accept<trait HasItem<Item = u8, Item = u16>>() }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "duplicate_family_bindings.fe".into(),
+            &format!(
+                "trait HasItem {{ type Item }}\nstruct Family<P: * -> Constraint> {{}}\nfn accept<P: * -> Constraint>() {{}}\n{use_site}"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        let diagnostics = db.run_on_top_mod(module);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.to_complete(&db).message == "`Item` is bound more than once"
+            }),
+            "{use_site}"
+        );
+    }
+}
+
+#[test]
+fn family_capture_uses_the_enclosing_impls_associated_binding() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "family_captures_impl_binding.fe".into(),
+        r#"
+trait Rel<T> {}
+struct Family<P: * -> Constraint> {}
+trait Parts {
+    type Left
+    type Right
+}
+struct Pair {}
+impl Parts for Pair {
+    type Left = Family<trait Rel<Self::Right>>
+    type Right = u256
+}
+fn verify(value: <Pair as Parts>::Left) -> Family<trait Rel<u256>> {
+    value
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}

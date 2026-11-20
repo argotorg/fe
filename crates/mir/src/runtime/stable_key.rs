@@ -777,10 +777,9 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                 .map(|&ty| type_identity(db, ty))
                 .collect::<Vec<_>>()
                 .join("$");
-            let mut bindings: Vec<_> = family.associated(db).iter().collect();
-            bindings.sort_by(|(a, _), (b, _)| a.canonical_cmp(db, b));
-            let bindings = bindings
-                .into_iter()
+            let bindings = family
+                .associated(db)
+                .iter()
                 .map(|(name, &ty)| format!("{}${}", name.pretty_print(db), type_identity(db, ty)))
                 .collect::<Vec<_>>()
                 .join("$");

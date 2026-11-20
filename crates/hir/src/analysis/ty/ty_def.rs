@@ -1369,7 +1369,7 @@ pub enum TyData<'db> {
     Invalid(InvalidCause<'db>),
 }
 
-#[salsa::interned]
+#[salsa::interned(constructor = intern)]
 #[derive(Debug)]
 pub struct TraitFamilyId<'db> {
     #[returns(copy)]
@@ -1383,6 +1383,17 @@ pub struct TraitFamilyId<'db> {
 }
 
 impl<'db> TraitFamilyId<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        def: Trait<'db>,
+        arguments: Vec<TyId<'db>>,
+        mut associated: IndexMap<AssocBinding<'db>, TyId<'db>>,
+        mode: ModeMarker,
+    ) -> Self {
+        associated.sort_by(|lhs, _, rhs, _| lhs.canonical_cmp(db, rhs));
+        Self::intern(db, def, arguments, associated, mode)
+    }
+
     pub(crate) fn map_types(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -1454,7 +1465,7 @@ impl<'db> TraitFamilyId<'db> {
             )
         }));
         if arguments.is_empty() {
-            name.to_string()
+            format!("trait {name}")
         } else {
             format!("trait {name}<{}>", arguments.join(", "))
         }

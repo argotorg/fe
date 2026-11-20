@@ -409,8 +409,8 @@ fn lower_explicit_trait_family<'db>(
         path,
         scope,
         assumptions,
-        &mut |path, resolution| lowering_cx.record_resolution(path, resolution),
-        &LoweringContext::deferred(),
+        &mut |_, _| {},
+        lowering_cx,
     );
     let goal = match selected {
         Ok(PathRes::Trait(goal)) => goal,
