@@ -35,11 +35,15 @@ fn prepare_err(source: &str) -> String {
 
 fn prepared_diagnostics(source: &str) -> String {
     let output = prepare(source).expect("the error is in written code");
+    output_diagnostics(&output)
+}
+
+fn output_diagnostics(output: &DriverDataBase) -> String {
     let url = Url::parse("file:///tmp/scoped-on-demand-derive.fe").unwrap();
-    let file = output.workspace().get(&output, &url).unwrap();
+    let file = output.workspace().get(output, &url).unwrap();
     output
         .run_on_top_mod(output.top_mod(file))
-        .format_diags(&output)
+        .format_diags(output)
 }
 
 fn eval_const_fn_u256(db: &DriverDataBase, fn_name: &str) -> String {
@@ -1187,6 +1191,20 @@ impl<T> Derive<Value> for Provider<T> {
             );
         }
     }
+
+    let shadowed = format!(
+        "{prelude}\nconst K: u256 = 1\n{constants}\nimpl Value for Pair with (Provider<7>)\nconst fn result() -> u256 {{ Pair::value() }}\n"
+    );
+    let output = prepare(&shadowed).unwrap();
+    assert!(output_diagnostics(&output).is_empty());
+    assert_eq!(eval_const_fn_u256(&output, "result"), "1");
+
+    let scoped = format!(
+        "{prelude}\nconst K: u256 = 1\n{constants}\nconst fn result() -> u256 {{ with (Provider<7>) {{ Pair::value() }} }}\n"
+    );
+    let output = prepare(&scoped).unwrap();
+    assert!(output_diagnostics(&output).is_empty());
+    assert_eq!(eval_const_fn_u256(&output, "result"), "1");
 }
 
 #[test]
@@ -1218,6 +1236,7 @@ const fn listed() -> usize {
 }
 "#;
     let output = prepare(source).unwrap();
+    assert!(output_diagnostics(&output).is_empty());
     for function in ["nested", "listed"] {
         assert_eq!(eval_const_fn_u256(&output, function), "3");
     }

@@ -155,7 +155,7 @@ of a trait containing only methods needs no ordinary counterpart.
 The ordinary implementation supplies the output representative used by type
 normalization. Agreement only at overlapping headers would leave named-only
 applications without that representative: a bound such as `T: Size` could be
-proved while `[u256; T::N]` could not normalize. Compiler-generated ordinary
+proved while `[u256; T::N]` could not normalize. Compiler-provided ordinary
 implementations do not yet qualify as output representatives or participate
 in this comparison. Extending this boundary requires corresponding output
 comparison support or normalization through evidence.

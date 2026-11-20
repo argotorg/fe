@@ -120,7 +120,7 @@ premise can change when the element becomes packed.
 
 - Type normalization does not read evidence, so a type cannot depend on a
   choice.
-- Compiler-generated ordinary implementations do not serve as output
+- Compiler-provided ordinary implementations do not serve as output
   representatives and are not compared. A written ordinary derive header
   participates after its provider has prepared the associated members.
 - There are no evidence values, `prove` expressions or constraint kinds in
