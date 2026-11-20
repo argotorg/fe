@@ -4867,12 +4867,11 @@ impl<'db> ConstRef<'db> {
             ),
             entries: recorded,
         });
-        let missing = if choices.is_some() {
+        if choices.is_some() {
             recorded.missing_bound_goals(db, signature, &subst)
         } else {
             Vec::new()
-        };
-        missing
+        }
     }
 }
 
