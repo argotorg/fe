@@ -1804,12 +1804,11 @@ fn finalized_derive_provider<'db>(
         spans.1.clone(),
     )
     .map_err(NativeDeriveProviderError::Provider)?;
-    let protocol = match key {
-        DeriveKey::Trait(_) => "Derive",
-        DeriveKey::Inherent(_) => "DeriveInherent",
-    };
-    let derive = resolve_core_trait(db, scope, &["derive", protocol])
-        .ok_or("missing canonical derive protocol")?;
+    let derive = match key {
+        DeriveKey::Trait(_) => resolve_core_trait(db, scope, &["derive", "Derive"]),
+        DeriveKey::Inherent(_) => resolve_core_trait(db, scope, &["derive", "DeriveInherent"]),
+    }
+    .ok_or("missing canonical derive protocol")?;
     let args = match key {
         DeriveKey::Trait(goal) => {
             let family = crate::analysis::ty::trait_resolution::derive::select_family(
