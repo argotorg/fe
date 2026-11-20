@@ -1143,7 +1143,7 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         (
             "hir/src/analysis/ty/ty_check/expr.rs",
             "resolve_core_trait",
-            2,
+            1,
         ),
         // `Collection`, which does not decide anything, by `["iter", name]`.
         (
@@ -1250,11 +1250,9 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/trait_def.rs", "resolve_core_trait", "&[\"marker\", \"Snapshot\"]", 1, Identity, "checks of written named implementations"),
         ("hir/src/analysis/ty/trait_def.rs", "resolve_core_trait", "&[\"marker\", \"Copy\"]", 1, Identity, "checks of written named implementations"),
         ("hir/src/analysis/ty/trait_def.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "checks of written named implementations"),
-        ("hir/src/analysis/ty/trait_resolution/generation.rs", "resolve_core_trait", "&[\"derive\", \"Derive\"]", 1, Identity, "the request machinery"),
         ("hir/src/analysis/ty/ty_check/contract.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, ErrorOnly, "a recv message must decode"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "a direct call of `drop`, after its presence was decided"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "resolve_core_trait", "&op.trait_path_segments()", 1, AuthoredFirst, "operator traits"),
-        ("hir/src/analysis/ty/ty_check/expr.rs", "resolve_core_trait", "&UnOp::Minus.trait_path_segments()", 1, AuthoredFirst, "the trait named in the diagnostic for unary negation"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "presence_trait", "&format!(\"core::{}\", mode_op.trait_path_segments().join(\"::\"))", 1, HandedOn, "the wrapping operator traits, named in `ModeOp::triple`"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "presence_trait", "\"core::ops::StateIndex\"", 1, Deciding, "whether a type indexes state"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "presence_trait", "\"core::ops::LaneCodec\"", 1, Deciding, "whether the entries of a state index are packed"),
