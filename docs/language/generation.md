@@ -35,7 +35,7 @@ fn the_header_and_the_block() {
 
 `fe test` on this file reports `1 passed`. `Pair::arity()` returns 2: the compiler runs `CountFields::derive` for `Pair` and uses the returned function as the body of `impl Arity for Pair`. The block `with (CountFields) { .. }` uses the provider for the `Arity` goals that are proved inside it. `scoped()` returns 3, the number of fields of `Line`, while `plain()` still returns 100.
 
-A header and a block are both called a request. Before a program is checked, the compiler prepares it: it runs the provider of every request and adds the returned code to a copy of the program. Generated code is then checked like code that was written; where it is used is described under "Generated code only fills gaps".
+Every written derive header requests code during preparation. A provider opened in a block runs when checking a goal needs the implementation from that provider. The compiler checks the returned code and then retries the goal.
 
 ## Providers
 
