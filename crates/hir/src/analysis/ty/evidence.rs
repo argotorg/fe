@@ -1394,10 +1394,18 @@ fn prove_in<'db>(
             SourceProof::Choice(index, application) => {
                 (Some(index), Some(application.constraints(db)))
             }
-            SourceProof::Open => (
-                solve_cx.matching_choice(db, goal).map(|(index, _)| index),
-                None,
-            ),
+            SourceProof::Open => {
+                let matching = solve_cx.matching_choice(db, goal);
+                // A later match can select an opening that was already
+                // explicitly applied at the source. Its arguments may be
+                // absent from the header, so recover their original bounds
+                // from the opening that supplied this application.
+                let conditions = matching.and_then(|(index, application)| {
+                    let source = bounds.source_choices?.items(db).get(index)?.applied?;
+                    (source.origin(db) == application.origin(db)).then(|| source.constraints(db))
+                });
+                (matching.map(|(index, _)| index), conditions)
+            }
             _ => (None, None),
         };
         let selection = if let Some(index) = chosen {
