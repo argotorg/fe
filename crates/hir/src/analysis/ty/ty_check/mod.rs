@@ -79,6 +79,7 @@ use salsa::SalsaValue;
 use crate::analysis::place::{
     Place, PlaceBase, PlaceProjection, is_grant_place_expr, is_pointer_place_expr,
 };
+use crate::core::semantic::ProviderSource;
 
 use super::{
     adt_def::ConcreteTypeView,
@@ -1969,25 +1970,46 @@ impl<'db> TyChecker<'db> {
                 Some(binding)
                     if matches!(
                         binding.provider.source,
-                        crate::core::semantic::ProviderSource::ContractField { .. }
-                            | crate::core::semantic::ProviderSource::RootProvider { .. }
+                        ProviderSource::ContractField { .. } | ProviderSource::RootProvider { .. }
                     ) =>
                 {
-                    // Contract fields are immutable unless declared `mut`. The
-                    // one exception — assigning immutable code-backed fields in
-                    // `init` — is already reflected in the provider's
-                    // site-specific mutability.
-                    if binding.requirement.is_mut
-                        && !binding.provider.is_mut
-                        && let crate::core::semantic::ProviderSource::ContractField { field } =
-                            binding.provider.source
-                    {
-                        self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
-                            primary: owner.effect_param_ty_span(self.db, idx).into(),
-                            field: binding.requirement.binding_name,
-                            field_span: crate::hir_def::FieldParent::Contract(field.contract)
-                                .field_name_span(field.index as usize),
-                        });
+                    match binding.provider.source {
+                        // Contract fields are immutable unless declared `mut`.
+                        // The one exception — assigning immutable code-backed
+                        // fields in `init` — is already reflected in the
+                        // provider's site-specific mutability.
+                        ProviderSource::ContractField { field }
+                            if binding.requirement.is_mut && !binding.provider.is_mut =>
+                        {
+                            self.push_diag(BodyDiag::ImmutableContractFieldMutBinding {
+                                primary: owner.effect_param_ty_span(self.db, idx).into(),
+                                field: binding.requirement.binding_name,
+                                field_span: FieldParent::Contract(field.contract)
+                                    .field_name_span(field.index as usize),
+                            });
+                        }
+                        // Every contract effect comes from the contract's
+                        // root, which is always mutable; the contract's own
+                        // declaration says whether the effect may be `mut`.
+                        ProviderSource::RootProvider { .. } if binding.requirement.is_mut => {
+                            if let Some(decl) = contract
+                                .effect_requirements(self.db)
+                                .iter()
+                                .find(|decl| decl.binding_name == binding.requirement.binding_name)
+                                && !decl.is_mut
+                            {
+                                self.push_diag(BodyDiag::ImmutableContractEffectMutBinding {
+                                    primary: owner.effect_param_ty_span(self.db, idx).into(),
+                                    effect: decl.binding_name,
+                                    effect_span: contract
+                                        .span()
+                                        .effects()
+                                        .param_idx(decl.binding_idx as usize)
+                                        .into(),
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 // A field whose layout failed has reported its own error.

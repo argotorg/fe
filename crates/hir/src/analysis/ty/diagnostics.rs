@@ -1157,6 +1157,13 @@ pub enum BodyDiag<'db> {
         field: IdentId<'db>,
         field_span: DynLazySpan<'db>,
     },
+    /// A recv arm or `init` lists `mut` a contract effect the contract
+    /// declares without `mut`.
+    ImmutableContractEffectMutBinding {
+        primary: DynLazySpan<'db>,
+        effect: IdentId<'db>,
+        effect_span: DynLazySpan<'db>,
+    },
 
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
@@ -1658,6 +1665,7 @@ impl<'db> BodyDiag<'db> {
             Self::TypeAnnotationNeeded { .. } => 31,
             Self::VariadicArgLabel(_) => 160,
             Self::InvalidVariadicArg { .. } => 161,
+            Self::ImmutableContractEffectMutBinding { .. } => 162,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,
