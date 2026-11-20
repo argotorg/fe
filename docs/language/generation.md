@@ -1,6 +1,6 @@
 # Generating code from types
 
-A provider is a type that implements `Derive`. Its `derive` function runs while the program is compiled, reads the fields or variants of a type and returns code. A header, an implementation written with `with (Provider)` in place of a body, asks for that code. Compiler messages call it a derive header. Neither word is related to the header `Type: Trait` of an implementation in `named-implementations.md` or to effect providers:
+A provider is a type that implements `Derive` or `DeriveInherent`. Its `derive` function runs while the program is compiled, reads the fields or variants of a type and returns code. A header, an implementation written with `with (Provider)` in place of a body, asks for that code. Compiler messages call it a derive header. Neither word is related to the header `Type: Trait` of an implementation in `named-implementations.md` or to effect providers:
 
 ```fe
 use core::derive::Derive
