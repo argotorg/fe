@@ -1457,7 +1457,8 @@ fn prove_in<'db>(
                         .get(index)?
                         .implementation()?
                         .applied?;
-                    (source.origin(db) == choice.template.origin(db)).then(|| source.constraints(db))
+                    (source.origin(db) == choice.template.origin(db))
+                        .then(|| source.constraints(db))
                 });
                 (matching, conditions)
             }
