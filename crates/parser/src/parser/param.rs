@@ -414,7 +414,9 @@ fn parse_kind_bound<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recove
     let checkpoint = parser.checkpoint();
     let is_newline_trivia = parser.set_newline_as_trivia(false);
 
-    parser.expect(&[SyntaxKind::Star, SyntaxKind::LParen], None)?;
+    if !parser.is_ident("Constraint") {
+        parser.expect(&[SyntaxKind::Star, SyntaxKind::LParen], None)?;
+    }
 
     if parser.bump_if(SyntaxKind::LParen) {
         parse_kind_bound(parser)?;
@@ -427,14 +429,10 @@ fn parse_kind_bound<S: TokenStream>(parser: &mut Parser<S>) -> Result<(), Recove
         )? {
             parser.bump();
         }
-    } else if parser.current_kind() == Some(SyntaxKind::Star) {
+    } else {
         parser
             .parse(KindBoundMonoScope::default())
             .unwrap_infallible();
-    } else {
-        // guaranteed by `expected`, unless other recovery
-        // other tokens are added to the current scope
-        unreachable!();
     }
 
     if parser.current_kind() == Some(SyntaxKind::Arrow) {
@@ -449,7 +447,7 @@ impl super::Parse for KindBoundMonoScope {
     type Error = Infallible;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        parser.bump_expected(SyntaxKind::Star);
+        parser.bump();
         Ok(())
     }
 }
@@ -784,8 +782,11 @@ impl WhereClauseScope {
             (ItemBlock::Required | ItemBlock::Optional, _) => parser.dry_run(|parser| {
                 skip_braces(parser)
                     && parser.current_kind().is_some_and(|kind| {
+                        // Treat a following trait declaration as an item
+                        // boundary. A trait-family bound
+                        // after a braced condition starts with a comma.
                         matches!(kind, SyntaxKind::Comma | SyntaxKind::LBrace)
-                            || starts_predicate(kind)
+                            || (kind != SyntaxKind::TraitKw && starts_predicate(kind))
                     })
             }),
         }

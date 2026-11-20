@@ -614,6 +614,12 @@ fn ty_mentions_effect_provider_param<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'
         TyData::QualifiedTy(trait_inst) => {
             trait_inst_mentions_effect_provider_param(db, *trait_inst)
         }
+        TyData::ConstraintTerm(goal) => trait_inst_mentions_effect_provider_param(db, *goal),
+        TyData::TraitFamily(family) => family
+            .arguments(db)
+            .iter()
+            .chain(family.associated(db).values())
+            .any(|&ty| ty_mentions_effect_provider_param(db, ty)),
         TyData::TyVar(_)
         | TyData::TyBase(_)
         | TyData::ConstTy(_)
@@ -757,6 +763,32 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             assoc.mode
         ),
         TyData::QualifiedTy(trait_inst) => format!("qualified${}", trait_identity(db, *trait_inst)),
+        TyData::ConstraintTerm(goal) => {
+            format!(
+                "constraint${:?}${}",
+                goal.mode(db),
+                trait_identity(db, *goal)
+            )
+        }
+        TyData::TraitFamily(family) => {
+            let args = family
+                .arguments(db)
+                .iter()
+                .map(|&ty| type_identity(db, ty))
+                .collect::<Vec<_>>()
+                .join("$");
+            let bindings = family
+                .associated(db)
+                .iter()
+                .map(|(name, &ty)| format!("{}${}", name.pretty_print(db), type_identity(db, ty)))
+                .collect::<Vec<_>>()
+                .join("$");
+            format!(
+                "trait_family${}${:?}$args${args}$assoc${bindings}",
+                item_identity(db, family.def(db).into()),
+                family.mode(db),
+            )
+        }
         TyData::ConstTy(const_ty) => {
             format!(
                 "const_ty${}",

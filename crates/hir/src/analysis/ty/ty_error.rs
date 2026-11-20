@@ -763,9 +763,6 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 }
             };
 
-        // TODO(diags): In the future, refine this to walk only generic args
-        // under the trait ref and surface kind/arg mismatches with precise
-        // spans when available from semantic lowering.
         let resolved = resolve_trait_path_with_observer_and_minter(
             self.db,
             path,
@@ -776,7 +773,15 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         );
         match resolved {
             Ok(res) => {
-                if !matches!(res, crate::analysis::name_resolution::PathRes::Trait(_)) {
+                if matches!(res, PathRes::Trait(_)) {
+                    self.diags.extend(path_arg_diags(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        scope,
+                        self.assumptions,
+                    ));
+                } else {
                     // Expected a trait in this context
                     let ident = path.ident(self.db).unwrap();
                     let seg_span = span.clone().name();

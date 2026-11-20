@@ -64,6 +64,7 @@ pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
     match k {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Constraint => Kind::Constraint,
         HirKindBound::Shape => Kind::Shape,
         HirKindBound::Abs(lhs, rhs) => {
             let lhs_k = match lhs {
@@ -3674,8 +3675,10 @@ impl<'db> TypeAlias<'db> {
         };
         let assumptions = constraints_for(db, self.into());
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-        if ty.has_invalid(db) {
-            collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions)
+        let diagnostics =
+            collect_ty_lower_errors(db, self.scope(), hir_ty, self.span().ty(), assumptions);
+        if !diagnostics.is_empty() {
+            diagnostics
         } else if let Some(cause) = demanded_ground_const_cause(db, ty) {
             diag_from_invalid_cause(self.span().ty().into(), &cause)
                 .into_iter()

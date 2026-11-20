@@ -180,6 +180,13 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                 TyId::qualified_ty(db, folded_trait)
             }
 
+            ConstraintTerm(goal) => TyId::new(db, ConstraintTerm(goal.fold_with(db, folder))),
+
+            TraitFamily(family) => TyId::new(
+                db,
+                TraitFamily(family.map_types(db, |ty| folder.fold_ty(db, ty))),
+            ),
+
             TyBase(TyBaseData::Closure(closure)) => {
                 let mut fold_tys = |tys: &Vec<TyId<'db>>| -> Vec<TyId<'db>> {
                     tys.iter().map(|&ty| folder.fold_ty(db, ty)).collect()
