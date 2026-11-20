@@ -266,7 +266,7 @@ fn possible_header_overlap<'db, U: UnificationStore<'db>>(
                 *self
                     .outputs
                     .entry(ty)
-                    .or_insert_with(|| self.table.new_var(TyVarSort::General, &ty.kind(db)))
+                    .or_insert_with(|| self.table.new_var(TyVarSort::General, ty.kind(db)))
             } else {
                 ty.super_fold_with(db, self)
             }
