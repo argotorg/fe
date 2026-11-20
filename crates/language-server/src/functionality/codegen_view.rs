@@ -126,16 +126,15 @@ pub async fn handle_execute_command(
         }
     };
 
-    // Write to VFS (borrows backend mutably)
-    let vfs = backend.virtual_files_mut().ok_or_else(|| {
+    let vfs = backend.virtual_files().ok_or_else(|| {
         ResponseError::new(
             ErrorCode::INTERNAL_ERROR,
             "virtual files not available".to_string(),
         )
     })?;
 
-    let tmp_url = vfs
-        .write_file("codegen", &output_path, &content, false)
+    let view_url = vfs
+        .write_codegen(&internal_uri, &output_path, &content)
         .map_err(|e| {
             ResponseError::new(
                 ErrorCode::INTERNAL_ERROR,
@@ -147,7 +146,7 @@ pub async fn handle_execute_command(
     let show_result = backend
         .client
         .show_document(ShowDocumentParams {
-            uri: tmp_url.clone(),
+            uri: view_url.clone(),
             external: None,
             take_focus: Some(true),
             selection: None,
@@ -169,7 +168,7 @@ pub async fn handle_execute_command(
         changes: None,
         document_changes: Some(DocumentChanges::Operations(vec![
             DocumentChangeOperation::Op(ResourceOp::Create(CreateFile {
-                uri: tmp_url.clone(),
+                uri: view_url.clone(),
                 options: Some(CreateFileOptions {
                     overwrite: Some(true),
                     ignore_if_exists: None,
@@ -178,7 +177,7 @@ pub async fn handle_execute_command(
             })),
             DocumentChangeOperation::Edit(TextDocumentEdit {
                 text_document: OptionalVersionedTextDocumentIdentifier {
-                    uri: tmp_url,
+                    uri: view_url,
                     version: None,
                 },
                 edits: vec![OneOf::Left(TextEdit {

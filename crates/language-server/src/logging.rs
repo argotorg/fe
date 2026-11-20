@@ -115,30 +115,24 @@ fn resolve_log_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(dir));
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
-        let p = cwd.join(".fe-lsp");
-        if try_prepare_log_dir(&p) {
-            return Some(p);
-        }
-    }
+    std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.join(".fe-lsp"))
+        .into_iter()
+        .chain(user_cache_dirs())
+        .find(|dir| try_prepare_log_dir(dir))
+}
 
-    if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
-        let p = PathBuf::from(xdg).join("fe-language-server");
-        if try_prepare_log_dir(&p) {
-            return Some(p);
-        }
-    }
-
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home)
-            .join(".cache")
-            .join("fe-language-server");
-        if try_prepare_log_dir(&p) {
-            return Some(p);
-        }
-    }
-
-    None
+/// `$XDG_CACHE_HOME/fe-language-server` and `$HOME/.cache/fe-language-server`, for whichever
+/// of the two variables hold an absolute path. The XDG spec says to ignore an empty or
+/// relative one.
+pub(crate) fn user_cache_dirs() -> impl Iterator<Item = PathBuf> {
+    let xdg = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
+    let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"));
+    xdg.into_iter()
+        .chain(home)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("fe-language-server"))
 }
 
 /// Create `dir` if needed and verify it accepts a test write. Returns
