@@ -223,6 +223,15 @@ where
 {
     let db = visitor.db();
     match value.value(db) {
+        SemConstValue::ItemCode { ty, code } => {
+            ty.visit_with(visitor);
+            for hole in code.holes() {
+                walk_sem_const(visitor, *hole);
+            }
+        }
+        SemConstValue::Meta { ty, .. } => {
+            ty.visit_with(visitor);
+        }
         SemConstValue::Description(term) => visitor.visit_ty(TyId::const_ty(db, *term)),
         SemConstValue::Tuple { elems, .. } | SemConstValue::Array { elems, .. } => {
             for child in elems.iter().copied() {

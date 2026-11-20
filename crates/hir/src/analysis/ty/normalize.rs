@@ -4,6 +4,7 @@
 //! to concrete types when possible. This happens before type unification to ensure
 //! that types are in their most resolved form.
 
+use crate::analysis::name_resolution::Tier;
 use std::collections::hash_map::Entry;
 
 use crate::core::hir_def::{ImplTrait, scope_graph::ScopeId};
@@ -435,7 +436,8 @@ impl<'db> TypeNormalizer<'db> {
 
         let mut dedup: IndexMap<TyId<'db>, ()> = IndexMap::new();
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope).with_assumptions(self.assumptions);
+        let solve_cx =
+            TraitSolveCx::new(self.db, self.scope, Tier::All).with_assumptions(self.assumptions);
         let (primary, secondary) = solve_cx.search_ingots_for_trait_inst(self.db, trait_inst);
         let search_ingots = [Some(primary), secondary];
 
@@ -449,6 +451,7 @@ impl<'db> TypeNormalizer<'db> {
                 for implementor in impls_for_trait_inst_with_possible_constraints(
                     self.db,
                     ingot,
+                    Tier::All,
                     canonical_inst,
                     self.assumptions,
                 ) {

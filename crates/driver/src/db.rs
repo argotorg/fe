@@ -55,6 +55,57 @@ impl DriverDataBase {
         map_file_to_mod(self, input)
     }
 
+    /// A new database holding the same authored inputs: every workspace file,
+    /// the dependency graph with its trust roots, and the compiler settings.
+    /// Generation inputs start empty. Database-local identities do not carry
+    /// over; resolve them again in the new view.
+    pub fn fork_inputs(&self) -> Self {
+        self.fork_inputs_selecting(|_| true)
+    }
+
+    pub(crate) fn fork_inputs_selecting(&self, include: impl Fn(&url::Url) -> bool) -> Self {
+        use common::InputDb;
+        use salsa::Setter;
+
+        let mut target = Self::default();
+        // Default construction installs the builtin libraries. Replace the
+        // whole file set so the view keeps removals and edited builtins too.
+        let defaults: Vec<_> = target
+            .workspace()
+            .all_files(&target)
+            .iter()
+            .map(|(url, _)| url.clone())
+            .collect();
+        for url in defaults {
+            target.workspace().remove(&mut target, &url);
+        }
+        for (url, file) in self.workspace().all_files(self).iter() {
+            if include(&url) {
+                target
+                    .workspace()
+                    .update(&mut target, url, file.text(self).clone());
+            }
+        }
+        self.dependency_graph().copy_into(self, &mut target);
+        target
+            .compiler_options()
+            .set_recovery_mode(&mut target)
+            .to(self.compiler_options().recovery_mode(self));
+        target
+            .compilation_settings()
+            .set_profile(&mut target)
+            .to(self.compilation_settings().profile(self).clone());
+        target
+            .compilation_settings()
+            .set_target(&mut target)
+            .to(self.compilation_settings().target(self));
+        target
+            .compilation_settings()
+            .set_platform(&mut target)
+            .to(self.compilation_settings().platform(self));
+        target
+    }
+
     pub fn mir_diagnostics_for_top_mod<'db>(
         &'db self,
         top_mod: TopLevelMod<'db>,
@@ -176,7 +227,7 @@ impl DiagnosticsCollection<'_> {
         trim_trailing_line_whitespace(std::str::from_utf8(buffer.as_slice()).unwrap())
     }
 
-    fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
+    pub(crate) fn finalize(&self, db: &DriverDataBase) -> Vec<CompleteDiagnostic> {
         let mut diags: Vec<_> = self.0.iter().map(|d| d.as_ref().to_complete(db)).collect();
         sort_and_dedup_complete_diagnostics(&mut diags);
         diags

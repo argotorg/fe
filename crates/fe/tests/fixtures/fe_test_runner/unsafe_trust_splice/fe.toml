@@ -1,0 +1,8 @@
+[ingot]
+name = "unsafe_trust_splice"
+version = "0.1.0"
+
+[dependencies]
+t = { path = "../unsafe_trust_splice_vendor/t", allow_unsafe = true }
+t2 = { path = "../unsafe_trust_splice_vendor/t2", allow_unsafe = true }
+u = { path = "../unsafe_trust_splice_vendor/u" }

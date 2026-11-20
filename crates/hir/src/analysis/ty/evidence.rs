@@ -11,6 +11,7 @@
 //! dispatches through a bound reaches its implementation without selecting
 //! it again.
 
+use crate::analysis::name_resolution::Tier;
 use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 
@@ -28,7 +29,7 @@ use super::{
     },
     trait_lower::lower_impl_trait,
     trait_resolution::{
-        ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
+        ChoiceMatch, ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
         assumption_matcher, constraint::collect_candidate_constraints,
         normalize_trait_inst_preserving_validity,
     },
@@ -260,14 +261,17 @@ impl<'db> UseEvidence<'db> {
 
     /// Explicit instance-boundary completion. A present but uncompletable
     /// selected tree is an error, never an absent proof eligible for re-selection.
-    pub fn complete_deferred(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
+    pub(crate) fn complete_deferred(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<(), EvidenceCompletionError> {
         if let Some(dispatch) = &mut self.dispatch {
             dispatch.proof = complete_deferred_evidence(db, dispatch.proof)?;
         }
         if let Some(bounds) = &mut self.bounds {
             bounds.entries = bounds.entries.complete_deferred(db)?;
         }
-        Some(())
+        Ok(())
     }
 }
 
@@ -326,7 +330,7 @@ pub struct DeferredProofBounds<'db> {
 
 enum SourceProof<'db> {
     Bound(EvidenceId<'db>),
-    Choice(usize, ImplementorId<'db>),
+    Choice(usize, Option<PredicateListId<'db>>),
     Implementation(ImplementorId<'db>),
     Open,
 }
@@ -367,8 +371,14 @@ impl<'db> DeferredProofBounds<'db> {
         let source_cx = cx
             .with_assumptions(self.source_slots)
             .with_choices(self.source_choices);
-        if let Some((index, application)) = source_cx.matching_choice(db, self.source_goal) {
-            return Ok(SourceProof::Choice(index, application));
+        if let Some(choice) = source_cx.matching_choice(db, self.source_goal) {
+            let conditions = match choice {
+                ChoiceMatch::Implementation(_, matched) => {
+                    Some(matched.implementation().constraints(db))
+                }
+                _ => None,
+            };
+            return Ok(SourceProof::Choice(choice.index(), conditions));
         }
         let exact = self.source_slots.list(db).contains(&self.source_goal);
         if !exact
@@ -666,15 +676,15 @@ fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>
 /// Complete only the obligations explicitly retained by the producer.
 /// This runs at instance finalization, never in generic substitution/folding.
 #[salsa::tracked(returns(copy))]
-pub(crate) fn complete_deferred_evidence<'db>(
+fn complete_deferred_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
-) -> Option<EvidenceId<'db>> {
+) -> Result<EvidenceId<'db>, EvidenceCompletionError> {
     if !proof.has_deferred(db) {
-        return Some(proof);
+        return Ok(proof);
     }
     match proof.data(db) {
-        Evidence::Assumption(_) => Some(proof),
+        Evidence::Assumption(_) => Ok(proof),
         Evidence::DeferredSolCodec {
             goal,
             scope,
@@ -688,18 +698,23 @@ pub(crate) fn complete_deferred_evidence<'db>(
             if collect_flags(db, *goal).intersects(open)
                 || choices.is_some_and(|choices| collect_flags(db, choices).intersects(open))
             {
-                Some(proof)
+                Ok(proof)
             } else {
-                let cx = TraitSolveCx::new(db, *scope).with_choices(*choices);
-                match bounds {
+                let cx = TraitSolveCx::new(db, *scope, Tier::All).with_choices(*choices);
+                let outcome = match bounds {
                     Some(bounds) => prove_in(
                         db,
                         cx.with_assumptions(bounds.applied_slots),
                         *goal,
                         Some(*bounds),
-                    )
-                    .evidence(),
-                    None => prove(db, cx, *goal),
+                    ),
+                    None => prove_outcome(db, cx, *goal),
+                };
+                match outcome {
+                    ProofOutcome::Proven(proof) => Ok(proof),
+                    ProofOutcome::Deferred | ProofOutcome::Unavailable => {
+                        Err(EvidenceCompletionError::Unavailable)
+                    }
                 }
             }
         }
@@ -707,7 +722,7 @@ pub(crate) fn complete_deferred_evidence<'db>(
             selected,
             instantiated,
             conds,
-        } => Some(EvidenceId::new(
+        } => Ok(EvidenceId::new(
             db,
             Evidence::Impl {
                 selected: *selected,
@@ -715,10 +730,15 @@ pub(crate) fn complete_deferred_evidence<'db>(
                 conds: conds
                     .iter()
                     .map(|&proof| complete_deferred_evidence(db, proof))
-                    .collect::<Option<_>>()?,
+                    .collect::<Result<_, _>>()?,
             },
         )),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) enum EvidenceCompletionError {
+    Unavailable,
 }
 
 /// Proofs form a shared DAG. Cache this property so repeated tuple/condition
@@ -843,27 +863,31 @@ impl<'db> EvidenceList<'db> {
             .any(|proof| proof.has_deferred(db))
     }
 
-    pub fn complete_deferred(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
-        let complete = |proof| match proof {
-            Some(proof) => complete_deferred_evidence(db, proof).map(Some),
-            None => Some(None),
+    fn complete_deferred(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Self, EvidenceCompletionError> {
+        let complete = |proof: Option<EvidenceId<'db>>| {
+            proof
+                .map(|proof| complete_deferred_evidence(db, proof))
+                .transpose()
         };
         let entries = self
             .entries(db)
             .iter()
             .map(|proof| complete(*proof))
-            .collect::<Option<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         let rows = self
             .rows(db)
             .iter()
             .map(|row| {
-                Some(RowEvidence {
+                Ok(RowEvidence {
                     proof: complete(row.proof)?,
                     ..row.clone()
                 })
             })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self::of(db, entries).with_rows(db, rows))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::of(db, entries).with_rows(db, rows))
     }
 
     pub(crate) fn missing_bound_goals(
@@ -1134,7 +1158,8 @@ pub(crate) fn declared_bound_evidence<'db>(
             {
                 return None;
             }
-            prove(db, solve_cx, goal)
+            let outcome = prove_outcome(db, solve_cx, goal);
+            outcome.evidence()
         },
     )
 }
@@ -1390,9 +1415,12 @@ fn prove_in<'db>(
             Ok(source) => source,
             Err(()) => return ProofOutcome::Unavailable,
         };
-        let (chosen, source_conditions) = match source {
-            SourceProof::Choice(index, application) => {
-                (Some(index), Some(application.constraints(db)))
+        let (matching, source_conditions) = match source {
+            SourceProof::Choice(index, conditions) => {
+                let Some(choice) = solve_cx.matching_choice_at(db, goal, index) else {
+                    return ProofOutcome::Unavailable;
+                };
+                (Some(choice), conditions)
             }
             SourceProof::Open => {
                 let matching = solve_cx.matching_choice(db, goal);
@@ -1400,20 +1428,30 @@ fn prove_in<'db>(
                 // explicitly applied at the source. Its arguments may be
                 // absent from the header, so recover their original bounds
                 // from the opening that supplied this application.
-                let conditions = matching.and_then(|(index, application)| {
-                    let source = bounds.source_choices?.items(db).get(index)?.applied?;
-                    (source.origin(db) == application.origin(db)).then(|| source.constraints(db))
+                let conditions = matching.and_then(|matching| {
+                    let ChoiceMatch::Implementation(index, choice) = matching else {
+                        return None;
+                    };
+                    let source = bounds
+                        .source_choices?
+                        .items(db)
+                        .get(index)?
+                        .implementation()?
+                        .applied?;
+                    (source.origin(db) == choice.template.origin(db))
+                        .then(|| source.constraints(db))
                 });
-                (matching.map(|(index, _)| index), conditions)
+                (matching, conditions)
             }
             _ => (None, None),
         };
-        let selection = if let Some(index) = chosen {
-            let applied = solve_cx
-                .choices()
-                .and_then(|choices| choices.items(db).get(index));
-            applied
-                .and_then(|&choice| instantiate_selected_choice(db, solve_cx, choice, goal))
+        let (choice, chosen) = match matching {
+            Some(ChoiceMatch::Implementation(index, choice)) => (Some(choice), Some(index)),
+            Some(ChoiceMatch::Unsettled(_)) => return ProofOutcome::Deferred,
+            None => (None, None),
+        };
+        let selection = if let Some(choice) = choice {
+            instantiate_selected_choice(db, solve_cx, choice, goal)
                 .map_or(Selection::NotFound, Selection::Unique)
         } else if let SourceProof::Implementation(selected) = source {
             let scope = solve_cx.normalization_scope_for_trait_inst(db, goal);
@@ -1444,17 +1482,21 @@ fn prove_in<'db>(
     } else {
         (resolve_trait_impl_instance(db, solve_cx, goal), None, None)
     };
-    let Selection::Unique(resolved) = selection else {
-        if chosen.is_some() {
-            return ProofOutcome::Unavailable;
+    let resolved = match selection {
+        Selection::Unique(resolved) => resolved,
+        Selection::NotFound | Selection::Ambiguous(_) => {
+            if chosen.is_some() {
+                return ProofOutcome::Unavailable;
+            }
+            return if collect_flags(db, goal)
+                .intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
+                && !solve_cx.has_matching_choice(db, goal)
+            {
+                ProofOutcome::Deferred
+            } else {
+                ProofOutcome::Unavailable
+            };
         }
-        return if collect_flags(db, goal).intersects(TyFlags::HAS_PARAM | TyFlags::HAS_PROJECTION)
-            && !solve_cx.has_matching_choice(db, goal)
-        {
-            ProofOutcome::Deferred
-        } else {
-            ProofOutcome::Unavailable
-        };
     };
     prove_selected(db, solve_cx, goal, bounds, source_conditions, resolved)
 }
@@ -1515,6 +1557,54 @@ fn prove_selected<'db>(
             },
         ));
     }
+    let mut conditions = Vec::new();
+    if matches!(
+        resolved.selected().origin(db),
+        ImplementorOrigin::Hir(_) | ImplementorOrigin::Structural
+    ) {
+        let mode = Some(if goal.is_mut(db) {
+            BorrowKind::Mut
+        } else {
+            BorrowKind::Ref
+        });
+        let source_conditions = bounds.and_then(|bounds| {
+            chosen_source_conditions
+                .map(|conditions| (conditions, bounds))
+                .or_else(|| source_conditions(db, resolved.selected(), bounds))
+        });
+        let unbound_cx = if bounds.is_some() {
+            solve_cx.with_assumptions(PredicateListId::empty_list(db))
+        } else {
+            solve_cx
+        };
+        for (index, &condition) in resolved
+            .instantiated_constraints(db)
+            .list(db)
+            .iter()
+            .enumerate()
+        {
+            let condition = condition.at_mode(db, mode);
+            let source = source_conditions.and_then(|(conditions, bounds)| {
+                let source_goal = conditions.list(db).get(index)?.at_mode(db, mode);
+                proof_inputs_settled(collect_flags(db, source_goal)).then_some(
+                    DeferredProofBounds {
+                        source_goal,
+                        ..bounds
+                    },
+                )
+            });
+            let outcome = match source {
+                Some(bounds) => prove_in(db, solve_cx, condition, Some(bounds)),
+                None => prove_outcome(db, unbound_cx, condition),
+            };
+            match outcome {
+                ProofOutcome::Proven(proof) => conditions.push(proof),
+                ProofOutcome::Deferred | ProofOutcome::Unavailable => {
+                    return ProofOutcome::Unavailable;
+                }
+            }
+        }
+    }
     let selected_proof = || -> Option<EvidenceId<'db>> {
         let evidence = match resolved.selected().origin(db) {
             ImplementorOrigin::Assumption if bounds.is_some() => return None,
@@ -1522,59 +1612,11 @@ fn prove_selected<'db>(
                 BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
                     .slot(db, answering_assumption(db, solve_cx, goal)?)?,
             ),
-            ImplementorOrigin::Hir(_) | ImplementorOrigin::Structural => {
-                // A `mut` goal's conditions are its implementation's `mut?`
-                // bounds at `mut`.
-                let mode = Some(if goal.is_mut(db) {
-                    BorrowKind::Mut
-                } else {
-                    BorrowKind::Ref
-                });
-                let conditions = bounds.and_then(|bounds| {
-                    if let Some(conditions) = chosen_source_conditions {
-                        Some((conditions, bounds))
-                    } else {
-                        source_conditions(db, resolved.selected(), bounds)
-                    }
-                });
-                Evidence::Impl {
-                    selected: resolved.selected(),
-                    instantiated: resolved.instantiated(),
-                    conds: resolved
-                        .instantiated_constraints(db)
-                        .list(db)
-                        .iter()
-                        .enumerate()
-                        .map(|(index, &cond)| {
-                            let cond = cond.at_mode(db, mode);
-                            if let Some((conditions, bounds)) = conditions
-                                && let Some(&source) = conditions.list(db).get(index)
-                            {
-                                let source_goal = source.at_mode(db, mode);
-                                if proof_inputs_settled(collect_flags(db, source_goal)) {
-                                    return prove_in(
-                                        db,
-                                        solve_cx,
-                                        cond,
-                                        Some(DeferredProofBounds {
-                                            source_goal,
-                                            ..bounds
-                                        }),
-                                    )
-                                    .evidence();
-                                }
-                            }
-                            let cx = if bounds.is_some() {
-                                solve_cx.with_assumptions(PredicateListId::empty_list(db))
-                            } else {
-                                solve_cx
-                            };
-                            prove(db, cx, cond)
-                        })
-                        .collect::<Option<_>>()?,
-                }
-            }
-
+            ImplementorOrigin::Hir(_) | ImplementorOrigin::Structural => Evidence::Impl {
+                selected: resolved.selected(),
+                instantiated: resolved.instantiated(),
+                conds: conditions,
+            },
             ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Callable => Evidence::Impl {
                 selected: resolved.selected(),
                 instantiated: resolved.instantiated(),
@@ -1764,7 +1806,7 @@ fn basis_proofs<'db>(
                 .collect::<Vec<_>>(),
         )
     };
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(basis);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(basis);
     let proofs = signature
         .list(db)
         .iter()
@@ -1898,7 +1940,7 @@ pub(crate) fn instance_evidence<'db>(
                 {
                     // A selected parent is authoritative even if one retained
                     // obligation cannot close. Never replace that tree.
-                    let completed = complete_deferred_evidence(db, proof)?;
+                    let completed = complete_deferred_evidence(db, proof).ok()?;
                     return (!is_closed_goal(db, goal) || completed.is_closed(db))
                         .then_some(completed);
                 }
@@ -1951,7 +1993,7 @@ mod schema_tests {
             &["marker", "Clearable"],
         )
         .unwrap();
-        let cx = TraitSolveCx::new(&db, module.scope());
+        let cx = TraitSolveCx::new(&db, module.scope(), Tier::All);
         let protected = super::super::adt_def::AdtRef::Struct(protected).as_adt(&db);
         for (field, expected) in [(TyId::u256(&db), true), (TyId::adt(&db, protected), false)] {
             let aggregate = TyId::tuple_with_elems(&db, &[field]);

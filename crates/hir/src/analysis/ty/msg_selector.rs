@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use rustc_hash::FxHashMap;
 
 use parser::{
@@ -16,7 +17,7 @@ use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_type_path};
 use crate::analysis::ty::diagnostics::FuncBodyDiag;
 use crate::analysis::ty::trait_def::TraitInstId;
 use crate::analysis::ty::trait_resolution::{
-    GoalSatisfiability, TraitSolveCx, is_goal_satisfiable,
+    GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
 };
 use crate::analysis::ty::ty_check::eval_msg_variant_selector;
 use crate::analysis::ty::ty_def::{InvalidCause, TyId};
@@ -26,7 +27,7 @@ use crate::analysis::{
 };
 use crate::hir_def::{ItemKind, Mod, Struct, TopLevelMod};
 use crate::lower::parse_file_impl;
-use crate::semantic::get_variant_selector_info;
+use crate::semantic::{get_variant_selector_info, resolve_sol_abi_ty};
 use crate::span::{DesugaredOrigin, HirOrigin, MsgDesugaredFocus};
 use crate::{MsgDiagnostic, MsgDiagnosticKind};
 
@@ -71,6 +72,9 @@ fn check_msg_mod<'db>(
 
     let mut seen: FxHashMap<u32, (parser::TextRange, String)> = FxHashMap::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = vec![];
+    // A `msg` block writes `MsgVariant<Sol>` for each variant, and the selectors
+    // that must differ are those of that ABI.
+    let abi = resolve_sol_abi_ty(db, msg_mod.scope(), PredicateListId::empty_list(db));
 
     for struct_ in msg_variant_structs(db, msg_mod) {
         let Some(name) = struct_.name(db).to_opt() else {
@@ -90,8 +94,9 @@ fn check_msg_mod<'db>(
         );
         check_variant_signature_types(db, top_mod, struct_, variant_ty, &variant_name, &mut diags);
 
-        let Some(selector) = eval_msg_variant_selector(db, variant_ty, struct_.scope(), ty_diags)
-        else {
+        let Some(selector) = abi.and_then(|abi| {
+            eval_msg_variant_selector(db, variant_ty, abi, struct_.scope(), ty_diags)
+        }) else {
             continue;
         };
 
@@ -147,7 +152,7 @@ fn field_abi_failures<'db>(
         return Vec::new();
     };
 
-    let solve_cx = TraitSolveCx::new(db, struct_.scope());
+    let solve_cx = TraitSolveCx::new(db, struct_.scope(), Tier::All);
     let adt = AdtRef::from(struct_).as_adt(db);
     struct_
         .field_tys(db)
@@ -269,7 +274,10 @@ fn check_variant_signature_types<'db>(
 ) {
     let file = top_mod.file(db);
 
-    let Some(signature) = get_variant_selector_info(db, variant_ty, struct_.scope()).signature
+    let Some(abi) = resolve_sol_abi_ty(db, struct_.scope(), PredicateListId::empty_list(db)) else {
+        return;
+    };
+    let Some(signature) = get_variant_selector_info(db, variant_ty, abi, struct_.scope()).signature
     else {
         return;
     };

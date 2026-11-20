@@ -25,9 +25,10 @@ pub mod reference;
 mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
+use crate::analysis::ty::corelib::{resolve_lib_func_path, resolve_lib_trait_path};
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
 use crate::analysis::ty::fold::TyFoldable;
@@ -1608,8 +1609,8 @@ impl<'db> FuncParamView<'db> {
         }
 
         // Well-formedness / trait-bound satisfaction for parameter type
-        let solve_cx =
-            TraitSolveCx::new(db, func.scope()).with_assumptions(param_env(db, func.into()));
+        let solve_cx = TraitSolveCx::new(db, func.scope(), Tier::All)
+            .with_assumptions(param_env(db, func.into()));
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.
@@ -1802,10 +1803,10 @@ impl<'db> RecvArmView<'db> {
         let contract = recv.contract(db);
 
         let variant_ty = self.variant_ty(db);
-        let selector_info = get_variant_selector_info(db, variant_ty, contract.scope());
+        let selector_info = get_variant_selector_info(db, variant_ty, abi, contract.scope());
 
         let Some(msg_variant_trait) =
-            resolve_core_trait(db, contract.scope(), &["message", "MsgVariant"])
+            resolve_lib_trait_path(db, contract.scope(), "core::message::MsgVariant")
         else {
             return RecvArmAbiInfo {
                 is_fallback: false,
@@ -2817,7 +2818,9 @@ fn compute_arg_bindings<'db>(
     Some(bindings)
 }
 
-fn resolve_sol_abi_ty<'db>(
+/// The ABI of a `recv` block and of a `msg` block: `std::abi::Sol`, as seen
+/// from `scope`.
+pub(crate) fn resolve_sol_abi_ty<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
@@ -2841,41 +2844,50 @@ fn resolve_sol_abi_ty<'db>(
     }
 }
 
+/// The implementation of `MsgVariant<abi>` that gives `variant_ty` its
+/// selector and its return type in a block whose ABI is `abi`, selected like
+/// any trait implementation. An implementation for another ABI is not a
+/// candidate, so a type that has one for each answers to the selector and the
+/// return type of the block's own.
+///
+/// `MsgVariant` does not declare `#[decides]`: this is an ordinary selection
+/// that treats a missing implementation as an error. A generated
+/// implementation of the block's ABI therefore fills the gap of an arm that
+/// names a type with none, or conflicts with a written one, and one for
+/// another ABI is no candidate.
+pub(crate) fn msg_variant_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    variant_ty: TyId<'db>,
+    abi: TyId<'db>,
+) -> Option<ImplementorId<'db>> {
+    use crate::analysis::ty::trait_def::resolve_trait_impl_instance;
+    use crate::analysis::ty::trait_resolution::Selection;
+
+    let msg_variant_trait = resolve_lib_trait_path(db, scope, "core::message::MsgVariant")?;
+    if variant_ty.has_invalid(db) || abi.has_invalid(db) {
+        return None;
+    }
+    let inst = TraitInstId::new_simple(db, msg_variant_trait, vec![variant_ty, abi]);
+    match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope, Tier::All), inst) {
+        Selection::Unique(resolved) => Some(resolved.selected()),
+        Selection::Ambiguous(_) | Selection::NotFound => None,
+    }
+}
+
 pub(crate) fn get_variant_selector_info<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
+    abi: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> VariantSelectorInfo {
     use crate::analysis::semantic::{
         EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
     };
-    use crate::analysis::ty::{
-        canonical::Canonical,
-        corelib::resolve_core_trait,
-        trait_def::impls_for_ty,
-        ty_def::{PrimTy, TyBase, TyData},
-    };
+    use crate::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
     use num_traits::ToPrimitive;
 
-    let Some(msg_variant_trait) = resolve_core_trait(db, scope, &["message", "MsgVariant"]) else {
-        return VariantSelectorInfo {
-            value: None,
-            signature: None,
-        };
-    };
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    let Some(impl_) = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
-            .copied()
-    }) else {
+    let Some(impl_) = msg_variant_impl(db, scope, variant_ty, abi) else {
         return VariantSelectorInfo {
             value: None,
             signature: None,
@@ -3697,7 +3709,8 @@ impl<'db> TypeAlias<'db> {
         let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            TraitSolveCx::new(db, self.scope(), Tier::All)
+                .with_assumptions(param_env(db, self.into())),
             ty,
         ) {
             vec![
@@ -4491,7 +4504,8 @@ impl<'db> Impl<'db> {
         }
         match check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            TraitSolveCx::new(db, self.scope(), Tier::All)
+                .with_assumptions(param_env(db, self.into())),
             ty,
         ) {
             WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
@@ -4653,10 +4667,13 @@ impl<'db> ImplTrait<'db> {
         let implementor =
             ImplementorId::new(db, trait_inst, params, types, ImplementorOrigin::Hir(self));
 
-        // Conflict check
+        // Conflict check: it sees every implementation, generated ones included,
+        // because an overlap is a fact about the whole program.
         if self.selection_name(db).is_none() {
             let trait_ = implementor.trait_(db);
-            for &cand_view in impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db)) {
+            for &cand_view in
+                impls_for_trait_def(db, self.top_mod(db).ingot(db), trait_.def(db), Tier::All)
+            {
                 let cand_impl_trait = cand_view.hir_impl_trait(db);
                 if cand_impl_trait == self {
                     continue;
@@ -4701,7 +4718,7 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-        self.trait_inst_result_in_mode(db, false)
+        self.trait_inst_result_in_mode(db, self.trait_ref(db), false)
     }
 
     /// Candidate signatures retain anonymous const bodies without checking
@@ -4711,12 +4728,20 @@ impl<'db> ImplTrait<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
-        self.trait_inst_result_in_mode(db, true)
+        self.trait_inst_result_in_mode(db, self.trait_ref(db), true)
+    }
+
+    pub(crate) fn candidate_derive_trait_inst(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
+        self.trait_inst_result_in_mode(db, self.modifiers(db).derive_trait_ref.into(), true)
     }
 
     fn trait_inst_result_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
+        trait_ref: Partial<TraitRefId<'db>>,
         defer_const_bodies: bool,
     ) -> Result<TraitInstId<'db>, TraitRefLowerError<'db>> {
         let assumptions = if defer_const_bodies {
@@ -4745,7 +4770,7 @@ impl<'db> ImplTrait<'db> {
         }
 
         // No trait-ref in source: nothing to report here.
-        let Some(trait_ref) = self.trait_ref(db).to_opt() else {
+        let Some(trait_ref) = trait_ref.to_opt() else {
             return Err(TraitRefLowerError::Ignored);
         };
 
@@ -4824,7 +4849,7 @@ impl<'db> ImplTrait<'db> {
         db: &'db dyn HirAnalysisDb,
         marker: Trait<'db>,
     ) -> impl Iterator<Item = ImplTrait<'db>> {
-        collect_trait_impls(db, marker.ingot(db))
+        collect_trait_impls(db, marker.ingot(db), Tier::All)
             .by_trait
             .get(&marker)
             .into_iter()
@@ -4838,6 +4863,9 @@ impl<'db> ImplTrait<'db> {
         impl_trait: ImplTrait<'db>,
         marker: Trait<'db>,
     ) -> bool {
+        if crate::core::meta::is_pending_derive_request(db, impl_trait) {
+            return false;
+        }
         let Some(trait_ref) = impl_trait.trait_ref(db).to_opt() else {
             return false;
         };
@@ -4968,12 +4996,29 @@ impl<'db> ImplTrait<'db> {
         self.assoc_type_bindings_for_trait_inst_in_mode(db, trait_inst, true)
     }
 
+    /// Whether the members of this implementation are unknown: it is a derive
+    /// header, `impl Tr for T with (P)`, that preparation has not given
+    /// members yet. The header says the implementation exists, and nothing
+    /// else. Neither a member nor the trait's default stands in for what its
+    /// provider will produce, so every lookup of a method body, a constant or
+    /// an associated type that would fall back to the trait's default asks
+    /// this first.
+    pub(crate) fn members_unknown(self, db: &'db dyn HirAnalysisDb) -> bool {
+        // Only a derive header can be unfulfilled; the lowered modifier tells
+        // so without reading the syntax.
+        self.derive_provider(db).is_some()
+            && crate::core::meta::is_unfulfilled_derive_request(db, self)
+    }
+
     fn assoc_type_bindings_for_trait_inst_in_mode(
         self,
         db: &'db dyn HirAnalysisDb,
         trait_inst: TraitInstId<'db>,
         defer_const_bodies: bool,
     ) -> IndexMap<IdentId<'db>, TyId<'db>> {
+        if self.members_unknown(db) {
+            return IndexMap::new();
+        }
         // Semantic associated type implementations in this impl-trait block.
         let mut types: IndexMap<_, _> = self
             .assoc_types(db)
@@ -5080,7 +5125,8 @@ impl<'db> ImplTrait<'db> {
 
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
             db,
-            TraitSolveCx::new(db, self.scope()).with_assumptions(param_env(db, self.into())),
+            TraitSolveCx::new(db, self.scope(), Tier::All)
+                .with_assumptions(param_env(db, self.into())),
             ty,
         ) {
             return (
@@ -5407,7 +5453,7 @@ pub(crate) fn assoc_ty_value_diags<'db>(
     }
     if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(
         db,
-        TraitSolveCx::new(db, scope).with_assumptions(param_env(db, owner)),
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(param_env(db, owner)),
         ty,
     ) {
         return vec![
@@ -6298,8 +6344,8 @@ impl<'db> FieldView<'db> {
 
         // Trait-bound well-formedness for field type.
         let owner_item = self.owner_item();
-        let solve_cx =
-            TraitSolveCx::new(db, owner_item.scope()).with_assumptions(param_env(db, owner_item));
+        let solve_cx = TraitSolveCx::new(db, owner_item.scope(), Tier::All)
+            .with_assumptions(param_env(db, owner_item));
         if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty) {
             // Point at the written type inside a qualified path when that is
             // what is ill-formed.

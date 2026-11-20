@@ -1,5 +1,7 @@
 use core::abi::{load_word, store_word}
+use core::derive::{Derive, DeriveInherent}
 use core::marker::{Pinned, Storage}
+use core::meta::{Code, Item, Record}
 use core::ops::{Location, StateIndex}
 use core::ptr
 use std::abi::Bytes
@@ -64,4 +66,113 @@ pub msg NoteMsg {
 #[error]
 pub struct Refused {
     pub code: u256,
+}
+
+/// A trait whose members a provider of this ingot writes, for a header in
+/// the ingot that depends on it.
+pub trait Reading {
+    fn read(self) -> u256
+}
+
+/// Its member runs unsafe code, which this ingot wrote in a quotation.
+pub struct ReadsUnsafely {}
+
+impl Derive<trait Reading> for ReadsUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn read(self) -> u256 {
+                let p = ptr::alloc_bytes(32)
+                unsafe {
+                    store_word(ptr: p, value: 7)
+                    load_word(p)
+                }
+            }
+        }
+    }
+}
+
+/// Its member runs no unsafe code.
+pub struct ReadsSafely {}
+
+impl Derive<trait Reading> for ReadsSafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn read(self) -> u256 { 5 }
+        }
+    }
+}
+
+/// A provider for an inherent header whose member runs unsafe code, which
+/// this ingot wrote in a quotation.
+pub struct WritesUnsafely {}
+
+impl DeriveInherent for WritesUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn write(self) -> u256 {
+                let p = ptr::alloc_bytes(32)
+                unsafe {
+                    store_word(ptr: p, value: 9)
+                    load_word(p)
+                }
+            }
+        }
+    }
+}
+
+/// An unsafe trait: the ingot that writes `unsafe impl` for it, with a header
+/// or not, asserts the members.
+pub unsafe trait Vouching {
+    fn vouch(self) -> u256
+}
+
+/// Its member runs no unsafe code of its own.
+pub struct VouchesSafely {}
+
+impl Derive<trait Vouching> for VouchesSafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn vouch(self) -> u256 { 3 }
+        }
+    }
+}
+
+/// Its member holds an `unsafe` block, which this ingot wrote.
+pub struct VouchesUnsafely {}
+
+impl Derive<trait Vouching> for VouchesUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn vouch(self) -> u256 {
+                let p = ptr::alloc_bytes(32)
+                unsafe {
+                    store_word(ptr: p, value: 3)
+                    load_word(p)
+                }
+            }
+        }
+    }
+}
+
+/// A value that is not `Copy`.
+pub struct Token {
+    pub n: u256,
+}
+
+pub fn take(_ t: own Token) -> u256 {
+    t.n
+}
+
+/// A provider for an inherent header whose member moves a value twice.
+pub struct MovesTwice {}
+
+impl DeriveInherent for MovesTwice {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn twice(self) -> u256 {
+                let t = Token { n: 1 }
+                take(t) + take(t)
+            }
+        }
+    }
 }

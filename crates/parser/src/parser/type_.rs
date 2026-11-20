@@ -27,6 +27,9 @@ pub fn parse_type<S: TokenStream>(
         Some(SyntaxKind::Not) => parser
             .parse_cp(NeverTypeScope::default(), checkpoint)
             .map_err(|e| e.into()),
+        Some(SyntaxKind::Dollar) => {
+            parser.parse_cp(super::expr_atom::QuoteHoleTypeScope::default(), checkpoint)
+        }
         _ => parser.parse_cp(PathTypeScope::default(), checkpoint),
     }
 }
@@ -53,6 +56,7 @@ pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
         | SyntaxKind::SelfTypeKw
         | SyntaxKind::LParen
         | SyntaxKind::LBracket
+        | SyntaxKind::Dollar
         | SyntaxKind::TraitKw => true,
         SyntaxKind::MutKw | SyntaxKind::MaybeMutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,

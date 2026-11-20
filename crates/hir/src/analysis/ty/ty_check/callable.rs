@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::{
     hir_def::{
         BinOp, CallArg as HirCallArg, Expr, ExprId, FieldIndex, GenericArg, GenericArgListId,
@@ -305,16 +306,17 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     // stays the inference variable the callee was instantiated with, as does
     // an omitted parameter without a default; one with a default takes it.
     let inferred = &callable.generic_args[offset..];
-    let mut provided: Vec<_> =
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx)
-            .into_iter()
-            .zip(given)
-            .zip(inferred)
-            .map(|((lowered, arg), &var)| match arg {
-                GenericArg::Infer => var,
-                _ => lowered,
-            })
-            .collect();
+    let lowered_args =
+        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx);
+    let mut provided: Vec<_> = lowered_args
+        .into_iter()
+        .zip(given)
+        .zip(inferred)
+        .map(|((lowered, arg), &var)| match arg {
+            GenericArg::Infer => var,
+            _ => lowered,
+        })
+        .collect();
     let completed_args = match callable.callable_def {
         CallableDef::Func(func) => {
             let param_set = collect_generic_params(db, func.into());
@@ -754,7 +756,10 @@ impl<'db> Callable<'db> {
         self.use_evidence.has_deferred(db)
     }
 
-    pub(crate) fn complete_deferred_evidence(&mut self, db: &'db dyn HirAnalysisDb) -> Option<()> {
+    pub(crate) fn complete_deferred_evidence(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<(), super::super::evidence::EvidenceCompletionError> {
         self.use_evidence.complete_deferred(db)
     }
 
@@ -1593,7 +1598,7 @@ impl<'db> Callable<'db> {
             CallableDef::Func(func) => param_env(db, func.into()),
             CallableDef::VariantCtor(_) | CallableDef::StructCtor(_) => declared,
         };
-        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope())
+        let definition_solve_cx = TraitSolveCx::new(db, self.callable_def.scope(), Tier::All)
             .with_assumptions(definition_assumptions);
 
         let mut pending_obligations = Vec::new();

@@ -3,6 +3,7 @@ use super::{
     SemanticInstance, SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
     resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
+use crate::analysis::name_resolution::Tier;
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -430,6 +431,13 @@ pub(super) fn root_impl_env<'db>(
 /// source calls. Inherited arguments come from `trait_inst`; `own_args` are the
 /// callee's own source generic arguments. Generated calls must dispatch to a
 /// concrete body and cannot carry hidden layout or effect-provider slots.
+/// A generated call retains the proof that selected its implementation, so
+/// compiler clients can validate declaration requirements before execution.
+pub struct FinalizedGeneratedCall<'db> {
+    pub key: SemanticInstanceKey<'db>,
+    pub evidence: Option<crate::analysis::ty::evidence::EvidenceId<'db>>,
+}
+
 pub fn generated_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -438,6 +446,17 @@ pub fn generated_callee_key<'db>(
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
+    Ok(generated_callee(db, scope, assumptions, func, trait_inst, own_args)?.key)
+}
+
+pub fn generated_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    func: Func<'db>,
+    trait_inst: Option<TraitInstId<'db>>,
+    own_args: &[TyId<'db>],
+) -> Result<FinalizedGeneratedCall<'db>, MethodArgMapError<'db>> {
     let keys = ParamSchemaId::full(db, func.into()).keys(db);
     let inherited = trait_inst.map_or(&[][..], |inst| inst.args(db));
     let inherited_len = GenericParamOwner::Func(func)
@@ -462,10 +481,15 @@ pub fn generated_callee_key<'db>(
     );
     // The call proves its goal and its callee's bounds where it is made, as
     // the checker proves a written call's.
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     callable.record_evidence(db, solve_cx);
     // A generated call carries no effect arguments.
     callable.record_bound_evidence(db, solve_cx, &[]);
+    if callable.has_deferred_evidence(db) {
+        callable
+            .complete_deferred_evidence(db)
+            .map_err(|_| MethodArgMapError::MissingBody)?;
+    }
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
@@ -480,7 +504,10 @@ pub fn generated_callee_key<'db>(
     if !callee.concrete_dispatch {
         return Err(MethodArgMapError::MissingBody);
     }
-    Ok(callee.key)
+    Ok(FinalizedGeneratedCall {
+        key: callee.key,
+        evidence: callable.evidence(),
+    })
 }
 
 /// The instance a compiler-generated call of core trait `trait_path`'s
@@ -521,7 +548,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         completed = callable.clone();
         completed
             .complete_deferred_evidence(db)
-            .ok_or(MethodArgMapError::MissingBody)?;
+            .map_err(|_| MethodArgMapError::MissingBody)?;
         &completed
     } else {
         callable
@@ -780,10 +807,24 @@ fn semantic_callee_key_with_assumptions<'db>(
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
     let mut subst_args = callable.generic_args().to_vec();
+    // A call through a written header has no body to run: the trait's default
+    // is not what the generated implementation will contain.
+    if callable.trait_inst().is_some()
+        && callable
+            .selected_method(
+                db,
+                TraitSolveCx::new(db, impl_env.normalization_scope(db), Tier::All)
+                    .with_assumptions(assumptions),
+            )
+            .is_some_and(|method| method.is_declared_only())
+    {
+        return Err(MethodArgMapError::DeclaredOnly);
+    }
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(method) = callable.selected_method(
             db,
-            TraitSolveCx::new(db, impl_env.normalization_scope(db)).with_assumptions(assumptions),
+            TraitSolveCx::new(db, impl_env.normalization_scope(db), Tier::All)
+                .with_assumptions(assumptions),
         )
         && let Some(impl_func) = method.body()
     {
@@ -1044,7 +1085,7 @@ fn semantic_callee_key_with_assumptions<'db>(
         let independent = bounds.list(db).iter().copied().all(|bound| {
             collect_flags(db, bound).contains(TyFlags::HAS_PARAM)
                 || matches!(
-                    is_goal_satisfiable(db, TraitSolveCx::new(db, scope), bound),
+                    is_goal_satisfiable(db, TraitSolveCx::new(db, scope, Tier::All), bound),
                     GoalSatisfiability::Satisfied(_)
                 )
         }) && subst_args.iter().all(|&arg| same_without_caller(arg))

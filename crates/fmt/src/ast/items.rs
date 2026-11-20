@@ -1501,17 +1501,25 @@ impl ToDoc for ast::Impl {
 
         let where_clause = where_doc(self, ctx);
 
+        let header = attrs
+            .append(alloc.text("impl"))
+            .append(generics)
+            .append(ty_doc);
+
+        if let Some(provider) = self.derive_provider() {
+            return header
+                .append(alloc.text(" with ("))
+                .append(provider.to_doc(ctx))
+                .append(alloc.text(")"))
+                .append(where_clause);
+        }
+
         let items_doc = self.item_list().map_or_else(
             || alloc.text(" {}"),
             |items| alloc.text(" ").append(items.to_doc(ctx)),
         );
 
-        attrs
-            .append(alloc.text("impl"))
-            .append(generics)
-            .append(ty_doc)
-            .append(where_clause)
-            .append(items_doc)
+        header.append(where_clause).append(items_doc)
     }
 }
 
@@ -1554,20 +1562,30 @@ impl ToDoc for ast::ImplTrait {
             .map(|name| alloc.text(" as ").append(alloc.text(ctx.token(&name))))
             .unwrap_or_else(|| alloc.nil());
 
-        let items_doc = self.item_list().map_or_else(
-            || alloc.text(" {}"),
-            |items| alloc.text(" ").append(items.to_doc(ctx)),
-        );
-
-        attrs
+        let header = attrs
             .append(modifier_doc(self, ctx))
             .append(alloc.text("impl"))
             .append(generics)
             .append(trait_doc)
             .append(ty_doc)
-            .append(selection)
-            .append(where_clause)
-            .append(items_doc)
+            .append(selection);
+
+        // An explicit derive request has no body: its provider supplies the
+        // members, and its requirements follow the provider.
+        if let Some(provider) = self.derive_provider() {
+            return header
+                .append(alloc.text(" with ("))
+                .append(provider.to_doc(ctx))
+                .append(alloc.text(")"))
+                .append(where_clause);
+        }
+
+        let items_doc = self.item_list().map_or_else(
+            || alloc.text(" {}"),
+            |items| alloc.text(" ").append(items.to_doc(ctx)),
+        );
+
+        header.append(where_clause).append(items_doc)
     }
 }
 

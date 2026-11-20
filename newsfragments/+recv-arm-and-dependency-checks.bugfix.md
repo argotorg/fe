@@ -1,0 +1,1 @@
+A `recv` arm requires the `MsgVariant` implementation of its own ABI, so a message that implements `MsgVariant` only for another ABI is refused. A dependency warning allows its dependent packages to continue checking.

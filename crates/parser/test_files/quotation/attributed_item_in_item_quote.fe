@@ -1,0 +1,8 @@
+use core::meta::{Code, Item}
+
+const fn f() -> Code<Item> {
+    quote {
+        #[inline]
+        fn f() {}
+    }
+}

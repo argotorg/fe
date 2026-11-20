@@ -1,0 +1,10 @@
+// A member that a provider of `dep` generates exists only in this ingot, so
+// its body is checked here whether or not anything calls it, and `dep` being
+// untrusted does not change that.
+pub struct Moves {}
+impl Moves with (dep::MovesTwice)
+
+#[test]
+fn nothing_calls_the_generated_member() {
+    assert!(dep::safe_sum(1, 2) == 3)
+}

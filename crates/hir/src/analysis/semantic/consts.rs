@@ -46,6 +46,25 @@ impl<'db> SemConstId<'db> {
                 }
             },
             SemConstValue::Description(term) => term.pretty_print_concrete(db),
+            SemConstValue::ItemCode { .. } => "<checked item code>".into(),
+            SemConstValue::Meta { value, .. } => match value {
+                crate::core::meta::MetaValue::Record(record) => {
+                    format!("<record {}>", record.ty().pretty_print(db))
+                }
+                crate::core::meta::MetaValue::Field(field) => {
+                    let name = field.name(db).map_or_else(
+                        || field.index().to_string(),
+                        |ident| ident.data(db).to_string(),
+                    );
+                    format!("<field {}.{name}>", field.record().ty().pretty_print(db))
+                }
+                crate::core::meta::MetaValue::FieldType(field) => {
+                    format!("<field_type {}>", field.ty(db).pretty_print(db))
+                }
+                crate::core::meta::MetaValue::TypeRef { ty, .. } => {
+                    format!("<type_ref {}>", ty.pretty_print(db))
+                }
+            },
             SemConstValue::Tuple { elems, .. } => {
                 let elems = elems
                     .iter()
@@ -100,6 +119,14 @@ impl<'db> SemConstId<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemConstValue<'db> {
+    ItemCode {
+        ty: TyId<'db>,
+        code: crate::core::meta::ItemCode<'db>,
+    },
+    Meta {
+        ty: TyId<'db>,
+        value: crate::core::meta::MetaValue<'db>,
+    },
     Unit,
     Scalar {
         ty: TyId<'db>,
@@ -137,6 +164,8 @@ pub fn sem_const_ty<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> 
         SemConstValue::Unit => TyId::unit(db),
         SemConstValue::Description(term) => term.ty(db),
         SemConstValue::Scalar { ty, .. }
+        | SemConstValue::ItemCode { ty, .. }
+        | SemConstValue::Meta { ty, .. }
         | SemConstValue::Tuple { ty, .. }
         | SemConstValue::Struct { ty, .. }
         | SemConstValue::Array { ty, .. }
@@ -150,6 +179,15 @@ pub(crate) fn retype_sem_const_description<'db>(
     ty: TyId<'db>,
 ) -> Option<SemConstId<'db>> {
     let value = match value.value(db).clone() {
+        SemConstValue::ItemCode { ty: original, code } if original == ty => {
+            SemConstValue::ItemCode { ty, code }
+        }
+        SemConstValue::ItemCode { .. } => return None,
+        SemConstValue::Meta {
+            ty: original,
+            value,
+        } if original == ty => SemConstValue::Meta { ty, value },
+        SemConstValue::Meta { .. } => return None,
         SemConstValue::Unit if ty == TyId::unit(db) => SemConstValue::Unit,
         SemConstValue::Unit => return None,
         SemConstValue::Scalar { value, .. } => SemConstValue::Scalar { ty, value },
@@ -256,6 +294,46 @@ fn verify_sem_const_shape_impl<'db>(
     allow_dependent: bool,
 ) -> Result<(), &'static str> {
     match value.value(db) {
+        SemConstValue::ItemCode { ty, code } => {
+            if crate::core::meta::code_kind_from_ty(db, *ty) != Some(code.kind()) {
+                return Err("item code has a different declared carrier kind");
+            }
+            code.validate(db)
+        }
+        SemConstValue::Meta { ty, value } => {
+            if crate::analysis::ty::corelib::resolve_lib_type_path(
+                db,
+                value.scope(),
+                value.carrier_path(),
+            ) != Some(*ty)
+            {
+                return Err("record input payload has a different declared carrier type");
+            }
+            use crate::core::meta::MetaValue;
+            match value {
+                MetaValue::TypeRef { ty, .. } => {
+                    if ty.has_invalid(db) {
+                        return Err("type reference contains an invalid type");
+                    }
+                }
+                MetaValue::Record(record) => record.validate(db)?,
+                MetaValue::Field(field) | MetaValue::FieldType(field) => {
+                    field.record().validate(db)?;
+                    let field_count = field.record().field_count(db).map_err(
+                        |cause| match cause {
+                            crate::core::meta::RecordInputError::WholeEnumHasNoFields => {
+                                "field metadata requires a selected enum payload, not a whole enum"
+                            }
+                            _ => "field metadata does not identify an authored field collection",
+                        },
+                    )?;
+                    if field.index() >= field_count {
+                        return Err("field index outside record");
+                    }
+                }
+            }
+            Ok(())
+        }
         SemConstValue::Unit => Ok(()),
         SemConstValue::Description(term) if allow_dependent && !term.ty(db).has_invalid(db) => {
             match term.data(db) {
@@ -418,6 +496,13 @@ pub fn sem_const_eq<'db>(
         return true;
     }
     match (lhs.value(db), rhs.value(db)) {
+        (
+            SemConstValue::ItemCode { ty: a, code: x },
+            SemConstValue::ItemCode { ty: b, code: y },
+        ) => a == b && x == y,
+        (SemConstValue::Meta { ty: a, value: x }, SemConstValue::Meta { ty: b, value: y }) => {
+            a == b && x == y
+        }
         (SemConstValue::Unit, SemConstValue::Unit) => true,
         (
             SemConstValue::Scalar {
@@ -637,6 +722,8 @@ fn reify_runtime_const_impl<'db>(
         instance.normalized_ty(db, expected_ty)
     });
     let reified = match value.value(db) {
+        SemConstValue::ItemCode { .. } => return None,
+        SemConstValue::Meta { .. } => return None,
         SemConstValue::Unit => unit_const(db),
         SemConstValue::Scalar { ty, value } => {
             let ty = if ty.pretty_print(db) == "{integer}" || ty.is_integral_var(db) {
@@ -691,7 +778,9 @@ fn reify_runtime_const_impl<'db>(
             if ty.is_func(db) && fields.is_empty() {
                 return Some(struct_const(db, ty, Box::new([])));
             }
-            if !ty.is_struct(db) && ty.as_closure(db).is_none() {
+            if (!ty.is_struct(db) && ty.as_closure(db).is_none())
+                || crate::core::meta::is_canonical_meta_carrier_ty(db, ty)
+            {
                 return None;
             }
             let field_tys = ty.field_types(db);

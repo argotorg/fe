@@ -4,6 +4,7 @@ use common::{
     stdlib::{HasBuiltinCore, HasBuiltinStd},
 };
 use ena::unify::InPlace;
+use fe_hir::analysis::name_resolution::Tier;
 use fe_hir::{
     analysis::ty::{
         trait_def::TraitInstId,
@@ -189,7 +190,8 @@ fn test_types(_ subject: Subject) {}
     let external = choose_impl.args(&db)[1];
 
     let assumptions = PredicateListId::empty_list(&db);
-    let solve_cx = TraitSolveCx::new(&db, test_types.scope()).with_assumptions(assumptions);
+    let solve_cx =
+        TraitSolveCx::new(&db, test_types.scope(), Tier::All).with_assumptions(assumptions);
     let direct_choose = TraitInstId::new(
         &db,
         choose_trait,

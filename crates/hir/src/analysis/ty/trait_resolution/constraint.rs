@@ -296,7 +296,7 @@ pub(crate) fn decl_constraint_pairs<'db>(
 }
 
 #[salsa::tracked(cycle_initial=decl_constraint_pairs_cycle_initial)]
-fn candidate_decl_constraint_pairs<'db>(
+pub(crate) fn candidate_decl_constraint_pairs<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: GenericParamOwner<'db>,
 ) -> Vec<(TraitInstId<'db>, PredicateSource<'db>)> {
@@ -603,6 +603,7 @@ fn try_resolve_type_bound<'db>(
 
 #[cfg(test)]
 mod tests {
+    use crate::analysis::name_resolution::Tier;
     use camino::Utf8PathBuf;
 
     use super::*;
@@ -828,7 +829,7 @@ fn require_decode<T>() where T: Decode<Sol> {}
                 .list(&db)
                 .first()
                 .unwrap_or_else(|| panic!("missing {label} constraint"));
-            let solve_cx = TraitSolveCx::new(&db, func.scope());
+            let solve_cx = TraitSolveCx::new(&db, func.scope(), Tier::All);
             match is_goal_satisfiable(&db, solve_cx, goal) {
                 GoalSatisfiability::Satisfied(_) => {}
                 other => panic!(

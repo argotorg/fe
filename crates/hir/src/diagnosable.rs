@@ -5,6 +5,7 @@
 //! logic from `core::semantic` is being migrated here to keep the main
 //! traversal surface free of diagnostic concerns.
 
+use crate::analysis::name_resolution::Tier;
 use common::{compilation::Target, ingot::IngotKind};
 use rustc_hash::FxHashMap;
 use smallvec1::SmallVec;
@@ -256,7 +257,7 @@ impl<'db> WherePredicateBoundView<'db> {
                 if !is_trait_self_subject {
                     match check_trait_inst_wf(
                         db,
-                        ty::trait_resolution::TraitSolveCx::new(db, scope)
+                        ty::trait_resolution::TraitSolveCx::new(db, scope, Tier::All)
                             .with_assumptions(param_env(db, owner_item)),
                         inst,
                     ) {
@@ -339,7 +340,7 @@ impl<'db> Func<'db> {
             // Then run kind/const checks on the lowered semantic type
             let ret = self.return_ty(db);
             let span: DynLazySpan<'db> = self.span().ret_ty().into();
-            let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+            let solve_cx = ty::trait_resolution::TraitSolveCx::new(db, self.scope(), Tier::All)
                 .with_assumptions(param_env(db, self.into()));
             if let Some(diag) = ty::ty_error::normalization_limit_diag(
                 db,
@@ -766,7 +767,7 @@ impl<'db> Trait<'db> {
             for trait_inst in assoc.bounds_on_subject(db, default_ty) {
                 match ty::trait_resolution::is_goal_satisfiable(
                     db,
-                    ty::trait_resolution::TraitSolveCx::new(db, self.scope())
+                    ty::trait_resolution::TraitSolveCx::new(db, self.scope(), Tier::All)
                         .with_assumptions(assumptions),
                     trait_inst,
                 ) {
@@ -801,7 +802,8 @@ impl<'db> Trait<'db> {
         let assumptions = constraints_for(db, self.into());
         let self_ty = self.self_param(db);
         let formal = trait_self_predicate(db, self).trait_ref(db);
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(param_env(db, self.into()));
+        let solve_cx =
+            TraitSolveCx::new(db, scope, Tier::All).with_assumptions(param_env(db, self.into()));
         let mut diags = Vec::new();
         for assoc in self.assoc_types(db) {
             // A bound's subject is the associated type, as the trait's
@@ -943,7 +945,7 @@ impl<'db> Trait<'db> {
 
             match check_trait_inst_wf(
                 db,
-                ty::trait_resolution::TraitSolveCx::new(db, scope)
+                ty::trait_resolution::TraitSolveCx::new(db, scope, Tier::All)
                     .with_assumptions(param_env(db, self.into())),
                 inst,
             ) {
@@ -1137,6 +1139,64 @@ impl<'db> Impl<'db> {
 }
 
 impl<'db> ImplTrait<'db> {
+    /// A warning for each member of a generated implementation whose name its
+    /// type already has, through an inherent member or another trait. Inside
+    /// the package that generates it, the existing member keeps being selected
+    /// by a call that names the member; the generated one is reached by naming
+    /// its trait. Derive pairs often share a method name, so this is not an
+    /// error.
+    fn diags_generated_member_names(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        implementor: ImplementorId<'db>,
+    ) -> Vec<TyDiagCollection<'db>> {
+        use crate::analysis::name_resolution::method_selection::MethodCandidate;
+        use crate::analysis::name_resolution::path_resolver::{AuthoredMember, authored_member};
+        if !self
+            .scope()
+            .is_within_generated(db, self.top_mod(db).ingot(db))
+            || self.selection_name(db).is_some()
+        {
+            return Vec::new();
+        }
+        let trait_ = implementor.trait_def(db);
+        let self_ty = implementor.self_ty(db);
+        let assumptions = param_env(db, self.into());
+        let names = trait_
+            .method_defs(db)
+            .keys()
+            .copied()
+            .chain(trait_.assoc_consts(db).filter_map(|c| c.name(db)))
+            .collect::<Vec<_>>();
+        let mut out = Vec::new();
+        for name in names {
+            let existing = match authored_member(db, self_ty, name, self.scope(), assumptions) {
+                None => continue,
+                Some(AuthoredMember::TraitConst(inst)) => Some(inst.def(db)),
+                Some(AuthoredMember::Method(
+                    MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand),
+                )) => cand.method.containing_trait(db),
+                Some(_) => None,
+            };
+            // The same trait through another implementation is a conflict,
+            // which has its own diagnostic.
+            if existing == Some(trait_) {
+                continue;
+            }
+            out.push(
+                ty::diagnostics::ImplDiag::GeneratedMemberNameShared {
+                    primary: self.span().into(),
+                    trait_,
+                    member: name,
+                    self_ty,
+                    existing,
+                }
+                .into(),
+            );
+        }
+        out
+    }
+
     /// Diagnostics for the types the header's trait reference writes as
     /// arguments. An impl defines its associated types in its body, so a
     /// binding written in its header is also rejected.
@@ -1320,7 +1380,7 @@ impl<'db> ImplTrait<'db> {
         // the type's own ingot can implement a core trait for it.
         let copy = ty::corelib::resolve_core_trait(db, self.scope(), &["marker", "Copy"])?;
         let adt_ty = ty.base_ty(db);
-        if impls_for_trait_def(db, adt.ingot(db), copy)
+        if impls_for_trait_def(db, adt.ingot(db), copy, Tier::All)
             .iter()
             .any(|implementor| implementor.self_ty(db).base_ty(db) == adt_ty)
         {
@@ -1337,7 +1397,7 @@ impl<'db> ImplTrait<'db> {
                 !declared.list(db).contains(goal)
                     && classify_constraint_entailment(is_goal_satisfiable(
                         db,
-                        TraitSolveCx::new(db, self.scope()).with_assumptions(declared),
+                        TraitSolveCx::new(db, self.scope(), Tier::All).with_assumptions(declared),
                         *goal,
                     )) != ConstraintEntailment::Proven
             })
@@ -1892,7 +1952,7 @@ impl<'db> ImplTrait<'db> {
                 use ty::trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable};
                 if let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
                     db,
-                    TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(db, self.scope(), Tier::All).with_assumptions(assumptions),
                     bound_inst,
                 ) {
                     let assoc_ty_span = self
@@ -1926,7 +1986,7 @@ impl<'db> ImplTrait<'db> {
         let trait_inst = implementor.trait_(db);
         let trait_def = implementor.trait_def(db);
 
-        let solve_cx = trait_resolution::TraitSolveCx::new(db, self.scope())
+        let solve_cx = trait_resolution::TraitSolveCx::new(db, self.scope(), Tier::All)
             .with_assumptions(param_env(db, self.into()));
 
         if let WellFormedness::IllFormed { goal, subgoal } =
@@ -2099,7 +2159,8 @@ impl<'db> VariantView<'db> {
             // Trait-bound well-formedness for element type.
             match check_ty_wf(
                 db,
-                TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enum_.into())),
+                TraitSolveCx::new(db, scope, Tier::All)
+                    .with_assumptions(param_env(db, enum_.into())),
                 ty,
             ) {
                 WellFormedness::WellFormed => {}
@@ -2424,7 +2485,7 @@ impl<'db> GenericParamOwner<'db> {
 
                         match check_trait_inst_wf(
                             db,
-                            ty::trait_resolution::TraitSolveCx::new(db, scope)
+                            ty::trait_resolution::TraitSolveCx::new(db, scope, Tier::All)
                                 .with_assumptions(param_env(db, self.into())),
                             inst,
                         ) {
@@ -2559,6 +2620,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
             for cand in probe_method(
                 db,
                 ingot,
+                Tier::All,
                 MethodProbe {
                     receiver: self_ty,
                     assumptions: param_env(db, impl_.into()),
@@ -2656,6 +2718,7 @@ impl<'db> Diagnosable<'db> for ImplTrait<'db> {
         out.extend(self.diags_copy_fields(db, implementor));
         out.extend(self.diags_drop(db, implementor));
         out.extend(self.diags_compiler_implemented_trait(db, implementor));
+        out.extend(self.diags_generated_member_names(db, implementor));
         out.extend(self.diags_pin(db, implementor));
         out.extend(self.diags_unsafe_impl(db, implementor));
         out.extend(self.diags_trait_ref_and_wf(db));

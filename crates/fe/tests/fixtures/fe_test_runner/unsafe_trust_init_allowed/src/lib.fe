@@ -1,0 +1,11 @@
+// The same contract with `u` trusted.
+use u::WI
+
+pub contract Holder {
+    init(w: WI) {}
+}
+
+#[test]
+fn the_contract_decodes_its_init_arguments() {
+    assert(true)
+}

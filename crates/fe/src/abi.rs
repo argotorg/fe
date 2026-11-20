@@ -1,3 +1,4 @@
+use hir::analysis::name_resolution::Tier;
 use std::collections::HashSet;
 
 use common::ingot::IngotKind;
@@ -382,7 +383,8 @@ fn collect_typed_body_event_structs<'db>(
             let mut target = VisitedFuncBody::from_callable(func, callable);
             if let Some(method) = callable.selected_method(
                 db,
-                TraitSolveCx::new(db, body.scope()).with_assumptions(typed_body.assumptions()),
+                TraitSolveCx::new(db, body.scope(), Tier::All)
+                    .with_assumptions(typed_body.assumptions()),
             ) && let Some(impl_func) = method.body()
                 && let Ok(body_args) = method.complete_body_args(db, callable.generic_args())
             {

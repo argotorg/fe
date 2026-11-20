@@ -11,8 +11,8 @@ use parser::ast;
 use super::{
     AttrListId, Body, CompBinOp, EffectParamListId, FuncParamListId, FuncParamName,
     GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, KindBound,
-    ManualContractRootAttr, Partial, Pat, PatId, TupleTypeId, TypeBound, TypeId, UseAlias,
-    WhereClauseId,
+    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, TupleTypeId, TypeBound, TypeId,
+    UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -459,7 +459,7 @@ impl<'db> TopLevelMod<'db> {
     }
 
     pub fn scope_graph(self, db: &'db dyn HirDb) -> &'db ScopeGraph<'db> {
-        lower::scope_graph_impl(db, self)
+        lower::linked_scope_graph(db, self)
     }
 
     /// Returns the child top level modules of `self`.
@@ -761,6 +761,12 @@ impl<'db> Func<'db> {
 
     pub fn is_const(self, db: &dyn HirDb) -> bool {
         self.modifiers(db).is_const
+    }
+
+    /// Whether the function declares binders of its own, apart from those of
+    /// its enclosing implementation or trait.
+    pub fn declares_generic_params(self, db: &'db dyn HirDb) -> bool {
+        !self.generic_params(db).data(db).is_empty()
     }
 
     pub fn is_must_use(self, db: &'db dyn HirDb) -> bool {
@@ -1283,6 +1289,9 @@ pub struct Impl<'db> {
     #[returns(copy)]
     pub(in crate::core) where_clause: WhereClauseId<'db>,
     pub(in crate::core) consts: Vec<AssocConstDef<'db>>,
+    /// `impl S with (P)`: the provider path written in the header.
+    #[returns(copy)]
+    pub derive_provider: Option<PathId<'db>>,
     #[returns(copy)]
     pub top_mod: TopLevelMod<'db>,
 
@@ -1319,6 +1328,17 @@ impl<'db> Impl<'db> {
 
     pub fn scope(self) -> ScopeId<'db> {
         ScopeId::from_item(self.into())
+    }
+
+    /// Whether every member of this implementation is generated code of
+    /// `ingot`: the implementation is itself generated there, or it is an
+    /// inherent header `impl Type with (Provider)` written there, whose
+    /// provider wrote all of its members. The header names no trait, so it is
+    /// a written fact for nothing, and the authored tier of `ingot` hides its
+    /// members as it hides those of a generated implementation.
+    pub fn members_generated_in(self, db: &'db dyn HirDb, ingot: Ingot<'db>) -> bool {
+        self.scope().is_within_generated(db, ingot)
+            || (self.derive_provider(db).is_some() && self.top_mod(db).ingot(db) == ingot)
     }
 
     // raw type_ref access kept; shim exposes public ___tmp method.
@@ -1491,6 +1511,15 @@ pub struct ImplTraitModifiers<'db> {
     pub selection_name: Option<IdentId<'db>>,
     /// `pub impl T for S as N`: the name's visibility, private by default.
     pub vis: Visibility,
+    /// `impl T for S with (P)`: the provider of an explicit derive request,
+    /// as written, with its arguments.
+    pub derive_provider: Option<PathId<'db>>,
+    /// A derive request uses the written callable signature to select its
+    /// provider, including any output that impl lowering moves into members.
+    pub derive_trait_ref: Option<TraitRefId<'db>>,
+    /// For an `unsafe impl` written in a quotation, the quotations that wrote
+    /// and placed it, innermost first.
+    pub quote_chain: Option<QuoteChain<'db>>,
 }
 
 impl<'db> ImplTrait<'db> {
@@ -1507,6 +1536,22 @@ impl<'db> ImplTrait<'db> {
     /// The visibility of a named implementation's name.
     pub fn vis(self, db: &'db dyn HirDb) -> Visibility {
         self.modifiers(db).vis
+    }
+
+    /// The provider path of an explicit derive request, `P` in
+    /// `impl T for S with (P)`.
+    pub fn derive_provider(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
+        self.modifiers(db).derive_provider
+    }
+
+    /// The modules of the quotations that wrote and placed this implementation,
+    /// writer first and the outermost placer last. Empty for hand-written code,
+    /// and for any implementation that is not an `unsafe impl`: only those keep
+    /// their chain.
+    pub fn quote_chain(self, db: &'db dyn HirDb) -> Vec<TopLevelMod<'db>> {
+        self.modifiers(db)
+            .quote_chain
+            .map_or_else(Vec::new, |chain| chain.modules(db).clone())
     }
 
     pub fn span(self) -> LazyImplTraitSpan<'db> {
@@ -1559,6 +1604,15 @@ impl<'db> ImplTrait<'db> {
     // Semantic `ty` lives in `crate::semantic`.
 }
 
+/// Where a member spliced into an implementation from a quotation was written:
+/// the quote's module and the member's node in it. Authored members have none
+/// and are located in their implementation's own syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct GeneratedMemberSyntax<'db> {
+    pub top_mod: TopLevelMod<'db>,
+    pub node: parser::ast::SyntaxNodePtr,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AssocTyDef<'db> {
     pub attributes: AttrListId<'db>,
@@ -1567,6 +1621,7 @@ pub struct AssocTyDef<'db> {
     /// Whether the item is written `shape Step = ..`, giving an associated
     /// shape, rather than `type`.
     pub is_shape: bool,
+    pub generated: Option<GeneratedMemberSyntax<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -1578,6 +1633,7 @@ pub struct AssocConstDef<'db> {
     /// Only meaningful for consts in inherent `impl` blocks; consts in trait
     /// impls inherit their visibility from the trait.
     pub vis: Visibility,
+    pub generated: Option<GeneratedMemberSyntax<'db>>,
 }
 
 #[salsa::tracked]

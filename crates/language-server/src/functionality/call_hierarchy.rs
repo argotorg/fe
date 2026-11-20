@@ -56,18 +56,19 @@ pub async fn handle_prepare(
             .uri
             .clone(),
     );
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(
         params.text_document_position_params.position,
         file_text.as_str(),
     );
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
@@ -80,7 +81,7 @@ pub async fn handle_prepare(
         _ => return Ok(None),
     };
 
-    let item = func_to_hierarchy_item(&backend.db, func).map(|mut item| {
+    let item = func_to_hierarchy_item(&analysis_db, func).map(|mut item| {
         item.uri = backend.map_internal_uri_to_client(item.uri);
         item
     });
@@ -93,15 +94,16 @@ pub async fn handle_incoming_calls(
     params: CallHierarchyIncomingCallsParams,
 ) -> Result<Option<Vec<CallHierarchyIncomingCall>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.item.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
@@ -114,12 +116,12 @@ pub async fn handle_incoming_calls(
         _ => return Ok(None),
     };
 
-    let callers = find_incoming_calls(&backend.db, target_func, top_mod);
+    let callers = find_incoming_calls(&analysis_db, target_func, top_mod);
 
     let items: Vec<_> = callers
         .into_iter()
         .filter_map(|(caller, ranges)| {
-            let item = func_to_hierarchy_item(&backend.db, caller)?;
+            let item = func_to_hierarchy_item(&analysis_db, caller)?;
             let mut item = item;
             item.uri = backend.map_internal_uri_to_client(item.uri);
             Some(CallHierarchyIncomingCall {
@@ -194,15 +196,16 @@ pub async fn handle_outgoing_calls(
     params: CallHierarchyOutgoingCallsParams,
 ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.item.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &url) else {
+    let analysis_db = backend.analysis_db_for_url(&url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.item.selection_range.start, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = top_mod.target_at(&backend.db, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = top_mod.target_at(&analysis_db, cursor);
     let Some(target) = resolution.first() else {
         return Ok(None);
     };
@@ -215,12 +218,12 @@ pub async fn handle_outgoing_calls(
         _ => return Ok(None),
     };
 
-    let targets = find_outgoing_calls(&backend.db, source_func);
+    let targets = find_outgoing_calls(&analysis_db, source_func);
 
     let items: Vec<_> = targets
         .into_iter()
         .filter_map(|(callee, ranges)| {
-            let item = func_to_hierarchy_item(&backend.db, callee)?;
+            let item = func_to_hierarchy_item(&analysis_db, callee)?;
             let mut item = item;
             item.uri = backend.map_internal_uri_to_client(item.uri);
             Some(CallHierarchyOutgoingCall {

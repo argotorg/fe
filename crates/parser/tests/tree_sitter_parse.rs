@@ -656,6 +656,122 @@ fn tree_sitter_agrees_on_where_clauses_and_function_bodies() {
 }
 
 #[test]
+fn tree_sitter_agrees_on_bounded_native_derive_surface() {
+    let mut parser = new_parser();
+    for source in [
+        include_str!("../../../ingots/core/src/derive.fe"),
+        "impl Score for Pair with (Fields)\nimpl Score for Pair as Zero with (mod_::Provider)\n",
+        "impl Score for Pair with (Provider<u256>)\n",
+        "pub impl Score for Pair as Chosen with (Provider)\n",
+        "trait Constraint {}\ntrait Holder<T: Constraint> {}\n",
+        "impl Score for Pair as Ordinary where true { fn score() -> usize { 7 } }\n",
+    ] {
+        let (_, compiler_errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(compiler_errors.is_empty(), "{compiler_errors:?}\n{source}");
+        assert!(parse_errors(&mut parser, source).is_empty(), "{source}");
+    }
+    for source in [
+        "impl Score for Pair with ()\n",
+        "impl Score for Pair with (Provider) where true {}\n",
+    ] {
+        let (_, compiler_errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(!compiler_errors.is_empty(), "{source}");
+        assert!(!parse_errors(&mut parser, source).is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn tree_sitter_agrees_on_basic_quotation_and_contextual_quote_names() {
+    use fe_parser::{SyntaxKind, SyntaxNode};
+    let mut parser = new_parser();
+    for (source, expected_quotes) in [
+        (
+            "const fn make() { let n = 2\n quote { const fn count() -> usize { ${n} } } }",
+            1,
+        ),
+        ("const fn make() { quote   { fn f() {} } }", 1),
+        ("fn ordinary() { let quote = 41\n quote + 1 }", 0),
+        ("fn ordinary() { quote(1, 2) }", 0),
+        ("fn ordinary() { let quote = 8\n quote / { 2 } }", 0),
+        ("fn ordinary() { quote(1) / { 2 } }", 0),
+        ("fn ordinary() { quote\n {} }", 0),
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let count = SyntaxNode::new_root(green)
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::QuoteExpr)
+            .count();
+        assert_eq!(count, expected_quotes, "{source}");
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let tree = parser.parse(source, None).unwrap();
+        let mut pending = vec![tree.root_node()];
+        let mut count = 0;
+        while let Some(node) = pending.pop() {
+            count += usize::from(node.kind() == "quote_expression");
+            if node.kind() == "quote" {
+                assert_eq!(
+                    node.utf8_text(source.as_bytes()).unwrap(),
+                    "quote",
+                    "{source}"
+                );
+            }
+            let mut cursor = node.walk();
+            pending.extend(node.children(&mut cursor));
+        }
+        assert_eq!(count, expected_quotes, "{source}");
+    }
+}
+
+#[test]
+fn tree_sitter_agrees_on_composed_quotation_and_enum_reflection_examples() {
+    let mut parser = new_parser();
+    for source in [
+        include_str!(
+            "../test_files/quotation/generic_struct_within_with_fold_fields_and_field_type_splice.fe"
+        ),
+        include_str!(
+            "../test_files/quotation/enum_eq_across_unit_tuple_record_and_generic_enums_with_hygienic_binders.fe"
+        ),
+        include_str!(
+            "../test_files/quotation/field_type_queries_and_abi_derive_helpers_evaluate_in_provider.fe"
+        ),
+        "const fn make() { quote(other) { impl ${record} { fn test(self) { ${body} } } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$ {ty}> { make() } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$\n{ty}> { make() } } }",
+        "const fn make() { quote { fn f() -> Wrapper<$// comment\n{ty}> { make() } } }",
+    ] {
+        let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{errors:?}\n{source}");
+        let tree = parser.parse(source, None).unwrap();
+        let mut pending = vec![tree.root_node()];
+        while let Some(node) = pending.pop() {
+            if matches!(node.kind(), "quote" | "<") {
+                assert_eq!(
+                    node.utf8_text(source.as_bytes()).unwrap(),
+                    node.kind(),
+                    "{source}"
+                );
+            }
+            let mut cursor = node.walk();
+            pending.extend(node.children(&mut cursor));
+        }
+    }
+}
+
+#[test]
+fn tree_sitter_highlight_query_accepts_pattern_paths() {
+    tree_sitter::Query::new(
+        &tree_sitter_fe::LANGUAGE.into(),
+        include_str!("../../tree-sitter-fe/queries/highlights.scm"),
+    )
+    .expect("highlight query must match the generated editor node structure");
+}
+
+#[test]
 fn tree_sitter_parses_named_and_ordinary_impl_operands() {
     let source =
         "impl<T> Pick for T as Named {}\nfn f<T>() { with (Named<T>) { with (<T as Pick>) {} } }";
@@ -690,4 +806,191 @@ fn public_named_implementation_visibility_agrees_between_parsers() {
         "ordinary implementations have no public selection name"
     );
     assert!(!parse_errors(&mut parser, source).is_empty());
+}
+
+#[test]
+fn tree_sitter_agrees_on_pattern_only_quotation_bodies() {
+    let mut parser = new_parser();
+    for pattern in ["_", "mut x", "mut? x", "ref x", "var x", ".."] {
+        let source = format!("const fn make() {{ let p = quote {{ {pattern} }} }}");
+        let (_, errors) = parse_source_file(&source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, &source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let tree = parser.parse(&source, None).unwrap();
+        if matches!(pattern, "_" | "..") {
+            assert!(
+                tree.root_node().to_sexp().contains("quote_pattern"),
+                "{source}: {}",
+                tree.root_node().to_sexp()
+            );
+        }
+    }
+    let source = "const fn make() { let p = quote { _ => 7 } }";
+    let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(parse_errors(&mut parser, source).is_empty());
+    let tree = parser.parse(source, None).unwrap();
+    assert!(tree.root_node().to_sexp().contains("match_arm_list"));
+}
+
+#[test]
+fn tree_sitter_agrees_on_compound_pattern_quotation_bodies() {
+    use fe_parser::{SyntaxKind, SyntaxNode};
+    let mut parser = new_parser();
+    // A body is a pattern in both parsers when it holds a wildcard, a rest
+    // pattern or a nested `var` binding, and a block when it also reads as an
+    // expression.
+    for (body, is_pattern) in [
+        ("(_, mut y)", true),
+        ("Pair { value: mut a, .. }", true),
+        ("core::option::Option::Some((_, v))", true),
+        ("(.., x)", true),
+        ("(var a, b)", true),
+        ("Some(_) | None", true),
+        ("Pair { ${f}: w, .. }", true),
+        ("Some(v)", false),
+        ("(a, b)", false),
+        ("true | false", false),
+        ("|_| 1", false),
+        ("0..n", false),
+        ("match x { _ => 1 }", false),
+        ("var x = 1\n x", false),
+        ("decode_field<Sol, ${ty}, _, _>(mut d, input)", false),
+        ("pick<u256, _>(7, false)", false),
+    ] {
+        let source = format!("const fn make() {{ let p = quote {{ {body} }} }}");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let parser_pattern = SyntaxNode::new_root(green)
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::QuotePat);
+        let errors = parse_errors(&mut parser, &source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let tree = parser.parse(&source, None).unwrap();
+        let sexp = tree.root_node().to_sexp();
+        let tree_pattern = sexp.contains("quote_pattern");
+        assert_eq!(
+            (parser_pattern, tree_pattern),
+            (is_pattern, is_pattern),
+            "{source}: {sexp}"
+        );
+    }
+}
+
+#[test]
+fn tree_sitter_agrees_on_reflected_declaration_names_and_trait_member_splices() {
+    let mut parser = new_parser();
+    for source in [
+        "const fn make() { quote { fn ${name}() -> u256 { 7 } } }",
+        "const fn make() { quote { const ${name}: u256 = 3\n impl Pair { const ${name}: u256 = 9 } } }",
+        "const fn make() { quote { fn generated() { trait Local { ${declaration} }\n impl Local for Pair { ${definition} } } } }",
+        "const fn make() { quote { fn generated() { trait Local { const ${name}: u256 }\n impl Local for Pair { const ${name}: u256 = 5 } } } }",
+    ] {
+        let (_, errors) = parse_source_file(source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+    }
+}
+
+#[test]
+fn tree_sitter_agrees_on_inherent_and_trait_provider_headers() {
+    let mut parser = new_parser();
+    for valid in [
+        "impl Packet with (InspectAbi)",
+        "impl<T: Ord> Box2<T> with (Within)",
+        "impl<T> Box2<T> with (Within) where T: Ord",
+        "impl<T> Box2<T> with (pkg::Within<T>) where T: Ord",
+        "impl Score for Packet with (InspectAbi)",
+        "impl<T> Score for Box2<T> with (Within) where T: Ord",
+        "pub impl<T> Score for Box2<T> as Ordered with (Within) where T: Ord",
+        "impl Packet with (InspectAbi)\nimpl Score for Packet {}\nfn run() { for x in xs {} }",
+    ] {
+        let (_, errors) = parse_source_file(valid, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{valid}: {errors:?}");
+        let ts_errors = parse_errors(&mut parser, valid);
+        assert!(ts_errors.is_empty(), "{valid}: {ts_errors:?}");
+        let tree = parser.parse(valid, None).unwrap();
+        assert_eq!(
+            tree_sitter_item_shapes(&mut parser, valid),
+            parser_item_shapes(valid),
+            "{valid}: {}",
+            tree.root_node().to_sexp()
+        );
+    }
+
+    for invalid in [
+        "impl Packet with",
+        "impl Packet with InspectAbi",
+        "impl Packet with (InspectAbi",
+        "impl Packet with (InspectAbi, Other)",
+        "impl Packet with (InspectAbi) {}",
+        "impl Packet with (InspectAbi) where T: Ord {}",
+        "impl Score for Packet with (InspectAbi) {}",
+        "impl Score for Packet with (InspectAbi) where T: Ord {}",
+        "pub impl Packet with (InspectAbi)",
+        "unsafe impl Packet with (InspectAbi)",
+        "impl Packet as Named with (InspectAbi)",
+    ] {
+        let (_, errors) = parse_source_file(invalid, RecoveryMode::NoRecover);
+        assert!(
+            !errors.is_empty(),
+            "expected Rust parser error on {invalid:?}"
+        );
+        let ts_errors = parse_errors(&mut parser, invalid);
+        assert!(
+            !ts_errors.is_empty(),
+            "expected tree-sitter error on {invalid:?}"
+        );
+    }
+}
+
+/// A provider header ends where its line ends. The compiler's parser refuses
+/// a `;` after it, as after any item, and the editor grammar refuses it too.
+#[test]
+fn tree_sitter_and_the_parser_refuse_a_semicolon_after_a_provider_header() {
+    let mut parser = new_parser();
+    for invalid in [
+        "impl Packet with (InspectAbi);",
+        "impl<T> Box2<T> with (Within) where T: Ord;",
+        "impl Score for Packet with (InspectAbi);",
+        "pub impl<T> Score for Box2<T> as Ordered with (Within) where T: Ord;",
+        "impl Packet with (InspectAbi);\nfn run() {}",
+    ] {
+        let (_, errors) = parse_source_file(invalid, RecoveryMode::NoRecover);
+        assert!(
+            !errors.is_empty(),
+            "expected Rust parser error on {invalid:?}"
+        );
+        let ts_errors = parse_errors(&mut parser, invalid);
+        assert!(
+            !ts_errors.is_empty(),
+            "expected tree-sitter error on {invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn tree_sitter_agrees_on_a_quoted_const_predicate_that_starts_with_a_splice() {
+    let mut parser = new_parser();
+    for body in [
+        "where ${n} > 0",
+        "where ${n} > 0, ${t}: Copy",
+        "where ${w}",
+        "where ${t}: Copy",
+    ] {
+        let source = format!("const fn pred() {{ quote {{ {body} }} }}");
+        let (_, errors) = parse_source_file(&source, RecoveryMode::NoRecover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let errors = parse_errors(&mut parser, &source);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+    }
+}
+
+#[test]
+fn tree_sitter_parses_an_associated_shape_in_a_quotation() {
+    let mut parser = new_parser();
+    let source = "const fn members() -> u256 {\n    let code = quote {\n        shape Step = (own usize, D::Step)\n        fn at(self) -> u256 { 0 }\n    }\n    0\n}\n";
+    assert_eq!(parse_errors(&mut parser, source), Vec::<String>::new());
 }

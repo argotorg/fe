@@ -5,6 +5,7 @@
 //! resolved, typed expressions after substitution, without evaluating
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::name_resolution::{
     method_selection::{MethodCandidate, select_method_candidate},
     resolve_path_with_minter,
@@ -277,6 +278,11 @@ pub(super) enum Discharge {
     Fails(RequirementFailure),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub(super) struct DischargedRequirement {
+    pub(super) outcome: Discharge,
+}
+
 /// Whether a predicate can be discharged.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(super) enum FormationStatus<'db> {
@@ -378,8 +384,9 @@ pub(super) fn check_predicate_formation<'db>(
     // A condition the parser could not read has no expression to check or
     // evaluate. The parser reported it, at its position.
     if matches!(body.expr(db).data(db, body), Partial::Absent) {
+        let (diags, _) = infer_body(db, owner);
         return PredicateFormation {
-            diags: infer_body(db, owner).0.clone(),
+            diags: diags.clone(),
             status: FormationStatus::IllFormed,
         };
     }
@@ -541,6 +548,352 @@ fn adt_declaration<'db>(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroundBoundAdmissionCause {
+    UnsupportedInput,
+    UnsupportedConditions,
+    ConditionsNotAdmitted,
+    NotProven,
+    Incomplete,
+}
+
+/// Validate declaration requirements of the proof already selected by the
+/// evidence engine. This never selects an implementation or replaces a proof.
+///
+/// With `header_premises`, the proof is stated under a derive header's own
+/// premises. A requirement proved by one of those premises is admitted as that
+/// premise, at the root of the proof and inside the conditions of an
+/// implementation that proves it, because ordinary implementation selection
+/// proves it again for each instance where the generated implementation is used.
+pub(crate) fn retained_bound_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: crate::analysis::ty::evidence::EvidenceId<'db>,
+    goal: TraitInstId<'db>,
+    origin: ScopeId<'db>,
+    span: DynLazySpan<'db>,
+    header_premises: bool,
+) -> Result<(), (GroundBoundAdmissionCause, Vec<FuncBodyDiag<'db>>)> {
+    use crate::analysis::ty::{evidence::Evidence, trait_def::ImplementorOrigin};
+    if header_premises && matches!(proof.data(db), Evidence::Assumption(_)) {
+        return Ok(());
+    }
+    let mut declarations = FxHashSet::default();
+    for &argument in goal
+        .args(db)
+        .iter()
+        .chain(goal.assoc_type_bindings(db).values())
+    {
+        // A nominal type that only the conditions of a proof reach is admitted
+        // at its declaration here, before any provider runs, as
+        // `admit_type_application` admits the types that a written
+        // application names.
+        if !argument.has_param(db) {
+            visit_type_applications(db, argument, &mut |application| {
+                if let Some(declaration) = adt_declaration(db, application)
+                    && declarations.insert(declaration)
+                {
+                    let adt = application.adt_def(db).expect("nominal application");
+                    admit_adt_declaration(db, adt.adt_ref(db)).map_err(|error| {
+                        (
+                            GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                            error.diagnostics,
+                        )
+                    })?;
+                }
+                Ok(())
+            })?;
+        }
+        if !argument.has_param(db)
+            && let Some(unmet) =
+                check_type_requirements(db, argument, origin, &FxHashSet::default())
+        {
+            return Err((
+                GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                vec![unmet_requirement_diag(
+                    span.clone(),
+                    unmet.predicate,
+                    unmet.failure,
+                    Some(unmet.ty),
+                )],
+            ));
+        }
+    }
+    // Provisional codec evidence must be completed at the shared instance boundary.
+    // It cannot establish admission or justify reconstructing a selected parent.
+    if matches!(proof.data(db), Evidence::DeferredSolCodec { .. }) {
+        return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
+    }
+    let Some(resolved) = proof.answering(db, goal) else {
+        return Err((GroundBoundAdmissionCause::UnsupportedInput, Vec::new()));
+    };
+    if let ImplementorOrigin::Hir(implementation) = resolved.selected().origin(db) {
+        let diagnostics =
+            check_where_const_predicates(db, WhereClauseOwner::ImplTrait(implementation));
+        if !diagnostics.is_empty() {
+            return Err((
+                GroundBoundAdmissionCause::ConditionsNotAdmitted,
+                diagnostics,
+            ));
+        }
+    }
+    if let Evidence::Impl { conds, .. } = proof.data(db) {
+        let conditions = resolved.instantiated_constraints(db);
+        if conditions.list(db).len() != conds.len() {
+            return Err((GroundBoundAdmissionCause::Incomplete, Vec::new()));
+        }
+        for (&condition, &proof) in conditions.list(db).iter().zip(conds) {
+            retained_bound_requirements(
+                db,
+                proof,
+                condition,
+                origin,
+                span.clone(),
+                header_premises,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Why a ground application could not enter a compiler client. The original
+/// ordinary diagnostics remain available; a category is not a proof receipt.
+#[derive(Debug)]
+pub enum GroundTypeAdmissionKind<'db> {
+    UnsupportedInput,
+    Declaration,
+    Requirement,
+    Bound {
+        goal: TraitInstId<'db>,
+        cause: GroundBoundAdmissionCause,
+    },
+}
+
+#[derive(Debug)]
+pub struct GroundTypeAdmissionError<'db> {
+    pub kind: GroundTypeAdmissionKind<'db>,
+    pub diagnostics: Vec<FuncBodyDiag<'db>>,
+}
+
+impl<'db> GroundTypeAdmissionError<'db> {
+    pub fn vouchers(&self) -> Vec<Box<dyn crate::analysis::diagnostics::DiagnosticVoucher + 'db>> {
+        self.diagnostics
+            .iter()
+            .map(FuncBodyDiag::to_voucher)
+            .collect()
+    }
+
+    pub fn description(&self) -> &'static str {
+        use GroundBoundAdmissionCause as E;
+        match &self.kind {
+            GroundTypeAdmissionKind::UnsupportedInput => "type is not a fully ground valid type",
+            GroundTypeAdmissionKind::Declaration => "declaration is not admitted",
+            GroundTypeAdmissionKind::Requirement => "type requirement is not admitted",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::UnsupportedConditions,
+                ..
+            } => "bound has unsupported conditional nominal requirements",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::Incomplete,
+                ..
+            } => "bound proof is incomplete or ambiguous",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::ConditionsNotAdmitted,
+                ..
+            } => "bound declaration conditions are not admitted",
+            GroundTypeAdmissionKind::Bound {
+                cause: E::NotProven,
+                ..
+            } => "bound is not proven",
+            GroundTypeAdmissionKind::Bound { .. } => {
+                "bound application is unsupported or unresolved"
+            }
+        }
+    }
+}
+
+/// Admit a nominal struct or enum declaration before a compiler client
+/// executes. Checks ordinary declaration diagnostics, layout cycles, ground
+/// const where-predicates, and written-type requirements of the declaration.
+pub fn admit_adt_declaration<'db>(
+    db: &'db dyn HirAnalysisDb,
+    adt_ref: crate::analysis::ty::adt_def::AdtRef<'db>,
+) -> Result<(), GroundTypeAdmissionError<'db>> {
+    use crate::semantic::diagnostics::Diagnosable;
+    let declaration = match adt_ref {
+        crate::analysis::ty::adt_def::AdtRef::Struct(record) => WhereClauseOwner::Struct(record),
+        crate::analysis::ty::adt_def::AdtRef::Enum(enum_) => WhereClauseOwner::Enum(enum_),
+    };
+    let adt = adt_ref.as_adt(db);
+    let mut diagnostics: Vec<FuncBodyDiag<'db>> = adt_ref
+        .diags(db)
+        .into_iter()
+        .map(FuncBodyDiag::from)
+        .collect();
+    if let Some(cycle) = crate::analysis::ty::adt_cycle_diagnostic(db, adt) {
+        diagnostics.push(TyDiagCollection::from(cycle).into());
+    }
+    diagnostics.extend(check_where_const_predicates(db, declaration));
+    diagnostics.extend(written_type_check(db, declaration.into()).iter().cloned());
+    if !diagnostics.is_empty() {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Declaration,
+            diagnostics,
+        });
+    }
+    Ok(())
+}
+
+/// Admit a fully ground type at an authored application before a compiler
+/// client executes. Initial bound proof has no target/self premises. Reuses
+/// ordinary declaration and use diagnostics; it neither proves the generated
+/// trait impl nor introduces a new proof or field-graph policy.
+pub fn admit_ground_type_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    origin: ItemKind<'db>,
+    span: DynLazySpan<'db>,
+) -> Result<(), GroundTypeAdmissionError<'db>> {
+    admit_type_application(db, ty, origin, span, None)
+}
+
+/// Admit the target of an explicit derive header that declares binders, before
+/// its provider executes: the checks of a ground application, under the
+/// header's own premises. A requirement proved by a premise the header states
+/// is admitted as that premise, because ordinary implementation selection
+/// proves it again for each instance where the generated implementation is
+/// used. Constant requirements over the binders are likewise checked there.
+pub fn admit_header_type_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    header: ItemKind<'db>,
+    span: DynLazySpan<'db>,
+) -> Result<(), GroundTypeAdmissionError<'db>> {
+    admit_type_application(db, ty, header, span, Some(header))
+}
+
+fn admit_type_application<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    origin: ItemKind<'db>,
+    span: DynLazySpan<'db>,
+    header: Option<ItemKind<'db>>,
+) -> Result<(), GroundTypeAdmissionError<'db>> {
+    use crate::analysis::ty::trait_resolution::{
+        TraitSolveCx, WellFormedness, check_ty_wf, constraint::ty_constraints,
+    };
+    let ground = crate::analysis::ty::const_ty::ty_is_fully_ground(db, ty);
+    let admissible = ground
+        || header.is_some_and(|header| crate::core::meta::ground_over_header(db, ty, header));
+    if !ty.is_star_kind(db) || ty.has_invalid(db) || !admissible {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::UnsupportedInput,
+            diagnostics: Vec::new(),
+        });
+    }
+    // A header's target is proved under the header's own premises: its
+    // binders and requirements, as a handwritten implementation's would be.
+    let context = TraitSolveCx::new(db, origin.scope(), Tier::All);
+    let context = match header.and_then(crate::hir_def::GenericParamOwner::from_item_opt) {
+        Some(owner) => context.with_assumptions(
+            crate::analysis::ty::trait_resolution::constraint::collect_constraints(db, owner)
+                .instantiate_identity(),
+        ),
+        None => context,
+    };
+    let mut declarations = FxHashSet::default();
+    visit_type_applications(db, ty, &mut |application| {
+        if let Some(declaration) = adt_declaration(db, application)
+            && declarations.insert(declaration)
+        {
+            let adt = application.adt_def(db).expect("nominal application");
+            admit_adt_declaration(db, adt.adt_ref(db))?;
+        }
+        for &bound in ty_constraints(db, application).list(db) {
+            let goal = bound.normalize(db, origin.scope(), context.assumptions());
+            let admitted = crate::analysis::ty::evidence::prove(db, context, goal)
+                .ok_or((GroundBoundAdmissionCause::NotProven, Vec::new()))
+                .and_then(|proof| {
+                    retained_bound_requirements(
+                        db,
+                        proof,
+                        goal,
+                        origin.scope(),
+                        span.clone(),
+                        header.is_some(),
+                    )
+                });
+            if let Err((cause, mut diagnostics)) = admitted {
+                if diagnostics.is_empty() {
+                    diagnostics.push(
+                        TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                            span: span.clone(),
+                            primary_goal: goal,
+                            unsat_subgoal: None,
+                            required_by: None,
+                        })
+                        .into(),
+                    );
+                }
+                return Err(GroundTypeAdmissionError {
+                    kind: GroundTypeAdmissionKind::Bound { goal, cause },
+                    diagnostics,
+                });
+            }
+        }
+        Ok(())
+    })?;
+    if let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, context, ty) {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics: vec![
+                TyDiagCollection::from(TraitConstraintDiag::TraitBoundNotSat {
+                    span: span.clone(),
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                })
+                .into(),
+            ],
+        });
+    }
+    // Existing written-position ownership includes nested anonymous constants
+    // and aliases. Ground declaration failures were already checked above.
+    let diagnostics = written_type_check(db, origin).clone();
+    if !diagnostics.is_empty() {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics,
+        });
+    }
+    if ground
+        && let Some(unmet) = check_type_requirements(db, ty, origin.scope(), &FxHashSet::default())
+    {
+        return Err(GroundTypeAdmissionError {
+            kind: GroundTypeAdmissionKind::Requirement,
+            diagnostics: vec![unmet_requirement_diag(
+                span,
+                unmet.predicate,
+                unmet.failure,
+                None,
+            )],
+        });
+    }
+    Ok(())
+}
+
+/// Shared postorder traversal of existing type applications. This follows
+/// type arguments only; ADT field-graph policy belongs to declaration checks.
+fn visit_type_applications<'db, E>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    visit: &mut impl FnMut(TyId<'db>) -> Result<(), E>,
+) -> Result<(), E> {
+    for &arg in ty.decompose_ty_app(db).1 {
+        visit_type_applications(db, arg, visit)?;
+    }
+    visit(ty)
+}
+
 /// The conditions of each fully applied record or enum in `ty`, instantiated
 /// with its arguments.
 fn type_conditions<'db>(
@@ -548,39 +901,40 @@ fn type_conditions<'db>(
     ty: TyId<'db>,
     conditions: &mut Vec<(Body<'db>, CompleteSubst<'db>)>,
 ) -> Result<(), SubstError<'db>> {
-    let (_, args) = ty.decompose_ty_app(db);
-    for &arg in args {
-        type_conditions(db, arg, conditions)?;
-    }
-    let Some(declaration) = adt_declaration(db, ty) else {
-        return Ok(());
-    };
-    let predicates = declaration.where_clause(db).const_predicates(db);
-    if predicates.is_empty() {
-        return Ok(());
-    }
-    let subst = requirement_subst(db, declaration, args)?;
-    conditions.extend(
-        predicates
-            .iter()
-            .map(|&predicate| (predicate, subst.clone())),
-    );
-    Ok(())
+    visit_type_applications(db, ty, &mut |ty| {
+        let (_, args) = ty.decompose_ty_app(db);
+        let Some(declaration) = adt_declaration(db, ty) else {
+            return Ok(());
+        };
+        let predicates = declaration.where_clause(db).const_predicates(db);
+        if predicates.is_empty() {
+            return Ok(());
+        }
+        let subst = requirement_subst(db, declaration, args)?;
+        conditions.extend(
+            predicates
+                .iter()
+                .map(|&predicate| (predicate, subst.clone())),
+        );
+        Ok(())
+    })
 }
 
 /// A condition of a record or enum in `ty`, if any.
 fn first_condition<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Body<'db>> {
-    ty.decompose_ty_app(db)
-        .1
-        .iter()
-        .find_map(|&arg| first_condition(db, arg))
-        .or_else(|| {
-            adt_declaration(db, ty)?
+    visit_type_applications(db, ty, &mut |ty| match adt_declaration(db, ty).and_then(
+        |declaration| {
+            declaration
                 .where_clause(db)
                 .const_predicates(db)
                 .first()
                 .copied()
-        })
+        },
+    ) {
+        Some(predicate) => Err(predicate),
+        None => Ok(()),
+    })
+    .err()
 }
 
 /// Checks the requirements of the types and callees that enter a typed body.
@@ -624,7 +978,7 @@ pub(super) fn check_body_requirements<'db>(
                 body.scope(),
                 typed.assumptions(),
             );
-            let cx = TraitSolveCx::new(db, body.scope())
+            let cx = TraitSolveCx::new(db, body.scope(), Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(typed.expr_choices(expr));
             if let Some(goal) = type_choice_read(db, deferred, cx) {
@@ -647,7 +1001,7 @@ pub(super) fn check_body_requirements<'db>(
         if let WrittenEntry::ConstBodies(bodies) = entry {
             for &(nested, expected) in bodies {
                 if let Some(choices) = typed.choices_in_scope(db, nested.scope()) {
-                    let cx = TraitSolveCx::new(db, nested.scope())
+                    let cx = TraitSolveCx::new(db, nested.scope(), Tier::All)
                         .with_assumptions(typed.assumptions())
                         .with_choices(Some(choices));
                     let ty = TyId::const_ty(
@@ -680,7 +1034,7 @@ pub(super) fn check_body_requirements<'db>(
                 written.scope,
                 typed.assumptions(),
             );
-            let cx = TraitSolveCx::new(db, written.scope)
+            let cx = TraitSolveCx::new(db, written.scope, Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
             if let Some(goal) = type_choice_read(db, deferred, cx) {
@@ -699,7 +1053,7 @@ pub(super) fn check_body_requirements<'db>(
         if typed.has_chosen_impls()
             && let Some(choices) = typed.choices_in_scope(db, nested.scope())
         {
-            let cx = TraitSolveCx::new(db, nested.scope())
+            let cx = TraitSolveCx::new(db, nested.scope(), Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
             let ty = TyId::const_ty(
@@ -770,6 +1124,8 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
                 _ => None,
             })
             .collect();
+        let written = written_applications(db, owner);
+        let check = RequirementCheck::default();
         Self {
             db,
             scope: owner.scope(),
@@ -777,9 +1133,9 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
             body,
             premise_owner: requirement_premise_owner(db, owner),
             direct_callees,
-            written: written_applications(db, owner),
+            written,
             entered: FxHashSet::default(),
-            check: RequirementCheck::default(),
+            check,
         }
     }
 
@@ -978,13 +1334,14 @@ impl<'a, 'db> BodyRequirements<'a, 'db> {
             .iter()
             .filter(|&&predicate| checked_at_uses(db, predicate))
         {
-            if let Discharge::Fails(failure) = discharge_requirement(
+            let discharged = discharge_requirement(
                 db,
                 WhereClauseOwner::Func(func),
                 predicate,
                 args.to_vec(),
                 premise_owner,
-            ) {
+            );
+            if let Discharge::Fails(failure) = discharged.outcome {
                 self.check
                     .unmet(expr.span(self.body).into(), predicate, failure);
             }
@@ -1072,7 +1429,8 @@ fn anon_const_position_check<'db>(
     if diags_allow_evaluation(db, diags) {
         let mut check = check_body_requirements(db, owner, typed);
         if typed.has_chosen_impls() {
-            let cx = TraitSolveCx::new(db, body.scope()).with_assumptions(typed.assumptions());
+            let cx = TraitSolveCx::new(db, body.scope(), Tier::All)
+                .with_assumptions(typed.assumptions());
             let ty = TyId::const_ty(
                 db,
                 crate::analysis::ty::const_ty::ConstTyId::from_body(db, body, Some(expected), None),
@@ -1089,17 +1447,32 @@ fn anon_const_position_check<'db>(
         }
         return check;
     }
-    // A lone path to a constant is read as that constant, not checked as a
-    // body, so its failures are reported where the constant is.
+    // A lone path to a constant is evaluated at its declaration. The
+    // declaration owns evaluation failures, but cannot report whether the
+    // path is visible from this use.
     let position = body.scope().parent(db).unwrap_or(body.scope());
     let mut check = RequirementCheck::default();
-    if !crate::analysis::ty::ty_lower::const_body_names_a_constant(
+    if crate::analysis::ty::ty_lower::const_body_names_a_constant(
         db,
         body,
         position,
         typed.assumptions(),
-    ) && let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed)
-    {
+    ) {
+        check.diags.extend(
+            diags
+                .iter()
+                .filter(|diag| {
+                    matches!(
+                        diag,
+                        FuncBodyDiag::NameRes(PathResDiag::Invisible(..))
+                            | FuncBodyDiag::Ty(TyDiagCollection::PathRes(PathResDiag::Invisible(
+                                ..
+                            )))
+                    )
+                })
+                .cloned(),
+        );
+    } else if let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed) {
         check.diags = diags.clone();
     }
     check
@@ -1279,7 +1652,7 @@ fn check_path_application<'db>(
 /// lengths, explicit const arguments of calls, method calls and function
 /// values, and const arguments of the other path segments. Types written in
 /// the body are covered by `check_declared_type_requirements`.
-fn expression_const_bodies<'db>(
+pub(super) fn expression_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     body: Body<'db>,
@@ -1341,7 +1714,6 @@ fn expression_const_bodies<'db>(
                         *name,
                         body.scope(),
                         typed.assumptions(),
-                        None,
                     )
                     .ok()?,
                 )
@@ -1559,10 +1931,18 @@ fn check_entered_header<'db>(
         .filter(|&(carrier, ty)| carrier != expr || !is_function_ty(db, ty))
         .map(|(_, ty)| ty)
         .collect();
-    headers
+    let mut first_failure = None;
+    for header in headers
         .into_iter()
         .filter(|&header| !carried.iter().any(|&ty| ty_mentions(db, ty, header)))
-        .find_map(|header| check_type_requirements(db, header, scope, written))
+    {
+        if let Some(failure) = check_type_requirements(db, header, scope, written)
+            && first_failure.is_none()
+        {
+            first_failure = Some(failure);
+        }
+    }
+    first_failure
 }
 
 /// Whether `needle` occurs in `ty`.
@@ -1592,12 +1972,25 @@ fn check_type_requirements<'db>(
     scope: ScopeId<'db>,
     reported: &FxHashSet<TyId<'db>>,
 ) -> Option<TypeRequirementFailure<'db>> {
-    let (base, args) = ty.decompose_ty_app(db);
-    for &arg in args {
-        if let Some(failure) = check_type_requirements(db, arg, scope, reported) {
-            return Some(failure);
+    let mut first_failure = None;
+    let _ = visit_type_applications(db, ty, &mut |ty| {
+        if let Some(failure) = check_own_type_requirements(db, ty, scope, reported)
+            && first_failure.is_none()
+        {
+            first_failure = Some(failure);
         }
-    }
+        Ok::<(), ()>(())
+    });
+    first_failure
+}
+
+fn check_own_type_requirements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: ScopeId<'db>,
+    reported: &FxHashSet<TyId<'db>>,
+) -> Option<TypeRequirementFailure<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
     if reported.contains(&ty) {
         return None;
     }
@@ -1632,35 +2025,43 @@ fn check_type_requirements<'db>(
         return None;
     }
     let caller = premise_owner_in_scope(db, scope);
-    predicates
+    let mut first_failure = None;
+    for &predicate in predicates
         .iter()
         .filter(|&&predicate| checked_at_uses(db, predicate))
-        .find_map(|&predicate| {
-            match discharge_requirement(db, declaration, predicate, args.to_vec(), caller) {
-                Discharge::Holds => None,
-                Discharge::Fails(failure) => Some(TypeRequirementFailure {
-                    ty,
-                    predicate,
-                    failure,
-                }),
-            }
-        })
+    {
+        let discharged = discharge_requirement(db, declaration, predicate, args.to_vec(), caller);
+        if first_failure.is_none()
+            && let Discharge::Fails(failure) = discharged.outcome
+        {
+            first_failure = Some(TypeRequirementFailure {
+                ty,
+                predicate,
+                failure,
+            });
+        }
+    }
+    first_failure
 }
 
-#[salsa::tracked(returns(copy), cycle_initial=requirement_cycle_initial)]
+#[salsa::tracked(cycle_initial=requirement_cycle_initial)]
 fn discharge_requirement<'db>(
     db: &'db dyn HirAnalysisDb,
     declaration: WhereClauseOwner<'db>,
     predicate: Body<'db>,
     args: Vec<TyId<'db>>,
     caller: Option<GenericParamOwner<'db>>,
-) -> Discharge {
-    let typed = match &check_predicate_formation(db, predicate).status {
+) -> DischargedRequirement {
+    let formation = check_predicate_formation(db, predicate);
+    let finish = |outcome| DischargedRequirement { outcome };
+    let typed = match &formation.status {
         FormationStatus::WellFormed(typed) => typed,
         FormationStatus::IllFormed => {
-            return Discharge::Fails(RequirementFailure::NotEstablished);
+            return finish(Discharge::Fails(RequirementFailure::NotEstablished));
         }
-        FormationStatus::Recursive => return Discharge::Fails(RequirementFailure::Recursive),
+        FormationStatus::Recursive => {
+            return finish(Discharge::Fails(RequirementFailure::Recursive));
+        }
     };
     let not_instantiable = Discharge::Fails(RequirementFailure::NotInstantiable);
     // The use's arguments name the caller's parameters as its body and
@@ -1670,19 +2071,19 @@ fn discharge_requirement<'db>(
     let args = match caller {
         Some(caller) => match caller_args(db, caller, args) {
             Ok(args) => args,
-            Err(_) => return not_instantiable,
+            Err(_) => return finish(not_instantiable),
         },
         None => args,
     };
     let Ok(subst) = requirement_subst(db, declaration, &args) else {
-        return not_instantiable;
+        return finish(not_instantiable);
     };
     // The use leaves the predicate generic when an argument for one of the
     // parameters it mentions still mentions a parameter.
     let mut symbolic = false;
     for &param in predicate_params(db, predicate) {
         let Ok(arg) = substitute_complete(db, param, &subst) else {
-            return not_instantiable;
+            return finish(not_instantiable);
         };
         symbolic |= arg.has_param(db);
     }
@@ -1701,42 +2102,45 @@ fn discharge_requirement<'db>(
             );
             let subst = GenericSubst::for_body_owner(db, owner, use_args);
             match condition_outcome_in(db, owner, subst, impl_env) {
-                ConditionOutcome::True => return Discharge::Holds,
-                ConditionOutcome::False => return Discharge::Fails(RequirementFailure::False),
+                ConditionOutcome::True => return finish(Discharge::Holds),
+                ConditionOutcome::False => {
+                    return finish(Discharge::Fails(RequirementFailure::False));
+                }
                 ConditionOutcome::NotBool
                 | ConditionOutcome::Blocked(_)
                 | ConditionOutcome::Failed(_) => {}
             }
         }
         let Ok(key) = predicate_key(db, predicate, typed, &subst) else {
-            return not_instantiable;
+            return finish(not_instantiable);
         };
         if let (Some(key), Some(caller)) = (&key, caller) {
             let Ok(premises) = caller_premises(db, caller) else {
-                return not_instantiable;
+                return finish(not_instantiable);
             };
             for (premise, premise_subst) in premises {
-                let Some(premise_typed) = check_predicate_formation(db, premise).well_formed()
-                else {
+                let premise_formation = check_predicate_formation(db, premise);
+                let Some(premise_typed) = premise_formation.well_formed() else {
                     continue;
                 };
                 let Ok(premise_key) = predicate_key(db, premise, premise_typed, &premise_subst)
                 else {
-                    return not_instantiable;
+                    return finish(not_instantiable);
                 };
                 if premise_key.as_ref() == Some(key) {
-                    return Discharge::Holds;
+                    return finish(Discharge::Holds);
                 }
             }
         }
-        return Discharge::Fails(if key.is_some() {
+        return finish(Discharge::Fails(if key.is_some() {
             RequirementFailure::NoMatchingPremise
         } else {
             RequirementFailure::NotForwardable
-        });
+        }));
     }
     let owner = BodyOwner::const_predicate(db, predicate);
-    match condition_outcome(db, owner, GenericSubst::for_body_owner(db, owner, args)) {
+    let subst = GenericSubst::for_body_owner(db, owner, args);
+    let outcome = match condition_outcome(db, owner, subst) {
         ConditionOutcome::True => Discharge::Holds,
         ConditionOutcome::False => Discharge::Fails(RequirementFailure::False),
         ConditionOutcome::NotBool | ConditionOutcome::Blocked(_) => {
@@ -1745,7 +2149,8 @@ fn discharge_requirement<'db>(
         ConditionOutcome::Failed(cause) => {
             Discharge::Fails(RequirementFailure::from_evaluation(&cause))
         }
-    }
+    };
+    finish(outcome)
 }
 
 // A requirement reached again while it is being discharged depends on itself.
@@ -1756,8 +2161,10 @@ fn requirement_cycle_initial<'db>(
     _predicate: Body<'db>,
     _args: Vec<TyId<'db>>,
     _caller: Option<GenericParamOwner<'db>>,
-) -> Discharge {
-    Discharge::Fails(RequirementFailure::Recursive)
+) -> DischargedRequirement {
+    DischargedRequirement {
+        outcome: Discharge::Fails(RequirementFailure::Recursive),
+    }
 }
 
 // A predicate reached again while its formation is checked depends on
@@ -1883,6 +2290,23 @@ struct WrittenTypeRegion<'db> {
 /// discharged; `written_type_check` discharges.
 fn written_types<'db>(db: &'db dyn HirAnalysisDb, item: ItemKind<'db>) -> &'db [WrittenEntry<'db>] {
     written_types_query(db, WrittenTypeRegion::new(db, item))
+}
+
+pub(crate) fn written_const_bodies_of<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> Vec<(Body<'db>, TyId<'db>)> {
+    let mut bodies = Vec::new();
+    for entry in written_types(db, item) {
+        if let WrittenEntry::ConstBodies(found) = entry {
+            for &(body, expected) in found {
+                if !bodies.contains(&(body, expected)) {
+                    bodies.push((body, expected));
+                }
+            }
+        }
+    }
+    bodies
 }
 
 #[salsa::tracked]
@@ -2149,7 +2573,7 @@ fn written_type_check_query<'db>(
                 if written.dropped && !ill_formed[written.nested_from..].contains(&true) =>
             {
                 written.lowered.is_some_and(|ty| {
-                    let solve_cx = TraitSolveCx::new(db, written.scope)
+                    let solve_cx = TraitSolveCx::new(db, written.scope, Tier::All)
                         .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
                     let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty)
                     else {
@@ -2212,7 +2636,8 @@ fn written_type_check_query<'db>(
                         written.scope,
                         assumptions,
                     );
-                    let cx = TraitSolveCx::new(db, written.scope).with_assumptions(assumptions);
+                    let cx = TraitSolveCx::new(db, written.scope, Tier::All)
+                        .with_assumptions(assumptions);
                     if let Some(goal) = type_choice_read(db, deferred, cx) {
                         diags.push(
                             BodyDiag::ChosenTypeRead {
@@ -2356,6 +2781,7 @@ fn written_const_args<'db>(
 /// Until type normalization consumes evidence, a written type cannot request
 /// a lexical dictionary. Deferred type constants retain the checked uses and
 /// substitutions needed here, including aliases, without evaluating source.
+///
 fn type_choice_read<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -2380,10 +2806,11 @@ fn type_choice_read<'db>(
             prove: impl FnOnce(&'db dyn HirAnalysisDb) -> ProofOutcome<'db>,
         ) {
             let db = self.db;
-            if self.found.is_none()
-                && cx.choices().is_some()
-                && prove(db).reads_named_choice(db, cx, goal)
-            {
+            if self.found.is_some() || cx.choices().is_none() {
+                return;
+            }
+            let outcome = prove(db);
+            if outcome.reads_named_choice(db, cx, goal) {
                 self.found = Some(goal);
             }
         }
@@ -2417,6 +2844,7 @@ fn type_choice_read<'db>(
                         typed.call_effect_args(expr).unwrap_or(&[]).to_vec(),
                     );
                     callable.record_bound_evidence(self.db, cx, &effect_args);
+                    let unavailable = ProofOutcome::Unavailable;
                     if let (CallableDef::Func(func), Some(proofs)) =
                         (callable.callable_def(), callable.bound_evidence())
                         && let Ok(subst) = CompleteSubst::for_owner(
@@ -2434,7 +2862,7 @@ fn type_choice_read<'db>(
                                 self.goal_in(cx, goal, |db| {
                                     proofs
                                         .get(db, index)
-                                        .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+                                        .map_or(unavailable, ProofOutcome::Proven)
                                 });
                             }
                         }

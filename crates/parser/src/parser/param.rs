@@ -709,6 +709,16 @@ impl super::Parse for WhereClauseScope {
         loop {
             parser.set_newline_as_trivia(true);
             match parser.current_kind() {
+                // `where ${w}` splices predicates; `where ${t}: Tr` bounds a type.
+                // A splice that an expression continues, as in `where ${n} > 0`,
+                // starts a condition.
+                Some(SyntaxKind::Dollar)
+                    if !parser.dry_run(|p| {
+                        parse_type(p, None).is_ok() && p.current_kind() == Some(SyntaxKind::Colon)
+                    }) && splice_ends_predicate(parser) =>
+                {
+                    parser.parse(super::expr_atom::QuoteHoleScope::default())?;
+                }
                 Some(SyntaxKind::LBrace) if self.brace_opens_predicate(parser, pred_count == 0) => {
                     parser.parse(WhereConstPredicateScope::default())?;
                 }
@@ -809,6 +819,27 @@ fn skip_braces<S: TokenStream>(parser: &mut Parser<S>) -> bool {
         }
     }
     false
+}
+
+/// Whether the splice `${..}` at the current token is a whole predicate list
+/// and not the start of a condition. Only a `,`, a line break, a `{` or `}`,
+/// or the end of the input follows a list: `where ${w}` splices predicates,
+/// and `where ${n} > 0` is a condition. A splice that does not parse is left to
+/// the rule for a list, which reports it.
+fn splice_ends_predicate<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| {
+        p.parse(super::expr_atom::QuoteHoleScope::default())
+            .is_err()
+            || matches!(
+                p.current_kind_same_line(),
+                None | Some(
+                    SyntaxKind::Comma
+                        | SyntaxKind::Newline
+                        | SyntaxKind::LBrace
+                        | SyntaxKind::RBrace
+                )
+            )
+    })
 }
 
 /// Whether a `where` predicate can start with `kind`: a type bound starts

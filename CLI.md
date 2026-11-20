@@ -660,6 +660,23 @@ ingot's code that reaches an `unsafe` block or `unsafe fn` body of an untrusted 
 reaches what it runs: the functions it calls, the `StateIndex::locate` of a collection it indexes,
 and the bodies of a contract it creates.
 
+Generated code belongs to the package that wrote its text, not to the package that asked for it. Unsafe
+code is accepted only if every package that contributed to it is trusted: the package whose text
+contains the `unsafe` block, and each package whose quotation placed the block into the code that
+runs by splicing a fragment. These packages form a chain, the writer first and the outermost placer
+last. The error names the first package of the chain that is not trusted and labels the block in
+the text of the package that wrote it.
+
+A call also reaches code that the compiler runs for it without a written call: the `Decode` and
+`Encode` implementations that the dispatcher of a contract applies to the arguments and the return
+value of a `recv` arm and to the arguments of `init`, and the `Drop` implementations that run where
+a value goes out of scope. The error is reported at the arm, or at the value that is dropped. A
+`#[test]` function that an untrusted package contributed to is a use of that code when `fe test`
+runs it, and is reported at the function. An `unsafe impl` with no function has nothing for a call
+to reach, so it is judged where it is declared, in the ingot being checked and in every package it
+depends on, whether or not anything uses it: it is refused if an untrusted package wrote it or
+placed it.
+
 ### Backend
 
 `--backend` selects the target to check for, as for `fe build`. Without it, the check uses the

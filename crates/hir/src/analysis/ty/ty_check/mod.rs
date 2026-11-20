@@ -1,7 +1,13 @@
 mod callable;
 mod const_requirements;
-pub(crate) use const_requirements::check_declared_type_requirements;
-pub use const_requirements::{EvaluationStop, RequirementFailure};
+pub use const_requirements::{
+    EvaluationStop, GroundBoundAdmissionCause, GroundTypeAdmissionError, GroundTypeAdmissionKind,
+    RequirementFailure, admit_adt_declaration, admit_ground_type_application,
+    admit_header_type_application,
+};
+pub(crate) use const_requirements::{
+    check_declared_type_requirements, retained_bound_requirements,
+};
 mod contract;
 mod effect_env;
 pub(crate) mod env;
@@ -11,6 +17,9 @@ mod pat;
 mod path;
 mod projection;
 pub(crate) use projection::constructed_variant;
+mod use_target;
+pub(crate) use use_target::target_at;
+pub use use_target::{UseTarget, item_target};
 mod stmt;
 
 pub use self::contract::{
@@ -23,6 +32,7 @@ pub use self::contract::{
 pub(crate) use self::contract::{contract_field_slot, eval_msg_variant_selector};
 pub(crate) use self::env::{func_declared_bounds, func_signature};
 pub use self::path::RecordLike;
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::adt_def::AdtRef;
@@ -38,7 +48,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{
-    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ModeMarker, Trait,
+    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ItemKind, ModeMarker, Trait,
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
@@ -134,7 +144,7 @@ use crate::analysis::ty::{
     ty_error::{
         collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
         emit_invalid_ty_error, normalization_limit_diag, path_arg_diags, path_generic_arg_diags,
-        qualified_path_wf_diags,
+        qualified_path_wf_diags_under_choices,
     },
 };
 use crate::analysis::{
@@ -159,7 +169,11 @@ pub fn check_func_body<'db>(
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let mut bodies = BodyOwner::func_bodies(db, func).map(|owner| check_body(db, owner));
     let (mut diags, typed) = bodies.next().expect("a function has a body");
-    for diag in bodies.flat_map(|(diags, _)| diags) {
+    let mut other_diags = Vec::new();
+    for (mode_diags, _) in bodies {
+        other_diags.extend(mode_diags);
+    }
+    for diag in other_diags {
         // An effect the `ref` body's call misses at `ref` and the `mut`
         // body's at `mut` is missing at `mut?`.
         if let FuncBodyDiag::Body(BodyDiag::MissingEffect {
@@ -406,17 +420,15 @@ pub fn check_generic_default_bodies<'db>(
     owner: GenericParamOwner<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let mut diags = Vec::new();
-    for view in owner.params(db) {
-        for checked in check_generic_default_body_types(db, owner, view.idx) {
-            diags.extend(checked.diagnostics.iter().cloned());
-            if checked.ctfe_ready {
-                diags.extend(const_body_ctfe_diags(
-                    db,
-                    checked.body,
-                    checked.expected,
-                    ConstUsePolicy::AllowDependent,
-                ));
-            }
+    for checked in generic_default_body_checks(db, owner) {
+        diags.extend(checked.diagnostics.iter().cloned());
+        if checked.ctfe_ready {
+            diags.extend(const_body_ctfe_diags(
+                db,
+                checked.body,
+                checked.expected,
+                ConstUsePolicy::AllowDependent,
+            ));
         }
     }
     diags
@@ -428,6 +440,17 @@ pub(crate) struct DefaultConstBodyCheck<'db> {
     pub(crate) expected: TyId<'db>,
     pub(crate) diagnostics: Vec<FuncBodyDiag<'db>>,
     pub(crate) ctfe_ready: bool,
+}
+
+/// Share the actual checked default bodies and their declared expected types
+/// with consumers of retained metadata. Do not rediscover defaults from syntax.
+fn generic_default_body_checks<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+) -> impl Iterator<Item = &'db DefaultConstBodyCheck<'db>> + 'db {
+    owner
+        .params(db)
+        .flat_map(move |view| check_generic_default_body_types(db, owner, view.idx).iter())
 }
 
 /// Name/type checking stays separate from const execution so structural
@@ -573,17 +596,57 @@ pub(crate) fn check_where_const_predicates<'db>(
     if predicates.is_empty() {
         return diags;
     }
-    let generic_declaration = match owner {
+    let generic_declaration = generic_declaration_of(db, owner);
+    if !const_predicates_supported(db, owner, generic_declaration) {
+        diags.extend(
+            predicates
+                .iter()
+                .map(|body| BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into()),
+        );
+        return diags;
+    }
+
+    for &body in &predicates {
+        let formation = const_requirements::check_predicate_formation(db, body);
+        if formation.well_formed().is_none() {
+            diags.extend(formation.diags.iter().cloned());
+            continue;
+        }
+        if predicate_awaits_uses(db, body, generic_declaration) {
+            continue;
+        }
+        let owner = BodyOwner::const_predicate(db, body);
+        let outcome = condition_outcome(db, owner, GenericSubst::none(db));
+        diags.extend(const_predicate_outcome_diag(db, body, outcome));
+    }
+    diags
+}
+
+/// The declaration whose generic parameters ordinary generic functions and
+/// ADTs keep their parameter-dependent predicates for.
+fn generic_declaration_of<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Option<GenericParamOwner<'db>> {
+    match owner {
         WhereClauseOwner::Func(func) if func.is_free_or_inherent(db) => {
             Some(GenericParamOwner::Func(func))
         }
         WhereClauseOwner::Struct(record) => Some(GenericParamOwner::Struct(record)),
         WhereClauseOwner::Enum(enum_) => Some(GenericParamOwner::Enum(enum_)),
         _ => None,
-    };
-    // Inherent method parameter lists include their impl's generic parameters.
-    // Requirement substitution reconciles their owners. Other generic contexts remain
-    // unsupported, including trait methods and nested generic declarations.
+    }
+}
+
+/// Whether the generic context of `owner` supports const predicates.
+/// Inherent method parameter lists include their impl's generic parameters.
+/// Requirement substitution reconciles their owners. Other generic contexts remain
+/// unsupported, including trait methods and nested generic declarations.
+fn const_predicates_supported<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+    generic_declaration: Option<GenericParamOwner<'db>>,
+) -> bool {
     let inherited_impl = match owner {
         WhereClauseOwner::Func(func) => func
             .scope()
@@ -599,35 +662,26 @@ pub(crate) fn check_where_const_predicates<'db>(
                 .is_none_or(|declaration| current != crate::hir_def::ItemKind::from(declaration))
             && Some(current) != inherited_impl
         {
-            diags.extend(
-                predicates.iter().map(|body| {
-                    BodyDiag::GenericConstPredicateUnsupported(body.span().into()).into()
-                }),
-            );
-            return diags;
+            return false;
         }
         item = current.scope().parent_item(db);
     }
+    true
+}
 
-    for &body in &predicates {
-        let formation = const_requirements::check_predicate_formation(db, body);
-        if formation.well_formed().is_none() {
-            diags.extend(formation.diags.iter().cloned());
-            continue;
-        }
-        if let Some(declaration) = generic_declaration
-            && !collect_generic_params(db, declaration)
-                .params(db)
-                .is_empty()
+/// Whether a predicate of a generic declaration is kept for substitution at
+/// the declaration's uses, rather than evaluated with the declaration.
+fn predicate_awaits_uses<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+    generic_declaration: Option<GenericParamOwner<'db>>,
+) -> bool {
+    generic_declaration.is_some_and(|declaration| {
+        !collect_generic_params(db, declaration)
+            .params(db)
+            .is_empty()
             && const_requirements::predicate_may_depend_on_params(db, body)
-        {
-            continue;
-        }
-        let owner = BodyOwner::const_predicate(db, body);
-        let outcome = condition_outcome(db, owner, GenericSubst::none(db));
-        diags.extend(const_predicate_outcome_diag(db, body, outcome));
-    }
-    diags
+    })
 }
 
 /// What a boolean compile-time condition evaluated to. Only `True` holds: a
@@ -843,13 +897,21 @@ pub(crate) fn effect_key_wf_diag<'db>(
     ))
 }
 
+/// The declaration-owned condition and expected type used both for checking
+/// and for recovering the checked body's retained preparation metadata.
+fn static_assert_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assert_: StaticAssert<'db>,
+) -> (Body<'db>, TyId<'db>) {
+    (assert_.condition(db), TyId::bool(db))
+}
+
 #[salsa::tracked]
 pub fn check_static_assert<'db>(
     db: &'db dyn HirAnalysisDb,
     assert_: StaticAssert<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let condition = assert_.condition(db);
-    let expected = TyId::bool(db);
+    let (condition, expected) = static_assert_body(db, assert_);
     let owner = BodyOwner::AnonConstBody {
         body: condition,
         expected,
@@ -980,6 +1042,154 @@ pub fn check_body<'db>(
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let CheckedBody { diags, typed, .. } = checked_body(db, owner);
     (diags, typed)
+}
+
+/// The bodies of `module` that checking its items checks: function bodies in
+/// every mode, constants, contract initializers and receive arms, and the
+/// anonymous constant bodies of associated constants, const predicates,
+/// generic defaults and static assertions. Both opening retention and
+/// generation preparation read bodies through this one enumeration.
+pub(crate) fn module_body_owners<'db>(
+    db: &'db dyn HirAnalysisDb,
+    module: crate::hir_def::TopLevelMod<'db>,
+) -> Vec<BodyOwner<'db>> {
+    let mut owners = Vec::new();
+    for &function in module.all_funcs(db) {
+        owners.extend(BodyOwner::func_bodies(db, function));
+    }
+    for item in module.all_items(db) {
+        if let ItemKind::Const(constant) = item {
+            owners.push(BodyOwner::Const(*constant));
+        }
+    }
+    for &contract in module.all_contracts(db) {
+        owners.push(BodyOwner::ContractInit { contract });
+        for (recv_idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
+            for arm_idx in 0..recv.arms.data(db).len() {
+                owners.push(BodyOwner::ContractRecvArm {
+                    contract,
+                    recv_idx: recv_idx as u32,
+                    arm_idx: arm_idx as u32,
+                });
+            }
+        }
+    }
+    for &implementation in module.all_impl_traits(db) {
+        let Some(implementor) = super::trait_lower::lower_impl_trait(db, implementation) else {
+            continue;
+        };
+        for constant in implementation.assoc_consts(db) {
+            let Some(body) = constant.value_body(db) else {
+                continue;
+            };
+            let expected = constant
+                .name(db)
+                .and_then(|name| implementor.trait_def(db).const_(db, name))
+                .and_then(|constant| constant.ty_binder(db))
+                .map(|binder| binder.instantiate(db, implementor.trait_(db).args(db)))
+                .or_else(|| constant.ty(db));
+            if let Some(expected) = expected {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
+    // Inherent associated constants use the same declared expected type as
+    // BodyAnalysisPass::run_on_module and check_anon_const_body.
+    for &implementation in module.all_impls(db) {
+        for constant in implementation.assoc_consts(db) {
+            if let (Some(body), Some(expected)) = (constant.value_body(db), constant.ty(db)) {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
+    for &trait_ in module.all_traits(db) {
+        for constant in trait_.assoc_consts(db) {
+            if let (Some(body), Some(expected)) = (constant.default_body(db), constant.ty(db)) {
+                owners.push(BodyOwner::AnonConstBody { body, expected });
+            }
+        }
+    }
+    for &item in module.all_items(db) {
+        owners.extend(BodyOwner::const_predicates_of(db, item));
+        if let Some(owner) = GenericParamOwner::from_item_opt(item) {
+            owners.extend(generic_default_body_checks(db, owner).map(|checked| {
+                BodyOwner::AnonConstBody {
+                    body: checked.body,
+                    expected: checked.expected,
+                }
+            }));
+        }
+        for (body, expected) in const_requirements::written_const_bodies_of(db, item) {
+            let anon = BodyOwner::AnonConstBody { body, expected };
+            if !owners.contains(&anon) {
+                owners.push(anon);
+            }
+        }
+    }
+    for &assert_ in module.all_static_asserts(db) {
+        let (body, expected) = static_assert_body(db, assert_);
+        owners.push(BodyOwner::AnonConstBody { body, expected });
+    }
+    let mut index = 0;
+    while index < owners.len() {
+        let owner = owners[index];
+        index += 1;
+        let Some(body) = owner.body(db) else {
+            continue;
+        };
+        for (nested, expected) in
+            const_requirements::written_const_bodies_of(db, ItemKind::Body(body))
+        {
+            let anon = BodyOwner::AnonConstBody {
+                body: nested,
+                expected,
+            };
+            if !owners.contains(&anon) {
+                owners.push(anon);
+            }
+        }
+        let typed = &infer_body(db, owner).1;
+        for (nested, expected) in
+            const_requirements::expression_const_bodies(db, owner, body, typed)
+        {
+            let anon = BodyOwner::AnonConstBody {
+                body: nested,
+                expected,
+            };
+            if !owners.contains(&anon) {
+                owners.push(anon);
+            }
+        }
+    }
+    owners
+}
+
+/// The diagnostics of `owner`'s checked body, requirement checks included. A
+/// closure is checked inline in its parent's body.
+pub(crate) fn checked_body_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    match owner {
+        BodyOwner::Func(func, _) => check_func_body(db, func).0.clone(),
+        BodyOwner::Const(const_) => check_const_body(db, const_).0.clone(),
+        BodyOwner::AnonConstBody { body, expected } => {
+            check_anon_const_body(db, body, expected).0.clone()
+        }
+        BodyOwner::ContractInit { contract } => {
+            contract::check_contract_init_body(db, contract).0.clone()
+        }
+        BodyOwner::ContractRecvArm {
+            contract,
+            recv_idx,
+            arm_idx,
+        } => contract::check_contract_recv_arm_body(db, contract, recv_idx, arm_idx)
+            .0
+            .clone(),
+        BodyOwner::Closure { def, .. } => BodyOwner::closure_parent(db, def)
+            .map(|parent| checked_body_diags(db, parent))
+            .unwrap_or_default(),
+    }
 }
 
 /// How the bindings of a pattern take what its source grants.
@@ -1161,7 +1371,7 @@ pub(crate) fn inference_met_lowering_cycle<'db>(
 /// recursive const definition would be an unrecoverable salsa cycle through
 /// body checking instead of converging to a `RecursiveConst` error in the
 /// eval queries.
-#[salsa::tracked]
+#[salsa::tracked(cycle_initial = check_const_value_cycle_initial)]
 pub fn check_const_value<'db>(
     db: &'db dyn HirAnalysisDb,
     const_: Const<'db>,
@@ -1177,6 +1387,21 @@ pub fn check_const_value<'db>(
     }
 
     const_body_ctfe_diags(db, body, const_.ty(db), ConstUsePolicy::RequireValue)
+}
+
+fn check_const_value_cycle_initial<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    const_: Const<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let span = const_
+        .body(db)
+        .to_opt()
+        .map(|body| body.span().into())
+        .unwrap_or_else(DynLazySpan::invalid);
+    vec![FuncBodyDiag::Ty(
+        TyLowerDiag::TypeLoweringCycle(span).into(),
+    )]
 }
 
 /// CTFE-validates an anonymous const body (a top-level `const` initializer or
@@ -1293,7 +1518,24 @@ fn const_body_ctfe_diags_with_context<'db>(
                     EvidenceList::none(db),
                 );
                 let semantic = SemanticInstance::new(db, key);
-                if reify_runtime_const_for_ty(db, semantic, expected, value).is_none() {
+                let has_meta_carrier =
+                    crate::core::meta::ty_contains_meta_carrier(db, expected).is_some();
+                let checked_metadata = has_meta_carrier
+                    && crate::core::meta::issued_metadata_leaves(db, value)
+                    && crate::analysis::semantic::sem_const_ty(db, value) == expected
+                    && crate::analysis::semantic::consts::verify_sem_const_shape(db, value).is_ok();
+                // A completely verified compile-time token is a known constant;
+                // it is intentionally never reified into a runtime seal value.
+                if has_meta_carrier && !checked_metadata {
+                    push_const_eval_diag(
+                        &mut diags,
+                        body,
+                        context,
+                        "compile-time metadata token must be compiler-issued",
+                    );
+                } else if !checked_metadata
+                    && reify_runtime_const_for_ty(db, semantic, expected, value).is_none()
+                {
                     push_const_eval_diag(
                         &mut diags,
                         body,
@@ -1484,6 +1726,7 @@ fn typed_body_for_bodyless_func<'db>(
         named_impl_operands: FxHashSet::default(),
         expr_choices: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
+        pat_const_refs: SecondaryMap::new(),
         value_path_refs: SecondaryMap::new(),
         semantic_expr_lowering: SecondaryMap::new(),
         record_init_lowering: SecondaryMap::new(),
@@ -1536,6 +1779,9 @@ pub struct TyChecker<'db> {
     ref_part_bindings: FxHashSet<PatId>,
     /// Names bound to a shape whole, which is reported where they bind.
     shape_bindings: FxHashSet<PatId>,
+    /// Bare pattern names that name a constant or unit variant, so bind
+    /// nothing.
+    matching_bare_pats: FxHashSet<PatId>,
     /// The missing effects of `mut?` calls at `ref`, reported once the calls'
     /// modes are final: the call, the effect's binding index in its callee,
     /// and the report.
@@ -1631,6 +1877,44 @@ impl<'db> TyChecker<'db> {
         let env = TyCheckEnv::new(db, owner)?;
         let expected = env.compute_expected_return();
         let mut checker = Self::new_internal(db, env, expected);
+        if let BodyOwner::Func(function, _) = owner
+            && !function.is_const(db)
+        {
+            for (index, ty) in function.arg_tys(db).iter().enumerate() {
+                let ty = normalize_ty(
+                    db,
+                    ty.instantiate_identity(),
+                    checker.env.scope(),
+                    checker.env.assumptions(),
+                );
+                if let Some(meta) = crate::core::meta::ty_contains_meta_carrier(db, ty) {
+                    checker.push_diag(BodyDiag::CompileTimePhase {
+                        primary: function.span().params().param(index).ty().into(),
+                        message: format!(
+                            "`{}` is compile-time-only in a runtime parameter",
+                            meta.pretty_print(db)
+                        ),
+                        label: BodyDiag::RUNTIME_CONTEXT_LABEL,
+                    });
+                }
+            }
+            let return_ty = normalize_ty(
+                db,
+                function.return_ty(db),
+                checker.env.scope(),
+                checker.env.assumptions(),
+            );
+            if let Some(meta) = crate::core::meta::ty_contains_meta_carrier(db, return_ty) {
+                checker.push_diag(BodyDiag::CompileTimePhase {
+                    primary: function.span().ret_ty().into(),
+                    message: format!(
+                        "`{}` is compile-time-only in a runtime return type",
+                        meta.pretty_print(db)
+                    ),
+                    label: BodyDiag::RUNTIME_CONTEXT_LABEL,
+                });
+            }
+        }
         checker.seed_effect_witnesses();
         Ok(checker)
     }
@@ -1800,7 +2084,8 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 idx,
                 &key,
-                TraitSolveCx::new(self.db, func.scope()).with_assumptions(self.env.assumptions()),
+                TraitSolveCx::new(self.db, func.scope(), Tier::All)
+                    .with_assumptions(self.env.assumptions()),
             ) {
                 self.push_diag(diag);
             } else if let Some(root_ty) = root_ty {
@@ -1811,7 +2096,7 @@ impl<'db> TyChecker<'db> {
                     ResolvedEffectKey::Trait(schema) => !matches!(
                         is_goal_satisfiable(
                             self.db,
-                            TraitSolveCx::new(self.db, func.scope()),
+                            TraitSolveCx::new(self.db, func.scope(), Tier::All),
                             instantiate_trait_self(
                                 self.db,
                                 schema.into_trait_inst(self.db),
@@ -1908,7 +2193,8 @@ impl<'db> TyChecker<'db> {
                     owner,
                     idx,
                     &key,
-                    TraitSolveCx::new(self.db, contract.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(self.db, contract.scope(), Tier::All)
+                        .with_assumptions(assumptions),
                 ) {
                     self.push_diag(diag);
                     continue;
@@ -1926,7 +2212,7 @@ impl<'db> TyChecker<'db> {
                         if matches!(
                             is_goal_satisfiable(
                                 self.db,
-                                TraitSolveCx::new(self.db, contract.scope()),
+                                TraitSolveCx::new(self.db, contract.scope(), Tier::All),
                                 trait_req
                             ),
                             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -2041,8 +2327,28 @@ impl<'db> TyChecker<'db> {
             }
         }
     }
-    fn finish(self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+    fn finish(mut self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
+        self.check_open_name_binders();
         TyCheckerFinalizer::new(self).finish()
+    }
+
+    /// Reports an open name of a spliced quote that lowering found bound only
+    /// by bare pattern names, each of which names a constant or unit variant.
+    fn check_open_name_binders(&mut self) {
+        let body = self.body();
+        for binders in &body.source_map(self.db).open_name_binders {
+            if let Some(&innermost) = binders.pats.first()
+                && binders
+                    .pats
+                    .iter()
+                    .all(|pat| self.matching_bare_pats.contains(pat))
+            {
+                self.push_diag(BodyDiag::QuotedOpenNameUnbound {
+                    primary: innermost.span(body).into(),
+                    name: binders.name.clone(),
+                });
+            }
+        }
     }
 
     pub(crate) fn snapshot_state(&mut self) -> TyCheckerSnapshot<'db> {
@@ -2418,7 +2724,7 @@ impl<'db> TyChecker<'db> {
             return TraitObligationOutcome::Discharged;
         }
 
-        let solve_cx = TraitSolveCx::new(db, scope)
+        let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
             .with_assumptions(assumptions)
             .with_choices(obligation.choices);
         let query = solve_cx.query(db, goal);
@@ -3139,6 +3445,7 @@ impl<'db> TyChecker<'db> {
             param_pattern_sites: FxHashMap::default(),
             ref_part_bindings: FxHashSet::default(),
             shape_bindings: FxHashSet::default(),
+            matching_bare_pats: FxHashSet::default(),
             missing_effects: Vec::new(),
             effect_providers: FxHashMap::default(),
             split_demand: None,
@@ -3184,7 +3491,14 @@ impl<'db> TyChecker<'db> {
         let annotated = arm
             .ret_ty
             .map(|hir_ty| self.lower_ty(hir_ty, arm_ret_span.clone(), true));
-        let variant_ret = contract::get_msg_variant_return_type(self.db, pat_ty, self.env.scope());
+        let variant_ret = crate::semantic::resolve_sol_abi_ty(
+            self.db,
+            self.env.scope(),
+            PredicateListId::empty_list(self.db),
+        )
+        .and_then(|abi| {
+            contract::get_msg_variant_return_type(self.db, pat_ty, abi, self.env.scope())
+        });
 
         let ret_ty = match (variant_ret, annotated) {
             (Some(var_ty), Some(annot_ty)) => {
@@ -3362,7 +3676,7 @@ impl<'db> TyChecker<'db> {
 
         // A qualified path resolves to a type that no longer mentions the
         // types written inside it, so check those where they are written.
-        for diag in qualified_path_wf_diags(
+        for diag in qualified_path_wf_diags_under_choices(
             self.db,
             self.env.scope(),
             hir_ty,
@@ -4058,7 +4372,7 @@ impl<'db> TyChecker<'db> {
                 let Some(LocalBinding::Local { .. }) = self.env.pat_binding(pat) else {
                     return;
                 };
-                if let Some(ident) = path.as_ident(self.db) {
+                if let Some(ident) = path.local_ident(self.db) {
                     let current = self.env.current_block_idx();
                     if self.env.get_block(current).lookup_var(ident).is_none() {
                         let binding = LocalBinding::local(
@@ -4215,15 +4529,18 @@ impl<'db> TyChecker<'db> {
         let scope = self.env.scope();
         let mut invisible = None;
         let mut applications = Vec::new();
-        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
-            applications.extend(const_requirements::constrained_applications(self.db, reso));
-            if invisible.is_some() {
-                return;
-            }
-            if !reso.is_visible_from(self.db, scope) {
-                invisible = Some((path, reso.name_span(self.db)));
-            }
-        };
+        let mut observe_segment =
+            |path: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+                applications.extend(const_requirements::constrained_applications(self.db, reso));
+                if invisible.is_some() {
+                    return;
+                }
+                if !quoted_visibility
+                    .unwrap_or_else(|| reso.is_segment_visible_from(self.db, path, scope))
+                {
+                    invisible = Some((path, reso.name_span(self.db)));
+                }
+            };
 
         let res = resolve_path_with_observer_and_minter(
             self.db,
@@ -4511,14 +4828,14 @@ impl<'db> ConstRef<'db> {
     /// Proves, in the use's context, the bounds the trait's default value
     /// body declares, instantiated for the use, as `declared_bound_evidence`
     /// records them. Return missing dictionaries when lexical selection requires
-    /// complete evidence, using the same validation as callable signatures.
+    /// complete evidence.
     pub(super) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
     ) -> Vec<TraitInstId<'db>> {
         let ConstRef::TraitConst { use_, evidence, .. } = self else {
-            return Vec::new();
+            return Default::default();
         };
         let trait_ = use_.inst().def(db);
         let (Some(body), Ok(subst)) = (
@@ -4527,7 +4844,7 @@ impl<'db> ConstRef<'db> {
                 .and_then(|constant| constant.default_body(db)),
             CompleteSubst::for_owner(db, trait_.into(), use_.inst().args(db).to_vec()),
         ) else {
-            return Vec::new();
+            return Default::default();
         };
         let declared = const_body_assumptions(db, body.scope());
         let signature = declared.extend_all_bounds(db);
@@ -4550,11 +4867,12 @@ impl<'db> ConstRef<'db> {
             ),
             entries: recorded,
         });
-        if choices.is_some() {
+        let missing = if choices.is_some() {
             recorded.missing_bound_goals(db, signature, &subst)
         } else {
             Vec::new()
-        }
+        };
+        missing
     }
 }
 
@@ -4744,6 +5062,7 @@ mod typed_body_tables {
         pub(super) expr_choices:
             SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
+        pub(super) pat_const_refs: SecondaryMap<PatId, Option<ConstRef<'db>>>,
         pub(super) value_path_refs: SecondaryMap<ExprId, Option<ValuePathRef<'db>>>,
         pub(super) semantic_expr_lowering: SecondaryMap<ExprId, Option<SemanticExprLowering<'db>>>,
         pub(super) record_init_lowering: SecondaryMap<ExprId, Option<RecordInitLowering<'db>>>,
@@ -5140,6 +5459,9 @@ impl<'db> TypedBody<'db> {
         for cref in self.tables.const_refs.values().flatten() {
             cref.visit_with(visitor);
         }
+        for cref in self.tables.pat_const_refs.values().flatten() {
+            cref.visit_with(visitor);
+        }
         for value_path in self.tables.value_path_refs.values().flatten() {
             value_path.visit_with(visitor);
         }
@@ -5212,6 +5534,10 @@ impl<'db> TyFoldable<'db> for TypedBody<'db> {
             .flatten()
             .for_each(|shape| *shape = shape.clone().fold_with(db, folder));
         this.const_refs
+            .values_mut()
+            .flatten()
+            .for_each(|cref| *cref = (*cref).fold_with(db, folder));
+        this.pat_const_refs
             .values_mut()
             .flatten()
             .for_each(|cref| *cref = (*cref).fold_with(db, folder));
@@ -5315,7 +5641,12 @@ impl<'db> TypedBody<'db> {
                 call.callable.bind_evidence(db, bound);
             }
         }
-        for const_ref in tables.const_refs.values_mut().flatten() {
+        for const_ref in tables
+            .const_refs
+            .values_mut()
+            .chain(tables.pat_const_refs.values_mut())
+            .flatten()
+        {
             if let ConstRef::TraitConst { evidence, .. } = const_ref {
                 evidence.bind(db, bound);
             }
@@ -5708,6 +6039,14 @@ impl<'db> TypedBody<'db> {
 
     pub fn expr_const_ref(&self, expr: ExprId) -> Option<ConstRef<'db>> {
         self.tables.const_refs[expr]
+    }
+
+    /// The constant that the pattern `pat` names, as `Y::N` in
+    /// `match x { Y::N => .. }`. The pattern holds the constant's value, which
+    /// is evaluated where the pattern is checked; the reference is kept apart
+    /// from [`Self::const_refs`], which belong to expressions.
+    pub fn pat_const_ref(&self, pat: PatId) -> Option<ConstRef<'db>> {
+        self.tables.pat_const_refs[pat]
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
@@ -6449,7 +6788,7 @@ impl<'db> TypedBody<'db> {
         };
         if let Some(method) = callable.selected_method(
             db,
-            TraitSolveCx::new(db, body.scope()).with_assumptions(self.assumptions()),
+            TraitSolveCx::new(db, body.scope(), Tier::All).with_assumptions(self.assumptions()),
         ) && let Some(body_func) = method.body()
         {
             func = body_func;
@@ -7048,7 +7387,7 @@ impl<'db> TypedBody<'db> {
             Expr::Closure { .. } => {
                 *saw_non_param = true;
             }
-            Expr::Lit(_) | Expr::Path(_) | Expr::UnsupportedMacroCall => {}
+            Expr::ItemQuote(_) | Expr::Lit(_) | Expr::Path(_) | Expr::UnsupportedMacroCall => {}
         }
     }
 
@@ -7311,6 +7650,7 @@ impl<'db> TypedBody<'db> {
             named_impl_operands: FxHashSet::default(),
             expr_choices: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
+            pat_const_refs: SecondaryMap::new(),
             value_path_refs: SecondaryMap::new(),
             semantic_expr_lowering: SecondaryMap::new(),
             record_init_lowering: SecondaryMap::new(),
@@ -8093,7 +8433,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             return;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope());
+        let solve_cx = TraitSolveCx::new(self.db, self.body.body().unwrap().scope(), Tier::All);
         if let Some(diag) = ty.emit_wf_diag(self.db, solve_cx, self.assumptions, span) {
             self.diags.push(diag.into());
         }

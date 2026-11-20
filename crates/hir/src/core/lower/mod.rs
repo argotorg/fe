@@ -13,10 +13,10 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        AttrListId, Body, ExprId, Func, IdentId, IntegerId, ItemKind, LitKind, ModuleTree, Partial,
-        PathId, StringId, TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility,
-        module_tree_impl,
-        scope_graph::ScopeGraph,
+        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, IntegerId,
+        ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod, TrackedItemId,
+        TrackedItemVariant, Use, Visibility, module_tree_impl,
+        scope_graph::{ScopeGraph, ScopeId},
         use_tree::{UsePathId, UsePathSegment},
     },
     span::HirOrigin,
@@ -26,6 +26,7 @@ pub use abi_struct::{AbiStructDiagnostic, AbiStructDiagnosticKind};
 pub use attr::{AttrMisuseError, AttrMisuseErrorKind};
 pub use error::{ErrorDiagnostic, ErrorDiagnosticKind};
 pub use event::{EventError, EventErrorKind};
+pub use generated::GenerationLoweringError;
 pub use item::{FieldModifierError, FieldModifierErrorKind, MsgDiagnostic, MsgDiagnosticKind};
 pub use params::{VariadicParamError, VariadicParamErrorKind};
 pub use parse::{ParsedFile, parse_file_impl};
@@ -40,6 +41,7 @@ mod contract;
 mod error;
 mod event;
 mod expr;
+mod generated;
 mod hir_builder;
 mod item;
 mod msg;
@@ -120,7 +122,158 @@ pub fn scope_graph<'db>(
     db: &'db dyn LowerHirDb,
     top_mod: TopLevelMod<'db>,
 ) -> &'db ScopeGraph<'db> {
+    linked_scope_graph(db, top_mod)
+}
+
+/// The scope graph of `top_mod` with every generated item's lexical edge to a
+/// producer in another module. Lowering leaves those edges out, so that no
+/// module's lowering reads another module's lowered graph; linking reads the
+/// producer modules' lowered graphs only, which never wait for this module.
+pub(crate) fn linked_scope_graph<'db>(
+    db: &'db dyn HirDb,
+    top_mod: TopLevelMod<'db>,
+) -> &'db ScopeGraph<'db> {
+    linked_scope_graph_impl(db, top_mod)
+        .as_ref()
+        .unwrap_or_else(|| scope_graph_impl(db, top_mod))
+}
+
+#[salsa::tracked]
+fn linked_scope_graph_impl<'db>(
+    db: &'db dyn HirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Option<ScopeGraph<'db>> {
+    let lowered = scope_graph_impl(db, top_mod);
+    if lowered.foreign_origins.is_empty() {
+        return None;
+    }
+    let mut linked = lowered.clone();
+    for (item, producer) in std::mem::take(&mut linked.foreign_origins) {
+        let edge = crate::hir_def::scope_graph::ScopeEdge {
+            dest: resolve_authored_scope(db, producer),
+            kind: crate::hir_def::scope_graph::EdgeKind::lex(),
+        };
+        let scope = linked
+            .scopes
+            .get_mut(&item)
+            .expect("a generated item has a scope in its module");
+        // External edges precede the item's own edges, as lowering orders them.
+        scope.edges = std::iter::once(edge)
+            .chain(std::mem::take(&mut scope.edges))
+            .collect();
+    }
+    Some(linked)
+}
+
+/// Bind an authored reference in its module's lowered scope graph. The
+/// referenced declaration was validated when its request was frozen and its
+/// source is unchanged in this view.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn resolve_authored_scope<'db>(
+    db: &'db dyn HirDb,
+    reference: AuthoredScope<'db>,
+) -> ScopeId<'db> {
+    let top_mod = reference.top_mod(db);
+    let graph = scope_graph_impl(db, top_mod);
+    match reference.locator(db) {
+        AuthoredLocator::Producer { module, block } => scope_builder::find_producer_scope(
+            db,
+            top_mod,
+            graph.scopes.keys().copied(),
+            module,
+            block,
+        ),
+        AuthoredLocator::Item(range) => {
+            let written_at = |origin: Option<ast::SyntaxNodePtr>| {
+                origin.is_some_and(|ptr| ptr.text_range() == range)
+            };
+            let root = top_mod_ast(db, top_mod);
+            graph
+                .scopes
+                .keys()
+                .copied()
+                .find(|scope| match *scope {
+                    ScopeId::Item(ItemKind::Struct(s)) => {
+                        s.origin(db).authored_range(root.syntax()) == Some(range)
+                    }
+                    ScopeId::Item(ItemKind::Enum(e)) => written_at(raw_origin(e.origin(db))),
+                    ScopeId::Item(ItemKind::Trait(t)) => written_at(raw_origin(t.origin(db))),
+                    _ => false,
+                })
+                .expect("validated authored declaration exists in unchanged source")
+        }
+        AuthoredLocator::GenericParam { item, index } => {
+            let header = graph
+                .scopes
+                .keys()
+                .find_map(|scope| match *scope {
+                    ScopeId::Item(header @ ItemKind::ImplTrait(implementation))
+                        if raw_origin(implementation.origin(db))
+                            .is_some_and(|ptr| ptr.text_range() == item) =>
+                    {
+                        Some(header)
+                    }
+                    ScopeId::Item(header @ ItemKind::Impl(implementation))
+                        if raw_origin(implementation.origin(db))
+                            .is_some_and(|ptr| ptr.text_range() == item) =>
+                    {
+                        Some(header)
+                    }
+                    _ => None,
+                })
+                .expect("the derive header being lowered is authored in its module");
+            ScopeId::GenericParam(header, index)
+        }
+    }
+}
+
+/// The declared type of an authored record's field, bound as a type splice
+/// copies it: names in the record's scope, its generic parameters left to the
+/// use site.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn authored_field_type<'db>(
+    db: &'db dyn HirDb,
+    field: crate::hir_def::AuthoredFieldType<'db>,
+) -> Option<crate::hir_def::TypeId<'db>> {
+    use crate::hir_def::VariantKind;
+    let record = field.record(db);
+    let item = record.resolve(db).to_item()?;
+    let index = field.index(db);
+    let ty = match (item, field.variant(db)) {
+        (ItemKind::Struct(s), None) => s.fields(db).data(db).get(index)?.type_ref.to_opt(),
+        (ItemKind::Enum(e), Some(variant)) => {
+            match &e.variants_list(db).data(db).get(variant)?.kind {
+                VariantKind::Tuple(elems) => elems.data(db).get(index)?.to_opt(),
+                VariantKind::Record(fields) => fields.data(db).get(index)?.type_ref.to_opt(),
+                VariantKind::Unit => None,
+            }
+        }
+        _ => None,
+    }?;
+    Some(types::bind_type_to_scope(db, ty, record, item))
+}
+
+fn raw_origin<T: AstNode<Language = parser::FeLang>>(
+    origin: &HirOrigin<T>,
+) -> Option<ast::SyntaxNodePtr> {
+    match origin {
+        HirOrigin::Raw(ptr) => Some(ptr.syntax_node_ptr()),
+        _ => None,
+    }
+}
+
+pub fn generation_lowering_errors<'db>(
+    db: &'db dyn LowerHirDb,
+    top_mod: TopLevelMod<'db>,
+) -> Vec<GenerationLoweringError> {
     scope_graph_impl(db, top_mod)
+        .lower_diagnostics
+        .iter()
+        .filter_map(|diagnostic| match diagnostic {
+            LowerDiagnostic::Generation(error) => Some(error.clone()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Returns the ingot module tree of the given ingot.
@@ -161,6 +314,8 @@ pub(crate) fn scope_graph_impl<'db>(
             lower_module_items(&mut ctxt, items);
         }
     }
+    generated::append_functions(&mut ctxt);
+    ctxt.builder.apply_quoted_function_origins();
     ctxt.leave_item_scope(top_mod);
 
     ctxt.build()
@@ -184,6 +339,28 @@ pub(crate) fn enclosing_cfg_holds_impl<'db>(db: &'db dyn HirDb, top_mod: TopLeve
     })
 }
 
+/// Whether lowering keeps the item whose syntax is `item`, a node of the file
+/// of `top_mod`: the `cfg` attributes of the item and of every item around
+/// it, the `#![cfg]` attributes of every item list around it, and those of
+/// the file modules around `top_mod` hold.
+pub fn syntax_item_cfg_holds(db: &dyn HirDb, top_mod: TopLevelMod<'_>, item: &SyntaxNode) -> bool {
+    let holds = |attrs: Option<ast::AttrList>| {
+        attr::named_attr_specs(attrs, "cfg")
+            .iter()
+            .all(|spec| attr::cfg_spec_holds(db, spec) == Some(true))
+    };
+    enclosing_cfg_holds_impl(db, top_mod)
+        && item.ancestors().all(|node| {
+            if let Some(item) = ast::Item::cast(node.clone()) {
+                holds(item.attr_list())
+            } else if let Some(items) = ast::ItemList::cast(node) {
+                holds(items.inner_attr_list())
+            } else {
+                true
+            }
+        })
+}
+
 /// Returns the scope graph of the body of `func`, lowered on its own, or `None`
 /// if the function has no body in source or its body was lowered with the
 /// module because it declares items.
@@ -198,7 +375,7 @@ pub(crate) fn func_body_graph_impl<'db>(
     let ast = ptr.to_node(top_mod_ast(db, func.top_mod(db)).syntax());
     let body = ast.body()?;
     let mut ctxt = FileLowerCtxt::enter_func_body(db, func);
-    Body::lower_func_body(&mut ctxt, &ast, body);
+    Body::lower_func_body(&mut ctxt, &ast, body, Vec::new());
     Some(ctxt.build())
 }
 
@@ -232,6 +409,7 @@ pub enum LowerDiagnostic {
     AbiField(AbiFieldDiagnostic),
     AttrMisuse(AttrMisuseError),
     VariadicParam(VariadicParamError),
+    Generation(GenerationLoweringError),
 }
 
 pub(super) struct FileLowerCtxt<'db> {
@@ -240,6 +418,154 @@ pub(super) struct FileLowerCtxt<'db> {
     next_impl_trait_idx: u32,
     next_static_assert_idx: u32,
     diagnostics: Vec<LowerDiagnostic>,
+    next_quote_frame_id: usize,
+    pub(super) quote_frames: Vec<generated::ActiveQuoteFrame<'db>>,
+    /// The derive header, trait or inherent, whose members are being lowered:
+    /// the only binders a frozen type may name.
+    pub(super) derive_header: Option<parser::TextRange>,
+}
+
+/// An authored record named by a frozen reference: its reference, bound by
+/// ordinary resolution, and the syntax lowering reads names and shapes from.
+pub(super) struct AuthoredRecord<'db> {
+    pub(super) scope: AuthoredScope<'db>,
+    pub(super) syntax: RecordSyntax,
+}
+
+pub(super) enum RecordSyntax {
+    Struct(ast::Struct),
+    Enum(ast::Enum),
+    /// A `msg` variant, whose struct has the variant's parameters as fields.
+    MsgVariant(ast::MsgVariant),
+}
+
+/// The fields of a struct or of one enum variant, named as lowering names
+/// them: tuple struct fields by position, tuple variant fields by count.
+pub(super) enum AuthoredFields<'db> {
+    Unit,
+    Tuple(usize),
+    Named(Vec<Partial<IdentId<'db>>>),
+}
+
+impl<'db> AuthoredRecord<'db> {
+    pub(super) fn name(&self, db: &'db dyn HirDb) -> Partial<IdentId<'db>> {
+        let name = match &self.syntax {
+            RecordSyntax::Struct(s) => s.name(),
+            RecordSyntax::Enum(e) => e.name(),
+            RecordSyntax::MsgVariant(v) => v.name(),
+        };
+        name.map(|name| IdentId::new(db, name.text().to_string()))
+            .into()
+    }
+
+    pub(super) fn generic_params(&self) -> Option<ast::GenericParamList> {
+        match &self.syntax {
+            RecordSyntax::Struct(s) => s.generic_params(),
+            RecordSyntax::Enum(e) => e.generic_params(),
+            RecordSyntax::MsgVariant(_) => None,
+        }
+    }
+
+    pub(super) fn variant(&self, index: usize) -> Option<ast::VariantDef> {
+        let RecordSyntax::Enum(e) = &self.syntax else {
+            return None;
+        };
+        e.variants()?.into_iter().nth(index)
+    }
+
+    /// The struct's fields, or variant `variant`'s; `None` when the reference
+    /// does not name fields of this record.
+    pub(super) fn fields(
+        &self,
+        db: &'db dyn HirDb,
+        variant: Option<usize>,
+    ) -> Option<AuthoredFields<'db>> {
+        let labels = |fields: Vec<ast::RecordFieldDef>, is_tuple: bool| {
+            AuthoredFields::Named(
+                fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        if is_tuple {
+                            Partial::Present(IdentId::new(db, index.to_string()))
+                        } else {
+                            field
+                                .name()
+                                .map(|name| IdentId::new(db, name.text().to_string()))
+                                .into()
+                        }
+                    })
+                    .collect(),
+            )
+        };
+        let named = |list: Option<ast::RecordFieldDefList>| {
+            let Some(list) = list else {
+                return AuthoredFields::Named(Vec::new());
+            };
+            let is_tuple = list.is_tuple();
+            labels(list.into_iter().collect(), is_tuple)
+        };
+        match (&self.syntax, variant) {
+            (RecordSyntax::Struct(s), None) => Some(named(s.fields())),
+            (RecordSyntax::MsgVariant(v), None) => {
+                Some(labels(v.params().into_iter().flatten().collect(), false))
+            }
+            (RecordSyntax::Enum(_), Some(index)) => Some(match self.variant(index)?.kind() {
+                ast::VariantKind::Unit => AuthoredFields::Unit,
+                ast::VariantKind::Tuple(tuple) => AuthoredFields::Tuple(tuple.into_iter().count()),
+                ast::VariantKind::Record(fields) => named(Some(fields)),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Whether field `index` of the struct, or of variant `variant`, declares
+    /// a type.
+    pub(super) fn field_has_type(&self, variant: Option<usize>, index: usize) -> bool {
+        match (&self.syntax, variant) {
+            (RecordSyntax::Struct(s), None) => s
+                .fields()
+                .and_then(|fields| fields.into_iter().nth(index))
+                .is_some_and(|field| field.ty().is_some()),
+            (RecordSyntax::MsgVariant(v), None) => v
+                .params()
+                .and_then(|params| params.into_iter().nth(index))
+                .is_some_and(|field| field.ty().is_some()),
+            (RecordSyntax::Enum(_), Some(v)) => match self.variant(v).map(|v| v.kind()) {
+                Some(ast::VariantKind::Tuple(tuple)) => tuple.into_iter().nth(index).is_some(),
+                Some(ast::VariantKind::Record(fields)) => fields
+                    .into_iter()
+                    .nth(index)
+                    .is_some_and(|field| field.ty().is_some()),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// A path naming the record itself, bound when it is resolved.
+    pub(super) fn path(
+        &self,
+        db: &'db dyn HirDb,
+        generic_args: crate::hir_def::GenericArgListId<'db>,
+    ) -> PathId<'db> {
+        let display = PathId::new(
+            db,
+            crate::hir_def::PathKind::Ident {
+                ident: self.name(db),
+                generic_args,
+            },
+            None,
+        );
+        PathId::new(
+            db,
+            crate::hir_def::PathKind::BoundItem {
+                item: self.scope,
+                display,
+            },
+            None,
+        )
+    }
 }
 
 impl<'db> FileLowerCtxt<'db> {
@@ -250,6 +576,9 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
+            next_quote_frame_id: 0,
+            quote_frames: Vec::new(),
+            derive_header: None,
         }
     }
 
@@ -260,9 +589,420 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
             diagnostics: Vec::new(),
+            next_quote_frame_id: 0,
+            quote_frames: Vec::new(),
+            derive_header: None,
         }
     }
 
+    pub(super) fn next_quote_frame_id(&mut self) -> usize {
+        let id = self.next_quote_frame_id;
+        self.next_quote_frame_id += 1;
+        id
+    }
+
+    pub(super) fn resolve_sub_quote_local_ident(&self, text: &str) -> IdentId<'db> {
+        let db = self.db();
+        if let Some(frame) = self.quote_frames.last()
+            && frame.is_sub_quote
+            && !frame.open_names.iter().any(|(name, _)| name == text)
+        {
+            return IdentId::new(db, format!("\0q{}_{text}", frame.frame_id));
+        }
+        IdentId::new(db, text.to_string())
+    }
+
+    pub(super) fn record_bound_name(&mut self, name: &str) {
+        for frame in self.quote_frames.iter_mut().rev() {
+            frame.bound_names.insert(name.to_string());
+            if !frame.is_sub_quote {
+                break;
+            }
+        }
+    }
+
+    pub(super) fn pop_quote_frame(&mut self) {
+        let Some(frame) = self.quote_frames.pop() else {
+            return;
+        };
+        if !frame.is_sub_quote {
+            let db = self.db();
+            let file = frame.quote_top_mod.file(db);
+            for (name, range) in frame.open_names {
+                if !frame.bound_names.contains(&name) {
+                    self.file_scoped_error(
+                        file,
+                        range,
+                        format!("quoted open name `{name}` has no enclosing binder"),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn current_hole(
+        &self,
+        range: parser::TextRange,
+    ) -> Option<common::generation::FrozenHoleValue> {
+        self.quote_frames
+            .last()?
+            .holes
+            .iter()
+            .find(|(r, _)| *r == range)
+            .map(|(_, value)| value.clone())
+    }
+
+    /// Mark an item generated into an authored declaration as generated, like
+    /// every other generated item: its quote's producer is its lexical origin
+    /// and the enclosing declaration its publication parent.
+    pub(super) fn defer_generated_member_origin(&mut self, item: ItemKind<'db>) {
+        let producer = self
+            .quote_frames
+            .last()
+            .expect("a generated member is lowered inside its quote")
+            .producer;
+        self.builder.defer_quoted_item_origin(item, producer);
+    }
+
+    /// The file and line of the active quotation, for messages about what it
+    /// wrote; this file's start outside generation.
+    pub(super) fn current_quote_location(&self) -> String {
+        let db = self.db();
+        let (file, range) = self.quote_frames.last().map_or_else(
+            || (self.top_mod().file(db), parser::TextRange::empty(0.into())),
+            |frame| (frame.quote_top_mod.file(db), frame.quote_range),
+        );
+        source_location(db, file, range)
+    }
+
+    /// The module whose syntax is being lowered: the active quotation's, or
+    /// this file's outside generation.
+    pub(super) fn syntax_top_mod(&self) -> TopLevelMod<'db> {
+        self.quote_frames
+            .last()
+            .map_or_else(|| self.top_mod(), |frame| frame.quote_top_mod)
+    }
+
+    /// The modules of the active quotations, innermost first: the one that
+    /// wrote the code being lowered, then each one that spliced a fragment
+    /// around it, the outermost last. Empty outside generation.
+    pub(super) fn quote_chain(&self) -> Vec<TopLevelMod<'db>> {
+        self.quote_frames
+            .iter()
+            .rev()
+            .map(|frame| frame.quote_top_mod)
+            .collect()
+    }
+
+    /// Where a member spliced from the active quotation was written.
+    pub(super) fn generated_member_syntax(
+        &self,
+        node: &parser::SyntaxNode,
+    ) -> crate::hir_def::GeneratedMemberSyntax<'db> {
+        crate::hir_def::GeneratedMemberSyntax {
+            top_mod: self.syntax_top_mod(),
+            node: parser::ast::SyntaxNodePtr::new(node),
+        }
+    }
+
+    /// Whether the free names of the active quotation resolve in the scope
+    /// where the quotation was written, as they do for a fragment spliced into
+    /// a body and for the members of a spliced template.
+    pub(super) fn quote_names_resolve_at_producer(&self) -> bool {
+        self.quote_frames
+            .last()
+            .is_some_and(|frame| frame.is_sub_quote || frame.is_member_quote)
+    }
+
+    pub(super) fn quote_producer_in_other_ingot(
+        &self,
+    ) -> Option<crate::hir_def::AuthoredScope<'db>> {
+        let frame = self.quote_frames.last()?;
+        let db = self.db();
+        let quote_ingot = frame.producer.ingot(db);
+        (quote_ingot != self.top_mod().ingot(db)).then_some(frame.producer)
+    }
+
+    pub(super) fn resolve_quote_template(
+        &mut self,
+        quote_file: &url::Url,
+        quote_range: parser::TextRange,
+        producer_module: Option<parser::TextRange>,
+        producer_block: Option<parser::TextRange>,
+        is_sub_quote: bool,
+        holes: Vec<common::generation::FrozenHoleValue>,
+    ) -> (ast::QuoteExpr, generated::ActiveQuoteFrame<'db>) {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, quote_file)
+            .expect("validated frozen quote file exists in workspace");
+        let quote_top_mod = map_file_to_mod_impl(db, file);
+        let root = top_mod_ast(db, quote_top_mod);
+        let quote = root
+            .syntax()
+            .descendants()
+            .filter_map(ast::QuoteExpr::cast)
+            .find(|quote| quote.syntax().text_range() == quote_range)
+            .expect("validated frozen quote belongs to unchanged input source");
+        let holes = crate::core::meta::quote_holes(&quote)
+            .expect("checked frozen quote retains valid bounded syntax")
+            .into_iter()
+            .map(|hole| hole.syntax().text_range())
+            .zip(holes)
+            .collect();
+        let open_names = quote
+            .open_list()
+            .map(|list| {
+                list.names()
+                    .map(|n| (n.text().to_string(), n.text_range()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let producer = AuthoredScope::producer(db, quote_top_mod, producer_module, producer_block);
+        let frame_id = self.next_quote_frame_id();
+        (
+            quote,
+            generated::ActiveQuoteFrame {
+                frame_id,
+                quote_top_mod,
+                quote_range,
+                producer,
+                is_sub_quote,
+                is_member_quote: false,
+                open_names,
+                bound_names: rustc_hash::FxHashSet::default(),
+                holes,
+            },
+        )
+    }
+
+    /// The authored record a frozen reference names, read from its file's
+    /// syntax. Lowering takes the record's names and shapes from here, not
+    /// from its lowered HIR, which may depend on this module's own output.
+    pub(super) fn authored_record(
+        &self,
+        record_ref: &common::generation::FrozenRecordRef,
+    ) -> AuthoredRecord<'db> {
+        self.authored_record_at(&record_ref.target_file, record_ref.target_range)
+    }
+
+    fn authored_record_at(&self, file: &url::Url, range: parser::TextRange) -> AuthoredRecord<'db> {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, file)
+            .expect("validated frozen record file exists in workspace");
+        let top_mod = map_file_to_mod_impl(db, file);
+        let syntax = top_mod_ast(db, top_mod)
+            .syntax()
+            .descendants()
+            .filter(|node| node.text_range() == range)
+            .find_map(|node| {
+                ast::Struct::cast(node.clone())
+                    .map(RecordSyntax::Struct)
+                    .or_else(|| ast::Enum::cast(node.clone()).map(RecordSyntax::Enum))
+                    .or_else(|| ast::MsgVariant::cast(node).map(RecordSyntax::MsgVariant))
+            })
+            .expect("validated authored record item exists in target module");
+        AuthoredRecord {
+            scope: AuthoredScope::item(db, top_mod, range),
+            syntax,
+        }
+    }
+
+    /// A path naming the authored type declaration `decl`, bound when it is
+    /// resolved.
+    pub(super) fn authored_decl_path(
+        &self,
+        decl: &common::generation::FrozenDeclRef,
+        generic_args: crate::hir_def::GenericArgListId<'db>,
+    ) -> PathId<'db> {
+        self.authored_record_at(&decl.file, decl.range)
+            .path(self.db(), generic_args)
+    }
+
+    /// A path naming parameter `index` of the derive header (trait or inherent)
+    /// being lowered, bound when it is resolved. Generated members resolve free
+    /// names in their producer, so a header binder is never named by spelling.
+    pub(super) fn header_param_path(&mut self, index: usize) -> Partial<PathId<'db>> {
+        let db = self.db();
+        let Some(header) = self.derive_header else {
+            self.record_generation_error(
+                parser::TextRange::empty(0.into()),
+                "a frozen type names a derive header parameter outside its header",
+            );
+            return Partial::Absent;
+        };
+        let name = top_mod_ast(db, self.top_mod())
+            .syntax()
+            .descendants()
+            .filter(|node| node.text_range() == header)
+            .find_map(|node| {
+                ast::ImplTrait::cast(node.clone())
+                    .map(|header| header.generic_params())
+                    .or_else(|| ast::Impl::cast(node).map(|header| header.generic_params()))
+            })
+            .flatten()
+            .and_then(|params| params.into_iter().nth(index))
+            .and_then(|param| match param.kind() {
+                ast::GenericParamKind::Type(p) => p.name(),
+                ast::GenericParamKind::Const(p) => p.name(),
+                ast::GenericParamKind::Shape(p) => p.name(),
+            })
+            .map(|name| IdentId::new(db, name.text().to_string()));
+        let Some(name) = name else {
+            self.record_generation_error(
+                header,
+                "invalid derive header parameter in a frozen type",
+            );
+            return Partial::Absent;
+        };
+        let scope = AuthoredScope::new(
+            db,
+            self.top_mod(),
+            AuthoredLocator::GenericParam {
+                item: header,
+                index: index as u16,
+            },
+        );
+        Partial::Present(PathId::new(
+            db,
+            crate::hir_def::PathKind::BoundItem {
+                item: scope,
+                display: PathId::from_ident(db, name),
+            },
+            None,
+        ))
+    }
+
+    /// The record's lowered item, when it is declared in this module and was
+    /// lowered already: its generic header is copied, not only named.
+    pub(super) fn local_record_item(
+        &self,
+        record_ref: &common::generation::FrozenRecordRef,
+    ) -> Option<ItemKind<'db>> {
+        let db = self.db();
+        let file = db.workspace().get(db, &record_ref.target_file)?;
+        (map_file_to_mod_impl(db, file) == self.top_mod())
+            .then(|| self.builder.find_item_by_range(record_ref.target_range))
+            .flatten()
+    }
+
+    pub(super) fn lower_field_hole_ident(
+        &mut self,
+        range: parser::TextRange,
+    ) -> Partial<IdentId<'db>> {
+        let Some(common::generation::FrozenHoleValue::Field(field_ref)) = self.current_hole(range)
+        else {
+            self.record_generation_error(
+                range,
+                "record field label hole requires a Field<T, F> splice",
+            );
+            return Partial::Absent;
+        };
+        let db = self.db();
+        let record = self.authored_record(&field_ref.record);
+        match record.fields(db, field_ref.record.variant_index) {
+            Some(AuthoredFields::Named(names)) => match names.get(field_ref.index) {
+                Some(name) => *name,
+                None => {
+                    self.record_generation_error(
+                        range,
+                        "invalid field splice in record field label",
+                    );
+                    Partial::Absent
+                }
+            },
+            Some(AuthoredFields::Tuple(_)) => {
+                self.record_generation_error(
+                    range,
+                    "tuple variant field cannot be used as a named record field label",
+                );
+                Partial::Absent
+            }
+            _ => {
+                self.record_generation_error(range, "invalid field splice in record field label");
+                Partial::Absent
+            }
+        }
+    }
+
+    pub(super) fn lower_field_hole_index(
+        &mut self,
+        range: parser::TextRange,
+    ) -> Partial<crate::hir_def::expr::FieldIndex<'db>> {
+        use crate::hir_def::expr::FieldIndex;
+        let Some(common::generation::FrozenHoleValue::Field(field_ref)) = self.current_hole(range)
+        else {
+            self.record_generation_error(range, "field access hole requires a Field<T, F> splice");
+            return Partial::Absent;
+        };
+        let db = self.db();
+        let record = self.authored_record(&field_ref.record);
+        let res: Partial<FieldIndex<'db>> =
+            match record.fields(db, field_ref.record.variant_index) {
+                Some(AuthoredFields::Named(names)) => names
+                    .get(field_ref.index)
+                    .and_then(|name| name.to_opt())
+                    .map(FieldIndex::Ident)
+                    .into(),
+                Some(AuthoredFields::Tuple(_)) => Partial::Present(FieldIndex::Index(
+                    IntegerId::new(db, BigUint::from(field_ref.index)),
+                )),
+                _ => Partial::Absent,
+            };
+        if res.to_opt().is_none() {
+            self.record_generation_error(range, "invalid field splice in field projection");
+        }
+        res
+    }
+
+    pub(super) fn record_generation_error(
+        &mut self,
+        range: parser::TextRange,
+        message: impl Into<String>,
+    ) {
+        let db = self.db();
+        let file = self.quote_frames.last().map_or_else(
+            || self.top_mod().file(db),
+            |frame| frame.quote_top_mod.file(db),
+        );
+        self.file_scoped_error(file, range, message);
+    }
+
+    pub(super) fn file_scoped_error(
+        &mut self,
+        file: common::file::File,
+        range: parser::TextRange,
+        message: impl Into<String>,
+    ) {
+        self.report(GenerationLoweringError {
+            file,
+            primary_range: range,
+            message: message.into(),
+        });
+    }
+}
+
+pub(crate) fn source_location(
+    db: &dyn HirDb,
+    file: common::file::File,
+    range: parser::TextRange,
+) -> String {
+    let text = file.text(db);
+    let offset = usize::from(range.start()).min(text.len());
+    let line = text[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let path = file
+        .path(db)
+        .as_ref()
+        .map(ToString::to_string)
+        .or_else(|| file.url(db).map(|url| url.to_string()))
+        .unwrap_or_else(|| "<source>".to_string());
+    format!("{path}:{line}")
+}
+
+impl<'db> FileLowerCtxt<'db> {
     pub(super) fn build(self) -> ScopeGraph<'db> {
         self.builder.build(self.diagnostics)
     }
@@ -333,7 +1073,7 @@ impl<'db> FileLowerCtxt<'db> {
             Partial::Present(UsePathSegment::Ident(super_ident)),
             Partial::Present(UsePathSegment::Glob),
         ];
-        let path = Partial::Present(UsePathId::new(db, segs));
+        let path = Partial::Present(UsePathId::new(db, segs, None, None));
 
         let id = self.joined_id(TrackedItemVariant::Use(path));
         self.enter_item_scope(id, false);
@@ -361,7 +1101,7 @@ impl<'db> FileLowerCtxt<'db> {
             .map(|ident| Partial::Present(UsePathSegment::Ident(ident)))
             .chain(std::iter::once(Partial::Present(UsePathSegment::Glob)))
             .collect();
-        let path = Partial::Present(UsePathId::new(db, segs));
+        let path = Partial::Present(UsePathId::new(db, segs, None, None));
 
         let id = self.joined_id(TrackedItemVariant::Use(path));
         self.enter_item_scope(id, false);
@@ -412,18 +1152,38 @@ impl<'db> FileLowerCtxt<'db> {
         idx
     }
 
+    pub(super) fn current_quote_top_mod(&self) -> Option<TopLevelMod<'db>> {
+        let frame = self.quote_frames.last()?;
+        (frame.quote_top_mod != self.top_mod()).then_some(frame.quote_top_mod)
+    }
+
+    pub(super) fn current_quote_mod_idx(&mut self) -> Option<u16> {
+        let quote_top_mod = self.current_quote_top_mod()?;
+        Some(self.builder.intern_quote_mod(quote_top_mod))
+    }
+
     /// Creates a new scope for an item.
     fn enter_item_scope(&mut self, id: TrackedItemId<'db>, is_mod: bool) {
-        self.builder.enter_item_scope(id, is_mod);
+        let quote_top_mod = self.current_quote_top_mod();
+        self.builder.enter_item_scope(id, is_mod, quote_top_mod);
     }
 
     fn enter_body_scope(&mut self, id: TrackedItemId<'db>) {
-        self.builder.enter_body_scope(id);
+        let quote_top_mod = self.current_quote_top_mod();
+        self.builder.enter_body_scope(id, quote_top_mod);
+    }
+
+    pub(super) fn enter_body_scope_with_top_mod(
+        &mut self,
+        id: TrackedItemId<'db>,
+        quote_top_mod: Option<TopLevelMod<'db>>,
+    ) {
+        self.builder.enter_body_scope(id, quote_top_mod);
     }
 
     /// Leaves the current scope, `item` should be the generated item which owns
     /// the scope.
-    fn leave_item_scope<I>(&mut self, item: I) -> I
+    pub(super) fn leave_item_scope<I>(&mut self, item: I) -> I
     where
         I: Into<ItemKind<'db>> + Copy,
     {

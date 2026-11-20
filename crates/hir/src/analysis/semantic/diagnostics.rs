@@ -193,6 +193,8 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
             SemanticDiagnosticKind::UnencodablePanic => 18,
+            SemanticDiagnosticKind::CompileTimePhase => 19,
+            SemanticDiagnosticKind::DeclaredOnlyImplementation => 20,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -229,9 +231,16 @@ impl SemanticDiagnosticKind {
             _ => format!("fn {name}"),
         };
         match self {
+            Self::CompileTimePhase => format!(
+                "compile-time-only body cannot be emitted at runtime: `{}`",
+                checker_name(db, instance)
+            ),
             Self::AccessConflict => format!("access conflict in `{item}`"),
             Self::MoveConflict => format!("move conflict in `{item}`"),
             Self::Internal => format!("internal access checking error in `{item}`"),
+            Self::DeclaredOnlyImplementation => format!(
+                "`{item}` goes through an implementation that a written header only declares"
+            ),
             Self::TransportViolation => format!("transport violation in `{item}`"),
             Self::StorageViolation => format!("storage violation in `{item}`"),
             Self::ProviderProvenanceConflict => {
@@ -411,6 +420,10 @@ impl<'db> From<SemanticDiagnostic<'db>> for SemanticNormalizationFailure<'db> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub enum SemanticDiagnosticKind {
+    CompileTimePhase,
+    /// A call goes through an implementation that a written header declares and
+    /// preparation has not given members: there is no body to run.
+    DeclaredOnlyImplementation,
     AccessConflict,
     MoveConflict,
     Internal,

@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::core::hir_def::{ItemKind, scope_graph::ScopeId};
 use common::indexmap::IndexMap;
 
@@ -46,7 +47,7 @@ fn items_in_scope_impl<'db>(
     let scope = i_scope.scope(db);
     let domain = i_scope.domain(db);
 
-    let imports = &resolve_imports(db, scope.ingot(db)).1;
+    let imports = &resolve_imports(db, scope.ingot(db), Tier::All).1;
 
     // Collect direct child items first (highest precedence: Def)
     for child in scope.child_items(db) {

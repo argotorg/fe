@@ -3,6 +3,7 @@
 //! Shared by the declaration-time `msg` selector signature check
 //! (`analysis::ty::msg_selector`) and JSON ABI emission in the `fe` crate.
 
+use crate::analysis::name_resolution::Tier;
 use std::fmt;
 
 use common::ingot::IngotKind;
@@ -497,7 +498,7 @@ fn declared_sol_compat_abi_type<'db>(
     ty: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> Option<String> {
-    let solve_cx = TraitSolveCx::new(db, scope);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All);
     let sol_compat = resolve_lib_trait_path(db, scope, "std::abi::SolCompat")?;
     let inst = TraitInstId::new_simple(db, sol_compat, vec![ty]);
     let sol_type_name = IdentId::new(db, "SOL_TYPE".to_string());

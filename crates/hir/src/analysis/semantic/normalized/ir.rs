@@ -559,6 +559,12 @@ pub enum ViewAccess {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NExpr<'db> {
+    /// Operation-preserving compile-time construction. It has no runtime
+    /// representation; scalar hole reads remain visible to ownership checks.
+    ItemQuote {
+        expression: ExprId,
+        holes: Box<[NOperand]>,
+    },
     Forward {
         src: NOperand,
     },
@@ -655,7 +661,9 @@ impl<'db> NExpr<'db> {
                 f(*lhs);
                 f(*rhs);
             }
-            Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
+            Self::ItemQuote { holes: fields, .. }
+            | Self::AggregateMake { fields, .. }
+            | Self::EnumMake { fields, .. } => {
                 fields.iter().copied().for_each(f);
             }
             Self::Call { args, .. } => args.iter().copied().for_each(f),
@@ -675,7 +683,8 @@ impl<'db> NExpr<'db> {
             | Self::Borrow { place, .. }
             | Self::MakeView { place, .. } => f(place),
             Self::Call { effect_args, .. } => effect_args.iter().map(|arg| &arg.place).for_each(f),
-            Self::Forward { .. }
+            Self::ItemQuote { .. }
+            | Self::Forward { .. }
             | Self::ProjectValue { .. }
             | Self::StructuralRepack { .. }
             | Self::CodeRegionRef { .. }

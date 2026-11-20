@@ -457,6 +457,14 @@ fn extract_single_file(
     db.workspace().touch(db, file_url.clone(), Some(content));
 
     let file = db.workspace().get(db, &file_url)?;
+    match driver::generation::prepare_file(db, file) {
+        Ok(Some(prepared)) => *db = prepared,
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Warning: File generation failed, documentation may be incomplete\n{error}");
+        }
+    }
+    let file = db.workspace().get(db, &file_url)?;
     let top_mod = db.top_mod(file);
 
     let diags = db.run_on_top_mod(top_mod);
@@ -466,7 +474,10 @@ fn extract_single_file(
     }
 
     let extractor = DocExtractor::new(db).with_include_tests(include_tests);
-    Some(extractor.extract_module(top_mod))
+    let mut index = extractor.extract_module(top_mod);
+    let ingot = top_mod.ingot(db);
+    index.link_trait_impls(trait_impl_links_for_ingot(db, ingot).clone());
+    Some(index)
 }
 
 fn extract_workspace(
@@ -527,6 +538,9 @@ fn extract_workspace(
         member_entries.push((member_name, member.url.clone()));
     }
 
+    let roots: Vec<_> = member_entries.iter().map(|(_, url)| url.clone()).collect();
+    prepare_doc_ingots(db, &roots);
+
     // Extract docs from each member using the shared db
     let mut combined = DocIndex::new();
     for (member_name, ingot_url) in &member_entries {
@@ -573,6 +587,7 @@ fn extract_ingot(
         eprintln!("Warning: Ingot initialization produced diagnostics");
     }
 
+    prepare_doc_ingots(db, std::slice::from_ref(&ingot_url));
     let ingot = db.workspace().containing_ingot(db, ingot_url)?;
 
     // Check for errors
@@ -592,6 +607,12 @@ fn extract_ingot(
     index.link_trait_impls(trait_impl_links_for_ingot(db, ingot).clone());
 
     Some(index)
+}
+
+fn prepare_doc_ingots(db: &mut DriverDataBase, roots: &[Url]) {
+    if let Err(error) = driver::generation::prepare_ingots_in_place(db, roots) {
+        eprintln!("Warning: Package generation failed, documentation may be incomplete\n{error}");
+    }
 }
 
 /// Generate SCIP JSON for embedding in static docs (best-effort).

@@ -99,9 +99,9 @@ error[6-0024]: method `locate` has incompatible effects
  51 │     fn locate(self, _ root: u256, _ key: u256) -> Location uses (ctx: Ctx) {
     │        ^^^^^^ expected 0 effects, found 1
     │
-    ┌─ src/ops.fe:250:8
+    ┌─ src/ops.fe:256:8
     │
-250 │     fn locate(self, _ root: u256, _ key: Self::Key) -> Location
+256 │     fn locate(self, _ root: u256, _ key: Self::Key) -> Location
     │        ------ trait requires these effects
 
 error[6-0029]: a type is pinned to a state space

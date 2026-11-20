@@ -23,6 +23,7 @@ use super::{
 };
 use crate::analysis::{
     HirAnalysisDb,
+    name_resolution::Tier,
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
@@ -92,6 +93,83 @@ fn impl_header_may_match<'db>(
             .iter()
             .zip(goal.args(db))
             .all(|(&header, &goal)| may_unify(db, header, goal))
+}
+
+/// Select a lexical header before checking its conditions. A failing explicit
+/// candidate does not silently fall back to an ordinary implementation.
+#[derive(Clone, Copy)]
+pub(crate) enum ChoiceMatch<'db> {
+    Implementation(usize, super::ChosenImpl<'db>),
+    Unsettled(usize),
+}
+
+impl ChoiceMatch<'_> {
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Implementation(index, _) | Self::Unsettled(index) => index,
+        }
+    }
+}
+
+/// One priority scan serves proof shortcuts and solver candidate availability.
+pub(super) fn matching_choice_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    choices: Option<super::ChosenImpls<'db>>,
+    goal: TraitInstId<'db>,
+    table: &mut PersistentUnificationTable<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<ChoiceMatch<'db>> {
+    choices?
+        .items(db)
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, &entry)| {
+            match_choice_entry(db, index, entry, goal, table, scope, assumptions)
+        })
+}
+
+pub(super) fn match_choice_entry<'db>(
+    db: &'db dyn HirAnalysisDb,
+    index: usize,
+    entry: super::ChoiceEntry<'db>,
+    goal: TraitInstId<'db>,
+    table: &mut PersistentUnificationTable<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<ChoiceMatch<'db>> {
+    let super::ChoiceEntry::Impl(choice) = entry;
+    let implementation = choice.implementation();
+    if implementation.trait_(db).def(db) != goal.def(db) {
+        return None;
+    }
+    let mut probe = table.clone();
+    let candidate = choice.instantiate(&mut probe);
+    match_header_args(
+        db,
+        &mut probe,
+        candidate.trait_(db),
+        goal,
+        scope,
+        [assumptions; 2],
+    )
+    .ok()?;
+    let matched_goal = goal.fold_with(db, &mut probe);
+    if Canonicalized::new(db, goal).canonical() != Canonicalized::new(db, matched_goal).canonical()
+    {
+        // A lexical opening does not decide the caller's unresolved arguments.
+        return Some(ChoiceMatch::Unsettled(index));
+    }
+    let candidate = candidate.fold_with(db, &mut probe);
+    *table = probe;
+    Some(ChoiceMatch::Implementation(
+        index,
+        ChosenImpl {
+            template: choice.template,
+            applied: Some(candidate),
+        },
+    ))
 }
 
 /// Match the entire head before consulting mode, associated bindings, or
@@ -289,40 +367,6 @@ fn possible_header_overlap<'db, U: UnificationStore<'db>>(
     Ok(HeaderMatch::Possible)
 }
 
-pub(super) fn matching_choice<'db>(
-    db: &'db dyn HirAnalysisDb,
-    table: &mut PersistentUnificationTable<'db>,
-    choices: Option<ChosenImpls<'db>>,
-    goal: TraitInstId<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<(usize, ImplementorId<'db>)> {
-    choices?
-        .items(db)
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, &choice)| {
-            let implementation = choice.implementation();
-            if implementation.trait_(db).def(db) != goal.def(db) {
-                return None;
-            }
-            let mut probe = table.clone();
-            let application = choice.instantiate(&mut probe);
-            match_header_args(
-                db,
-                &mut probe,
-                application.trait_(db),
-                goal,
-                scope,
-                [assumptions; 2],
-            )
-            .ok()?;
-            *table = probe;
-            Some((index, application))
-        })
-}
-
 /// The trait goal either operand of a single with could answer.
 pub(crate) fn common_choice_goal<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -404,9 +448,12 @@ pub(crate) fn match_chosen_header<'db>(
     complete: ImplementorId<'db>,
     goal: TraitInstId<'db>,
 ) -> Option<(ImplementorId<'db>, TraitInstId<'db>)> {
-    let solve_cx = solve_cx.with_choices(Some(ChosenImpls::new(db, vec![choice])));
+    let solve_cx = solve_cx.with_choices(Some(ChosenImpls::new(
+        db,
+        vec![super::ChoiceEntry::Impl(choice)],
+    )));
     let (query, mut table) = solve_cx.prepare_goal(db, goal);
-    let choice = query.choices?.items(db)[0];
+    let choice = query.choices?.items(db)[0].implementation()?;
     let mut application = choice.instantiate(&mut table);
     let scope = solve_cx.normalization_scope_for_trait_inst(db, query.goal);
     let goal = normalize_trait_inst_preserving_validity(db, query.goal, scope, query.assumptions);
@@ -616,6 +663,7 @@ fn type_depth_growth_exceeded(initial_depth: usize, current_depth: usize) -> boo
 struct TraitResolutionContext<'db> {
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     prepared_queries: FxHashMap<Query<'db>, PreparedQuery<'db>>,
     target: Option<TargetAnswer<'db>>,
     type_depth_budget: TypeDepthBudget,
@@ -625,12 +673,14 @@ impl<'db> TraitResolutionContext<'db> {
     fn new(
         db: &'db dyn HirAnalysisDb,
         origin_ingot: crate::Ingot<'db>,
+        tier: Tier,
         root: TraitSolverQuery<'db>,
         target: Option<TargetAnswer<'db>>,
     ) -> Self {
         Self {
             db,
             origin_ingot,
+            tier,
             prepared_queries: FxHashMap::default(),
             target,
             type_depth_budget: TypeDepthBudget::new(db, root, target),
@@ -756,7 +806,8 @@ impl<'db> TraitResolutionContext<'db> {
                 branch.remaining_goals.iter().rposition(|goal| {
                     let goal = goal.fold_with(self.db, &mut branch.table);
                     !goal.args(self.db).iter().any(|ty| ty.has_var(self.db))
-                        || !choices.items(self.db).iter().any(|choice| {
+                        || !choices.items(self.db).iter().any(|entry| {
+                            let super::ChoiceEntry::Impl(choice) = entry;
                             let implementation = choice
                                 .implementation()
                                 .fold_with(self.db, &mut branch.table);
@@ -831,30 +882,26 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         &mut self,
         key: &Self::Key,
     ) -> Result<CallbackOutcome<Vec<Self::Clause>, Self::StopReason>, Self::Error> {
-        let prepared = self.prepare_query(*key);
-        let mut table = prepared.table;
-        if let Some((index, application)) = matching_choice(
+        let mut prepared = self.prepare_query(*key);
+        match matching_choice_in(
             self.db,
-            &mut table,
             prepared.query.choices,
             prepared.normalized_goal,
+            &mut prepared.table,
             prepared.scope,
             prepared.query.assumptions,
         ) {
-            let matched_goal = prepared.normalized_goal.fold_with(self.db, &mut table);
-            if Canonicalized::new(self.db, prepared.normalized_goal).canonical()
-                != Canonicalized::new(self.db, matched_goal).canonical()
-            {
-                // Header priority is selection at known arguments, not
-                // permission to pick those arguments before other bounds.
+            Some(ChoiceMatch::Implementation(_, choice)) => {
+                return Ok(CallbackOutcome::Continue(vec![Clause::Chosen {
+                    selected: choice.template,
+                    application: choice.implementation(),
+                    table: prepared.table,
+                }]));
+            }
+            Some(ChoiceMatch::Unsettled(_)) => {
                 return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
             }
-            let choices = prepared.query.choices.expect("matched lexical choices");
-            return Ok(CallbackOutcome::Continue(vec![Clause::Chosen {
-                selected: choices.items(self.db)[index].template,
-                application,
-                table,
-            }]));
+            None => {}
         }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
@@ -869,6 +916,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             primary,
             secondary,
             Canonical::new(self.db, prepared.normalized_goal),
+            self.tier,
+            self.origin_ingot,
         );
 
         let mut clauses =
@@ -1245,11 +1294,12 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
 pub(super) fn solve<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     query: Query<'db>,
 ) -> GoalSatisfiability<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, None);
+    let mut context = TraitResolutionContext::new(db, origin_ingot, tier, root_goal, None);
     let mut observer = UnresolvedGoalObserver::default();
     let config = Config {
         limits: Limits {
@@ -1290,6 +1340,7 @@ pub(super) fn solve<'db>(
 pub(super) fn has_solution<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
+    tier: Tier,
     query: Query<'db>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
@@ -1301,7 +1352,7 @@ pub(super) fn has_solution<'db>(
         inst: target,
         relation,
     };
-    let mut context = TraitResolutionContext::new(db, origin_ingot, root_goal, Some(target));
+    let mut context = TraitResolutionContext::new(db, origin_ingot, tier, root_goal, Some(target));
     let options = ReportOptions::default().with_answerless(AnswerlessMode::Omit);
     // A target can occur after a non-regular recursive clause. Fair scheduling
     // keeps that branch from starving later root clauses before the type-depth
