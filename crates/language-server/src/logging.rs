@@ -98,10 +98,9 @@ const DEFAULT_CLIENT_FILTER: &str = "warn";
 ///   2. `<cwd>/.fe-lsp` if writable (workspace-local: Zed spawns `fe lsp`
 ///      with cwd set to the workspace root, so each workspace gets an
 ///      isolated log budget rather than sharing a global cache directory)
-///   3. `$XDG_CACHE_HOME/fe-language-server` if writable
-///   4. `$HOME/.cache/fe-language-server` if writable
+///   3. each of [`user_cache_dirs`] if writable
 ///
-/// Candidates 2-4 are probed in order via [`try_prepare_log_dir`]; the
+/// Candidates 2-3 are probed in order via [`try_prepare_log_dir`]; the
 /// first one that accepts a write is returned. This preserves the fallback
 /// chain in read-only or permission-restricted workspaces, where the
 /// previous implementation would silently drop logging by returning an
@@ -123,14 +122,17 @@ fn resolve_log_dir() -> Option<PathBuf> {
         .find(|dir| try_prepare_log_dir(dir))
 }
 
-/// `$XDG_CACHE_HOME/fe-language-server` and `$HOME/.cache/fe-language-server`, for whichever
-/// of the two variables hold an absolute path. The XDG spec says to ignore an empty or
+/// The per-user cache dirs, in order: `$XDG_CACHE_HOME/fe-language-server`,
+/// `$HOME/.cache/fe-language-server` and, on Windows, `%LOCALAPPDATA%\fe-language-server`, for
+/// whichever of the variables hold an absolute path. The XDG spec says to ignore an empty or
 /// relative one.
 pub(crate) fn user_cache_dirs() -> impl Iterator<Item = PathBuf> {
     let xdg = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
     let home = std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"));
+    let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     xdg.into_iter()
         .chain(home)
+        .chain(local_app_data)
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join("fe-language-server"))
 }

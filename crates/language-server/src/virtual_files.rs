@@ -12,10 +12,11 @@ use crate::logging::user_cache_dirs;
 /// Files the server writes for the editor to open: the builtin `core` and `std` ingots, and
 /// codegen views.
 ///
-/// They live in a cache dir shared by every server process, so a server that exits or is
-/// killed leaves nothing behind. Builtins go to `<cache>/builtins/<content hash>/{core,std}`,
-/// written once for each distinct content. Codegen views go to
-/// `<cache>/codegen/<source hash>/<name>`, replaced by each new view of the same source.
+/// They live in the user's cache dir, shared by every server process, so a server that exits
+/// or is killed leaves nothing behind. Builtins go to
+/// `<cache>/builtins/<content hash>/{core,std}`, written once for each distinct content.
+/// Codegen views go to `<cache>/codegen/<source hash>/<name>`, replaced by each new view of the
+/// same source.
 pub struct VirtualFiles {
     cache: PathBuf,
     builtins: PathBuf,
@@ -26,22 +27,19 @@ pub struct VirtualFiles {
 }
 
 impl VirtualFiles {
-    /// Write the builtin ingots to the first usable cache dir:
-    /// `$XDG_CACHE_HOME/fe-language-server`, `$HOME/.cache/fe-language-server`, then
-    /// `<temp dir>/fe-language-server`.
+    /// Write the builtin ingots to the first usable dir of [`user_cache_dirs`]. A shared temp dir
+    /// is no fallback: another user could create the fixed path first and plant symlinks.
     pub fn new(db: &DriverDataBase) -> Option<Self> {
-        user_cache_dirs()
-            .chain([std::env::temp_dir().join("fe-language-server")])
-            .find_map(|cache| {
-                Self::in_cache(&cache, db)
-                    .inspect_err(|e| {
-                        warn!(
-                            "failed to write builtin files to {}: {e:#}",
-                            cache.display()
-                        )
-                    })
-                    .ok()
-            })
+        user_cache_dirs().find_map(|cache| {
+            Self::in_cache(&cache, db)
+                .inspect_err(|e| {
+                    warn!(
+                        "failed to write builtin files to {}: {e:#}",
+                        cache.display()
+                    )
+                })
+                .ok()
+        })
     }
 
     fn in_cache(cache: &Path, db: &DriverDataBase) -> anyhow::Result<Self> {
