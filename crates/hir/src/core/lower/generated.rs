@@ -469,6 +469,9 @@ fn lower_scoped_derive<'db>(
     );
     ctxt.builder
         .defer_quoted_item_origin(implementation.into(), producer);
+    let demand = crate::hir_def::authored::ScopedDeriveDemandId::new(db, scoped.demand.clone());
+    ctxt.builder
+        .record_scoped_implementation(demand, implementation);
 }
 
 /// A member written in a member quotation: an item, or an associated shape,

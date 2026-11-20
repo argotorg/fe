@@ -1194,26 +1194,12 @@ fn check_scoped_implementation(
     let Some(scoped) = request.scoped_impl.as_ref() else {
         return Ok(());
     };
-    let file = db
-        .workspace()
-        .get(db, &request.target_file)
-        .expect("prepared view keeps every authored file");
-    let implementation = db
-        .top_mod(file)
-        .all_impl_traits(db)
-        .iter()
-        .copied()
-        .find(|implementation| {
-            implementation
-                .selection_name(db)
-                .is_some_and(|name| name.data(db) == &scoped.selection_name)
-        })
-        .ok_or_else(|| {
-            scoped_request_error(
-                &scoped.demand,
-                "generated scoped implementation was not constructed",
-            )
-        })?;
+    let implementation = hir::lower::prepared_scoped_item(db, &scoped.demand).ok_or_else(|| {
+        scoped_request_error(
+            &scoped.demand,
+            "generated scoped implementation was not constructed",
+        )
+    })?;
     let mut complete = implementation
         .diags(db)
         .into_iter()

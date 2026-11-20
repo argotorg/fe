@@ -2234,31 +2234,7 @@ pub fn scoped_derive_implementation<'db>(
 ) -> Option<crate::analysis::ty::trait_def::ImplementorId<'db>> {
     use crate::analysis::ty::trait_resolution::generation::GenerationRequest;
     let demand = freeze_generation_request(db, GenerationRequest::new(db, opening, goal)).ok()?;
-    let scoped = db
-        .generation_inputs()
-        .requests(db)
-        .iter()
-        .find_map(|request| {
-            request
-                .scoped_impl
-                .as_ref()
-                .filter(|scoped| scoped.demand == demand)
-        })?;
-    let file = db.workspace().get(db, &demand.opening.file)?;
-    let module = crate::lower::map_file_to_mod_impl(db, file);
-    let name = IdentId::new(db, scoped.selection_name.clone());
-    let mut implementations = module
-        .all_impl_traits(db)
-        .iter()
-        .copied()
-        .filter(|implementation| {
-            implementation.selection_name(db) == Some(name)
-                && matches!(implementation.origin(db), HirOrigin::Synthetic)
-        });
-    let implementation = implementations.next()?;
-    if implementations.next().is_some() {
-        return None;
-    }
+    let implementation = crate::lower::prepared_scoped_item(db, &demand)?;
     crate::analysis::ty::trait_lower::lower_impl_trait(db, implementation)
 }
 

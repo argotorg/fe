@@ -1,5 +1,6 @@
 use common::{
     file::File,
+    generation::ScopedDeriveDemand,
     ingot::{Ingot, IngotKind},
 };
 use num_bigint::BigUint;
@@ -13,9 +14,11 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, IntegerId,
-        ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, Use, Visibility, module_tree_impl,
+        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, ImplTrait,
+        IntegerId, ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, Use, Visibility,
+        authored::ScopedDeriveDemandId,
+        module_tree_impl,
         scope_graph::{ScopeGraph, ScopeId},
         use_tree::{UsePathId, UsePathSegment},
     },
@@ -274,6 +277,30 @@ pub fn generation_lowering_errors<'db>(
             _ => None,
         })
         .collect()
+}
+
+/// Finds the one prepared item installed for this frozen demand.
+pub fn prepared_scoped_item<'db>(
+    db: &'db dyn HirDb,
+    demand: &ScopedDeriveDemand,
+) -> Option<ImplTrait<'db>> {
+    let demand = ScopedDeriveDemandId::new(db, demand.clone());
+    prepared_scoped_item_impl(db, demand)
+}
+
+#[salsa::tracked(returns(copy))]
+fn prepared_scoped_item_impl<'db>(
+    db: &'db dyn HirDb,
+    demand: ScopedDeriveDemandId<'db>,
+) -> Option<ImplTrait<'db>> {
+    let file = db.workspace().get(db, &demand.demand(db).opening.file)?;
+    let module = map_file_to_mod_impl(db, file);
+    let mut items = scope_graph_impl(db, module)
+        .scoped_implementations
+        .iter()
+        .filter_map(|(key, item)| (*key == demand).then_some(*item));
+    let item = items.next()?;
+    items.next().is_none().then_some(item)
 }
 
 /// Returns the ingot module tree of the given ingot.

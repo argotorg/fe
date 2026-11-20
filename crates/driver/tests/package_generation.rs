@@ -1175,7 +1175,7 @@ fn prepared_modules(score: &str, alpha: &str, beta: &str) -> DriverDataBase {
 /// separate implementation, so the values do not mix.
 #[test]
 fn scoped_generic_provider_applications_cross_modules() {
-    let prepared = prepared_modules(
+    let mut prepared = prepared_modules(
         REPORT,
         r#"use ingot::beta::{Scaled, Weighted}
 use ingot::score::Report
@@ -1215,6 +1215,23 @@ impl<const K: u256> Derive<Report> for Scaled<K> {
     assert_eq!(eval(&prepared, alpha, "through_alias"), "10");
     assert_eq!(eval(&prepared, alpha, "both"), "1020");
     assert_eq!(eval(&prepared, alpha, "typed_pair"), "707");
+
+    use salsa::Setter;
+
+    let inputs = prepared.generation_inputs();
+    let original = inputs.requests(&prepared).clone();
+    let mut edited = original.clone();
+    let index = edited
+        .iter()
+        .position(|request| request.scoped_impl.is_some())
+        .expect("the package prepared scoped implementations");
+    let removed = edited.remove(index).scoped_impl.unwrap().demand;
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_some());
+    inputs.set_requests(&mut prepared).to(edited);
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_none());
+    inputs.set_requests(&mut prepared).to(original);
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_some());
+    assert_eq!(eval(&prepared, alpha, "both"), "1020");
 }
 
 /// Two applications of one provider whose implementations differ per argument

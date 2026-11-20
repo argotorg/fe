@@ -9,11 +9,19 @@
 //! ordinary resolution binds it in that module's lowered scope graph when a
 //! path or type containing it is resolved.
 
+use common::generation::ScopedDeriveDemand;
 use common::ingot::Ingot;
 use parser::TextRange;
 
 use super::{TopLevelMod, scope_graph::ScopeId};
 use crate::HirDb;
+
+#[salsa::interned]
+#[derive(Debug)]
+pub(crate) struct ScopedDeriveDemandId<'db> {
+    #[returns(ref)]
+    pub demand: ScopedDeriveDemand,
+}
 
 #[salsa::interned]
 #[derive(Debug)]

@@ -7,8 +7,9 @@ use crate::{
     hir_def::{
         AuthoredLocator, AuthoredScope, Body, Enum, EnumVariant, ExprId, FieldDefListId,
         FieldParent, Func, FuncParamListId, FuncParamName, GenericParamListId, GenericParamOwner,
-        HirIngot, Impl, ItemKind, TopLevelMod, TrackedItemId, TrackedItemVariant, Trait, Use,
-        VariantDefListId, VariantKind, Visibility,
+        HirIngot, Impl, ImplTrait, ItemKind, TopLevelMod, TrackedItemId, TrackedItemVariant, Trait,
+        Use, VariantDefListId, VariantKind, Visibility,
+        authored::ScopedDeriveDemandId,
         scope_graph::{EdgeKind, Scope, ScopeEdge, ScopeGraph, ScopeId},
     },
 };
@@ -81,6 +82,14 @@ impl<'db> ScopeGraphBuilder<'db> {
 
     pub(super) fn build(self, lower_diagnostics: Vec<LowerDiagnostic>) -> ScopeGraph<'db> {
         self.graph.build(self.top_mod, lower_diagnostics)
+    }
+
+    pub(super) fn record_scoped_implementation(
+        &mut self,
+        demand: ScopedDeriveDemandId<'db>,
+        item: ImplTrait<'db>,
+    ) {
+        self.graph.scoped_implementations.push((demand, item));
     }
 
     pub(super) fn enter_item_scope(
@@ -712,6 +721,7 @@ struct IntermediateScopeGraph<'db> {
     quote_mods: Vec<TopLevelMod<'db>>,
     quoted_top_mods: common::indexmap::IndexMap<ItemKind<'db>, TopLevelMod<'db>>,
     foreign_origins: Vec<(NodeId, AuthoredScope<'db>)>,
+    scoped_implementations: Vec<(ScopedDeriveDemandId<'db>, ImplTrait<'db>)>,
 }
 
 impl<'db> IntermediateScopeGraph<'db> {
@@ -750,6 +760,7 @@ impl<'db> IntermediateScopeGraph<'db> {
             quote_mods: self.quote_mods,
             quoted_top_mods: self.quoted_top_mods,
             foreign_origins,
+            scoped_implementations: self.scoped_implementations,
         }
     }
 
