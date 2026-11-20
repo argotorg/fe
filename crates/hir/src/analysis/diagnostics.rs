@@ -4973,6 +4973,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::ImmutableContractEffectMutBinding {
+                primary,
+                effect,
+                effect_span,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot bind immutable contract effect as `mut`".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is not declared `mut`", effect.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` declared here", effect.data(db)),
+                        span: effect_span.resolve(db),
+                    },
+                ],
+                notes: vec![
+                    "mark the contract's effect `mut` to use it mutably in `init` or a recv arm"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 

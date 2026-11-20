@@ -1,0 +1,67 @@
+use core::ptr::MemBuffer
+use std::abi::sol
+use std::evm::{Address, Call, Ctx, Log}
+
+msg M {
+    #[selector = sol("pay(address)")]
+    Pay { to: Address } -> bool,
+    #[selector = sol("note()")]
+    Note -> bool,
+}
+
+#[event]
+struct Noted {
+    value: u256,
+}
+
+fn pay(_ to: Address) -> bool uses (call: mut Call) {
+    call.try_call_raw(addr: to, gas: 0, value: Wei::zero(), args: MemBuffer::new(0).span()).success()
+}
+
+contract ArmListsMutEffectWithoutMut uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    recv M {
+        Pay { to } -> bool uses (ctx, call) {
+            call.try_call_raw(addr: to, gas: ctx.gas(), value: Wei::zero(), args: MemBuffer::new(0).span()).success()
+        }
+        Note -> bool uses (log) {
+            log.emit(Noted { value: 1 })
+            true
+        }
+    }
+}
+
+contract ArmPassesEffectWithoutMut uses (call: mut Call) {
+    recv M {
+        Pay { to } -> bool uses (call) {
+            pay(to)
+        }
+        Note -> bool {
+            false
+        }
+    }
+}
+
+contract ArmListsImmutableEffectAsMut uses (ctx: Ctx, call: Call) {
+    init() uses (mut ctx) {}
+
+    recv M {
+        Pay { to } -> bool uses (mut call) {
+            pay(to)
+        }
+        Note -> bool uses (ctx) {
+            ctx.gas() > 0
+        }
+    }
+}
+
+contract ArmListsMutEffectAsMut uses (ctx: Ctx, call: mut Call, log: mut Log) {
+    recv M {
+        Pay { to } -> bool uses (ctx, mut call) {
+            call.try_call_raw(addr: to, gas: ctx.gas(), value: Wei::zero(), args: MemBuffer::new(0).span()).success()
+        }
+        Note -> bool uses (mut log) {
+            log.emit(Noted { value: 1 })
+            true
+        }
+    }
+}
