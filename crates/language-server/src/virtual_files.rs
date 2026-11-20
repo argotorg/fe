@@ -3,7 +3,9 @@ use common::stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL, HasBuiltinCore
 use driver::DriverDataBase;
 use rustc_hash::FxHashMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 use tracing::warn;
 use url::Url;
 
@@ -129,7 +131,14 @@ impl VirtualFiles {
             .join(&blake3::hash(source.as_str().as_bytes()).to_hex()[..16]);
         fs::create_dir_all(&dir).with_context(|| format!("create dir {}", dir.display()))?;
         let path = dir.join(file_name);
-        fs::write(&path, content).with_context(|| format!("write file {}", path.display()))?;
+        // Write a temp file (mode 0600 on Unix) and rename it over the earlier view, so another
+        // server writing a view of the same source at once can't interleave its output with ours.
+        let mut file = NamedTempFile::new_in(&dir)
+            .with_context(|| format!("create temp file in {}", dir.display()))?;
+        file.write_all(content.as_bytes())
+            .with_context(|| format!("write temp file in {}", dir.display()))?;
+        file.persist(&path)
+            .with_context(|| format!("replace {}", path.display()))?;
         Url::from_file_path(&path).map_err(|_| anyhow::anyhow!("bad path url"))
     }
 
@@ -221,6 +230,8 @@ fn set_readonly(path: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Barrier;
     use std::thread;
 
@@ -266,8 +277,8 @@ mod tests {
         assert_eq!(vfs.map_client_to_internal(client), core_lib());
     }
 
-    /// A codegen view replaces the earlier view of its source, but not views of other sources
-    /// with the same file name.
+    /// A codegen view replaces the earlier view of its source without leaving a temp file, but
+    /// not views of other sources with the same file name. Only the user can read it.
     #[test]
     fn codegen_views_replace_views_of_the_same_source() {
         let cache = tempfile::tempdir().unwrap();
@@ -281,9 +292,17 @@ mod tests {
         let other = vfs.write_codegen(&b, "lib.mir", "other").unwrap();
         assert_eq!(first, second);
         assert_ne!(first, other);
+        let path = first.to_file_path().unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+        let views: Vec<_> = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert_eq!(views, [path.as_path()]);
+        #[cfg(unix)]
         assert_eq!(
-            fs::read_to_string(first.to_file_path().unwrap()).unwrap(),
-            "second"
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
         assert!(vfs.is_virtual_uri(&other));
     }
