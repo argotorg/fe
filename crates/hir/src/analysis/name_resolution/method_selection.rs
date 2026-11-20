@@ -16,8 +16,8 @@ use crate::analysis::{
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
-            ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
-            goal_query_has_solution, is_goal_query_satisfiable,
+            ChoiceEntry, ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
+            generation::GenerationRequest, goal_query_has_solution, is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -61,6 +61,10 @@ impl<'db> TraitMethodCand<'db> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum AssembledTraitMethodCand<'db> {
+    Offered {
+        inst: TraitInstId<'db>,
+        method: Func<'db>,
+    },
     Impl {
         implementor: ImplementorId<'db>,
         method: Func<'db>,
@@ -75,14 +79,16 @@ impl<'db> AssembledTraitMethodCand<'db> {
     fn trait_def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         match self {
             AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_def(db),
-            AssembledTraitMethodCand::Assumption { inst, .. } => inst.def(db),
+            AssembledTraitMethodCand::Assumption { inst, .. }
+            | AssembledTraitMethodCand::Offered { inst, .. } => inst.def(db),
         }
     }
 
     fn diagnostic_inst(self, db: &'db dyn HirAnalysisDb) -> TraitInstId<'db> {
         match self {
             AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_(db),
-            AssembledTraitMethodCand::Assumption { inst, .. } => inst,
+            AssembledTraitMethodCand::Assumption { inst, .. }
+            | AssembledTraitMethodCand::Offered { inst, .. } => inst,
         }
     }
 }
@@ -99,8 +105,12 @@ pub struct AmbiguousTraitMethods<'db> {
     pub diagnostic_traits: ThinVec<TraitInstId<'db>>,
 }
 
+/// A method selection and the generation requests its candidate probes stopped
+/// on. A probe that stops on a pending request leaves its candidate unconfirmed;
+/// the request is still owed to preparation.
 pub(crate) struct MethodSelectionOutcome<'db> {
     pub(crate) result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>,
+    pub(crate) pending: Vec<GenerationRequest<'db>>,
     /// The result is a candidate whose bounds are proven not to hold, kept only
     /// so that its unmet bound is reported. Nothing applies to the receiver,
     /// so a lower tier may still supply a method.
@@ -111,6 +121,7 @@ impl<'db> MethodSelectionOutcome<'db> {
     fn of(result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>) -> Self {
         Self {
             result,
+            pending: Vec::new(),
             unsatisfied: false,
         }
     }
@@ -281,8 +292,16 @@ fn select_filtered_method_in<'db>(
         return MethodSelectionOutcome::of(Err(MethodSelectionError::ReceiverTypeMustBeKnown));
     }
 
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter, tier);
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        filter,
+        choices,
+        tier,
+    );
     MethodSelector {
         db,
         receiver,
@@ -292,6 +311,7 @@ fn select_filtered_method_in<'db>(
         filter,
         choices,
         tier,
+        pending: Default::default(),
         unsatisfied: Default::default(),
     }
     .select()
@@ -325,8 +345,16 @@ pub(crate) fn select_trait_method_candidates<'db>(
 
     let filter = TraitFilter::Trait(trait_);
     // The caller names the trait and decides which tier to ask.
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter, tier);
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        filter,
+        None,
+        tier,
+    );
 
     let selector = MethodSelector {
         db,
@@ -337,6 +365,7 @@ pub(crate) fn select_trait_method_candidates<'db>(
         filter,
         choices: None,
         tier,
+        pending: Default::default(),
         unsatisfied: Default::default(),
     };
 
@@ -359,6 +388,7 @@ fn assemble_method_candidates<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
+    choices: Option<ChosenImpls<'db>>,
     tier: Tier,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
@@ -368,6 +398,7 @@ fn assemble_method_candidates<'db>(
         scope,
         assumptions,
         filter,
+        choices,
         tier,
         candidates: AssembledCandidates::default(),
     }
@@ -385,6 +416,7 @@ struct CandidateAssembler<'db, 'a> {
     /// The assumptions for the type bound in the current scope.
     assumptions: PredicateListId<'db>,
     filter: TraitFilter<'db>,
+    choices: Option<ChosenImpls<'db>>,
     /// Whether the methods and implementations generated in the ingot of
     /// `scope` are candidates.
     tier: Tier,
@@ -472,6 +504,49 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 }
             }
         }
+
+        // An offered trait contributes a declaration candidate, never an
+        // assumed proof. The ordinary lexical solver decides availability.
+        if let Some(choices) = self.choices {
+            let visible = choices.items(self.db).iter().any(|entry| {
+                matches!(entry, ChoiceEntry::Provider(opening) if opening.hints(self.db).open)
+            }).then(|| traits_available_for_selection(
+                self.db,
+                self.scope,
+                self.assumptions.list(self.db).iter().map(|inst| inst.def(self.db)),
+            ));
+            for entry in choices.items(self.db) {
+                let ChoiceEntry::Provider(opening) = entry else {
+                    continue;
+                };
+                for trait_ in opening.traits_for_lookup(
+                    self.db,
+                    visible.iter().flat_map(|traits| traits.iter().copied()),
+                ) {
+                    if !self.allow_trait(trait_) {
+                        continue;
+                    }
+                    let Some(&method) = trait_.method_defs(self.db).get(&self.method_name) else {
+                        continue;
+                    };
+                    // Declaration parameters become inference variables. The
+                    // provider only decides whether it can serve the resolved goal.
+                    let mut table = UnificationTable::new(self.db);
+                    let receiver = self.receiver.canonical().extract_identity(&mut table);
+                    let mut args = vec![receiver];
+                    let params = crate::analysis::ty::ty_lower::collect_generic_params(
+                        self.db,
+                        trait_.into(),
+                    );
+                    args.extend_from_slice(&params.params(self.db)[1..]);
+                    let inst = TraitInstId::new_simple(self.db, trait_, args);
+                    self.candidates
+                        .traits
+                        .insert(AssembledTraitMethodCand::Offered { inst, method });
+                }
+            }
+        }
+
         self.receiver.with_materialized(self.db, |cx| {
             let receiver = cx.query();
             for &pred in self.assumptions.list(self.db) {
@@ -578,6 +653,7 @@ struct MethodSelector<'db, 'a> {
     /// in the ingot of `scope`.
     tier: Tier,
     /// Requests that the probes of unconfirmed candidates stopped on.
+    pending: std::cell::RefCell<Vec<GenerationRequest<'db>>>,
     /// Set when the result is a candidate with a proven unmet bound.
     unsatisfied: std::cell::Cell<bool>,
 }
@@ -590,6 +666,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         };
         MethodSelectionOutcome {
             result,
+            pending: self.pending.into_inner(),
             unsatisfied: self.unsatisfied.get(),
         }
     }
@@ -973,9 +1050,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 });
                 contains_confirmed
                     || (reached_answer_cutoff
-                        && goal_query_has_solution(self.db, solve_cx, &query, confirmed))
+                        && goal_query_has_solution(
+                            self.db,
+                            solve_cx,
+                            &query,
+                            confirmed,
+                            &mut self.pending.borrow_mut(),
+                        ))
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
+            GoalSatisfiability::NeedsGeneration(request) => {
+                self.pending.borrow_mut().push(request);
+                false
+            }
         }
     }
 
@@ -985,8 +1072,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 implementor,
                 method,
             } => self.check_impl_cand(implementor, method),
-            AssembledTraitMethodCand::Assumption { inst, method } => {
-                match self.check_inst(inst, method) {
+            AssembledTraitMethodCand::Assumption { inst, method }
+            | AssembledTraitMethodCand::Offered { inst, method } => {
+                let offered = matches!(cand, AssembledTraitMethodCand::Offered { .. });
+                match self.check_inst(inst, method, offered) {
                     MethodCandidate::TraitMethod(cand) => TraitCandidateCheck::Confirmed(cand),
                     MethodCandidate::NeedsConfirmation(cand) => {
                         TraitCandidateCheck::NeedsConfirmation(cand)
@@ -1030,6 +1119,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     let solved = query.extract_solution(&mut table, solution).inst;
                     let _ = table.unify(constraint, solved);
                 }
+                GoalSatisfiability::NeedsGeneration(request) => {
+                    self.pending.borrow_mut().push(request);
+                    needs_confirmation = true;
+                }
                 GoalSatisfiability::NeedsConfirmation { .. }
                 | GoalSatisfiability::ContainsInvalid => {
                     needs_confirmation = true;
@@ -1066,7 +1159,12 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// checks if the goal is satisfiable given the current assumptions.
     /// Depending on the result, it either returns a confirmed trait method
     /// candidate or one that needs further confirmation.
-    fn check_inst(&self, inst: TraitInstId<'db>, method: Func<'db>) -> MethodCandidate<'db> {
+    fn check_inst(
+        &self,
+        declared: TraitInstId<'db>,
+        method: Func<'db>,
+        offered: bool,
+    ) -> MethodCandidate<'db> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -1082,17 +1180,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
             .with_assumptions(self.assumptions)
             .with_choices(self.choices);
-        let query = solve_cx.query(self.db, inst);
-        let inst = if receiver_is_ty_param {
-            inst
+        let inst = if receiver_is_ty_param && !offered {
+            declared
         } else {
-            let inst = table.instantiate_with_fresh_vars(inst);
+            let inst = table.instantiate_with_fresh_vars(declared);
             let inst_self_ty = table.instantiate_to_term(inst.self_ty(self.db));
             let receiver_term = table.instantiate_to_term(receiver_ty);
             let _ = table.unify(inst_self_ty, receiver_term);
             inst.fold_with(self.db, &mut table)
         };
 
+        // An offered declaration's arguments are holes to be settled by the
+        // call. Assumption arguments already denote the caller's types.
+        let query = solve_cx.query(self.db, if offered { inst } else { declared });
         let result = is_goal_query_satisfiable(self.db, solve_cx, &query);
         match result {
             GoalSatisfiability::Satisfied(solution) => {
@@ -1119,8 +1219,12 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             }
 
             GoalSatisfiability::NeedsConfirmation { .. }
+            | GoalSatisfiability::NeedsGeneration(_)
             | GoalSatisfiability::ContainsInvalid
             | GoalSatisfiability::UnSat(_) => {
+                if let GoalSatisfiability::NeedsGeneration(request) = result {
+                    self.pending.borrow_mut().push(request);
+                }
                 MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
                     self.receiver
                         .canonicalize_solution(self.db, &mut table, inst),
@@ -1144,7 +1248,19 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .list(self.db)
                 .iter()
                 .chain(&shapes)
-                .map(|inst| inst.def(self.db)),
+                .map(|inst| inst.def(self.db))
+                .chain(
+                    self.choices
+                        .into_iter()
+                        .flat_map(|choices| choices.items(self.db).iter())
+                        .flat_map(|entry| match entry {
+                            ChoiceEntry::Provider(opening) => {
+                                opening.hints(self.db).traits.as_slice()
+                            }
+                            ChoiceEntry::Impl(_) => &[],
+                        })
+                        .copied(),
+                ),
         )
     }
 }

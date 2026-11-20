@@ -96,6 +96,118 @@ const APP_WITH_LIB_TOML: &str =
 const LIB_TOML: &str = "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n";
 
 #[test]
+fn two_consumers_share_one_deferred_codec_specialization() {
+    let library =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/codec.fe");
+    let caller =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/lib.fe")
+            .replace("use ingot::codec::", "use lib::");
+    let second = APP_WITH_LIB_TOML.replace("name = \"app\"", "name = \"other\"");
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", library),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", caller.as_str()),
+        ("other/fe.toml", second.as_str()),
+        ("other/src/lib.fe", caller.as_str()),
+    ];
+    let db = project(&files);
+    assert!(prepare_ingots(&db, &[url("lib/")]).unwrap().is_none());
+
+    let forward = prepare_ingots(&db, &[url("app/"), url("other/")])
+        .unwrap()
+        .expect("the concrete calls request a provider");
+    let reverse = prepare_ingots(&db, &[url("other/"), url("app/")])
+        .unwrap()
+        .expect("the concrete calls request a provider");
+    let requests = forward.generation_inputs().requests(&forward);
+    assert_eq!(requests, reverse.generation_inputs().requests(&reverse));
+    assert_eq!(requests.len(), 1);
+    let scoped = requests[0].scoped_impl.as_ref().unwrap();
+    assert_eq!(scoped.demand.opening.file, url("lib/src/lib.fe"));
+    for root in ["app/", "other/"] {
+        let diagnostics = ingot_errors(&forward, root);
+        assert!(diagnostics.is_empty(), "{root}: {diagnostics}");
+    }
+    assert_authored_unchanged(&db, &files);
+}
+
+#[test]
+fn deferred_dependency_codec_rebinds_arguments_in_the_provider_view() {
+    let library =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/codec.fe")
+            .replace(
+                "pub struct Arg { value: u8 }",
+                "pub struct Arg<T> { value: T }",
+            )
+            .replace("impl Gate for Arg {", "impl<T> Gate for Arg<T> {")
+            .replace(
+                "pub fn write<K>(array: mut SolArray<Elem<K, Arg>>)",
+                "pub fn write<K, T>(array: mut SolArray<Elem<K, Arg<T>>>)",
+            );
+    let template =
+        include_str!("../../fe/tests/fixtures/fe_test_runner/late_storage_codec/src/lib.fe")
+            .replace("use ingot::codec::", "use lib::")
+            .replace("msg M {", "struct PrivateArgument { value: u8 }\n\nmsg M {");
+    let standin_dependency = "standin = { path = \"../standin\" }\n";
+    let app_manifest = format!("{APP_WITH_LIB_TOML}{standin_dependency}");
+    let library_with_standin = format!("{LIB_TOML}\n[dependencies]\n{standin_dependency}");
+    let standin_manifest = r#"
+[ingot]
+name = "std"
+version = "0.1.0"
+[dependencies]
+foundation = { path = "../foundation" }
+"#;
+    let standin = "pub struct Outside { value: u8 }\npub use foundation::FoundationType\n";
+    let foundation_manifest = &LIB_TOML.replace("\"lib\"", "\"foundation\"");
+    for (arg, imports, library_manifest, accepted) in [
+        ("u8", "", LIB_TOML, true),
+        ("(u8, [PrivateArgument; 1])", "", LIB_TOML, false),
+        ("Outside", "use standin::Outside\n", LIB_TOML, false),
+        (
+            "FoundationType",
+            "use standin::FoundationType\n",
+            library_with_standin.as_str(),
+            true,
+        ),
+    ] {
+        let caller = format!("{imports}{template}")
+            .replace("Elem<u8, Arg>", &format!("Elem<u8, Arg<{arg}>>"))
+            .replace("write<u8>", &format!("write<u8, {arg}>"));
+        let files = [
+            ("lib/fe.toml", library_manifest),
+            ("lib/src/lib.fe", library.as_str()),
+            ("app/fe.toml", app_manifest.as_str()),
+            ("app/src/lib.fe", caller.as_str()),
+            ("standin/fe.toml", standin_manifest),
+            ("standin/src/lib.fe", standin),
+            ("foundation/fe.toml", foundation_manifest.as_str()),
+            (
+                "foundation/src/lib.fe",
+                "pub struct FoundationType { value: u8 }",
+            ),
+        ];
+        let db = project(&files);
+        let result = prepare_ingots(&db, &[url("app/")]);
+        if accepted {
+            let prepared = result
+                .unwrap_or_else(|error| panic!("{arg}: {error}"))
+                .expect("the dependency codec is prepared");
+            assert_eq!(ingot_errors(&prepared, "app/"), "");
+        } else {
+            let error = result.err().expect("the argument is outside the view");
+            assert_eq!(error.file, url("lib/src/lib.fe"));
+            assert_eq!(
+                error.cause,
+                "a scoped target argument names a declaration outside the provider's input files"
+            );
+        }
+        assert_authored_unchanged(&db, &files);
+    }
+}
+
+#[test]
 fn quoted_import_paths_keep_the_producer_scope_after_dependency_edits() {
     let library = r#"
 mod tuning {
@@ -1038,32 +1150,6 @@ fn a_loop_between_mutually_generated_associated_types_agrees_with_its_handwritte
     assert_authored_unchanged(&db, &generated);
 }
 
-const SEEDS: &str = r#"pub trait Score {
-    const fn score() -> u256
-}
-pub trait Seed {
-    const fn seed() -> u256
-}
-pub struct Pair {}
-"#;
-
-const TYPES: &str = r#"pub trait Bits {
-    const BITS: u256
-}
-impl Bits for u8 {
-    const BITS: u256 = 8
-}
-pub struct Wrap<T> {
-    pub item: T,
-}
-impl<T: Bits> Bits for Wrap<T> {
-    const BITS: u256 = 2 * <T as Bits>::BITS
-}
-pub trait Report {
-    const fn bits() -> u256
-}
-"#;
-
 const REPORT: &str = "pub trait Report {\n    const fn weight() -> u256\n}\n";
 
 /// Prepare a three-module package (`score`, `alpha`, `beta` under `app/src`),
@@ -1083,6 +1169,190 @@ fn prepared_modules(score: &str, alpha: &str, beta: &str) -> DriverDataBase {
     prepared
 }
 
+/// A generic provider declared in `beta` and applied in `alpha` to a concrete
+/// type argument, to a constant argument through an alias declared in `alpha`,
+/// and twice in one function with different arguments. Each application is a
+/// separate implementation, so the values do not mix.
+#[test]
+fn scoped_generic_provider_applications_cross_modules() {
+    let mut prepared = prepared_modules(
+        REPORT,
+        r#"use ingot::beta::{Scaled, Weighted}
+use ingot::score::Report
+
+pub struct Pair {}
+pub type Ten = Scaled<10>
+pub const fn typed() -> u256 { with (Weighted<u8>) { Pair::weight() } }
+pub const fn through_alias() -> u256 { with (Ten) { Pair::weight() } }
+pub const fn both() -> u256 {
+    with (Scaled<10>) { Pair::weight() } * 100 + with (Scaled<20>) { Pair::weight() }
+}
+pub const fn typed_pair() -> u256 {
+    with (Weighted<u8>) { Pair::weight() } * 100 + with (Weighted<u256>) { Pair::weight() }
+}
+"#,
+        r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use ingot::score::Report
+
+pub struct Weighted<T> {}
+impl<T> Derive<trait Report> for Weighted<T> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn weight() -> u256 { 7 } }
+    }
+}
+pub struct Scaled<const K: u256> {}
+impl<const K: u256> Derive<trait Report> for Scaled<K> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let k = K
+        quote { const fn weight() -> u256 { ${k} } }
+    }
+}
+"#,
+    );
+    let alpha = "app/src/alpha.fe";
+    assert_eq!(eval(&prepared, alpha, "typed"), "7");
+    assert_eq!(eval(&prepared, alpha, "through_alias"), "10");
+    assert_eq!(eval(&prepared, alpha, "both"), "1020");
+    assert_eq!(eval(&prepared, alpha, "typed_pair"), "707");
+
+    use salsa::Setter;
+
+    let inputs = prepared.generation_inputs();
+    let original = inputs.requests(&prepared).clone();
+    let mut edited = original.clone();
+    let index = edited
+        .iter()
+        .position(|request| request.scoped_impl.is_some())
+        .expect("the package prepared scoped implementations");
+    let removed = edited.remove(index).scoped_impl.unwrap().demand;
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_some());
+    inputs.set_requests(&mut prepared).to(edited);
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_none());
+    inputs.set_requests(&mut prepared).to(original);
+    assert!(hir::lower::prepared_scoped_item(&prepared, &removed).is_some());
+    assert_eq!(eval(&prepared, alpha, "both"), "1020");
+}
+
+/// Two applications of one provider whose implementations differ per argument
+/// (`Provider<u8>` and `Provider<u256>`), named through aliases of the
+/// other module.
+#[test]
+fn scoped_generic_provider_aliases_pick_their_own_implementation_across_modules() {
+    let prepared = prepared_modules(
+        "pub trait Value {\n    const fn value() -> u256\n}\npub struct Pair {}\n",
+        r#"use ingot::beta::Provider
+use ingot::score::Pair
+
+type P8 = Provider<u8>
+type P256 = Provider<u256>
+pub const fn observe() -> u256 {
+    with (P8) { Pair::value() } * 100 + with (P256) { Pair::value() }
+}
+"#,
+        r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use ingot::score::Value
+
+pub struct Provider<T> {}
+impl Derive<trait Value> for Provider<u8> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn value() -> u256 { 1 } }
+    }
+}
+impl Derive<trait Value> for Provider<u256> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn value() -> u256 { 2 } }
+    }
+}
+"#,
+    );
+    assert_eq!(eval(&prepared, "app/src/alpha.fe", "observe"), "102");
+}
+
+const SEEDS: &str = r#"pub trait Score {
+    const fn score() -> u256
+}
+pub trait Seed {
+    const fn seed() -> u256
+}
+pub struct Pair {}
+"#;
+
+const RULE: &str = "what generation produces in its own package is not visible to it";
+
+/// `A`, written in `alpha`, opens the scoped output of `B`, written in
+/// `beta`; `B` opens that of `A` when `cyclic`, and is a leaf otherwise.
+fn two_module_providers(cyclic: bool) -> (String, String) {
+    let alpha = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use ingot::score::{Pair, Score, Seed}
+use ingot::beta::B
+
+pub struct A {}
+impl Derive<trait Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (B) { Pair::seed() }
+        quote { const fn score() -> u256 { ${n} + 1 } }
+    }
+}
+pub const fn run() -> u256 { with (A) { Pair::score() } }
+"#;
+    let seed = if cyclic {
+        "with (A) { Pair::score() }"
+    } else {
+        "41"
+    };
+    let beta = format!(
+        r#"use core::derive::Derive
+use core::meta::{{Code, Item, Record}}
+use ingot::score::{{Pair, Score, Seed}}
+use ingot::alpha::A
+
+pub struct B {{}}
+impl Derive<trait Seed> for B {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        let n: u256 = {seed}
+        quote {{ const fn seed() -> u256 {{ ${{n}} + 1 }} }}
+    }}
+}}
+"#
+    );
+    (alpha.to_string(), beta)
+}
+
+/// A provider that opens another module's provider reads what generation
+/// produces, which the one-view rule refuses. The refusal comes before any
+/// provider runs, at a `with` binding that names one of the two providers,
+/// whether or not `B` opens `A` in turn.
+#[test]
+fn a_provider_that_opens_another_modules_provider_is_refused_where_it_waits() {
+    for cyclic in [true, false] {
+        let (alpha, beta) = two_module_providers(cyclic);
+        let files = [
+            ("app/fe.toml", APP_TOML),
+            ("app/src/lib.fe", ""),
+            ("app/src/score.fe", SEEDS),
+            ("app/src/alpha.fe", alpha.as_str()),
+            ("app/src/beta.fe", beta.as_str()),
+        ];
+        let db = project(&files);
+        let error = prepare_ingots(&db, &[url("app/")])
+            .err()
+            .expect("a provider that opens a provider is refused");
+        assert!(error.cause.contains(RULE), "{error}");
+        assert_eq!(error.file, url("app/src/alpha.fe"), "{error}");
+        let start = usize::from(error.range.start());
+        let end = usize::from(error.range.end());
+        assert!(
+            matches!(&alpha[start..end], "A" | "B"),
+            "{error}: {}",
+            &alpha[start..end]
+        );
+        assert_authored_unchanged(&db, &files);
+    }
+}
+
 /// The accepted way to share a value between providers of two modules: an
 /// ordinary function that both read.
 #[test]
@@ -1099,9 +1369,7 @@ impl Derive<trait Score> for A {
         quote { const fn score() -> u256 { ${n} + 1 } }
     }
 }
-impl Score for Pair with (A)
-impl Seed for Pair with (B)
-pub const fn run() -> u256 { Pair::score() + Pair::seed() }
+pub const fn run() -> u256 { with (A) { Pair::score() } + with (B) { Pair::seed() } }
 "#;
     let beta = r#"use core::derive::Derive
 use core::meta::{Code, Item, Record}
@@ -1119,6 +1387,64 @@ impl Derive<trait Seed> for B {
     let prepared = prepared_modules(SEEDS, alpha, beta);
     assert_eq!(eval(&prepared, "app/src/alpha.fe", "run"), "84");
 }
+
+/// More independent scoped requests than the rounds a transaction may build:
+/// one provider written in `alpha` serves 130 records written in `beta`. All
+/// share a round, so the program prepares in two views.
+#[test]
+fn many_independent_scoped_requests_across_modules_share_a_round() {
+    const RECORDS: usize = 130;
+    let mut alpha = String::from(
+        r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+use ingot::score::Score
+use ingot::beta::*
+
+pub struct ProviderA {}
+impl Derive<trait Score> for ProviderA {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record) as u256
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+pub const fn total() -> u256 {
+    with (ProviderA) {
+        0
+"#,
+    );
+    let mut beta = String::new();
+    for record in 0..RECORDS {
+        alpha += &format!("            + R{record}::score()\n");
+        beta += &format!("pub struct R{record} {{ pub a: u8 }}\n");
+    }
+    alpha += "    }\n}\n";
+    let prepared = prepared_modules(
+        "pub trait Score {\n    const fn score() -> u256\n}\n",
+        &alpha,
+        &beta,
+    );
+    assert_eq!(
+        eval(&prepared, "app/src/alpha.fe", "total"),
+        RECORDS.to_string()
+    );
+}
+
+const TYPES: &str = r#"pub trait Bits {
+    const BITS: u256
+}
+impl Bits for u8 {
+    const BITS: u256 = 8
+}
+pub struct Wrap<T> {
+    pub item: T,
+}
+impl<T: Bits> Bits for Wrap<T> {
+    const BITS: u256 = 2 * <T as Bits>::BITS
+}
+pub trait Report {
+    const fn bits() -> u256
+}
+"#;
 
 /// Two modules derive for each other's records, and the generated code names
 /// a generic type applied to the other module's type (`Wrap<Right>`,
@@ -1207,6 +1533,61 @@ impl Score for Right with (MakeRight)
 "#;
     let prepared = prepared_modules(score, alpha, beta);
     assert_eq!(eval(&prepared, "app/src/alpha.fe", "left_total"), "3");
+}
+
+/// A chain of scoped providers that alternates between modules: `A` (alpha)
+/// opens `B` (beta), which opens `C` (alpha). Each link reads the output of
+/// the next, so the chain is refused at the first binding that waits.
+#[test]
+fn a_scoped_chain_that_alternates_between_modules_is_refused() {
+    let score = "pub trait Score {\n    const fn score() -> u256\n}\npub trait Seed {\n    const fn seed() -> u256\n}\npub trait Base {\n    const fn base() -> u256\n}\npub struct Pair {}\n";
+    let alpha = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+use ingot::score::{Score, Seed, Base, Pair}
+use ingot::beta::B
+
+pub struct A {}
+impl Derive<trait Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (B) { Pair::seed() }
+        quote { const fn score() -> u256 { ${n} + 1 } }
+    }
+}
+pub struct C {}
+impl Derive<trait Base> for C {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn base() -> u256 { 40 } }
+    }
+}
+pub const fn run() -> u256 { with (A) { Pair::score() } }
+"#;
+    let beta = r#"use core::derive::Derive
+use core::meta::{Record, Code, Item}
+use ingot::score::{Seed, Base, Pair}
+use ingot::alpha::C
+
+pub struct B {}
+impl Derive<trait Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (C) { Pair::base() }
+        quote { const fn seed() -> u256 { ${n} + 1 } }
+    }
+}
+"#;
+    let files = [
+        ("app/fe.toml", APP_TOML),
+        ("app/src/lib.fe", ""),
+        ("app/src/score.fe", score),
+        ("app/src/alpha.fe", alpha),
+        ("app/src/beta.fe", beta),
+    ];
+    let db = project(&files);
+    let error = prepare_ingots(&db, &[url("app/")])
+        .err()
+        .expect("a provider chain is refused");
+    assert!(error.cause.contains(RULE), "{error}");
+    assert_eq!(error.file, url("app/src/alpha.fe"), "{error}");
+    assert_authored_unchanged(&db, &files);
 }
 
 /// A generic header (`impl<T> Report for Box<T>`) whose provider is a generic
@@ -1365,6 +1746,144 @@ pub const fn result() -> u8 { Target {}.code() }
     assert!(
         diagnostics.contains("`rules` is not found"),
         "{diagnostics}"
+    );
+}
+
+#[test]
+fn scoped_quotation_uses_the_producers_dependency_edges() {
+    let library = r#"
+use core::meta::{Code, Item}
+
+pub const fn helper() -> u8 { 9 }
+pub mod local_rules { pub const fn score() -> u8 { 4 } }
+
+pub const fn fragment() -> Code<Item> {
+    quote {
+        const fn score() -> u8 {
+            use rules::score as imported
+            imported() + rules::score()
+        }
+    }
+}
+"#;
+    let app = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Score { const fn score() -> u8 }
+struct Target {}
+struct Provider {}
+
+impl Derive<trait Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> { lib::fragment() }
+}
+
+pub const fn result() -> u8 { with (Provider) { Target::score() } }
+"#;
+    let lib_with_rules = format!("{LIB_TOML}\n[dependencies]\nrules = {{ path = \"../rules\" }}\n");
+    let app_with_shadow = format!("{APP_WITH_LIB_TOML}rules = {{ path = \"../shadow\" }}\n");
+    let shadow_toml = LIB_TOML.replace("\"lib\"", "\"shadow\"");
+    let rules_toml = LIB_TOML.replace("\"lib\"", "\"rules\"");
+    let check = |lib_manifest: &str, app_manifest: &str, library: &str| {
+        let db = project(&[
+            ("app/fe.toml", app_manifest),
+            ("app/src/lib.fe", app),
+            ("lib/fe.toml", lib_manifest),
+            ("lib/src/lib.fe", library),
+            ("rules/fe.toml", &rules_toml),
+            ("rules/src/lib.fe", "pub const fn score() -> u8 { 3 }"),
+            ("shadow/fe.toml", &shadow_toml),
+            ("shadow/src/lib.fe", "pub const fn score() -> u8 { 5 }"),
+        ]);
+        prepare_ingots(&db, &[url("app/")])
+    };
+    let import = "use rules::score as imported";
+    for value_binding in [
+        "",
+        "const rules: u8 = 0\n",
+        "const fn rules() -> u8 { 0 }\n",
+        "use ingot::helper as rules\n",
+    ] {
+        let library = library.replace(import, &format!("{value_binding}{import}"));
+        for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
+            let prepared = check(&lib_with_rules, manifest, &library)
+                .expect("the producer can use its dependency")
+                .expect("the scoped request generated a method");
+            assert_eq!(ingot_errors(&prepared, "app/"), "", "{value_binding}");
+            assert_eq!(
+                eval(&prepared, "app/src/lib.fe", "result"),
+                "6",
+                "{value_binding}"
+            );
+        }
+
+        let prepared = check(LIB_TOML, &app_with_shadow, &library)
+            .expect("body diagnostics are reported on the prepared package")
+            .expect("the scoped request generated a method");
+        let diagnostics = ingot_errors(&prepared, "app/");
+        assert!(
+            diagnostics.contains("`rules` is not found"),
+            "{value_binding}: {diagnostics}"
+        );
+    }
+
+    for (before, after, read, expected) in [
+        ("const rules: u8 = 0", "", "selected", "3"),
+        ("const fn rules() -> u8 { 0 }", "", "selected()", "3"),
+        ("", "use ingot::helper as rules", "selected()", "12"),
+    ] {
+        let library = library
+            .replace(import, &format!("{before}\nuse rules as selected\n{after}"))
+            .replace(
+                "imported() + rules::score()",
+                &format!("{read} + selected::score()"),
+            );
+        for manifest in [APP_WITH_LIB_TOML, app_with_shadow.as_str()] {
+            let prepared = check(&lib_with_rules, manifest, &library)
+                .expect("the producer can use its dependency")
+                .expect("the scoped request generated a method");
+            assert_eq!(ingot_errors(&prepared, "app/"), "", "{library}");
+            assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), expected);
+        }
+        let prepared = check(LIB_TOML, &app_with_shadow, &library)
+            .expect("body diagnostics are reported on the prepared package")
+            .expect("the scoped request generated a method");
+        let diagnostics = ingot_errors(&prepared, "app/");
+        assert!(
+            diagnostics.contains("`selected` is not found"),
+            "{diagnostics}"
+        );
+    }
+
+    let local = library.replace(
+        import,
+        &format!("use ingot::local_rules as rules\n{import}"),
+    );
+    let prepared = check(LIB_TOML, &app_with_shadow, &local)
+        .expect("the local module alias is valid")
+        .expect("the scoped request generated a method");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "8");
+    let local_single = local
+        .replace(import, "use rules as selected")
+        .replace("imported() + rules::score()", "selected::score()");
+    let prepared = check(LIB_TOML, &app_with_shadow, &local_single)
+        .expect("the quoted module alias supplies the type domain")
+        .expect("the scoped request generated a method");
+    assert_eq!(ingot_errors(&prepared, "app/"), "");
+    assert_eq!(eval(&prepared, "app/src/lib.fe", "result"), "4");
+
+    let glob = library
+        .replace("use rules::score as imported", "use rules::*")
+        .replace("imported()", "score()");
+    let refusal = check(&lib_with_rules, APP_WITH_LIB_TOML, &glob)
+        .err()
+        .expect("glob imports in a scoped quotation are refused");
+    assert!(
+        refusal
+            .cause
+            .contains("a glob import is not supported inside a quotation"),
+        "{refusal}"
     );
 }
 

@@ -100,13 +100,16 @@ fn impl_header_may_match<'db>(
 #[derive(Clone, Copy)]
 pub(crate) enum ChoiceMatch<'db> {
     Implementation(usize, super::ChosenImpl<'db>),
+    NeedsGeneration(usize, super::generation::GenerationRequest<'db>),
     Unsettled(usize),
 }
 
 impl ChoiceMatch<'_> {
     pub(crate) fn index(self) -> usize {
         match self {
-            Self::Implementation(index, _) | Self::Unsettled(index) => index,
+            Self::Implementation(index, _)
+            | Self::NeedsGeneration(index, _)
+            | Self::Unsettled(index) => index,
         }
     }
 }
@@ -120,14 +123,61 @@ pub(super) fn matching_choice_in<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<ChoiceMatch<'db>> {
-    choices?
-        .items(db)
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, &entry)| {
-            match_choice_entry(db, index, entry, goal, table, scope, assumptions)
-        })
+    use super::{ChoiceEntry, generation::GenerationRequest};
+
+    let choices = choices?;
+    let items = choices.items(db);
+    let mut end = items.len();
+    while end != 0 {
+        let frame = choices.frame(db, end - 1);
+        end = frame.start;
+        if frame.len() == 1 {
+            let index = frame.start;
+            if let Some(matched) =
+                match_choice_entry(db, index, items[index], goal, table, scope, assumptions)
+            {
+                return Some(matched);
+            }
+            continue;
+        }
+
+        let mut selected: Option<(ChoiceMatch<'db>, _, Option<_>)> = None;
+        for index in frame.rev() {
+            let entry = items[index];
+            let mut probe = table.clone();
+            let Some(matched) =
+                match_choice_entry(db, index, entry, goal, &mut probe, scope, assumptions)
+            else {
+                continue;
+            };
+            if matches!(matched, ChoiceMatch::Unsettled(_)) {
+                return Some(matched);
+            }
+            let opening = match entry {
+                ChoiceEntry::Provider(opening) => Some(opening),
+                ChoiceEntry::Impl(_) => None,
+            };
+            match &selected {
+                Some((previous, _, earlier)) if opening.is_some() || earlier.is_some() => {
+                    let message = if opening.is_some() && earlier.is_some() {
+                        "one `with` header gives two derive providers for this trait application"
+                    } else {
+                        "one `with` header gives a derive provider and a choice for this trait application"
+                    };
+                    let opening = opening.or(*earlier).expect("provider conflict");
+                    let refusal = GenerationRequest::refused(db, opening, goal, message);
+                    return Some(ChoiceMatch::NeedsGeneration(previous.index(), refusal));
+                }
+                Some(_) => {}
+                None => selected = Some((matched, probe, opening)),
+            }
+        }
+        if let Some((matched, proof, _)) = selected {
+            *table = proof;
+            return Some(matched);
+        }
+    }
+    None
 }
 
 pub(super) fn match_choice_entry<'db>(
@@ -139,7 +189,46 @@ pub(super) fn match_choice_entry<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Option<ChoiceMatch<'db>> {
-    let super::ChoiceEntry::Impl(choice) = entry;
+    let choice = match entry {
+        super::ChoiceEntry::Impl(choice) => choice,
+        super::ChoiceEntry::Provider(opening) => {
+            if !opening.may_offer(db, goal.def(db)) {
+                return None;
+            }
+            let unresolved = super::super::visitor::collect_flags(db, goal)
+                .intersects(super::super::ty_def::TyFlags::HAS_VAR);
+            // A default can depend on an unresolved Self or another argument.
+            // Until the goal settles, its canonical residual can still change.
+            if unresolved
+                && goal.def(db).param_set(db).required_explicit_param_count(db) + 1
+                    < goal.args(db).len()
+            {
+                return Some(ChoiceMatch::Unsettled(index));
+            }
+            match super::generation::provider_offers_goal(db, opening, goal) {
+                Ok(false) => return None,
+                _ if unresolved => return Some(ChoiceMatch::Unsettled(index)),
+                Ok(true) => {}
+                Err(reason) => {
+                    let request =
+                        super::generation::GenerationRequest::refused(db, opening, goal, reason);
+                    return Some(ChoiceMatch::NeedsGeneration(index, request));
+                }
+            }
+            let Some(implementation) =
+                crate::core::meta::scoped_derive_implementation(db, opening, goal)
+            else {
+                return Some(ChoiceMatch::NeedsGeneration(
+                    index,
+                    super::generation::GenerationRequest::new(db, opening, goal),
+                ));
+            };
+            super::ChosenImpl {
+                template: implementation,
+                applied: Some(implementation),
+            }
+        }
+    };
     let implementation = choice.implementation();
     if implementation.trait_(db).def(db) != goal.def(db) {
         return None;
@@ -567,17 +656,19 @@ pub(crate) fn answering_assumption<'db>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StopReason {
+enum StopReason<'db> {
+    NeedsGeneration(super::generation::GenerationRequest<'db>),
     UnresolvedChoice,
     MaximumTypeDepth,
     TargetFound,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::SalsaValue)]
-pub(crate) enum TargetSolutionStatus {
+pub(crate) enum TargetSolutionStatus<'db> {
     Found,
     NotFound,
     Incomplete,
+    NeedsGeneration(super::generation::GenerationRequest<'db>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -806,13 +897,17 @@ impl<'db> TraitResolutionContext<'db> {
                 branch.remaining_goals.iter().rposition(|goal| {
                     let goal = goal.fold_with(self.db, &mut branch.table);
                     !goal.args(self.db).iter().any(|ty| ty.has_var(self.db))
-                        || !choices.items(self.db).iter().any(|entry| {
-                            let super::ChoiceEntry::Impl(choice) = entry;
-                            let implementation = choice
-                                .implementation()
-                                .fold_with(self.db, &mut branch.table);
-                            implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
-                                && impl_header_may_match(self.db, implementation, goal)
+                        || !choices.items(self.db).iter().any(|entry| match entry {
+                            super::ChoiceEntry::Provider(opening) => {
+                                opening.may_offer(self.db, goal.def(self.db))
+                            }
+                            super::ChoiceEntry::Impl(choice) => {
+                                let implementation = choice
+                                    .implementation()
+                                    .fold_with(self.db, &mut branch.table);
+                                implementation.trait_inst(self.db).def(self.db) == goal.def(self.db)
+                                    && impl_header_may_match(self.db, implementation, goal)
+                            }
                         })
                 })
             })
@@ -824,16 +919,10 @@ impl<'db> TraitResolutionContext<'db> {
         // sees a stale, pre-unification subgoal.
         let next_goal = next_goal.fold_with(self.db, &mut branch.table);
         let assumptions = assumptions.fold_with(self.db, &mut branch.table);
-        let choices = parent.value().choices.map(|choices| {
-            super::ChosenImpls::new(
-                self.db,
-                choices
-                    .items(self.db)
-                    .iter()
-                    .map(|item| item.fold_with(self.db, &mut branch.table))
-                    .collect::<Vec<_>>(),
-            )
-        });
+        let choices = parent
+            .value()
+            .choices
+            .map(|choices| choices.fold_with(self.db, &mut branch.table));
         Transition::Suspend {
             goal: TraitSolverQuery {
                 goal: next_goal,
@@ -856,7 +945,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
     type State = Branch<'db>;
     type Rebase = CanonicalGoalQuery<'db>;
     type Error = Infallible;
-    type StopReason = StopReason;
+    type StopReason = StopReason<'db>;
 
     fn canonicalize(
         &mut self,
@@ -897,6 +986,9 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     application: choice.implementation(),
                     table: prepared.table,
                 }]));
+            }
+            Some(ChoiceMatch::NeedsGeneration(_, request)) => {
+                return Ok(CallbackOutcome::Stop(StopReason::NeedsGeneration(request)));
             }
             Some(ChoiceMatch::Unsettled(_)) => {
                 return Ok(CallbackOutcome::Stop(StopReason::UnresolvedChoice));
@@ -1276,7 +1368,7 @@ impl<'db> Observer<TraitResolutionContext<'db>> for UnresolvedGoalObserver<'db> 
     }
 }
 
-fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
+fn map_completion(completion: Completion<StopReason<'_>>) -> TraitSolveCompletion {
     match completion {
         Completion::Saturated => TraitSolveCompletion::Saturated,
         Completion::RootAnswerLimit { limit } => TraitSolveCompletion::RootAnswerLimit { limit },
@@ -1285,6 +1377,9 @@ fn map_completion(completion: Completion<StopReason>) -> TraitSolveCompletion {
         Completion::PendingWorkLimit { limit } => TraitSolveCompletion::PendingWorkLimit { limit },
         Completion::Adapter(StopReason::UnresolvedChoice) => TraitSolveCompletion::UnresolvedChoice,
         Completion::Adapter(StopReason::MaximumTypeDepth) => TraitSolveCompletion::MaximumTypeDepth,
+        Completion::Adapter(StopReason::NeedsGeneration(_)) => {
+            unreachable!("generation dependency is handled before ordinary completion")
+        }
         Completion::Adapter(StopReason::TargetFound) => {
             unreachable!("ordinary trait solving never installs a target")
         }
@@ -1319,6 +1414,9 @@ pub(super) fn solve<'db>(
         Ok(report) => report,
         Err(never) => match never {},
     };
+    if let Completion::Adapter(StopReason::NeedsGeneration(request)) = report.completion {
+        return GoalSatisfiability::NeedsGeneration(request);
+    }
     let root = report.root;
     let solutions: IndexSet<_> = report.answers.into_iter().collect();
     let completion = map_completion(report.completion);
@@ -1344,7 +1442,7 @@ pub(super) fn has_solution<'db>(
     query: Query<'db>,
     target: Canonical<TraitInstId<'db>>,
     relation: TargetSolutionMatch,
-) -> TargetSolutionStatus {
+) -> TargetSolutionStatus<'db> {
     let mut root_table = PersistentUnificationTable::new(db);
     let root_goal = query.extract_identity(&mut root_table);
     let target = TargetAnswer {
@@ -1366,6 +1464,9 @@ pub(super) fn has_solution<'db>(
         Err(never) => match never {},
     };
     match report.completion {
+        Completion::Adapter(StopReason::NeedsGeneration(request)) => {
+            TargetSolutionStatus::NeedsGeneration(request)
+        }
         Completion::Adapter(StopReason::TargetFound) => TargetSolutionStatus::Found,
         Completion::Saturated => TargetSolutionStatus::NotFound,
         Completion::RootAnswerLimit { .. }

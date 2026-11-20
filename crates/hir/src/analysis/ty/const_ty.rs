@@ -141,6 +141,11 @@ pub(crate) struct LoweringContext<'db> {
     /// The record whose field type is being lowered where generated code
     /// spliced it (`with_spliced_record`).
     spliced_record: std::cell::Cell<Option<GenericParamOwner<'db>>>,
+    /// The generation requests that method discovery under `method_choices`
+    /// stopped on. The caller that supplied the choices owes them to
+    /// preparation (`take_generation_requests`).
+    generation_requests:
+        std::cell::RefCell<Vec<super::trait_resolution::generation::GenerationRequest<'db>>>,
     /// Names are found in the authored tier only, with no fallback to the items
     /// generated in the ingot. A bare identifier in a pattern is classified
     /// this way: it is a constant only if authored items say so.
@@ -168,6 +173,7 @@ impl<'db> LoweringContext<'db> {
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
             spliced_record: std::cell::Cell::new(None),
+            generation_requests: Default::default(),
             authored_names_only: false,
         }
     }
@@ -194,6 +200,21 @@ impl<'db> LoweringContext<'db> {
 
     pub(crate) fn method_choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
         self.method_choices
+    }
+
+    /// Called by path resolution for the requests a method discovery met.
+    pub(crate) fn record_generation_requests(
+        &self,
+        requests: impl IntoIterator<Item = super::trait_resolution::generation::GenerationRequest<'db>>,
+    ) {
+        self.generation_requests.borrow_mut().extend(requests);
+    }
+
+    /// The requests path resolution met under this context's choices.
+    pub(crate) fn take_generation_requests(
+        &self,
+    ) -> Vec<super::trait_resolution::generation::GenerationRequest<'db>> {
+        std::mem::take(&mut self.generation_requests.borrow_mut())
     }
 
     /// Makes this lowering lower an associated type of `impl_trait`.

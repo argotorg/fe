@@ -2871,7 +2871,7 @@ pub(crate) fn msg_variant_impl<'db>(
     let inst = TraitInstId::new_simple(db, msg_variant_trait, vec![variant_ty, abi]);
     match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope, Tier::All), inst) {
         Selection::Unique(resolved) => Some(resolved.selected()),
-        Selection::Ambiguous(_) | Selection::NotFound => None,
+        Selection::Ambiguous(_) | Selection::NotFound | Selection::NeedsGeneration(_) => None,
     }
 }
 
@@ -4508,7 +4508,9 @@ impl<'db> Impl<'db> {
                 .with_assumptions(param_env(db, self.into())),
             ty,
         ) {
-            WellFormedness::WellFormed => InherentImplAdmissibility::Admissible { ty },
+            WellFormedness::WellFormed | WellFormedness::Pending(_) => {
+                InherentImplAdmissibility::Admissible { ty }
+            }
             WellFormedness::IllFormed { goal, subgoal } => {
                 InherentImplAdmissibility::IllFormed { ty, goal, subgoal }
             }

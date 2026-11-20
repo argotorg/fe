@@ -31,7 +31,7 @@ use super::{
     trait_resolution::{
         ChoiceMatch, ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
         assumption_matcher, constraint::collect_candidate_constraints,
-        normalize_trait_inst_preserving_validity,
+        generation::GenerationRequest, normalize_trait_inst_preserving_validity,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
     ty_def::{BorrowKind, TyFlags, TyId},
@@ -264,7 +264,7 @@ impl<'db> UseEvidence<'db> {
     pub(crate) fn complete_deferred(
         &mut self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Result<(), EvidenceCompletionError> {
+    ) -> Result<(), EvidenceCompletionError<'db>> {
         if let Some(dispatch) = &mut self.dispatch {
             dispatch.proof = complete_deferred_evidence(db, dispatch.proof)?;
         }
@@ -679,7 +679,7 @@ fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>
 fn complete_deferred_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
-) -> Result<EvidenceId<'db>, EvidenceCompletionError> {
+) -> Result<EvidenceId<'db>, EvidenceCompletionError<'db>> {
     if !proof.has_deferred(db) {
         return Ok(proof);
     }
@@ -712,6 +712,9 @@ fn complete_deferred_evidence<'db>(
                 };
                 match outcome {
                     ProofOutcome::Proven(proof) => Ok(proof),
+                    ProofOutcome::NeedsGeneration(request) => {
+                        Err(EvidenceCompletionError::NeedsGeneration(request))
+                    }
                     ProofOutcome::Deferred | ProofOutcome::Unavailable => {
                         Err(EvidenceCompletionError::Unavailable)
                     }
@@ -737,8 +740,9 @@ fn complete_deferred_evidence<'db>(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
-pub(crate) enum EvidenceCompletionError {
+pub(crate) enum EvidenceCompletionError<'db> {
     Unavailable,
+    NeedsGeneration(GenerationRequest<'db>),
 }
 
 /// Proofs form a shared DAG. Cache this property so repeated tuple/condition
@@ -866,7 +870,7 @@ impl<'db> EvidenceList<'db> {
     fn complete_deferred(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Result<Self, EvidenceCompletionError> {
+    ) -> Result<Self, EvidenceCompletionError<'db>> {
         let complete = |proof: Option<EvidenceId<'db>>| {
             proof
                 .map(|proof| complete_deferred_evidence(db, proof))
@@ -1042,6 +1046,8 @@ fn is_closed_goal<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bo
 /// Consumers must not turn an unavailable lexical proof into ordinary dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, SalsaValue)]
 pub(crate) enum ProofOutcome<'db> {
+    /// Preparation must admit the requested candidate before the goal can be proved.
+    NeedsGeneration(GenerationRequest<'db>),
     Proven(EvidenceId<'db>),
     Deferred,
     Unavailable,
@@ -1065,14 +1071,22 @@ impl<'db> ProofOutcome<'db> {
                         matches!(prove_outcome(db, ordinary, goal), Self::Proven(_))
                     })
             }
-            Self::Deferred => false,
+            Self::NeedsGeneration(_) | Self::Deferred => false,
         }
     }
 
     pub(crate) fn evidence(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proven(evidence) => Some(evidence),
-            Self::Deferred | Self::Unavailable => None,
+            Self::Deferred | Self::Unavailable | Self::NeedsGeneration(_) => None,
+        }
+    }
+
+    /// The request that stopped the proof, if preparation must serve one.
+    pub(crate) fn request(self) -> Option<GenerationRequest<'db>> {
+        match self {
+            Self::NeedsGeneration(request) => Some(request),
+            Self::Proven(_) | Self::Deferred | Self::Unavailable => None,
         }
     }
 }
@@ -1136,15 +1150,18 @@ pub(crate) fn prove_outcome<'db>(
 /// lexical choice or supplied dictionary affects it. Resolved effect-provider
 /// arguments supply proofs through these same slots. Implied bounds project from their declared
 /// root dictionaries rather than selecting independently in the caller.
-pub(crate) fn declared_bound_evidence<'db>(
+/// The generation requests the proofs stopped on are returned with the slots:
+/// a missing slot that waits on one is not an unsatisfied trait obligation.
+pub(crate) fn declared_bound_evidence_with_pending<'db>(
     db: &'db dyn HirAnalysisDb,
     declared: PredicateListId<'db>,
     signature: PredicateListId<'db>,
     subst: &CompleteSubst<'db>,
     solve_cx: TraitSolveCx<'db>,
-) -> EvidenceList<'db> {
+) -> (EvidenceList<'db>, Vec<GenerationRequest<'db>>) {
     let assumptions = solve_cx.assumptions().extend_all_bounds(db);
-    declared_bound_evidence_from(
+    let mut pending = Vec::new();
+    let evidence = declared_bound_evidence_from(
         db,
         declared,
         signature,
@@ -1159,9 +1176,11 @@ pub(crate) fn declared_bound_evidence<'db>(
                 return None;
             }
             let outcome = prove_outcome(db, solve_cx, goal);
+            pending.extend(outcome.request());
             outcome.evidence()
         },
-    )
+    );
+    (evidence, pending)
 }
 
 pub(crate) fn declared_bound_evidence_from<'db>(
@@ -1447,6 +1466,9 @@ fn prove_in<'db>(
         };
         let (choice, chosen) = match matching {
             Some(ChoiceMatch::Implementation(index, choice)) => (Some(choice), Some(index)),
+            Some(ChoiceMatch::NeedsGeneration(_, request)) => {
+                return ProofOutcome::NeedsGeneration(request);
+            }
             Some(ChoiceMatch::Unsettled(_)) => return ProofOutcome::Deferred,
             None => (None, None),
         };
@@ -1484,6 +1506,7 @@ fn prove_in<'db>(
     };
     let resolved = match selection {
         Selection::Unique(resolved) => resolved,
+        Selection::NeedsGeneration(request) => return ProofOutcome::NeedsGeneration(request),
         Selection::NotFound | Selection::Ambiguous(_) => {
             if chosen.is_some() {
                 return ProofOutcome::Unavailable;
@@ -1514,6 +1537,7 @@ fn prove_deferred_candidates<'db>(
 ) -> ProofOutcome<'db> {
     let mut proof = None;
     let mut deferred = false;
+    let mut request = None;
     for candidate in candidates {
         match prove_selected(db, solve_cx, goal, Some(bounds), None, candidate) {
             ProofOutcome::Proven(candidate) => {
@@ -1522,8 +1546,14 @@ fn prove_deferred_candidates<'db>(
                 }
             }
             ProofOutcome::Deferred => deferred = true,
+            ProofOutcome::NeedsGeneration(candidate) => {
+                request.get_or_insert(candidate);
+            }
             ProofOutcome::Unavailable => {}
         }
+    }
+    if let Some(request) = request {
+        return ProofOutcome::NeedsGeneration(request);
     }
     if deferred {
         return ProofOutcome::Deferred;
@@ -1599,6 +1629,9 @@ fn prove_selected<'db>(
             };
             match outcome {
                 ProofOutcome::Proven(proof) => conditions.push(proof),
+                ProofOutcome::NeedsGeneration(request) => {
+                    return ProofOutcome::NeedsGeneration(request);
+                }
                 ProofOutcome::Deferred | ProofOutcome::Unavailable => {
                     return ProofOutcome::Unavailable;
                 }
@@ -1691,7 +1724,7 @@ pub(crate) fn instantiated_selection<'db>(
         }
         None => match resolve_trait_impl_instance(db, solve_cx, inst) {
             Selection::Unique(resolved) => Some(resolved),
-            Selection::Ambiguous(_) | Selection::NotFound => None,
+            Selection::Ambiguous(_) | Selection::NotFound | Selection::NeedsGeneration(_) => None,
         },
     }
 }

@@ -60,6 +60,15 @@ pub(crate) fn select_family<'db>(
             matching.push(family);
         }
     }
+    choose_family(db, provider, &families, matching)
+}
+
+pub(super) fn choose_family<'db>(
+    db: &'db dyn HirAnalysisDb,
+    provider: TyId<'db>,
+    families: &[TyId<'db>],
+    matching: Vec<TyId<'db>>,
+) -> Result<TyId<'db>, String> {
     if matching.len() == 1 {
         return Ok(matching[0]);
     }

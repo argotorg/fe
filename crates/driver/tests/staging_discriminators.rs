@@ -64,7 +64,8 @@ const PRELUDE: &str = "use core::derive::Derive\nuse core::meta::{Record, Code, 
 /// providers share a value under the one-view rule.
 const A_USES_HELPER: &str = "struct A {}\nimpl Derive<trait Score> for A {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = helper()\n        quote { const fn score() -> u256 { ${n} } }\n    }\n}\nconst fn helper() -> u256 { 42 }\n";
 const B_USES_HELPER: &str = "struct B {}\nimpl Derive<trait Seed> for B {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = helper()\n        quote { const fn seed() -> u256 { ${n} } }\n    }\n}\n";
-const RUN_BOTH: &str = "impl Score for Pair with (A)\nimpl Seed for Token with (B)\nconst fn run() -> u256 { Pair::score() + Token::seed() }\n";
+const RUN_BOTH: &str =
+    "const fn run() -> u256 { with (A) { Pair::score() } + with (B) { Token::seed() } }\n";
 
 /// The text a refusal of a provider that reads generated output must carry.
 const RULE: &str = "what generation produces in its own package is not visible to it";
@@ -104,10 +105,57 @@ fn shared_helper_edits_agree_with_fresh_preparation() {
     }
 }
 
+/// A provider that opens another provider's implementation reads generated
+/// output. It is refused in every declaration order, and the refusal names
+/// the rule; the provider body is never run.
 #[test]
-fn an_inherent_provider_cannot_read_another_headers_output() {
+fn provider_chain_is_refused_in_every_declaration_order() {
+    const A_USES_B: &str = "struct A {}\nimpl Derive<trait Score> for A {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = helper()\n        let zero: u256 = 0\n        let fault = 1 / zero\n        quote { const fn score() -> u256 { ${n} + ${fault} } }\n    }\n}\nconst fn helper() -> u256 { with (B) { Token::seed() } }\n";
+    const B: &str = "struct B {}\nimpl Derive<trait Seed> for B {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { const fn seed() -> u256 { 42 } }\n    }\n}\n";
+    const RUN: &str = "const fn run() -> u256 { with (A) { Pair::score() } }\n";
+    let parts = [A_USES_B, B, RUN];
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let source = std::iter::once(PRELUDE)
+            .chain(order.iter().map(|index| parts[*index]))
+            .collect::<String>();
+        let cause = fresh(&source).expect_err("a provider chain must be refused");
+        assert!(cause.contains(RULE), "{order:?}: {cause}");
+        assert!(!cause.contains("division by zero"), "{order:?}: {cause}");
+    }
+}
+
+/// S-T4: the request channels see the same thing. A scoped provider reading
+/// the members of an inherent header, the provider of an inherent header
+/// reading output of a scoped opening, and the provider of an inherent header
+/// reading the members of another inherent header are all refused, and every
+/// refusal names the rule.
+#[test]
+fn generation_channels_see_each_other_symmetrically() {
+    let scoped_reads_inherent = "use core::derive::{Derive, DeriveInherent}\nuse core::meta::{Record, Code, Item}\ntrait Score { const fn score() -> u256 }\nstruct SeedP {}\nimpl DeriveInherent for SeedP {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { pub const fn seed() -> u256 { 42 } }\n    }\n}\nstruct Token {}\nimpl Token with (SeedP)\nstruct Pair {}\nstruct A {}\nimpl Derive<trait Score> for A {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = Token::seed()\n        quote { const fn score() -> u256 { ${n} } }\n    }\n}\nconst fn run() -> u256 { with (A) { Pair::score() } }\n";
+    let inherent_reads_scoped = "use core::derive::{Derive, DeriveInherent}\nuse core::meta::{Record, Code, Item}\ntrait Seed { const fn seed() -> u256 }\nstruct Token {}\nstruct B {}\nimpl Derive<trait Seed> for B {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { const fn seed() -> u256 { 42 } }\n    }\n}\nstruct Make {}\nimpl DeriveInherent for Make {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = with (B) { Token::seed() }\n        quote { pub const fn run() -> u256 { ${n} } }\n    }\n}\nstruct Pair {}\nimpl Pair with (Make)\n";
     let inherent_reads_inherent = "use core::derive::{Derive, DeriveInherent}\nuse core::meta::{Record, Code, Item}\nstruct SeedP {}\nimpl DeriveInherent for SeedP {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { pub const fn seed() -> u256 { 42 } }\n    }\n}\nstruct Token {}\nimpl Token with (SeedP)\nstruct Make {}\nimpl DeriveInherent for Make {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = Token::seed()\n        quote { pub const fn run() -> u256 { ${n} } }\n    }\n}\nstruct Pair {}\nimpl Pair with (Make)\n";
-    let cause =
-        fresh(inherent_reads_inherent).expect_err("a provider cannot read generated output");
-    assert!(cause.contains(RULE), "{cause}");
+    for (name, source) in [
+        (
+            "scoped provider reads inherent header output",
+            scoped_reads_inherent,
+        ),
+        (
+            "inherent header provider reads scoped output",
+            inherent_reads_scoped,
+        ),
+        (
+            "inherent header provider reads inherent header output",
+            inherent_reads_inherent,
+        ),
+    ] {
+        let cause = fresh(source).expect_err(name);
+        assert!(cause.contains(RULE), "{name}: {cause}");
+    }
 }
