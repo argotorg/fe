@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicU64;
 use tokio::sync::broadcast;
 use url::Url;
 
-use crate::virtual_files::{VirtualFiles, materialize_builtins};
+use crate::virtual_files::VirtualFiles;
 
 /// Failure modes for work dispatched via [`Backend::spawn_on_workers`].
 ///
@@ -65,13 +65,7 @@ impl Backend {
         docs_url: Option<String>,
     ) -> Self {
         let db = DriverDataBase::default();
-        let mut virtual_files = VirtualFiles::new("fe-language-server-").ok();
-        if let Some(vfs) = virtual_files.as_mut()
-            && let Err(e) = materialize_builtins(vfs, &db)
-        {
-            tracing::warn!("failed to materialize builtins: {e}");
-            virtual_files = None;
-        }
+        let virtual_files = VirtualFiles::new(&db);
 
         let workers = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
@@ -138,8 +132,8 @@ impl Backend {
             .is_some_and(|vfs| vfs.is_virtual_uri(uri))
     }
 
-    pub fn virtual_files_mut(&mut self) -> Option<&mut VirtualFiles> {
-        self.virtual_files.as_mut()
+    pub fn virtual_files(&self) -> Option<&VirtualFiles> {
+        self.virtual_files.as_ref()
     }
 
     pub fn supports_definition_link(&self) -> bool {
