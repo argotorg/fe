@@ -10,6 +10,7 @@ ast_node! {
     SK::PtrType
     | SK::ModeType
     | SK::PathType
+    | SK::TraitFamilyType
     | SK::SelfType
     | SK::TupleType
     | SK::ArrayType
@@ -21,6 +22,9 @@ impl Type {
             SK::PtrType => TypeKind::Ptr(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ModeType => TypeKind::Mode(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::PathType => TypeKind::Path(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::TraitFamilyType => {
+                TypeKind::TraitFamily(AstNode::cast(self.syntax().clone()).unwrap())
+            }
             SK::TupleType => TypeKind::Tuple(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ArrayType => TypeKind::Array(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::NeverType => TypeKind::Never(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -157,12 +161,22 @@ ast_node! {
     SK::NeverType,
 }
 
+ast_node! {
+    pub struct TraitFamilyType,
+    SK::TraitFamilyType,
+}
+impl TraitFamilyType {
+    pub fn trait_ref(&self) -> Option<super::TraitRef> {
+        support::child(self.syntax())
+    }
+}
 /// A specific kind of type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum TypeKind {
     Ptr(PtrType),
     Mode(ModeType),
     Path(PathType),
+    TraitFamily(TraitFamilyType),
     Tuple(TupleType),
     Array(ArrayType),
     Never(NeverType),

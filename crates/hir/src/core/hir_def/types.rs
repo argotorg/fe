@@ -51,7 +51,7 @@ impl<'db> TypeId<'db> {
                     })
                 })
             }),
-            TypeKind::Never => false,
+            TypeKind::Never | TypeKind::TraitFamily(_) => false,
         }
     }
 
@@ -113,6 +113,10 @@ impl<'db> TypeId<'db> {
                 format!("[{elem_ty}; {len_str}]")
             }
             TypeKind::Never => "!".into(),
+            TypeKind::TraitFamily(reference) => reference.to_opt().map_or_else(
+                || "<missing>".into(),
+                |reference| format!("trait {}", reference.pretty_print(db)),
+            ),
         }
     }
 }
@@ -142,6 +146,7 @@ pub enum TypeKind<'db> {
     Ptr(Partial<TypeId<'db>>),
     Mode(TypeMode, Partial<TypeId<'db>>),
     Path(Partial<PathId<'db>>),
+    TraitFamily(Partial<super::TraitRefId<'db>>),
     Tuple(TupleTypeId<'db>),
     /// The first `TypeId` is the element type, the second `Body` is the length.
     Array(Partial<TypeId<'db>>, Partial<Body<'db>>),

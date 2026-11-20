@@ -4,8 +4,8 @@ use std::fmt;
 
 use crate::{
     hir_def::{
-        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, PathId, Struct,
-        TypeAlias as HirTypeAlias, VariantKind,
+        Body, Enum, ExprId, GenericParamOwner, IdentId, ItemKind, ModeMarker, PathId, Struct,
+        Trait, TypeAlias as HirTypeAlias, VariantKind,
         prim_ty::{IntTy as HirIntTy, PrimTy as HirPrimTy, UintTy as HirUintTy},
         scope_graph::ScopeId,
     },
@@ -14,7 +14,7 @@ use crate::{
 use bitflags::bitflags;
 use common::{
     compilation::Target,
-    indexmap::IndexSet,
+    indexmap::{IndexMap, IndexSet},
     ingot::{Ingot, IngotKind},
 };
 use num_bigint::{BigInt, BigUint};
@@ -27,15 +27,16 @@ use smallvec::SmallVec;
 use super::{
     adt_def::{AdtDef, Pin, instantiate_adt_field_shape},
     const_ty::{
-        ConstCaptureEnv, ConstTyData, ConstTyId, TypePrintMode, UnevaluatedConstPolicy,
-        const_ty_from_sem_const,
+        ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext, TypePrintMode,
+        UnevaluatedConstPolicy, const_ty_from_sem_const,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
     fold::{TyFoldable, TyFolder},
+    generic_defaults::DefaultApplication,
     normalize::normalize_ty,
     shape::Shape,
-    trait_def::{TraitInstId, TraitRefId},
+    trait_def::{AssocBinding, TraitInstId, TraitRefId},
     trait_resolution::{PredicateListId, WellFormedness},
     ty_lower::collect_generic_params,
     unify::{InferenceKey, UnificationTable},
@@ -233,6 +234,8 @@ impl<'db> TyId<'db> {
                 .iter()
                 .copied()
                 .find_map(|arg| ingot_from_non_projection(db, arg)),
+            TyData::ConstraintTerm(goal) => Some(goal.def(db).ingot(db)),
+            TyData::TraitFamily(family) => Some(family.def(db).ingot(db)),
             _ => None,
         }
     }
@@ -255,6 +258,8 @@ impl<'db> TyId<'db> {
             TyData::TyApp(..)
             | TyData::AssocTy(_)
             | TyData::QualifiedTy(_)
+            | TyData::ConstraintTerm(_)
+            | TyData::TraitFamily(_)
             | TyData::ConstTy(_) => ty_flags(db, self),
         }
     }
@@ -305,6 +310,12 @@ impl<'db> TyId<'db> {
                     trait_inst.pretty_print(db, false)
                 )
             }
+            TyData::ConstraintTerm(goal) => format!(
+                "{}: {}",
+                goal.self_ty(db).pretty_print_with_mode(db, mode),
+                goal.pretty_print(db, false)
+            ),
+            TyData::TraitFamily(family) => family.pretty_print(db, mode),
             TyData::TyApp(_, _) => pretty_print_ty_app(db, self, mode),
             TyData::TyBase(base) => base.pretty_print(db),
             TyData::ConstTy(const_ty) => const_ty.pretty_print_with_mode(db, mode),
@@ -873,6 +884,8 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => Some(param.scope(db)),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db),
             TyData::QualifiedTy(trait_inst) => Some(trait_inst.def(db).scope()),
+            TyData::ConstraintTerm(goal) => Some(goal.def(db).scope()),
+            TyData::TraitFamily(family) => Some(family.def(db).scope()),
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.scope(db)),
             TyData::TyBase(TyBase::Contract(c)) => Some(c.scope()),
             TyData::TyBase(TyBase::Func(func)) => Some(func.scope()),
@@ -899,6 +912,8 @@ impl<'db> TyId<'db> {
             TyData::TyParam(param) => param.scope(db).name_span(db),
             TyData::AssocTy(assoc_ty) => assoc_ty.scope(db)?.name_span(db),
             TyData::QualifiedTy(trait_inst) => trait_inst.def(db).scope().name_span(db),
+            TyData::ConstraintTerm(goal) => goal.def(db).scope().name_span(db),
+            TyData::TraitFamily(family) => family.def(db).scope().name_span(db),
 
             TyData::TyBase(TyBase::Adt(adt)) => Some(adt.name_span(db)),
             TyData::TyBase(TyBase::Contract(c)) => c.scope().name_span(db),
@@ -975,6 +990,9 @@ impl<'db> TyId<'db> {
 
     /// Perform type level application.
     pub(crate) fn app_structural(db: &'db dyn HirAnalysisDb, lhs: Self, rhs: Self) -> TyId<'db> {
+        if let TyData::TraitFamily(family) = lhs.data(db) {
+            return family.apply(db, rhs);
+        }
         Self::new(db, TyData::TyApp(lhs, rhs))
     }
 
@@ -1020,7 +1038,7 @@ impl<'db> TyId<'db> {
             );
         }
 
-        Self::new(db, TyData::TyApp(lhs, rhs))
+        Self::app_structural(db, lhs, rhs)
     }
 
     /// Whether application must retain this const argument as deferred metadata.
@@ -1206,7 +1224,7 @@ impl<'db> TyId<'db> {
         }
 
         let applicable_kind = match self.kind(db) {
-            Kind::Star | Kind::Shape => return None,
+            Kind::Star | Kind::Shape | Kind::Constraint => return None,
             Kind::Abs(inner) => inner.0.clone(),
             Kind::Any => Kind::Any,
         };
@@ -1327,6 +1345,12 @@ pub enum TyData<'db> {
     /// Qualified type, e.g., `<T as Iterator>`.
     QualifiedTy(TraitInstId<'db>),
 
+    /// A trait application with a free subject and any written arguments captured.
+    TraitFamily(TraitFamilyId<'db>),
+
+    /// A goal description, without either a proof or a value representation.
+    ConstraintTerm(TraitInstId<'db>),
+
     // Type application,
     // e.g., `Option<i32>` is represented as `TApp(TyConst(Option), TyConst(i32))`.
     TyApp(TyId<'db>, TyId<'db>),
@@ -1343,6 +1367,98 @@ pub enum TyData<'db> {
     // This type can be unified with any other types.
     // NOTE: For type soundness check in this level, we don't consider trait satisfiability.
     Invalid(InvalidCause<'db>),
+}
+
+#[salsa::interned]
+#[derive(Debug)]
+pub struct TraitFamilyId<'db> {
+    #[returns(copy)]
+    pub def: Trait<'db>,
+    #[returns(ref)]
+    pub arguments: Vec<TyId<'db>>,
+    #[returns(ref)]
+    pub associated: IndexMap<AssocBinding<'db>, TyId<'db>>,
+    #[returns(copy)]
+    pub mode: ModeMarker,
+}
+
+impl<'db> TraitFamilyId<'db> {
+    pub(crate) fn map_types(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        mut f: impl FnMut(TyId<'db>) -> TyId<'db>,
+    ) -> Self {
+        let arguments: Vec<_> = self.arguments(db).iter().copied().map(&mut f).collect();
+        let associated: IndexMap<_, _> = self
+            .associated(db)
+            .iter()
+            .map(|(&name, &ty)| (name, f(ty)))
+            .collect();
+        Self::new(db, self.def(db), arguments, associated, self.mode(db))
+    }
+
+    pub(crate) fn apply(self, db: &'db dyn HirAnalysisDb, subject: TyId<'db>) -> TyId<'db> {
+        let def = self.def(db);
+        let expected = def.self_param(db).kind(db);
+        if !expected.does_match(subject.kind(db)) {
+            return TyId::invalid(
+                db,
+                InvalidCause::KindMismatch {
+                    expected: Some(expected.clone()),
+                    given: subject,
+                },
+            );
+        }
+
+        // Substituting a family into a type can run in a structural fold. Leave
+        // constant defaults deferred, just as for other substituted types.
+        let lowering = LoweringContext::deferred();
+        let explicit = match def.param_set(db).complete_args(
+            db,
+            &[subject],
+            self.arguments(db),
+            DefaultApplication::StructuralMetadata(&lowering),
+        ) {
+            Ok(args) if args.len() + 1 == def.params(db).len() => args,
+            Ok(_) => return TyId::invalid(db, InvalidCause::NotFullyApplied),
+            Err(err) => return TyId::invalid(db, err.cause),
+        };
+        let mut args = Vec::with_capacity(explicit.len() + 1);
+        args.push(subject);
+        args.extend(explicit);
+        TyId::new(
+            db,
+            TyData::ConstraintTerm(TraitInstId::new(
+                db,
+                def,
+                args,
+                self.associated(db).clone(),
+                self.mode(db),
+            )),
+        )
+    }
+
+    fn pretty_print(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
+        let name = self.def(db).name(db).to_opt().map(|name| name.data(db));
+        let name = name.map_or("<missing>", |name| name.as_str());
+        let mut arguments: Vec<_> = self
+            .arguments(db)
+            .iter()
+            .map(|arg| arg.pretty_print_with_mode(db, mode))
+            .collect();
+        arguments.extend(self.associated(db).iter().map(|(name, ty)| {
+            format!(
+                "{} = {}",
+                name.pretty_print(db),
+                ty.pretty_print_with_mode(db, mode)
+            )
+        }));
+        if arguments.is_empty() {
+            name.to_string()
+        } else {
+            format!("trait {name}<{}>", arguments.join(", "))
+        }
+    }
 }
 
 /// A closure expression within the body that contains it, at the mode that
@@ -1823,6 +1939,9 @@ pub enum Kind {
     /// Represents star kind, i.e., `*` kind.
     Star,
 
+    /// Represents a fully applied trait obligation.
+    Constraint,
+
     /// Represents higher kinded types.
     /// e.g.,
     /// `* -> *`, `(* -> *) -> *` or `* -> (* -> *) -> *`
@@ -1844,7 +1963,9 @@ impl Kind {
 
     pub fn does_match(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::Star, Self::Star) | (Self::Shape, Self::Shape) => true,
+            (Self::Star, Self::Star)
+            | (Self::Shape, Self::Shape)
+            | (Self::Constraint, Self::Constraint) => true,
             (Self::Abs(a), Self::Abs(b)) => a.0.does_match(&b.0) && a.1.does_match(&b.1),
             (Self::Any, _) => true,
             (_, Self::Any) => true,
@@ -1857,6 +1978,7 @@ impl fmt::Display for Kind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Star => write!(f, "*"),
+            Self::Constraint => write!(f, "Constraint"),
             Self::Abs(inner) => write!(f, "({} -> {})", inner.0, inner.1),
             Self::Any => write!(f, "Any"),
             Self::Shape => write!(f, "shape"),
@@ -2540,6 +2662,11 @@ impl HasKind for TyData<'_> {
                 .and_then(|decl| super::ty_lower::lower_kind_in_bounds(&decl.bounds))
                 .unwrap_or(Kind::Star),
             TyData::QualifiedTy(_) => Kind::Star,
+            TyData::TraitFamily(family) => Kind::abs(
+                family.def(db).self_param(db).kind(db).clone(),
+                Kind::Constraint,
+            ),
+            TyData::ConstraintTerm(_) => Kind::Constraint,
             TyData::TyBase(base) => base.kind(db),
             TyData::TyApp(abs, _) => match abs.kind(db) {
                 // `TyId::app` method handles the kind mismatch, so we don't need to verify it again

@@ -460,10 +460,10 @@ module.exports = grammar({
     ),
 
     trait_ref: $ => choice(
-      seq(
+      prec.right(seq(
         $.path,
         optional($.generic_arg_list),
-      ),
+      )),
       $.fn_shape,
     ),
 
@@ -654,9 +654,14 @@ module.exports = grammar({
     ),
 
     kind_bound: $ => prec.right(choice(
-      seq('*', optional(seq('->', $.kind_bound))),
-      seq('(', $.kind_bound, ')', optional(seq('->', $.kind_bound))),
+      seq('*', optional(seq('->', $._kind_expression))),
+      seq('(', $._kind_expression, ')', optional(seq('->', $._kind_expression))),
     )),
+
+    _kind_expression: $ => choice(
+      $.kind_bound,
+      prec.right(seq('Constraint', optional(seq('->', $._kind_expression)))),
+    ),
 
     // Uses external scanner token _generic_open instead of '<' to avoid
     // precedence conflict with binary_expression's '<' operator.
@@ -714,6 +719,7 @@ module.exports = grammar({
 
     _type: $ => choice(
       $.path_type,
+      $.trait_family_type,
       $.tuple_type,
       $.array_type,
       $.pointer_type,
@@ -722,6 +728,8 @@ module.exports = grammar({
       $.never_type,
       $.qualified_path_type,
     ),
+
+    trait_family_type: $ => seq('trait', $.trait_ref),
 
     // Mode-prefixed type: ref Foo, mut Foo, mut? Foo, own Foo
     mode_type: $ => seq(

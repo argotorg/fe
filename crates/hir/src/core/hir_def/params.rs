@@ -457,6 +457,8 @@ impl<'db> TraitRefId<'db> {
 pub enum KindBound {
     /// `*`
     Mono,
+    /// The kind of a trait obligation.
+    Constraint,
     /// A `shape A` parameter's kind: a callable's parameter list.
     Shape,
     /// `* -> *`

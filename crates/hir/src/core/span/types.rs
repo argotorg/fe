@@ -1,6 +1,7 @@
 use parser::ast;
 
 use super::define_lazy_span_node;
+use crate::span::params::LazyTraitRefSpan;
 use crate::span::{item::LazyBodySpan, path::LazyPathSpan};
 
 define_lazy_span_node!(LazyTySpan);
@@ -44,7 +45,19 @@ impl<'db> LazyTySpan<'db> {
     pub fn into_array_type(self) -> LazyArrayTypeSpan<'db> {
         LazyArrayTypeSpan(self.0)
     }
+
+    pub fn into_trait_family_type(self) -> LazyTraitFamilyTypeSpan<'db> {
+        LazyTraitFamilyTypeSpan(self.0)
+    }
 }
+
+define_lazy_span_node!(
+    LazyTraitFamilyTypeSpan,
+    ast::TraitFamilyType,
+    @node {
+        (trait_ref, trait_ref, LazyTraitRefSpan),
+    }
+);
 
 define_lazy_span_node!(
     LazyPtrTypeSpan,

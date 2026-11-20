@@ -64,6 +64,7 @@ pub fn lower_hir_kind_local(k: &HirKindBound) -> Kind {
     use crate::hir_def::Partial;
     match k {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Constraint => Kind::Constraint,
         HirKindBound::Shape => Kind::Shape,
         HirKindBound::Abs(lhs, rhs) => {
             let lhs_k = match lhs {
