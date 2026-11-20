@@ -651,10 +651,16 @@ impl<'db> ImportResolver<'db> {
         }
         let directive = if lookup.quote_lookup == QuoteLookup::Local {
             QueryDirective::new().quoted_locals()
-        } else if idx == 0 {
-            QueryDirective::new()
-        } else {
+        } else if idx != 0 {
             QueryDirective::new().disallow_lex().disallow_external()
+        } else if lookup.quote_lookup == QuoteLookup::Producer
+            || use_
+                .path(db)
+                .is_some_and(|path| path.authored_scope(db).is_some())
+        {
+            QueryDirective::new().disallow_enclosing_item_bindings()
+        } else {
+            QueryDirective::new()
         };
         let query = EarlyNameQueryId::new(db, name, scope, directive);
         let mut bucket =

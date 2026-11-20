@@ -644,16 +644,6 @@ pub(crate) fn resolve_type_path_definition<'db>(
         let (bucket, _) =
             path_name_bucket(db, segment, query_scope, |query| resolve_query(db, query));
         let resolved = bucket.pick(NameDomain::TYPE).as_ref().ok()?;
-        if segment.hygiene_scope(db).is_some()
-            && matches!(
-                resolved.kind,
-                NameResKind::Scope(
-                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
-                )
-            )
-        {
-            return None;
-        }
         if segment_idx + 1 == path.len(db) {
             return Some(resolved.kind);
         }
@@ -767,10 +757,12 @@ fn make_query<'db>(
     path: PathId<'db>,
     scope: ScopeId<'db>,
 ) -> EarlyNameQueryId<'db> {
-    let directive = if path.segment_index(db) == 0 {
-        QueryDirective::new()
-    } else {
+    let directive = if path.segment_index(db) != 0 {
         QueryDirective::new().disallow_external().disallow_lex()
+    } else if path.hygiene_scope(db).is_some() {
+        QueryDirective::new().disallow_enclosing_item_bindings()
+    } else {
+        QueryDirective::new()
     };
 
     let name = path
@@ -801,10 +793,15 @@ fn path_name_bucket<'db>(
     );
     let local = resolve(local);
     match local.pick(NameDomain::TYPE) {
-        Err(NameResolutionError::NotFound) => (
-            resolve(make_query(db, path, origin.producer.resolve(db))),
-            Some(origin.producer),
-        ),
+        Err(NameResolutionError::NotFound) => {
+            let producer = EarlyNameQueryId::new(
+                db,
+                path.ident(db).unwrap(),
+                origin.producer.resolve(db),
+                QueryDirective::new().disallow_enclosing_item_bindings(),
+            );
+            (resolve(producer), Some(origin.producer))
+        }
         _ => (local, None),
     }
 }
@@ -2002,21 +1999,8 @@ fn resolve_segment<'db>(
         }
     });
 
-    // A path bound to a scope never names a parameter of a function.
-    let is_disallowed_hygiene_res = |res: &NameRes<'db>| {
-        (path.hygiene_scope(db).is_some() || authored_root.is_some())
-            && matches!(
-                res.kind,
-                NameResKind::Scope(
-                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
-                )
-            )
-    };
-
     let value = (is_tail && resolve_tail_as_value).then(|| bucket.pick(NameDomain::VALUE));
-    let res = if let Some(Ok(res)) = value
-        && !is_disallowed_hygiene_res(res)
-    {
+    let res = if let Some(Ok(res)) = value {
         *decided_by_value = true;
         res.clone()
     } else {
@@ -2035,15 +2019,6 @@ fn resolve_segment<'db>(
             }
             res => res?,
         };
-        if is_disallowed_hygiene_res(&res) {
-            return Err(PathResError::new(
-                PathResErrorKind::NotFound {
-                    parent: parent_res,
-                    bucket: NameResBucket::default(),
-                },
-                path,
-            ));
-        }
         res
     };
     let resolved = resolve_name_res_with_minter(db, &res, path, scope, assumptions, lowering_cx);

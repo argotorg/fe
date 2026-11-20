@@ -1906,7 +1906,7 @@ pub fn freeze_generation_request<'db>(
     }
     if goal.args(db).len() != 1
         || !goal.assoc_type_bindings(db).is_empty()
-        || !goal.def(db).types(db).is_empty()
+        || goal.def(db).has_assoc_outputs(db)
         || !goal.def(db).consts(db).is_empty()
     {
         return Err(

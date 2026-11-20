@@ -6945,16 +6945,6 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
-        if path.hygiene_scope(db).is_some()
-            && matches!(
-                res.kind,
-                crate::analysis::name_resolution::NameResKind::Scope(
-                    ScopeId::FuncParam(..) | ScopeId::GenericParam(ItemKind::Func(_), _)
-                )
-            )
-        {
-            return ResolvedPathInBody::Invalid;
-        }
         let Ok(reso) =
             resolve_name_res_with_minter(db, res, path, scope, env.assumptions(), lowering_cx)
         else {
@@ -6996,6 +6986,11 @@ fn resolve_ident_expr<'db>(
         }
 
         let directive = QueryDirective::for_scope(db, body_scope);
+        let directive = if hygiene_scope.is_some() {
+            directive.disallow_enclosing_item_bindings()
+        } else {
+            directive
+        };
         let query = EarlyNameQueryId::new(db, ident, body_scope, directive);
         let bucket = resolve_query_in(db, query, tier);
         match resolve_bucket(bucket, hygiene_scope.unwrap_or_else(|| env.scope())) {

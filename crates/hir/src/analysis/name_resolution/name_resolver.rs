@@ -117,7 +117,7 @@ impl QueryDirective {
         self
     }
 
-    fn disallow_enclosing_item_bindings(mut self) -> Self {
+    pub(crate) fn disallow_enclosing_item_bindings(mut self) -> Self {
         self.allow_enclosing_item_bindings = false;
         self
     }

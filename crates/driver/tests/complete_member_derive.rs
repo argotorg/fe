@@ -328,6 +328,32 @@ fn named_generated_outputs_need_and_agree_with_an_ordinary_implementation() {
     );
 }
 
+#[test]
+fn a_prepared_written_derive_header_supplies_ordinary_outputs() {
+    let source = format!(
+        "{SHAPE}impl Shape for Square as Named {{\n    const SIDES: usize = 3\n    type Unit = u256\n    const fn area() -> usize {{ 17 }}\n    const fn perimeter() -> usize {{ 19 }}\n}}\nconst fn named_area() -> usize {{ with (Named) {{ Square::area() }} }}\n"
+    );
+    let output = prepare(&source).unwrap();
+    assert_eq!(eval(&output, "area"), "9");
+    assert_eq!(eval(&output, "named_area"), "17");
+
+    let different_constant = source.replace("const SIDES: usize = 3", "const SIDES: usize = 4");
+    let cause = written_errors(&different_constant);
+    assert!(
+        cause.contains("named implementation changes a type-readable associated constant"),
+        "{cause}"
+    );
+    let different_type = source.replace(
+        "type Unit = u256\n    const fn area() -> usize { 17 }",
+        "type Unit = u8\n    const fn area() -> usize { 17 }",
+    );
+    let cause = written_errors(&different_type);
+    assert!(
+        cause.contains("named implementation changes an ordinary associated type"),
+        "{cause}"
+    );
+}
+
 /// A header's provider takes constants, types and methods from a helper's
 /// quotation through one `${members}` hole that holds every member.
 #[test]

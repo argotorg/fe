@@ -299,6 +299,11 @@ fn what_a_dependency_generates_is_an_ordinary_item_for_its_dependents() {
 
 In the package that asks for generated code, written code keeps its meaning: a generated item is used only where nothing written answers. A block `with (Provider) { .. }` is the exception, because it asks for the change in the text: inside the block its provider answers the goals of its trait in place of a written implementation, as `scoped()` in the first example shows. Written code is the package's own text, its dependencies, its imports and the prelude, and the headers that the package wrote.
 
+A scoped request chooses the generated implementation for the call in the
+block. The provider and the generated implementation use their own scopes.
+Other choices in the block travel through a call only as evidence for that
+call's declared bounds.
+
 Generated code may contain further items, such as an implementation inside a generated function. The provider `Gen` below writes one for `Tr2`. The call `X { a: 0 }.m()` is already answered by the written implementation of `Tr1`, so it keeps calling that:
 
 ```fe

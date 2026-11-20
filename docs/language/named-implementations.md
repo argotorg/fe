@@ -160,6 +160,10 @@ implementations do not yet qualify as output representatives or participate
 in this comparison. Extending this boundary requires corresponding output
 comparison support or normalization through evidence.
 
+An ordinary derive header written in the package can supply the representative
+after its provider has prepared the associated members. A named implementation
+must agree with those prepared outputs.
+
 A written type whose formation reads a chosen implementation is rejected until
 type normalization consumes evidence. Types formed before the block can still
 be used there, and an unbounded concrete helper retains its ordinary behavior

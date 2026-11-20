@@ -1140,6 +1140,114 @@ const fn scaled() -> u256 {
     assert_eq!(eval_const_fn_u256(&output, "scaled"), "1020");
 }
 
+#[test]
+fn quoted_members_do_not_capture_provider_impl_parameters() {
+    let prelude = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Value { const fn value() -> u256 }
+struct Pair {}
+"#;
+    let constants = r#"struct Provider<const K: u256> {}
+impl<const K: u256> Derive<Value> for Provider<K> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn value() -> u256 { K } }
+    }
+}
+"#;
+    let types = r#"struct Provider<T> {}
+impl<T> Derive<Value> for Provider<T> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const fn value() -> u256 {
+                let _: Option<T> = Option::None
+                7
+            }
+        }
+    }
+}
+"#;
+    for (provider, arg, parameter) in [(constants, "7", "K"), (types, "u8", "T")] {
+        for request in [
+            format!("impl Value for Pair with (Provider<{arg}>)"),
+            format!("const fn result() -> u256 {{ with (Provider<{arg}>) {{ Pair::value() }} }}"),
+        ] {
+            let source = format!("{prelude}{provider}{request}");
+            let (db, file) = input(&source);
+            let diagnostics = match prepare_file(&db, file) {
+                Err(error) => error.cause,
+                Ok(Some(output)) => output
+                    .run_on_top_mod(output.top_mod(file))
+                    .format_diags(&output),
+                Ok(None) => panic!("expected generation in {request}"),
+            };
+            assert!(
+                diagnostics.contains(&format!("`{parameter}`"))
+                    && (diagnostics.contains("undefined") || diagnostics.contains("is not found")),
+                "{request}: {diagnostics}"
+            );
+        }
+    }
+}
+
+#[test]
+fn scoped_provider_supplies_prerequisite_of_a_named_implementation() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record, field_count}
+
+trait Arity { const fn arity() -> usize }
+trait Report { const fn report() -> usize }
+struct Pair { a: u256, b: u256 }
+struct Box<T> { value: T }
+
+struct CountFields {}
+impl Derive<Arity> for CountFields {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let fields = field_count(record)
+        quote { const fn arity() -> usize { ${fields} } }
+    }
+}
+impl<T: Arity> Report for Box<T> as Fancy {
+    const fn report() -> usize { T::arity() + 1 }
+}
+
+const fn nested() -> usize {
+    with (CountFields) { with (Fancy) { <Box<Pair> as Report>::report() } }
+}
+const fn listed() -> usize {
+    with (CountFields, Fancy) { <Box<Pair> as Report>::report() }
+}
+"#;
+    let output = prepare(source).unwrap();
+    for function in ["nested", "listed"] {
+        assert_eq!(eval_const_fn_u256(&output, function), "3");
+    }
+}
+
+#[test]
+fn scoped_derive_refuses_associated_effect_rows_before_running_the_provider() {
+    let source = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait WithRow {
+    uses Row
+    const fn value() -> u256
+}
+struct Pair {}
+struct Provider {}
+impl Derive<WithRow> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault: u256 = 1 / zero
+        quote { const fn value() -> u256 { ${fault} } }
+    }
+}
+const fn result() -> u256 { with (Provider) { Pair::value() } }
+"#;
+    let cause = prepare_err(source);
+    assert!(cause.contains("without associated outputs"), "{cause}");
+    assert!(!cause.contains("division by zero"), "{cause}");
+}
+
 /// A type-generic provider applied to a concrete argument, and a constant
 /// generic provider applied through an alias.
 #[test]
