@@ -385,7 +385,7 @@ fn drop_glue_runs_the_member_a_provider_wrote() {
 
 The header `impl Conv<u8> for Pair with (Provider)` asks for `Derive<trait Conv<u8>>`. A single registration `impl<A> Derive<trait Conv<A>> for Provider` can handle several arguments. A generator can obtain the selected type with `type_ref<A>()` and splice the returned value into type syntax with `\${...}`.
 
-Omitting a trailing argument and writing its default select the same provider. For example, `Eq` and `Eq<Pair>` for `Pair` both select `Derive<trait Eq>`. `Eq<u8>` for `Pair` selects `Derive<trait Eq<u8>>`.
+Omitting a trailing argument and writing its default give the same provider candidates. For example, `Eq` and `Eq<Pair>` for `Pair` both select `Derive<trait Eq>`. `Eq<u8>` for `Pair` selects `Derive<trait Eq<u8>>`. If the provider registers both `Derive<trait Eq>` and `Derive<trait Eq<Pair>>`, either spelling for `Pair` gives an ambiguous request.
 
 A marker trait takes an empty output, `empty<Item>()`. A callable provider names its signature, as in `Derive<trait Fn(u256) -> u256>`. A provider for a header with inferred output uses `Derive<trait Fn(u256) -> _>` and supplies `Out`. The target may be an authored struct expanded by `#[abi]`, `#[error]` or `#[event]`, or the struct of a `msg` variant.
 
