@@ -1812,14 +1812,15 @@ fn finalized_derive_provider<'db>(
     .ok_or("missing canonical derive protocol")?;
     let args = match key {
         DeriveKey::Trait(goal) => {
-            let family = crate::analysis::ty::trait_resolution::derive::select_family(
-                db,
-                scope,
-                assumptions,
-                derive,
-                provider_ty,
-                goal,
-            )?;
+            use crate::analysis::ty::trait_resolution::derive::{
+                ProviderSearchBudget, select_family,
+            };
+            let budget = if requested_by_header {
+                ProviderSearchBudget::Written
+            } else {
+                ProviderSearchBudget::Scoped
+            };
+            let family = select_family(db, scope, assumptions, derive, provider_ty, goal, budget)?;
             vec![provider_ty, family]
         }
         DeriveKey::Inherent(_) => vec![provider_ty],

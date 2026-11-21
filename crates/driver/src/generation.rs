@@ -1129,7 +1129,18 @@ fn evaluate_scoped_request(
 ) -> Result<FrozenGenerationRequest, GenerationError> {
     let request = hir::core::meta::rebind_generation_request(db, &demand)
         .map_err(|cause| scoped_request_error(&demand, cause))?;
-    if !hir::analysis::ty::trait_resolution::generation::admission_demands(db, request).is_empty() {
+    let requirements =
+        hir::analysis::ty::trait_resolution::generation::admission_demands(db, request);
+    for pending in &requirements {
+        if let Err(cause) = &pending.demand {
+            return Err(GenerationError {
+                file: pending.opening.file.clone(),
+                range: pending.opening.binding_range,
+                cause: cause.clone(),
+            });
+        }
+    }
+    if !requirements.is_empty() {
         return Err(scoped_request_error(
             &demand,
             format!(

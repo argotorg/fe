@@ -22,7 +22,7 @@ use super::super::{
 };
 use super::{
     PredicateListId,
-    derive::{OfferHead, ProviderSearch},
+    derive::{OfferHead, ProviderSearch, ProviderSearchBudget},
 };
 
 #[salsa::interned]
@@ -279,7 +279,13 @@ fn provider_search<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Option<ProviderSearch<'db>> {
     let derive = super::super::corelib::resolve_core_trait(db, scope, &["derive", "Derive"])?;
-    Some(ProviderSearch::new(db, scope, assumptions, derive))
+    Some(ProviderSearch::new(
+        db,
+        scope,
+        assumptions,
+        derive,
+        ProviderSearchBudget::Scoped,
+    ))
 }
 
 fn provider_headers<'db>(

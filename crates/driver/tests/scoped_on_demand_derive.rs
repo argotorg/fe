@@ -3320,6 +3320,33 @@ struct Provider {{}}
                 )
                 .unwrap();
             }
+            if count == 129 && target_first {
+                let small = r#"
+struct Small {}
+impl Derive<trait Read<Key0>> for Small {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn read() -> usize { 7 } }
+    }
+}
+"#;
+                for order in ["Small, Provider", "Provider, Small"] {
+                    let idle = format!(
+                        "{source}{small}\nconst fn idle() -> usize {{ with ({order}) {{ 0 }} }}"
+                    );
+                    let (db, file) = input(&idle);
+                    let Err(error) = prepare_file(&db, file) else {
+                        panic!("expected refusal for incomplete eager comparison");
+                    };
+                    assert!(
+                        error
+                            .cause
+                            .contains("derive provider search exceeded its work limit"),
+                        "{error:?}"
+                    );
+                    let binding = usize::from(error.range.start())..usize::from(error.range.end());
+                    assert_eq!(&idle[binding], "Provider");
+                }
+            }
             source.push_str(
                 r#"
 impl Read<Key0> for Packet { const fn read() -> usize { 1 } }

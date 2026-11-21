@@ -15,8 +15,14 @@ use super::{
         unify::UnificationTable,
     },
     PredicateListId, TraitSolveCx,
-    table_solver::match_header_args,
+    table_solver::{match_header_args, match_header_type},
 };
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProviderSearchBudget {
+    Written,
+    Scoped,
+}
 
 /// A defaulted goal can fit distinct ordinary provider keys. Determine
 /// which keys the provider offers before proving its ordinary prerequisites.
@@ -27,12 +33,13 @@ pub(crate) fn select_family<'db>(
     derive: Trait<'db>,
     provider: TyId<'db>,
     goal: TraitInstId<'db>,
+    budget: ProviderSearchBudget,
 ) -> Result<TyId<'db>, String> {
     let families = crate::core::meta::derive_families(db, goal, scope, assumptions);
     if let [family] = families.as_slice() {
         return Ok(*family);
     }
-    let matching = ProviderSearch::new(db, scope, assumptions, derive)
+    let matching = ProviderSearch::new(db, scope, assumptions, derive, budget)
         .matching_headers(provider, &families)?
         .into_iter()
         .map(|(family, _)| family)
@@ -113,6 +120,7 @@ pub(super) struct ProviderSearch<'db> {
     wanted: Option<Canonical<TyId<'db>>>,
     active: Vec<(TyId<'db>, ImplementorOrigin<'db>)>,
     remaining: usize,
+    budget: ProviderSearchBudget,
 }
 
 impl<'db> ProviderSearch<'db> {
@@ -121,6 +129,7 @@ impl<'db> ProviderSearch<'db> {
         scope: ScopeId<'db>,
         assumptions: PredicateListId<'db>,
         derive: Trait<'db>,
+        budget: ProviderSearchBudget,
     ) -> Self {
         Self {
             db,
@@ -130,7 +139,16 @@ impl<'db> ProviderSearch<'db> {
             wanted: None,
             active: Vec::new(),
             remaining: 128,
+            budget,
         }
+    }
+
+    fn spend(&mut self) -> Result<(), &'static str> {
+        self.remaining = self
+            .remaining
+            .checked_sub(1)
+            .ok_or("derive provider search exceeded its work limit")?;
+        Ok(())
     }
 
     pub(super) fn matching_headers(
@@ -182,17 +200,29 @@ impl<'db> ProviderSearch<'db> {
             self.scope.ingot(db),
         ) {
             let mut table = UnificationTable::new(db);
-            let candidate = table.instantiate_with_fresh_vars(header);
-            if table
-                .unify_header(candidate.trait_inst(db).self_ty(db), receiver)
-                .is_err()
-            {
-                continue;
+            let mut candidate = table.instantiate_with_fresh_vars(header);
+            let candidate_receiver = candidate.trait_inst(db).self_ty(db);
+            let receiver_matches = match_header_type(
+                db,
+                &mut table,
+                candidate_receiver,
+                receiver,
+                self.scope,
+                self.assumptions,
+            )
+            .is_ok();
+            if !receiver_matches {
+                // A known family may bind an argument needed by a receiver
+                // projection. Retry with the whole head in a fresh table.
+                if self.wanted.is_none() || !candidate_receiver.has_projection(db) {
+                    continue;
+                }
+                table = UnificationTable::new(db);
+                candidate = table.instantiate_with_fresh_vars(header);
             }
-            if self.remaining == 0 {
-                return Err("derive provider search exceeded its work limit");
+            if receiver_matches && self.budget == ProviderSearchBudget::Scoped {
+                self.spend()?;
             }
-            self.remaining -= 1;
             let Some(&family) = candidate.trait_inst(db).args(db).get(1) else {
                 continue;
             };
@@ -231,6 +261,9 @@ impl<'db> ProviderSearch<'db> {
                     continue;
                 }
             }
+            if !receiver_matches && self.budget == ProviderSearchBudget::Scoped {
+                self.spend()?;
+            }
             let family = family.fold_with(db, &mut table);
             let family = if family.has_projection(db) {
                 normalize_ty(db, family, self.scope, self.assumptions)
@@ -256,6 +289,9 @@ impl<'db> ProviderSearch<'db> {
             let mut domain = IndexSet::from_iter([head]);
             for restriction in restrictors {
                 let other = restriction.self_ty(db).fold_with(db, &mut table);
+                if self.budget == ProviderSearchBudget::Written {
+                    self.spend()?;
+                }
                 let offered = self.headers(other)?;
                 domain = domain
                     .into_iter()

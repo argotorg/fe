@@ -275,6 +275,34 @@ pub(crate) fn match_header_args<'db, U: UnificationStore<'db>>(
     compare_headers(db, table, left, right, scope, assumptions, false).map(|_| ())
 }
 
+/// Match receiver types under the same projection rules as an ordinary header.
+pub(crate) fn match_header_type<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TyId<'db>,
+    right: TyId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> UnificationResult {
+    if !left.has_projection(db) && !right.has_projection(db) {
+        return table.unify_header(left, right);
+    }
+    compare_type_pairs(
+        db,
+        table,
+        vec![(left, right)],
+        |table, (left, right)| {
+            let assumptions = assumptions.fold_with(db, table);
+            (
+                normalize_assoc_binding(db, table, left, scope, assumptions),
+                normalize_assoc_binding(db, table, right, scope, assumptions),
+            )
+        },
+        false,
+    )
+    .map(|_| ())
+}
+
 /// Compare positional trait identity during normalization. Bind structural
 /// arguments before checking projection identities in the current table.
 /// Starting another normalizer here would restart the active cycle guards.

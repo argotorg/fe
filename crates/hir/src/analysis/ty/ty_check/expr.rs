@@ -2783,6 +2783,7 @@ impl<'db> TyChecker<'db> {
 
                 let mut claimed = rustc_hash::FxHashMap::default();
                 let mut conflict = None;
+                let mut exhausted = None;
                 for &entry in entries {
                     let (families, provider) = match entry {
                         ChoiceEntry::Impl(choice) => (
@@ -2799,7 +2800,7 @@ impl<'db> TyChecker<'db> {
                         ChoiceEntry::Provider(opening) => match closed_offers(self.db, opening) {
                             Ok(families) => (families, true),
                             Err(problem) => {
-                                conflict = Some(problem);
+                                exhausted = Some((opening, problem));
                                 break;
                             }
                         },
@@ -2816,14 +2817,19 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                 }
-                if let Some(message) = conflict {
-                    let opening = entries
-                        .iter()
-                        .find_map(|entry| match entry {
-                            ChoiceEntry::Provider(opening) => Some(*opening),
-                            ChoiceEntry::Impl(_) => None,
-                        })
-                        .expect("provider-containing group");
+                let refused = exhausted.or_else(|| {
+                    conflict.map(|message| {
+                        let opening = entries
+                            .iter()
+                            .find_map(|entry| match entry {
+                                ChoiceEntry::Provider(opening) => Some(*opening),
+                                ChoiceEntry::Impl(_) => None,
+                            })
+                            .expect("provider-containing group");
+                        (opening, message)
+                    })
+                });
+                if let Some((opening, message)) = refused {
                     self.env
                         .generation_demands
                         .refuse(opening.key(self.db).clone(), message);
