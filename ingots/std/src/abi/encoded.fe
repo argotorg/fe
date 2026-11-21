@@ -395,6 +395,7 @@ impl<I, T, A> Encoded<I, T, A>
     /// Read the field `key` of the record: a one-word value is decoded, and
     /// other types give a handle or a view (see `Part`).
     #[arithmetic(unchecked)]
+    #[inline(always)]
     pub fn at<F>(self, _ key: FieldKey<T, F>) -> F::Of
         where T: AbiSize, F: Part<I, A> + AbiSize
     {
@@ -531,6 +532,7 @@ impl<I, S, A> Encoded<I, S, A>
     /// Element `index`, read as `Part::read` reads a part (the same as
     /// `self[index]`). Panics with the index-out-of-bounds code if
     /// `index >= len()`.
+    #[inline(always)]
     pub fn element(self, _ index: usize) -> <S::Elem as Part<I, A>>::Of
         where S::Elem: Part<I, A> + AbiSize
     {
