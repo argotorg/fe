@@ -54,10 +54,10 @@ func private %newtype_word_mut_method_call(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v5.@layout_0 = call %bump v4;
-        v6.i256 = extract_value v5 0.i256;
-        return v6;
+        v2.@layout_0 = agg.make @layout_0 v0;
+        v3.@layout_0 = call %bump v2;
+        v5.i256 = extract_value v3 0.i256;
+        return v5;
 }
 
 

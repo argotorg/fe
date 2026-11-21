@@ -79,9 +79,8 @@ func private %main() -> @layout_0 {
     block1:
         v1.i1 = call %logical_or -1.i8;
         v2.i1 = call %logical_and -1.i8;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
-        v7.@layout_0 = insert_value v5 1.i256 v2;
-        return v7;
+        v3.@layout_0 = agg.make @layout_0 v1 v2;
+        return v3;
 }
 
 func private %main_root() {

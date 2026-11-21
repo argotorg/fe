@@ -13,15 +13,15 @@ func private %main() -> i256 {
         jump block1;
 
     block1:
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
-        v7.@layout_1 = insert_value undef.@layout_1 0.i256 v5;
-        v9.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
-        v11.@layout_1 = insert_value undef.@layout_1 0.i256 v9;
-        v13.@layout_0 = insert_value undef.@layout_0 0.i256 10.i256;
-        v15.@layout_1 = insert_value undef.@layout_1 0.i256 v13;
-        v16.i256 = call %match_newtype_nested v15;
-        return v16;
+        v1.@layout_0 = agg.make @layout_0 10.i256;
+        v2.@layout_0 = agg.make @layout_0 10.i256;
+        v3.@layout_1 = agg.make @layout_1 v2;
+        v4.@layout_0 = agg.make @layout_0 10.i256;
+        v5.@layout_1 = agg.make @layout_1 v4;
+        v6.@layout_0 = agg.make @layout_0 10.i256;
+        v7.@layout_1 = agg.make @layout_1 v6;
+        v8.i256 = call %match_newtype_nested v7;
+        return v8;
 }
 
 func private %main_root() {

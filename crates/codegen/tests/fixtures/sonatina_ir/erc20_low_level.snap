@@ -41,9 +41,8 @@ func private %abi_encode_string(v0.i256, v1.i256) {
         jump block2;
 
     block5:
-        v26.@layout_3 = insert_value undef.@layout_3 0.i256 v20;
-        v28.@layout_3 = insert_value v26 1.i256 v22;
-        obj.store v2 v28;
+        v26.@layout_3 = agg.make @layout_3 v20 v22;
+        obj.store v2 v26;
         jump block4;
 }
 
@@ -71,9 +70,8 @@ func private %abi_encode_u256(v0.i256) {
         jump block2;
 
     block5:
-        v16.@layout_3 = insert_value undef.@layout_3 0.i256 v10;
-        v18.@layout_3 = insert_value v16 1.i256 v12;
-        obj.store v1 v18;
+        v16.@layout_3 = agg.make @layout_3 v10 v12;
+        obj.store v1 v16;
         jump block4;
 }
 
@@ -126,11 +124,10 @@ func private %impl_Erc20__allowance(v0.i256, v1.@layout_0, v2.@layout_0) -> i256
         jump block1;
 
     block1:
-        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
-        v9.@layout_2 = insert_value v7 1.i256 v2;
-        v11.i256 = add v0 1.i256;
-        v12.i256 = call %get__g4007 v11 v9;
-        return v12;
+        v5.@layout_2 = agg.make @layout_2 v1 v2;
+        v8.i256 = add v0 1.i256;
+        v9.i256 = call %get__g4007 v8 v5;
+        return v9;
 }
 
 func private %erc20_low_level__allowance(v0.@layout_0, v1.@layout_0, v2.i256) -> i256 {
@@ -138,11 +135,10 @@ func private %erc20_low_level__allowance(v0.@layout_0, v1.@layout_0, v2.i256) ->
         jump block1;
 
     block1:
-        v7.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v9.@layout_2 = insert_value v7 1.i256 v1;
-        v11.i256 = add v2 1.i256;
-        v12.i256 = call %get__g4007 v11 v9;
-        return v12;
+        v5.@layout_2 = agg.make @layout_2 v0 v1;
+        v8.i256 = add v2 1.i256;
+        v9.i256 = call %get__g4007 v8 v5;
+        return v9;
 }
 
 func private %approve__gcd5c(v0.@layout_0, v1.i256, v2.i256) -> i256 {
@@ -160,10 +156,9 @@ func private %impl_Erc20__approve(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) 
         jump block1;
 
     block1:
-        v8.@layout_2 = insert_value undef.@layout_2 0.i256 v1;
-        v10.@layout_2 = insert_value v8 1.i256 v2;
-        v13.i256 = add v0 1.i256;
-        call %set__g4007 v13 v10 v3;
+        v6.@layout_2 = agg.make @layout_2 v1 v2;
+        v10.i256 = add v0 1.i256;
+        call %set__g4007 v10 v6 v3;
         return;
 }
 
@@ -200,8 +195,8 @@ func private %caller() -> @layout_0 {
 
     block1:
         v0.i256 = evm_caller;
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v3;
+        v1.@layout_0 = agg.make @layout_0 v0;
+        return v1;
 }
 
 func private %capacity(noalias nocapture readonly v0.objref<@layout_1>) -> i256 {
@@ -549,9 +544,8 @@ func private %init() {
         jump block2;
 
     block5:
-        v19.@layout_3 = insert_value undef.@layout_3 0.i256 v12;
-        v21.@layout_3 = insert_value v19 1.i256 v15;
-        obj.store v1 v21;
+        v19.@layout_3 = agg.make @layout_3 v12 v15;
+        obj.store v1 v19;
         jump block4;
 }
 
@@ -602,9 +596,8 @@ func inline(always) private %locate__g5cd5(v0.i256, v1.i256, v2.@layout_0) -> @l
 
     block1:
         v5.i256 = call %mapping_slot__g67a8 v1 v2;
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v5;
-        v10.@layout_4 = insert_value v8 1.i256 0.i256;
-        return v10;
+        v7.@layout_4 = agg.make @layout_4 v5 0.i256;
+        return v7;
 }
 
 func inline(always) private %locate__g4007(v0.i256, v1.i256, v2.@layout_2) -> @layout_4 {
@@ -613,9 +606,8 @@ func inline(always) private %locate__g4007(v0.i256, v1.i256, v2.@layout_2) -> @l
 
     block1:
         v5.i256 = call %mapping_slot__g7bf4 v1 v2;
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v5;
-        v10.@layout_4 = insert_value v8 1.i256 0.i256;
-        return v10;
+        v7.@layout_4 = agg.make @layout_4 v5 0.i256;
+        return v7;
 }
 
 func private %manual_contract_init_root_Erc20Contract() {
@@ -651,9 +643,8 @@ func inline(always) private %mapping_slot__g67a8(v0.i256, v1.@layout_0) -> i256 
         jump block5;
 
     block3:
-        v31.@layout_3 = insert_value undef.@layout_3 0.i256 v15;
-        v34.@layout_3 = insert_value v31 1.i256 v25;
-        obj.store v2 v34;
+        v31.@layout_3 = agg.make @layout_3 v15 v25;
+        obj.store v2 v31;
         jump block2;
 
     block4:
@@ -698,9 +689,8 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_2) -> i256 
         jump block5;
 
     block3:
-        v31.@layout_3 = insert_value undef.@layout_3 0.i256 v15;
-        v34.@layout_3 = insert_value v31 1.i256 v25;
-        obj.store v2 v34;
+        v31.@layout_3 = agg.make @layout_3 v15 v25;
+        obj.store v2 v31;
         jump block2;
 
     block4:
@@ -761,9 +751,9 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
         v6.i256 = add v0 3.i256;
         v7.i256 = evm_sload v6;
         v9.i256 = and v7 1461501637330902918203684832716283019655932542975.i256;
-        v12.@layout_0 = insert_value undef.@layout_0 0.i256 v9;
-        v14.i1 = call %ne v1 v12;
-        br v14 block2 block3;
+        v10.@layout_0 = agg.make @layout_0 v9;
+        v12.i1 = call %ne v1 v10;
+        br v12 block2 block3;
 
     block2:
         call %revert_empty;
@@ -773,9 +763,9 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
         jump block4;
 
     block4:
-        v17.i256 = call %impl_Erc20__balance_of v0 v2;
-        (v19.i256, v20.i1) = uaddo v17 v3;
-        br v20 block5 block6;
+        v15.i256 = call %impl_Erc20__balance_of v0 v2;
+        (v17.i256, v18.i1) = uaddo v15 v3;
+        br v18 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -783,7 +773,7 @@ func private %impl_Erc20__mint(v0.i256, v1.@layout_0, v2.@layout_0, v3.i256) {
         evm_revert 0.i256 36.i256;
 
     block6:
-        call %set__g5cd5 v0 v2 v19;
+        call %set__g5cd5 v0 v2 v17;
         return;
 }
 
@@ -827,8 +817,8 @@ func private %impl_Address__new(v0.i256) -> @layout_0 {
         jump block4;
 
     block4:
-        v13.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v13;
+        v12.@layout_0 = agg.make @layout_0 v0;
+        return v12;
 }
 
 func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d(v0.i256) -> @layout_1 {
@@ -837,10 +827,8 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_6a8d(v0.i256) -> @
 
     block1:
         v2.i256 = call %core__lib__ptr__alloc_bytes_8b3e v0;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
-        v7.@layout_1 = insert_value v5 1.i256 v0;
-        v9.@layout_1 = insert_value v7 2.i256 v0;
-        return v9;
+        v3.@layout_1 = agg.make @layout_1 v2 v0 v0;
+        return v3;
 }
 
 func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_f05d(v0.i256) -> @layout_1 {
@@ -849,10 +837,8 @@ func private %core__lib__ptr__impl_MemBuffer_2cdf__new_uninit_f05d(v0.i256) -> @
 
     block1:
         v2.i256 = call %core__lib__ptr__alloc_bytes_4704 v0;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
-        v7.@layout_1 = insert_value v5 1.i256 v0;
-        v9.@layout_1 = insert_value v7 2.i256 v0;
-        return v9;
+        v3.@layout_1 = agg.make @layout_1 v2 v0 v0;
+        return v3;
 }
 
 func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_1>, v1.i256, v2.i256) -> i256 {
@@ -1117,9 +1103,8 @@ func private %runtime() {
         jump block21;
 
     block24:
-        v77.@layout_3 = insert_value undef.@layout_3 0.i256 v73;
-        v80.@layout_3 = insert_value v77 1.i256 0.i256;
-        obj.store v0 v80;
+        v77.@layout_3 = agg.make @layout_3 v73 0.i256;
+        obj.store v0 v77;
         jump block23;
 }
 
@@ -1176,10 +1161,10 @@ func private %set_owner_once(v0.i256, v1.@layout_0) -> i1 {
         v4.i256 = add v0 3.i256;
         v5.i256 = evm_sload v4;
         v7.i256 = and v5 1461501637330902918203684832716283019655932542975.i256;
-        v10.@layout_0 = insert_value undef.@layout_0 0.i256 v7;
-        v11.@layout_0 = call %zero;
-        v12.i1 = call %ne v10 v11;
-        br v12 block2 block3;
+        v8.@layout_0 = agg.make @layout_0 v7;
+        v9.@layout_0 = call %zero;
+        v10.i1 = call %ne v8 v9;
+        br v10 block2 block3;
 
     block2:
         return 0.i1;
@@ -1188,17 +1173,17 @@ func private %set_owner_once(v0.i256, v1.@layout_0) -> i1 {
         jump block4;
 
     block4:
-        v16.i256 = add v0 3.i256;
-        v17.i256 = extract_value v1 0.i256;
-        v18.i256 = and v17 1461501637330902918203684832716283019655932542975.i256;
-        v19.i1 = ne v18 v17;
-        br v19 block5 block6;
+        v14.i256 = add v0 3.i256;
+        v16.i256 = extract_value v1 0.i256;
+        v17.i256 = and v16 1461501637330902918203684832716283019655932542975.i256;
+        v18.i1 = ne v17 v16;
+        br v18 block5 block6;
 
     block5:
         evm_revert 0.i256 0.i256;
 
     block6:
-        evm_sstore v16 v18;
+        evm_sstore v14 v17;
         return 1.i1;
 }
 
@@ -1292,10 +1277,9 @@ func private %impl_Erc20__transfer_from(v0.i256, v1.@layout_0, v2.@layout_0, v3.
 
     block4:
         call %impl_Erc20__transfer v0 v2 v3 v4;
-        v19.@layout_2 = insert_value undef.@layout_2 0.i256 v2;
-        v21.@layout_2 = insert_value v19 1.i256 v1;
-        (v23.i256, v24.i1) = usubo v8 v4;
-        br v24 block5 block6;
+        v17.@layout_2 = agg.make @layout_2 v2 v1;
+        (v19.i256, v20.i1) = usubo v8 v4;
+        br v20 block5 block6;
 
     block5:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -1303,8 +1287,8 @@ func private %impl_Erc20__transfer_from(v0.i256, v1.@layout_0, v2.@layout_0, v3.
         evm_revert 0.i256 36.i256;
 
     block6:
-        v30.i256 = add v0 1.i256;
-        call %set__g4007 v30 v21 v23;
+        v28.i256 = add v0 1.i256;
+        call %set__g4007 v28 v17 v19;
         return;
 }
 
@@ -1358,8 +1342,8 @@ func private %zero() -> @layout_0 {
         jump block1;
 
     block1:
-        v2.@layout_0 = insert_value undef.@layout_0 0.i256 0.i256;
-        return v2;
+        v1.@layout_0 = agg.make @layout_0 0.i256;
+        return v1;
 }
 
 func private %zero_bytes(v0.i256, v1.i256) {

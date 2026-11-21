@@ -13,11 +13,11 @@ func private %const_array_branch(v0.i1) -> i256 {
         br v0 block2 block3;
 
     block2:
-        v5.[i256; 1] = insert_value undef.[i256; 1] 0.i256 1.i256;
+        v3.[i256; 1] = agg.make [i256; 1] 1.i256;
         jump block4;
 
     block3:
-        v7.[i256; 1] = insert_value undef.[i256; 1] 0.i256 1.i256;
+        v5.[i256; 1] = agg.make [i256; 1] 1.i256;
         jump block4;
 
     block4:

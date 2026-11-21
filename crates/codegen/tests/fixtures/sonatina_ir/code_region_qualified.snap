@@ -148,9 +148,8 @@ func private %init() {
         jump block2;
 
     block5:
-        v18.@layout_1 = insert_value undef.@layout_1 0.i256 v11;
-        v20.@layout_1 = insert_value v18 1.i256 v14;
-        obj.store v1 v20;
+        v18.@layout_1 = agg.make @layout_1 v11 v14;
+        obj.store v1 v18;
         jump block4;
 }
 
@@ -209,10 +208,8 @@ func private %new_uninit(v0.i256) -> @layout_0 {
 
     block1:
         v2.i256 = call %alloc_bytes v0;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v7.@layout_0 = insert_value v5 1.i256 v0;
-        v9.@layout_0 = insert_value v7 2.i256 v0;
-        return v9;
+        v3.@layout_0 = agg.make @layout_0 v2 v0 v0;
+        return v3;
 }
 
 func private %prepare_copy_destination(noalias nocapture v0.objref<@layout_0>, v1.i256, v2.i256) -> i256 {
@@ -328,9 +325,8 @@ func private %runtime() {
         jump block2;
 
     block5:
-        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
-        v11.@layout_1 = insert_value v8 1.i256 0.i256;
-        obj.store v0 v11;
+        v8.@layout_1 = agg.make @layout_1 v4 0.i256;
+        obj.store v0 v8;
         jump block4;
 }
 
