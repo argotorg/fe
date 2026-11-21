@@ -1,0 +1,6 @@
+[ingot]
+name = "unsafe_trust_init_allowed"
+version = "0.1.0"
+
+[dependencies]
+u = { path = "../unsafe_trust_init_vendor/u", allow_unsafe = true }

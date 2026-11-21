@@ -1,0 +1,71 @@
+use core::meta::{Code, Item, Record}
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode, store_word}
+use core::derive::Derive
+use core::ops::Drop
+use core::ptr
+use std::abi::Sol
+
+/// A provider that gives a type an `Encode<Sol>` implementation with an
+/// `unsafe` block. `Encode` is a deciding trait, so a written header requests
+/// it.
+pub struct EncodesUnsafely {}
+impl Derive<trait Encode<Sol>> for EncodesUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn encode(self, _ out: AbiFrame) {
+                let p = ptr::alloc_bytes(32)
+                unsafe { store_word(ptr: p, value: 7) }
+                let _ = out
+            }
+        }
+    }
+}
+
+/// A type whose `Encode<Sol>` implementation, written here, has an `unsafe`
+/// block.
+pub struct WR { pub v: u256 }
+impl AbiSize for WR {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for WR {
+    fn encode(self, _ out: AbiFrame) {
+        let p = ptr::alloc_bytes(32)
+        unsafe { store_word(ptr: p, value: 7) }
+        let _ = out
+    }
+}
+impl Decode<Sol> for WR {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { WR { v: 0 } }
+}
+
+/// A type whose `Drop` implementation has an `unsafe` block. The compiler calls
+/// `drop` where a value of the type goes out of scope.
+pub struct WD {}
+impl Drop for WD {
+    fn drop(own self) {
+        let p = ptr::alloc_bytes(32)
+        unsafe { store_word(ptr: p, value: 7) }
+    }
+}
+pub fn mk_wd() -> WD { WD {} }
+
+/// A second type with the same kind of `drop`.
+pub struct WE {}
+impl Drop for WE {
+    fn drop(own self) {
+        let p = ptr::alloc_bytes(32)
+        unsafe { store_word(ptr: p, value: 7) }
+    }
+}
+pub fn mk_we() -> WE { WE {} }
+
+/// A third type with the same kind of `drop`.
+pub struct WF {}
+impl Drop for WF {
+    fn drop(own self) {
+        let p = ptr::alloc_bytes(32)
+        unsafe { store_word(ptr: p, value: 7) }
+    }
+}
+pub fn mk_wf() -> WF { WF {} }

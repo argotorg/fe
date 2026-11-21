@@ -1,4 +1,5 @@
 use camino::Utf8PathBuf;
+use fe_hir::analysis::name_resolution::Tier;
 use fe_hir::analysis::semantic::{
     GenericSubst, SemanticInstance, instantiate_typed_body, root_semantic_instance_key,
     typed_body_template,
@@ -61,7 +62,7 @@ fn run(evm: mut Evm) -> u256 {
 
     let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope())
+        TraitSolveCx::new(&db, impl_trait.scope(), Tier::All)
             .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
     )

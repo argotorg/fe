@@ -4,7 +4,7 @@ use camino::Utf8PathBuf;
 use dir_test::{Fixture, dir_test};
 use fe_hir::analysis::{
     analysis_pass::ModuleAnalysisPass,
-    name_resolution::{ImportAnalysisPass, NameDerivation, ResolvedImports, resolve_imports},
+    name_resolution::{ImportAnalysisPass, NameDerivation, ResolvedImports, Tier, resolve_imports},
 };
 use fe_hir::test_db::{HirAnalysisTestDb, HirPropertyFormatter};
 use fe_hir::{hir_def::Use, span::LazySpan};
@@ -25,7 +25,7 @@ fn import_standalone(fixture: Fixture<&str>) {
     db.assert_no_diags(top_mod);
 
     let mut pass = ImportAnalysisPass {};
-    let resolved_imports = resolve_imports(&db, top_mod.ingot(&db));
+    let resolved_imports = resolve_imports(&db, top_mod.ingot(&db), Tier::All);
     let diags = pass.run_on_module(&db, top_mod);
     if !diags.is_empty() {
         panic!("Failed to resolve imports");

@@ -1,0 +1,19 @@
+// Refused before and after the per-contributor rule: the unsafe block is in a
+// package that nothing trusts, whether a trusted provider calls into it or its
+// own provider splices it.
+
+pub struct TrustedCalls {}
+impl TrustedCalls with (t::Calls)
+
+pub struct UntrustedOwn {}
+impl UntrustedOwn with (u::OwnGen)
+
+#[test]
+fn trusted_provider_calls_an_untrusted_function() {
+    assert(TrustedCalls {}.spliced() == 7)
+}
+
+#[test]
+fn untrusted_provider_splices_its_own_fragment() {
+    assert(UntrustedOwn {}.spliced() == 7)
+}

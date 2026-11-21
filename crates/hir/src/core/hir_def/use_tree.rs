@@ -1,10 +1,16 @@
-use super::IdentId;
+use super::{AuthoredScope, IdentId, QuotedPathOrigin};
 use crate::{HirDb, hir_def::Partial};
 
 #[salsa::interned]
 #[derive(Debug)]
 pub struct UsePathId<'db> {
     pub data: Vec<Partial<UsePathSegment<'db>>>,
+    /// The producer scope of a free name in a quoted import's path.
+    #[returns(copy)]
+    pub authored_scope: Option<AuthoredScope<'db>>,
+    /// The quotation that introduces this import binding.
+    #[returns(copy)]
+    pub(crate) quote_origin: Option<QuotedPathOrigin<'db>>,
 }
 
 impl<'db> UsePathId<'db> {

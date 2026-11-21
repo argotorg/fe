@@ -1,6 +1,7 @@
 use camino::Utf8PathBuf;
 use common::diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics};
 use cranelift_entity::EntityRef;
+use fe_hir::analysis::name_resolution::Tier;
 use fe_hir::analysis::semantic::{
     GenericSubst, SemanticInstance, instantiate_typed_body, instantiated_effect_env,
     root_semantic_instance_key, typed_body_template, validate_instantiated_effect_env_key,
@@ -2744,7 +2745,7 @@ fn impl_trait_method_typed_body_instantiation_substitutes_self() {
         .expect("missing impl trait instance");
     let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope())
+        TraitSolveCx::new(&db, impl_trait.scope(), Tier::All)
             .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
     )
@@ -2793,7 +2794,7 @@ fn impl_trait_method_self_paths_preserve_binding_ty_after_instantiation() {
         .expect("missing impl trait instance");
     let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope())
+        TraitSolveCx::new(&db, impl_trait.scope(), Tier::All)
             .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
     )
@@ -3010,7 +3011,7 @@ fn impl_sum_semantic_body_uses_self_binding_directly() {
         .expect("missing impl trait instance");
     let resolved = prove(
         &db,
-        TraitSolveCx::new(&db, impl_trait.scope())
+        TraitSolveCx::new(&db, impl_trait.scope(), Tier::All)
             .with_assumptions(param_env(&db, ItemKind::ImplTrait(impl_trait))),
         inst,
     )

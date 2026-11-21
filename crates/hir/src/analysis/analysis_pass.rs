@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use crate::analysis::{
     HirAnalysisDb,
     diagnostics::DiagnosticVoucher,
@@ -289,7 +290,7 @@ fn semantic_field_type_errors<'db>(
 
         let scope = abi_struct.scope();
         let assumptions = constraints_for(db, abi_struct.into());
-        let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+        let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
         let traits = (
             resolve_lib_type_path(db, scope, "std::abi::Sol"),
             resolve_core_trait(db, scope, &["abi", "AbiSize"]),

@@ -33,6 +33,15 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
+    /// Severity does not depend on source spans. Semantic consumers must not
+    /// render diagnostics (or require a spanned database) to decide admission.
+    pub fn severity(&self) -> common::diagnostics::Severity {
+        match self {
+            Self::Body(BodyDiag::MutAccessCopied { .. }) => common::diagnostics::Severity::Warning,
+            _ => common::diagnostics::Severity::Error,
+        }
+    }
+
     pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self {
             Self::Ty(diag) => diag.to_voucher(),
@@ -571,9 +580,22 @@ pub enum MarkerPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
+    CompileTimePhase {
+        primary: DynLazySpan<'db>,
+        message: String,
+        /// What the primary span shows; see the `*_LABEL` constants.
+        label: &'static str,
+    },
     ChosenTypeRead {
         primary: DynLazySpan<'db>,
         goal: TraitInstId<'db>,
+    },
+    /// An open name of a spliced quote whose only enclosing binders are bare
+    /// pattern names that name a constant or unit variant; `primary` is the
+    /// innermost of them.
+    QuotedOpenNameUnbound {
+        primary: DynLazySpan<'db>,
+        name: String,
     },
     TypeMismatch {
         span: DynLazySpan<'db>,
@@ -1474,9 +1496,32 @@ pub enum BodyDiag<'db> {
     DropCalledDirectly {
         primary: DynLazySpan<'db>,
     },
+
+    /// A decision that prefers one implementation to another, or that depends
+    /// on an implementation being absent, would come out differently with the
+    /// implementations generated in the package. Written code keeps its
+    /// answer; preparation refuses the generated implementations where they
+    /// are requested.
+    GenerationChangesChoice {
+        primary: DynLazySpan<'db>,
+        decision: crate::analysis::name_resolution::Decision,
+        /// The trait whose generated implementations make the difference, if
+        /// the decision names one.
+        trait_: Option<Trait<'db>>,
+        /// The type the decision is about, which `trait_` is implemented for.
+        ty: Option<TyId<'db>>,
+        /// What the decision is about, for the message: a type, or a name.
+        subject: String,
+        /// The scope of the generated item, when the decision names it
+        /// directly.
+        generated: Option<crate::hir_def::scope_graph::ScopeId<'db>>,
+    },
 }
 
 impl<'db> BodyDiag<'db> {
+    /// A compile-time-only value (a carrier of generation) used at runtime.
+    pub(crate) const RUNTIME_CONTEXT_LABEL: &'static str =
+        "compile-time-only value cannot be used in this runtime context";
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
         primary: DynLazySpan<'db>,
@@ -1562,6 +1607,7 @@ impl<'db> BodyDiag<'db> {
 
     pub(crate) fn local_code(&self) -> u16 {
         match self {
+            Self::CompileTimePhase { .. } => 137,
             Self::TypeMismatch { .. } => 0,
             Self::InfiniteOccurrence(..) => 1,
             Self::DuplicatedRestPat(..) => 2,
@@ -1655,6 +1701,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpaqueShapeBound { .. } => 147,
             Self::ParamBindsTwice { .. } => 134,
             Self::DropCalledDirectly { .. } => 152,
+            Self::GenerationChangesChoice { .. } => 162,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
@@ -1711,6 +1758,7 @@ impl<'db> BodyDiag<'db> {
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
             Self::ChosenTypeRead { .. } => 138,
+            Self::QuotedOpenNameUnbound { .. } => 140,
         }
     }
 }
@@ -1847,6 +1895,21 @@ impl TraitConstraintDiag<'_> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ImplDiag<'db> {
+    UnfulfilledDeriveRequest {
+        primary: DynLazySpan<'db>,
+    },
+
+    /// A generated implementation of `trait_` gives `self_ty` a member named
+    /// `member` although the type already has one under that name, through
+    /// the trait `existing` or an inherent member (`None`). A call that names
+    /// the member keeps selecting the existing one. This is a warning.
+    GeneratedMemberNameShared {
+        primary: DynLazySpan<'db>,
+        trait_: Trait<'db>,
+        member: IdentId<'db>,
+        self_ty: TyId<'db>,
+        existing: Option<Trait<'db>>,
+    },
     ConflictMethodImpl {
         primary: CallableDef<'db>,
         conflict_with: CallableDef<'db>,
@@ -2072,7 +2135,9 @@ pub enum ImplDiag<'db> {
 
     /// A `Pinned` implementation whose space is not a state space, nor
     /// another pinned type's.
-    PinNotStateSpace { primary: DynLazySpan<'db> },
+    PinNotStateSpace {
+        primary: DynLazySpan<'db>,
+    },
 
     /// An implementation of an `unsafe trait` without `unsafe impl`, or an
     /// `unsafe impl` of a safe trait.
@@ -2091,7 +2156,9 @@ pub enum ImplDiag<'db> {
 
     /// A `Copy` implementation for a bare type parameter, which covers types
     /// whose fields, views and state the checks of a `Copy` type never see.
-    BlanketCopy { primary: DynLazySpan<'db> },
+    BlanketCopy {
+        primary: DynLazySpan<'db>,
+    },
 
     /// A `Drop` implementation for anything but a struct or enum applied to
     /// distinct generic parameters of the implementation.
@@ -2108,7 +2175,9 @@ pub enum ImplDiag<'db> {
     },
 
     /// A `drop` that declares effects, which no call site could provide.
-    DropEffects { primary: DynLazySpan<'db> },
+    DropEffects {
+        primary: DynLazySpan<'db>,
+    },
 
     /// A `Drop` implementation for a `Copy` type.
     DropOnCopy {
@@ -2127,6 +2196,8 @@ pub enum ImplDiag<'db> {
 impl ImplDiag<'_> {
     pub fn local_code(&self) -> u16 {
         match self {
+            Self::UnfulfilledDeriveRequest { .. } => 42,
+            Self::GeneratedMemberNameShared { .. } => 41,
             Self::ConflictMethodImpl { .. } => 0,
             Self::MethodNotDefinedInTrait { .. } => 1,
             Self::NotAllTraitItemsImplemented { .. } => 2,

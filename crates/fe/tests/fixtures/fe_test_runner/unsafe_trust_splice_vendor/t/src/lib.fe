@@ -1,0 +1,24 @@
+use core::derive::{Derive, DeriveInherent}
+use core::meta::{Code, Expr, Item, Record}
+
+// A provider of a package that the root trusts. `u` is declared here without
+// `allow_unsafe`, and the root does not trust it either.
+
+/// Splices a fragment that `u` wrote into its own quotation.
+pub struct Gen {}
+
+impl DeriveInherent for Gen {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e: Code<Expr> = u::frag()
+        quote { pub fn spliced(self) -> u256 { ${e} } }
+    }
+}
+
+/// Calls a function of `u` from its quotation.
+pub struct Calls {}
+
+impl DeriveInherent for Calls {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn spliced(self) -> u256 { u::raw() } }
+    }
+}

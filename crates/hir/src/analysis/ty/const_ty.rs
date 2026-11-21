@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use std::cell::OnceCell;
 
 use num_bigint::{BigInt, BigUint, Sign};
@@ -125,6 +126,8 @@ pub(crate) enum ConstBodyLowering {
 #[derive(Debug)]
 pub(crate) struct LoweringContext<'db> {
     const_bodies: ConstBodyLowering,
+    /// Lexical candidate availability for value-tail method discovery only.
+    method_choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
@@ -135,6 +138,13 @@ pub(crate) struct LoweringContext<'db> {
     /// Set while lowering resolves a path that an anonymous constant's body
     /// writes (`without_recording`).
     recording_paused: std::cell::Cell<bool>,
+    /// The record whose field type is being lowered where generated code
+    /// spliced it (`with_spliced_record`).
+    spliced_record: std::cell::Cell<Option<GenericParamOwner<'db>>>,
+    /// Names are found in the authored tier only, with no fallback to the items
+    /// generated in the ingot. A bare identifier in a pattern is classified
+    /// this way: it is a constant only if authored items say so.
+    authored_names_only: bool,
 }
 
 impl<'db> LoweringContext<'db> {
@@ -152,11 +162,38 @@ impl<'db> LoweringContext<'db> {
     pub(crate) fn for_const_bodies(const_bodies: ConstBodyLowering) -> Self {
         Self {
             const_bodies,
+            method_choices: None,
             impl_assoc_type: None,
             choices: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
+            spliced_record: std::cell::Cell::new(None),
+            authored_names_only: false,
         }
+    }
+
+    /// Makes name lookups use the authored tier only (see
+    /// `authored_names_only`).
+    pub(crate) fn authored_names_only(mut self) -> Self {
+        self.authored_names_only = true;
+        self
+    }
+
+    pub(crate) fn names_are_authored_only(&self) -> bool {
+        self.authored_names_only
+    }
+
+    pub(crate) fn with_method_choices(
+        mut self,
+        choices: Option<super::trait_resolution::ChosenImpls<'db>>,
+    ) -> Self {
+        self.method_choices = choices;
+        self.choices = choices;
+        self
+    }
+
+    pub(crate) fn method_choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
+        self.method_choices
     }
 
     /// Makes this lowering lower an associated type of `impl_trait`.
@@ -174,6 +211,7 @@ impl<'db> LoweringContext<'db> {
         choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     ) -> Self {
         self.choices = choices;
+        self.method_choices = choices;
         self
     }
 
@@ -205,6 +243,24 @@ impl<'db> LoweringContext<'db> {
         let result = resolve();
         self.recording_paused.set(paused);
         result
+    }
+
+    /// Runs `lower` with `record` as the record whose spliced field type is
+    /// being lowered, or with none. The anonymous constants of a spliced field
+    /// type are written in its record and are read there.
+    pub(crate) fn with_spliced_record<R>(
+        &self,
+        record: Option<GenericParamOwner<'db>>,
+        lower: impl FnOnce() -> R,
+    ) -> R {
+        let enclosing = self.spliced_record.replace(record);
+        let result = lower();
+        self.spliced_record.set(enclosing);
+        result
+    }
+
+    pub(crate) fn spliced_record(&self) -> Option<GenericParamOwner<'db>> {
+        self.spliced_record.get()
     }
 
     pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
@@ -463,6 +519,8 @@ fn trait_inst_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId
 
 fn sem_const_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, value: SemConstId<'db>) -> bool {
     match value.value(db) {
+        SemConstValue::ItemCode { ty, .. } => ty_is_fully_ground(db, *ty),
+        SemConstValue::Meta { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Unit => true,
         SemConstValue::Scalar { ty, .. } => ty_is_fully_ground(db, *ty),
         SemConstValue::Description(term) => const_ty_is_fully_ground(db, *term),
@@ -955,7 +1013,10 @@ fn const_ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, const_ty: ConstTyId
             ty.is_some_and(|ty| ty_is_fully_ground(db, ty))
                 && match capture {
                     ConstCaptureEnv::Empty => true,
-                    ConstCaptureEnv::Identity(_) => false,
+                    // An identity capture reads its owner's formals without
+                    // spelling them; with no formals, such as the `4` in
+                    // `impl Report for Buf<4>`, the body depends on none.
+                    ConstCaptureEnv::Identity(domain) => !domain.has_formals(db),
                     ConstCaptureEnv::Bound(subst) => subst
                         .values()
                         .iter()
@@ -1214,6 +1275,14 @@ fn canonicalize_sem_const_for_mode<'db>(
             .into_boxed_slice()
     };
     let value = match value.value(db) {
+        SemConstValue::ItemCode { ty, code } => SemConstValue::ItemCode {
+            ty: canonicalize(*ty),
+            code: code.clone(),
+        },
+        SemConstValue::Meta { ty, value } => SemConstValue::Meta {
+            ty: canonicalize(*ty),
+            value: *value,
+        },
         SemConstValue::Unit => SemConstValue::Unit,
         SemConstValue::Scalar { ty, value } => SemConstValue::Scalar {
             ty: canonicalize(*ty),
@@ -1767,8 +1836,8 @@ fn eval_int_expr<'db>(
                     ConstTyId::from_body(db, body, Some(declared_ty), Some(const_def))
                 }
                 PathRes::TraitConst(_, inst, name) => {
-                    let solve_cx =
-                        TraitSolveCx::new(db, body.scope()).with_assumptions(assumptions);
+                    let solve_cx = TraitSolveCx::new(db, body.scope(), Tier::All)
+                        .with_assumptions(assumptions);
                     const_ty_from_trait_const(db, solve_cx, inst, name)
                         .ok_or(ConstIntError::NotIntExpr)?
                 }
@@ -2034,7 +2103,8 @@ pub(crate) fn evaluate_const_ty<'db>(
                         ConstTyId::new(db, ConstTyData::Abstract(expr, expected_ty))
                     };
 
-                    let solve_cx = TraitSolveCx::new(db, use_scope).with_assumptions(assumptions);
+                    let solve_cx =
+                        TraitSolveCx::new(db, use_scope, Tier::All).with_assumptions(assumptions);
                     if let Some(const_ty) = const_ty_from_trait_const(db, solve_cx, inst, name) {
                         let evaluated = const_ty.evaluate(db, expected_ty);
                         if evaluated.ty(db).has_invalid(db) {
@@ -2450,6 +2520,18 @@ fn evaluate_const_ty_cycle_initial<'db>(
     _expected_ty: Option<TyId<'db>>,
 ) -> ConstTyId<'db> {
     const_ty
+}
+
+/// Whether the implementation that supplies `assoc` is only declared by a
+/// written header: its constants are produced by generation and unknown.
+pub(crate) fn assoc_const_use_is_declared_only<'db>(
+    db: &'db dyn HirAnalysisDb,
+    assoc: AssocConstUse<'db>,
+) -> bool {
+    matches!(
+        resolve_trait_impl_instance(db, assoc.solve_cx(db), assoc.inst()),
+        Selection::Unique(resolved) if resolved.selected().members_unknown(db)
+    )
 }
 
 pub(crate) fn const_ty_from_assoc_const_use<'db>(

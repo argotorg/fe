@@ -16,7 +16,7 @@ use salsa::SalsaValue;
 
 use super::{
     binder::Binder,
-    corelib::resolve_core_trait,
+    corelib::presence_trait,
     effects::rows::RowComponent,
     shape::Shape,
     trait_def::{AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId},
@@ -54,8 +54,12 @@ impl CallableTrait {
     }
 
     fn trait_<'db>(self, db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Option<Trait<'db>> {
-        let name = if self.mut_receiver { "FnMut" } else { "Fn" };
-        resolve_core_trait(db, scope, &["functional", name])
+        let path = if self.mut_receiver {
+            "core::functional::FnMut"
+        } else {
+            "core::functional::Fn"
+        };
+        presence_trait(db, scope, path)
     }
 
     /// The trait's method: `call`, or `call_mut` for a `mut` receiver.
@@ -321,7 +325,7 @@ impl<'db> RegionWalk<'db> {
             Expr::RecordInit(_, fields) => fields
                 .iter()
                 .for_each(|field| self.expr(field.expr, region)),
-            Expr::Tuple(elems) | Expr::Array(elems) => {
+            Expr::Tuple(elems) | Expr::Array(elems) | Expr::ItemQuote(elems) => {
                 elems.iter().for_each(|&elem| self.expr(elem, region))
             }
             Expr::If(cond, then, else_) => {

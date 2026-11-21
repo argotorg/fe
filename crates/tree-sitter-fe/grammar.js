@@ -35,6 +35,7 @@ module.exports = grammar({
     $._block_comment_end,
     $._generic_open,
     $._comparison_lt,
+    $._quote_keyword,
   ],
 
   word: $ => $.identifier,
@@ -47,9 +48,21 @@ module.exports = grammar({
   ],
 
   conflicts: $ => [
+    [$.record_expression, $._pattern_path],
+    [$._pattern_path, $.path],
+    [$.where_clause, $._expression, $._condition_atom_no_let],
+    [$.record_field, $.record_pattern_field],
+    [$.where_clause, $._condition_atom_no_let],
+    [$.tuple_expression, $.tuple_pattern],
+    [$._expression, $._pattern],
+    [$._expression, $.match_arm_list],
+    [$._expression, $.identifier_pattern, $.path_segment],
+    [$.match_arm_list, $.block],
+    [$.literal_pattern, $.literal],
     [$._expression, $._condition_atom_no_let, $._path],
     [$._expression, $._condition_atom_no_let, $._path, $.path_segment],
     [$.where_clause],
+    [$._type, $._expression],
     // `pub (` in a tuple struct field is either a visibility restriction such
     // as `pub(ingot)` or a plain `pub` followed by a tuple type.
     [$.visibility],
@@ -102,6 +115,12 @@ module.exports = grammar({
     // inserted by the external scanner at newline boundaries.
     // This mirrors tree-sitter-javascript's _semicolon approach.
     _terminator: $ => choice(';', $._automatic_semicolon),
+
+    // The end of an item header with a provider: the end of its line, as the
+    // compiler's parser requires; a `;` there is refused. It shows as `;` in
+    // the tree, so that a header followed by more tokens on its line reports
+    // the missing end.
+    _header_end: $ => alias($._automatic_semicolon, ';'),
 
     // ==================== ITEMS ====================
 
@@ -165,7 +184,7 @@ module.exports = grammar({
       optional($.attribute_list),
       optional($.visibility),
       'const',
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.quote_splice)),
       ':',
       field('type', $._type),
       '=',
@@ -188,7 +207,7 @@ module.exports = grammar({
       optional('unsafe'),
       optional('const'),
       'fn',
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.quote_splice)),
       optional($.generic_param_list),
       $.parameter_list,
       optional(seq('->', field('return_type', $._type))),
@@ -482,6 +501,7 @@ module.exports = grammar({
         $.trait_type_item,
         $.trait_const_item,
         $.trait_uses_item,
+        $.quote_splice,
         $.trait_shape_item,
       )),
       '}',
@@ -514,7 +534,7 @@ module.exports = grammar({
     trait_const_item: $ => seq(
       optional($.attribute_list),
       'const',
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.quote_splice)),
       ':',
       field('type', $._type),
       optional(seq('=', field('value', $._expression))),
@@ -526,7 +546,7 @@ module.exports = grammar({
       optional($.attribute_list),
       optional($.visibility),
       'const',
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.quote_splice)),
       ':',
       field('type', $._type),
       optional(seq('=', field('value', $._expression))),
@@ -538,8 +558,20 @@ module.exports = grammar({
       'impl',
       optional($.generic_param_list),
       field('type', $._type),
-      optional($.where_clause),
-      field('body', $.impl_item_list),
+      choice(
+        seq(
+          'with',
+          '(',
+          field('derive_provider', $.path_type),
+          ')',
+          optional($.where_clause),
+          $._header_end,
+        ),
+        seq(
+          optional($.where_clause),
+          field('body', $.impl_item_list),
+        ),
+      ),
     ),
 
     impl_trait: $ => choice(
@@ -552,8 +584,17 @@ module.exports = grammar({
         'for',
         field('type', $._type),
         optional(seq('as', field('selection_name', $.identifier))),
-        optional($.where_clause),
-        field('body', $.trait_item_list),
+        choice(
+          seq(
+            'with',
+            '(',
+            field('derive_provider', $.path_type),
+            ')',
+            optional($.where_clause),
+            $._header_end,
+          ),
+          seq(optional($.where_clause), field('body', $.trait_item_list)),
+        ),
       ),
       seq(
         optional($.attribute_list),
@@ -566,14 +607,23 @@ module.exports = grammar({
         field('type', $._type),
         'as',
         field('selection_name', $.identifier),
-        optional($.where_clause),
-        field('body', $.trait_item_list),
+        choice(
+          seq(
+            'with',
+            '(',
+            field('derive_provider', $.path_type),
+            ')',
+            optional($.where_clause),
+            $._header_end,
+          ),
+          seq(optional($.where_clause), field('body', $.trait_item_list)),
+        ),
       ),
     ),
 
     impl_item_list: $ => seq(
       '{',
-      repeat(choice($.function_definition, $.impl_const_item)),
+      repeat(choice($.function_definition, $.impl_const_item, $.quote_splice)),
       '}',
     ),
 
@@ -701,7 +751,7 @@ module.exports = grammar({
 
     where_clause: $ => seq(
       'where',
-      sep1(choice($.where_predicate, $.where_const_predicate), ','),
+      sep1(choice($.where_predicate, $.where_const_predicate, $.quote_splice), ','),
       optional(','),
     ),
 
@@ -718,6 +768,7 @@ module.exports = grammar({
     // ==================== TYPES ====================
 
     _type: $ => choice(
+      $.quote_splice,
       $.path_type,
       $.trait_family_type,
       $.tuple_type,
@@ -778,6 +829,8 @@ module.exports = grammar({
     // ==================== EXPRESSIONS ====================
 
     _expression: $ => choice(
+      $.quote_expression,
+      $.quote_splice,
       $.binary_expression,
       $.unary_expression,
       $.cast_expression,
@@ -1012,7 +1065,7 @@ module.exports = grammar({
     field_expression: $ => prec.left(PREC.POSTFIX, seq(
       field('value', $._expression),
       '.',
-      field('field', choice($.identifier, $.integer_literal)),
+      field('field', choice($.identifier, $.integer_literal, $.quote_splice)),
     )),
 
     try_expression: $ => prec(PREC.POSTFIX, seq(
@@ -1059,11 +1112,11 @@ module.exports = grammar({
 
     record_field: $ => choice(
       seq(
-        field('name', $.identifier),
+        field('name', choice($.identifier, $.quote_splice)),
         ':',
         field('value', $._expression),
       ),
-      field('value', $.identifier),
+      field('value', choice($.identifier, $.quote_splice)),
     ),
 
     tuple_expression: $ => seq(
@@ -1099,6 +1152,7 @@ module.exports = grammar({
     // Condition expression atoms excluding let-conditions and condition-specific
     // binary operator nodes.
     _condition_atom_no_let: $ => choice(
+      $.quote_splice,
       $.unary_expression,
       $.cast_expression,
       $.call_expression,
@@ -1172,6 +1226,7 @@ module.exports = grammar({
     // let-condition rhs allows tighter operators but excludes top-level `&&`
     // and `||` to match compiler parsing behavior.
     _condition_let_value: $ => choice(
+      $.quote_splice,
       $.condition_binary_expression_let_value,
       $.unary_expression,
       $.cast_expression,
@@ -1230,7 +1285,7 @@ module.exports = grammar({
 
     match_arm_list: $ => seq(
       '{',
-      repeat($.match_arm),
+      repeat(choice($.match_arm, seq($.quote_splice, choice(',', $._terminator)))),
       '}',
     ),
 
@@ -1260,6 +1315,36 @@ module.exports = grammar({
     match_arm_break: $ => 'break',
 
     match_arm_continue: $ => 'continue',
+
+    quote_expression: $ => seq(
+      alias($._quote_keyword, 'quote'),
+      optional($.quote_open_list),
+      field('body', choice($.block, $.quote_pattern, $.quote_where, $.match_arm_list, $.quote_members)),
+    ),
+
+    // A quote body that reads only as a pattern, such as `(_, mut y)`, is a
+    // pattern. A body that reads both ways is a block, such as `Some(v)` or a
+    // mode-headed `mut x`, unless it holds a wildcard or a rest pattern, which
+    // mark pattern syntax as in the compiler's parser: their weight (below)
+    // outweighs this rule's negative precedence.
+    quote_pattern: $ => prec.dynamic(-1, seq('{', $._pattern, '}')),
+
+    quote_where: $ => seq('{', $.where_clause, '}'),
+
+    // The members of an implementation that declare an associated shape, such
+    // as `quote { shape Step = (own usize, D::Step) }`. A block cannot hold a
+    // shape, so a body with one is read as members.
+    quote_members: $ => seq(
+      '{',
+      repeat(choice($._statement, $._item)),
+      $.trait_shape_item,
+      repeat(choice($._statement, $._item, $.trait_shape_item)),
+      '}',
+    ),
+
+    quote_open_list: $ => seq('(', sepTrailing($.identifier, ','), ')'),
+
+    quote_splice: $ => seq('$', '{', field('value', $._expression), '}'),
 
     with_expression: $ => seq(
       'with',
@@ -1414,6 +1499,7 @@ module.exports = grammar({
     // ==================== PATTERNS ====================
 
     _pattern: $ => choice(
+      $.quote_splice,
       $.wildcard_pattern,
       $.rest_pattern,
       $.literal_pattern,
@@ -1429,9 +1515,11 @@ module.exports = grammar({
       $.or_pattern,
     ),
 
-    wildcard_pattern: $ => '_',
+    // `_` also reads as an identifier in this grammar's expressions; the
+    // weight keeps a quote body that holds it a pattern (see quote_pattern).
+    wildcard_pattern: $ => prec.dynamic(2, '_'),
 
-    rest_pattern: $ => '..',
+    rest_pattern: $ => prec.dynamic(2, '..'),
 
     literal_pattern: $ => choice(
       $.integer_literal,
@@ -1485,7 +1573,7 @@ module.exports = grammar({
 
     record_pattern_field: $ => choice(
       seq(
-        field('name', $.identifier),
+        field('name', choice($.identifier, $.quote_splice)),
         ':',
         field('pattern', $._pattern),
       ),
@@ -1494,7 +1582,7 @@ module.exports = grammar({
       $.path_tuple_pattern,
       // Scoped path in field position: e.g., `Bar::Unit` inside `Foo { x, Bar::Unit }`
       $.scoped_path,
-      field('name', $.identifier),
+      field('name', choice($.identifier, $.quote_splice)),
       // Marked shorthand bindings: `Foo { mut x, ref y, var z }`
       $.mut_pattern,
       $.maybe_mut_pattern,

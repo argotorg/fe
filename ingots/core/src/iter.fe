@@ -308,6 +308,7 @@ impl<T> Bidirectional for MemSlice<T> {
 /// Nothing promises one call per element: `filter` projects each element to
 /// test it and again to yield it, and `take(0)` still starts its inner
 /// traversal.
+#[decides = "which protocol a `for` loop runs"]
 pub trait Driver {
     /// The driver's own effects; each method declares its base's too.
     uses E
@@ -363,6 +364,7 @@ pub trait Driver {
 
 /// A traversal that produces an owned value at each position, so non-`Copy`
 /// results can be collected.
+#[decides = "which protocol a `for` loop runs"]
 pub trait Producer {
     uses E
     type Base: Collection

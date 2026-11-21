@@ -1,4 +1,4 @@
-use super::{Body, GenericArg, IdentId, Partial, PathId};
+use super::{AuthoredScope, Body, GenericArg, GenericArgListId, IdentId, Partial, PathId};
 use crate::HirDb;
 
 #[salsa::interned]
@@ -51,7 +51,10 @@ impl<'db> TypeId<'db> {
                     })
                 })
             }),
-            TypeKind::Never | TypeKind::TraitFamily(_) => false,
+            TypeKind::AuthoredField(field) => field
+                .bound_type(db)
+                .is_some_and(|ty| ty.mentions_maybe_mut(db)),
+            TypeKind::Primitive(..) | TypeKind::Never | TypeKind::TraitFamily(_) => false,
         }
     }
 
@@ -112,7 +115,13 @@ impl<'db> TypeId<'db> {
                 );
                 format!("[{elem_ty}; {len_str}]")
             }
+            TypeKind::Primitive(primitive, args) => {
+                format!("{}{}", primitive.name(db).data(db), args.pretty_print(db))
+            }
             TypeKind::Never => "!".into(),
+            TypeKind::AuthoredField(field) => field
+                .bound_type(db)
+                .map_or_else(|| "<missing>".into(), |ty| ty.pretty_print(db)),
             TypeKind::TraitFamily(reference) => reference.to_opt().map_or_else(
                 || "<missing>".into(),
                 |reference| format!("trait {}", reference.pretty_print(db)),
@@ -146,11 +155,40 @@ pub enum TypeKind<'db> {
     Ptr(Partial<TypeId<'db>>),
     Mode(TypeMode, Partial<TypeId<'db>>),
     Path(Partial<PathId<'db>>),
+    /// Compiler-owned primitive identity for frozen scalar holes and frozen
+    /// types, with its arguments: `String<N>`.
+    Primitive(super::prim_ty::PrimTy, GenericArgListId<'db>),
     TraitFamily(Partial<super::TraitRefId<'db>>),
     Tuple(TupleTypeId<'db>),
     /// The first `TypeId` is the element type, the second `Body` is the length.
     Array(Partial<TypeId<'db>>, Partial<Body<'db>>),
     Never,
+    /// The type declared at a field of an authored record, spliced by
+    /// generated code. Analysis binds it in the record's declaration.
+    AuthoredField(AuthoredFieldType<'db>),
+}
+
+/// A field of an authored record named by a generated type splice. Lowering
+/// records only where the field was declared, because the record's module may
+/// itself receive code generated from the module being lowered.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct AuthoredFieldType<'db> {
+    #[returns(copy)]
+    pub record: AuthoredScope<'db>,
+    #[returns(copy)]
+    pub variant: Option<usize>,
+    #[returns(copy)]
+    pub index: usize,
+}
+
+impl<'db> AuthoredFieldType<'db> {
+    /// The field's declared type, its names bound in the record's scope and
+    /// the record's generic parameters left to the use site, as the type
+    /// splice copies them. `None` when the declaration omits the type.
+    pub fn bound_type(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
+        crate::core::lower::authored_field_type(db, self)
+    }
 }
 
 #[salsa::interned]

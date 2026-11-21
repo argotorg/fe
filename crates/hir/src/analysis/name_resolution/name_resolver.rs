@@ -1,5 +1,7 @@
 use std::{cmp, fmt, mem};
 
+use common::ingot::Ingot;
+
 use crate::{
     core::{
         hir_def::{
@@ -34,7 +36,7 @@ pub struct EarlyNameQueryId<'db> {
     name: IdentId<'db>,
     /// The scope where the name is resolved.
     #[returns(copy)]
-    scope: ScopeId<'db>,
+    pub(super) scope: ScopeId<'db>,
     #[returns(copy)]
     directive: QueryDirective,
 }
@@ -51,12 +53,21 @@ pub struct QueryDirective {
     /// external ingot and builtin types as well.
     allow_external: bool,
 
+    /// A quote-local probe follows lexical parents only within generated code.
+    stay_inside_quote: bool,
+
     /// If `allow_assoc_fn` is `false`, functions defined in an `impl`,
     /// `impl trait` or `trait` scope are not visible. This is the case for
     /// queries propagated to a lexical parent: like in Rust, associated
     /// functions are not in scope as bare names inside their own impl or
     /// trait and must be referred to via `Self::f` or `self.f()`.
     allow_assoc_fn: bool,
+
+    /// If `allow_enclosing_item_bindings` is `false`, parameters, `Self`, and
+    /// associated items of enclosing functions, impls, or traits are not
+    /// visible when resolving names through a generated function's lexical
+    /// origin.
+    allow_enclosing_item_bindings: bool,
 }
 
 impl QueryDirective {
@@ -73,7 +84,9 @@ impl QueryDirective {
         Self {
             allow_lex: true,
             allow_external: true,
+            stay_inside_quote: false,
             allow_assoc_fn: true,
+            allow_enclosing_item_bindings: true,
         }
     }
 
@@ -88,8 +101,24 @@ impl QueryDirective {
         self
     }
 
+    pub(super) fn quoted_locals(self) -> Self {
+        Self {
+            stay_inside_quote: true,
+            ..self.disallow_external()
+        }
+    }
+
+    pub(super) fn allows_lex_at(self, db: &dyn HirAnalysisDb, scope: ScopeId) -> bool {
+        self.allow_lex && !(self.stay_inside_quote && scope.is_published(db))
+    }
+
     fn disallow_assoc_fn(mut self) -> Self {
         self.allow_assoc_fn = false;
+        self
+    }
+
+    pub(crate) fn disallow_enclosing_item_bindings(mut self) -> Self {
+        self.allow_enclosing_item_bindings = false;
         self
     }
 }
@@ -97,6 +126,196 @@ impl QueryDirective {
 impl Default for QueryDirective {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Which items of its own ingot a lookup may see.
+///
+/// Inside the ingot that generates them, generated items only fill gaps: a
+/// name, member or implementation that the ingot's own code or a dependency
+/// already answers keeps that answer, and generated items are consulted only
+/// where nothing else answers. A lookup procedure therefore runs in the
+/// `Authored` tier first, and in the `All` tier only if the whole procedure
+/// found nothing (see `authored_first`). A dependency's sealed generated items
+/// are ordinary items in both tiers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum Tier {
+    /// Without the items generated in the ingot the lookup starts in.
+    Authored,
+    /// Every item.
+    All,
+}
+
+impl Tier {
+    /// The tier to use for a lookup that starts in `ingot`: an ingot without
+    /// generated items has one tier, so its lookups share their cache entries
+    /// whichever tier asked.
+    pub fn in_ingot<'db>(self, db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+        match self {
+            Tier::Authored if *ingot_has_generated_items(db, ingot) => Tier::Authored,
+            _ => Tier::All,
+        }
+    }
+
+    /// Like [`Tier::in_ingot`], for the lookup of a name or an import. Only an
+    /// item that generation published into a module is bound by its name there
+    /// (see `ScopeId::is_generated_in`); the members that a provider gives to
+    /// a derive header join the header, not a module. A package whose only
+    /// generation is derive headers therefore has one answer for every name and
+    /// every import, and shares its cache entries between the tiers.
+    pub fn in_ingot_for_names<'db>(self, db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+        match self {
+            Tier::Authored if *ingot_publishes_items(db, ingot) => Tier::Authored,
+            _ => Tier::All,
+        }
+    }
+
+    /// The tier to use in the tables of `table` for a lookup that starts in
+    /// `origin`: only the origin ingot's own tables hide its generated items,
+    /// because the generated items of any other ingot are sealed.
+    pub fn for_table<'db>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        origin: Ingot<'db>,
+        table: Ingot<'db>,
+    ) -> Self {
+        if origin == table {
+            self.in_ingot(db, table)
+        } else {
+            Tier::All
+        }
+    }
+
+    /// The ingot whose generated items the tier hides for a lookup that
+    /// starts in `origin`.
+    pub fn hides<'db>(self, origin: Ingot<'db>) -> Option<Ingot<'db>> {
+        (self == Tier::Authored).then_some(origin)
+    }
+}
+
+/// Whether generation produced code in a file of `ingot`: an item published
+/// into a module, or members given to an authored derive header, which can hold
+/// nested items such as implementations. Generation is described by the
+/// database's generation inputs, so this does not depend on lowering any
+/// module.
+#[salsa::tracked]
+pub fn ingot_has_generated_items<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> bool {
+    let inputs = db.generation_inputs();
+    let functions = inputs.functions(db);
+    let requests = inputs.requests(db);
+    if functions.is_empty() && requests.is_empty() {
+        return false;
+    }
+    ingot.files(db).iter().any(|(url, _)| {
+        functions.iter().any(|plan| plan.target_file == url)
+            || requests.iter().any(|request| request.target_file == url)
+    })
+}
+
+/// Whether generation published an item into a module of `ingot`: a
+/// module-level generated item or the named implementation of a scoped
+/// derive. The members of a derive header are not such items.
+#[salsa::tracked]
+pub fn ingot_publishes_items<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> bool {
+    let inputs = db.generation_inputs();
+    let functions = inputs.functions(db);
+    let requests = inputs.requests(db);
+    ingot.files(db).iter().any(|(url, _)| {
+        functions.iter().any(|plan| plan.target_file == url)
+            || requests
+                .iter()
+                .any(|request| request.request_impl.is_none() && request.target_file == url)
+    })
+}
+
+/// Runs a lookup procedure in the authored tier and, only if it found nothing
+/// there (`found` is false), in the full tier. This is the one place where the
+/// full tier is reached as a fallback; every procedure that chooses among
+/// names, members or implementations goes through it.
+///
+/// The procedure must contain every lookup it needs to decide, so that a
+/// generated item never wins part of a decision that authored items made: a
+/// lookup that is one step of a longer walk (a block, its enclosing blocks and
+/// then the module) belongs inside the closure, not around each step.
+pub(crate) fn authored_first<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    procedure: impl FnMut(Tier) -> T,
+    found: impl Fn(&T) -> bool,
+) -> T {
+    authored_first_filling(db, ingot, procedure, found, |_authored, all| all)
+}
+
+/// Like [`authored_first`], for a procedure whose authored result still
+/// matters when the full tier supplies nothing: `fill` chooses between the two
+/// results when the authored tier found nothing.
+pub(crate) fn authored_first_filling<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    mut procedure: impl FnMut(Tier) -> T,
+    found: impl Fn(&T) -> bool,
+    fill: impl FnOnce(T, T) -> T,
+) -> T {
+    if Tier::Authored.in_ingot(db, ingot) == Tier::Authored {
+        let authored = procedure(Tier::Authored);
+        if found(&authored) {
+            return authored;
+        }
+        let all = procedure(Tier::All);
+        return fill(authored, all);
+    }
+    procedure(Tier::All)
+}
+
+/// A decision that prefers one implementation to another, made in both tiers.
+pub(crate) struct TieredChoice<T> {
+    /// The answer the program takes: the authored tier's if it answers, and
+    /// the full tier's only where the authored tier found nothing.
+    pub chosen: T,
+    /// The full tier's answer, when the authored tier answered and the full
+    /// tier answers differently: generated implementations would change the
+    /// choice. The program keeps `chosen`; the generated implementations that
+    /// would change it are refused where they are requested.
+    pub changed_to: Option<T>,
+}
+
+/// Makes a decision that prefers one implementation to another (an ordered
+/// choice, such as the first of several traits that applies) in the authored
+/// tier, and in the full tier to learn whether generated implementations would
+/// change it. Unlike [`authored_first`], which stops at the first tier that
+/// finds an answer, this also runs the full tier when the authored tier
+/// answered, because a changed choice is an error to report and not a gap to
+/// fill. An ingot without generated code has one tier and no change.
+///
+/// `procedure` is given the tier and whether its answer is only compared (the
+/// full tier after an authored answer): a procedure that changes the state of
+/// a checker must undo that for a comparison. `same` says whether two answers
+/// are the same choice.
+pub(crate) fn choose_in_tiers<'db, T>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    mut procedure: impl FnMut(Tier, bool) -> T,
+    found: impl Fn(&T) -> bool,
+    same: impl Fn(&T, &T) -> bool,
+) -> TieredChoice<T> {
+    if Tier::Authored.in_ingot(db, ingot) == Tier::All {
+        return TieredChoice {
+            chosen: procedure(Tier::All, false),
+            changed_to: None,
+        };
+    }
+    let authored = procedure(Tier::Authored, false);
+    if !found(&authored) {
+        return TieredChoice {
+            chosen: procedure(Tier::All, false),
+            changed_to: None,
+        };
+    }
+    let all = procedure(Tier::All, true);
+    let changed = !same(&all, &authored);
+    TieredChoice {
+        chosen: authored,
+        changed_to: changed.then_some(all),
     }
 }
 
@@ -117,6 +336,15 @@ impl<'db> NameResBucket<'db> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Whether the lookup answered in any domain: it found a name, or the name
+    /// is ambiguous, invisible or in conflict. Only a lookup that found
+    /// nothing leaves a name to the generated items of a lower tier.
+    pub fn answers(&self) -> bool {
+        self.bucket
+            .iter()
+            .any(|(_, res)| !matches!(res, Err(NameResolutionError::NotFound)))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &NameResolutionResult<'db, NameRes<'db>>> {
@@ -255,6 +483,26 @@ pub struct NameRes<'db> {
 }
 
 impl<'db> NameRes<'db> {
+    /// A local module alias can give the rest of a quoted path producer
+    /// access only for another path copied from the same quotation.
+    pub(super) fn quoted_module_alias(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        origin: crate::hir_def::QuotedPathOrigin<'db>,
+    ) -> bool {
+        let NameDerivation::NamedImported(import) = self.derivation.origin() else {
+            return false;
+        };
+        import
+            .path(db)
+            .to_opt()
+            .and_then(|path| path.quote_origin(db))
+            == Some(origin)
+            && self
+                .scope()
+                .is_some_and(|scope| super::visibility_checker::is_authored_module(db, scope))
+    }
+
     /// Returns `true` if the name is visible from the given `scope`.
     pub fn is_visible(&self, db: &'db dyn HirAnalysisDb, from: ScopeId<'db>) -> bool {
         match self.derivation.origin() {
@@ -476,11 +724,26 @@ impl<'db> NameDerivation<'db> {
 pub(crate) struct NameResolver<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     importer: &'a dyn Importer<'db>,
+    /// The ingot whose generated items this resolver does not see: the authored
+    /// tier of a lookup that starts in it. Items generated in other ingots are
+    /// ordinary.
+    hide: Option<Ingot<'db>>,
 }
 
 impl<'db, 'a> NameResolver<'db, 'a> {
-    pub(super) fn new(db: &'db dyn HirAnalysisDb, importer: &'a dyn Importer<'db>) -> Self {
-        Self { db, importer }
+    pub(super) fn new(
+        db: &'db dyn HirAnalysisDb,
+        importer: &'a dyn Importer<'db>,
+        hide: Option<Ingot<'db>>,
+    ) -> Self {
+        Self { db, importer, hide }
+    }
+
+    /// Whether the resolver does not see `scope`: a generated item of the
+    /// ingot whose generated items the lookup does not use.
+    fn hides(&self, scope: ScopeId<'db>) -> bool {
+        self.hide
+            .is_some_and(|ingot| scope.is_generated_in(self.db, ingot))
     }
 
     pub(crate) fn resolve_query(&mut self, query: EarlyNameQueryId<'db>) -> NameResBucket<'db> {
@@ -500,11 +763,11 @@ impl<'db, 'a> NameResolver<'db, 'a> {
         {
             // Edges only need the query's name and whether lexical scopes apply.
             let name = query.name(self.db);
-            let allow_lex = query.directive(self.db).allow_lex;
+            let allow_lex = query.directive(self.db).allows_lex_at(self.db, scope);
             let mut process_edge =
                 |edge: &ScopeEdge<'db>| match edge.kind.propagate(self.db, name, allow_lex) {
                     PropagationResult::Terminated => {
-                        if found_scopes.insert(edge.dest) {
+                        if !self.hides(edge.dest) && found_scopes.insert(edge.dest) {
                             let res = NameRes::new_from_scope(
                                 edge.dest,
                                 NameDomain::from_edge(self.db, edge),
@@ -527,7 +790,15 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                     scope,
                     ScopeId::Item(ItemKind::Impl(_) | ItemKind::ImplTrait(_) | ItemKind::Trait(_))
                 );
+            let only_lex = !query.directive(self.db).allow_enclosing_item_bindings
+                && !matches!(
+                    scope,
+                    ScopeId::Block(..) | ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_))
+                );
             for edge in s_graph.edges(scope) {
+                if only_lex && !matches!(edge.kind, EdgeKind::Lex(_)) {
+                    continue;
+                }
                 if hide_assoc_fns && matches!(edge.dest, ScopeId::Item(ItemKind::Func(_))) {
                     continue;
                 }
@@ -553,10 +824,13 @@ impl<'db, 'a> NameResolver<'db, 'a> {
 
         // 4. Look for the name in the lexical scope if it exists.
         if let Some(parent) = parent {
-            let directive = query
+            let mut directive = query
                 .directive(self.db)
                 .disallow_external()
                 .disallow_assoc_fn();
+            if scope.data(self.db).publication_parent.is_some() {
+                directive = directive.disallow_enclosing_item_bindings();
+            }
             let query_for_parent =
                 EarlyNameQueryId::new(self.db, query.name(self.db), parent, directive);
 
@@ -651,6 +925,9 @@ impl<'db, 'a> NameResolver<'db, 'a> {
                 continue;
             }
             let scope = edge.dest;
+            if self.hides(scope) {
+                continue;
+            }
 
             let name = scope.name(self.db).unwrap();
             if !found_kinds.insert((name, scope.into())) {

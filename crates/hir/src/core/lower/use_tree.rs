@@ -1,8 +1,8 @@
 use parser::ast::{self, prelude::*};
 
-use super::FileLowerCtxt;
+use super::{FileLowerCtxt, path::quote_name_is_bound};
 use crate::{
-    hir_def::{AttrListId, IdentId, Partial, TrackedItemVariant, Use, use_tree::*},
+    hir_def::{AttrListId, AuthoredScope, IdentId, Partial, TrackedItemVariant, Use, use_tree::*},
     span::{HirOrigin, UseDesugared},
 };
 
@@ -23,9 +23,13 @@ impl<'db> Use<'db> {
             return vec![use_];
         };
 
+        if ctxt.quote_names_resolve_at_producer() {
+            refuse_glob_imports(ctxt, &use_tree);
+        }
+
         // If the use tree has no subtree, then there is no need to decompose it.
         if !use_tree.has_subtree() {
-            let path = UsePathId::lower_ast_partial(ctxt, use_tree.path());
+            let path = UsePathId::lower_ast_partial(ctxt, use_tree.path(), &ast);
             let id = ctxt.joined_id(TrackedItemVariant::Use(path));
             ctxt.enter_item_scope(id, false);
             let alias = use_tree
@@ -53,35 +57,79 @@ impl<'db> Use<'db> {
     }
 }
 
+/// Refuses a glob import in a quotation, at any depth of the use tree. The
+/// names that a glob brings in are not known when the quotation is lowered, so
+/// a name that only the glob provides would be looked up in the producer's
+/// scope, where it can mean another item or nothing.
+fn refuse_glob_imports(ctxt: &mut FileLowerCtxt<'_>, tree: &ast::UseTree) {
+    if let Some(segment) = tree.path().and_then(|path| path.into_iter().last())
+        && matches!(segment.kind(), Some(ast::UsePathSegmentKind::Glob(_)))
+    {
+        ctxt.record_generation_error(
+            segment.syntax().text_range(),
+            "a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}`",
+        );
+    }
+    for child in tree.children().into_iter().flatten() {
+        refuse_glob_imports(ctxt, &child);
+    }
+}
+
 impl<'db> UsePathId<'db> {
     fn lower_ast_partial(
         ctxt: &mut FileLowerCtxt<'db>,
         ast: Option<ast::UsePath>,
+        import: &ast::Use,
     ) -> Partial<Self> {
         let Some(ast) = ast else {
             return Partial::Absent;
         };
-
-        let segments = ast
-            .into_iter()
-            .map(|ast| UsePathSegment::lower_ast_partial(ctxt, ast))
-            .collect::<Vec<_>>();
-        Some(Self::new(ctxt.db(), segments)).into()
+        Self::from_segments(ctxt, ast.into_iter().collect(), import)
     }
 
     fn from_segments(
         ctxt: &mut FileLowerCtxt<'db>,
         ast_segs: Vec<ast::UsePathSegment>,
+        import: &ast::Use,
     ) -> Partial<Self> {
-        if ast_segs.is_empty() {
-            Partial::Absent
-        } else {
-            let segs = ast_segs
-                .into_iter()
-                .map(|seg| UsePathSegment::lower_ast_partial(ctxt, seg))
-                .collect::<Vec<_>>();
-            Partial::Present(Self::new(ctxt.db(), segs))
+        let Some(first) = ast_segs.first() else {
+            return Partial::Absent;
+        };
+        let authored_scope = quoted_import_scope(ctxt, first, import);
+        let quote_origin = ctxt.quote_frames.last().map(|frame| frame.path_origin());
+        let segments: Vec<_> = ast_segs
+            .into_iter()
+            .map(|segment| UsePathSegment::lower_ast_partial(ctxt, segment))
+            .collect();
+        Partial::Present(Self::new(ctxt.db(), segments, authored_scope, quote_origin))
+    }
+}
+
+/// The path's free names are looked up at the quotation's producer, while its
+/// import binding is introduced into the generated block.
+fn quoted_import_scope<'db>(
+    ctxt: &FileLowerCtxt<'db>,
+    first: &ast::UsePathSegment,
+    import: &ast::Use,
+) -> Option<AuthoredScope<'db>> {
+    let frame = ctxt.quote_frames.last()?;
+    match first.kind()? {
+        ast::UsePathSegmentKind::Ingot(_) => ctxt.quote_producer_in_other_ingot(),
+        ast::UsePathSegmentKind::Super(_) if ctxt.quote_names_resolve_at_producer() => {
+            Some(frame.producer)
         }
+        ast::UsePathSegmentKind::Ident(name)
+            if ctxt.quote_names_resolve_at_producer()
+                && !quote_name_is_bound(
+                    first.syntax(),
+                    name.text(),
+                    frame.is_sub_quote,
+                    Some(import.syntax()),
+                ) =>
+        {
+            Some(frame.producer)
+        }
+        _ => None,
     }
 }
 
@@ -132,7 +180,7 @@ fn decompose_tree<'db>(
     decompose_subtree(ctxt, use_tree, (vec![], use_desugared))
         .into_iter()
         .map(|(ast_segs, alias, desugared)| {
-            let path = UsePathId::from_segments(ctxt, ast_segs);
+            let path = UsePathId::from_segments(ctxt, ast_segs, &ast);
             (path, alias, desugared)
         })
         .collect()

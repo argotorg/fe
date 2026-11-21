@@ -416,7 +416,8 @@ implementations keep without checking it, and each implementation is an
 entries inside the collection's region. The methods of an `unsafe impl` are
 ordinary safe code, and calling them is safe. A dependency's `unsafe impl`
 counts as unsafe code where it is used, as its `unsafe` blocks do, so it needs
-`allow_unsafe = true`.
+`allow_unsafe = true`. An `unsafe impl` with no function has nothing for a call to reach, so it
+counts where it is declared.
 
 ```fe
 unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {

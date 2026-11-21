@@ -25,12 +25,12 @@ use super::{
     trait_resolution::PredicateListId,
     ty_def::{BorrowKind, InvalidCause, PrimTy, ShapeMode, TyBase, TyId},
     ty_error::first_invalid_ty_cause,
-    ty_lower::{lower_generic_arg_list, lower_hir_ty_with_minter},
+    ty_lower::lower_hir_ty_with_minter,
 };
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        NameResKind, PathRes, PathResError, PathResErrorKind,
+        NameResKind, PathRes, PathResError, PathResErrorKind, Tier,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
     },
     ty::ty_def::{Kind, TyData},
@@ -94,7 +94,8 @@ fn raw_impl_self_key<'db>(
             },
             HirTyKind::Tuple(tuple) => Some(ImplSelfKey::Prim(PrimTy::Tuple(tuple.data(db).len()))),
             HirTyKind::Array(..) => Some(ImplSelfKey::Prim(PrimTy::Array)),
-            HirTyKind::Never | HirTyKind::TraitFamily(_) => None,
+            HirTyKind::AuthoredField(field) => lower(db, field.bound_type(db)?, scope),
+            HirTyKind::Primitive(..) | HirTyKind::Never | HirTyKind::TraitFamily(_) => None,
         }
     }
 
@@ -114,13 +115,20 @@ fn raw_impl_self_key<'db>(
 /// of semantic type lowering is therefore the boundary that prevents query
 /// cycles. Visible candidates are semantically lowered only after this index
 /// has been assembled by [`TraitEnv`](super::trait_def::TraitEnv).
+///
+/// In `tier`: in the authored tier, without the implementations generated in
+/// the ingot.
 #[salsa::tracked]
 pub(crate) fn collect_trait_impls<'db>(
     db: &'db dyn HirAnalysisDb,
     ingot: Ingot<'db>,
+    tier: Tier,
 ) -> TraitImplTable<'db> {
     let mut impl_table = TraitImplTable::default();
     for &impl_ in ingot.all_impl_traits(db).iter() {
+        if tier == Tier::Authored && impl_.scope().is_within_generated(db, ingot) {
+            continue;
+        }
         if let Some(trait_def) = raw_impl_trait_def(db, impl_) {
             impl_table
                 .by_trait
@@ -145,6 +153,9 @@ pub(crate) fn lower_impl_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<ImplementorId<'db>> {
+    if crate::core::meta::is_pending_derive_request(db, impl_trait) {
+        return None;
+    }
     let trait_inst = impl_trait.trait_inst_result(db).ok()?;
     let params = impl_trait.impl_params(db);
 
@@ -196,6 +207,11 @@ pub(crate) fn lower_checked_impl_assoc_ty<'db>(
     impl_trait: ImplTrait<'db>,
     name: IdentId<'db>,
 ) -> Option<TyId<'db>> {
+    // The trait's default is not the value of a member the provider has not
+    // produced yet.
+    if impl_trait.members_unknown(db) {
+        return None;
+    }
     if let Some(assoc) = impl_trait
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))
@@ -272,6 +288,11 @@ pub(crate) fn lower_candidate_impl_assoc_ty<'db>(
     impl_trait: ImplTrait<'db>,
     name: IdentId<'db>,
 ) -> Option<TyId<'db>> {
+    // The trait's default is not the value of a member the provider has not
+    // produced yet.
+    if impl_trait.members_unknown(db) {
+        return None;
+    }
     if let Some(assoc) = impl_trait
         .assoc_types(db)
         .find(|assoc| assoc.name(db) == Some(name))
@@ -336,6 +357,9 @@ pub(crate) fn lower_impl_trait_header<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Option<ImplementorId<'db>> {
+    if crate::core::meta::is_pending_derive_request(db, impl_trait) {
+        return None;
+    }
     // Delegate trait-ref lowering and ingot checks to the semantic helper on
     // `ImplTrait`. If lowering fails or the ingot rule is violated, this
     // returns `None`.
@@ -453,7 +477,7 @@ pub(crate) fn lower_trait_ref_with_minter<'db>(
         path,
         scope,
         assumptions,
-        &mut |_, _| {},
+        &mut |_, _, _| {},
         lowering_cx,
     ) {
         Ok(PathRes::Trait(t)) => {
@@ -578,7 +602,8 @@ pub(crate) fn lower_trait_ref_impl_with_minter<'db>(
     let generic_args = path.generic_args(db);
     // Lower provided explicit args (excluding Self) as a type's generic args
     // are: a path among them is the constant it names, if it names one.
-    let lowered = lower_generic_arg_list(db, generic_args, scope, assumptions, lowering_cx);
+    let lowered =
+        super::ty_lower::lower_generic_arg_list(db, generic_args, scope, assumptions, lowering_cx);
     let mut provided_explicit = Vec::new();
     let mut assoc_bindings = IndexMap::new();
     for (arg, lowered) in generic_args.data(db).iter().zip(lowered) {

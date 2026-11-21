@@ -235,6 +235,54 @@ where
     }
 }
 
+impl HirOrigin<ast::Struct> {
+    /// The syntax a struct item was written as, read by generation as the
+    /// authored declaration: the struct itself, the struct that `#[abi]`,
+    /// `#[error]` or `#[event]` expands (the expansion adds implementations
+    /// and leaves the fields as written), or the `msg` variant that a message
+    /// struct stands for. `root` is the syntax tree of the item's module.
+    pub(crate) fn authored_range(&self, root: &parser::SyntaxNode) -> Option<parser::TextRange> {
+        match self {
+            Self::Raw(ptr) => Some(ptr.syntax_node_ptr().text_range()),
+            Self::Desugared(DesugaredOrigin::AbiStruct(origin)) => {
+                Some(origin.abi_struct.syntax_node_ptr().text_range())
+            }
+            Self::Desugared(DesugaredOrigin::Error(origin)) => {
+                Some(origin.error_struct.syntax_node_ptr().text_range())
+            }
+            Self::Desugared(DesugaredOrigin::Event(origin)) => {
+                Some(origin.event_struct.syntax_node_ptr().text_range())
+            }
+            Self::Desugared(DesugaredOrigin::Msg(origin)) => origin
+                .msg
+                .to_node(root)
+                .variants()?
+                .into_iter()
+                .nth(origin.variant_idx?)
+                .map(|variant| variant.syntax().text_range()),
+            _ => None,
+        }
+    }
+
+    /// Whether the struct is an authored declaration in the sense of
+    /// [`Self::authored_range`].
+    pub(crate) fn is_authored(&self) -> bool {
+        matches!(
+            self,
+            Self::Raw(_)
+                | Self::Desugared(
+                    DesugaredOrigin::AbiStruct(_)
+                        | DesugaredOrigin::Error(_)
+                        | DesugaredOrigin::Event(_)
+                        | DesugaredOrigin::Msg(MsgDesugared {
+                            variant_idx: Some(_),
+                            ..
+                        })
+                )
+        )
+    }
+}
+
 /// This enum represents the origin of the HIR node which is desugared into
 /// other HIR node kinds.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]

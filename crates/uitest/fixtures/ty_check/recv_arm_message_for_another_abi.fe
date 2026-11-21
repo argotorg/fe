@@ -1,0 +1,95 @@
+// A recv block answers to the `MsgVariant` implementation for its own ABI (`Sol`).
+// Implementations for another ABI neither give a message its selector or return
+// type nor make a type a message of the block, and their selectors are not
+// compared with those of the block.
+
+use core::abi::{AbiSize, Abi, AbiDecoder, ByteInput, Decode, Encode, AbiFrame}
+use core::message::MsgVariant
+use std::abi::Sol
+
+// A second ABI for the messages of `M`, with its own selectors and return types.
+pub struct Alt {}
+pub struct AltDec { pub pos: u256, pub base: u256 }
+impl AbiDecoder<Alt> for AltDec {
+    fn base(self) -> u256 { self.base }
+    fn set_base(mut self, _ new_base: u256) { self.base = new_base }
+    fn pos(self) -> u256 { self.pos }
+    fn set_pos(mut self, _ new_pos: u256) { self.pos = new_pos }
+    fn read_u8<I: ByteInput>(mut self, _ input: I) -> u8 { 0 }
+    fn read_word<I: ByteInput>(mut self, _ input: I) -> u256 { 0 }
+    fn peek_word<I: ByteInput>(self, _ input: I, _ at: u256) -> u256 { 0 }
+}
+impl Abi for Alt {
+    type Selector = u32
+    type Decoder = AltDec
+    const SELECTOR_SIZE: u256 = 4
+    fn selector_from_prefix(_ prefix: u256) -> u32 { 0 }
+    fn decode_bool_word(_ w: u256) -> bool { false }
+    fn decode_u8_word(_ w: u256) -> u8 { 0 }
+    fn decode_u16_word(_ w: u256) -> u16 { 0 }
+    fn decode_u32_word(_ w: u256) -> u32 { 0 }
+    fn decode_u64_word(_ w: u256) -> u64 { 0 }
+    fn decode_u128_word(_ w: u256) -> u128 { 0 }
+    fn decode_i8_word(_ w: u256) -> i8 { 0 }
+    fn decode_i16_word(_ w: u256) -> i16 { 0 }
+    fn decode_i32_word(_ w: u256) -> i32 { 0 }
+    fn decode_i64_word(_ w: u256) -> i64 { 0 }
+    fn decode_i128_word(_ w: u256) -> i128 { 0 }
+    fn decode_error() -> ! { <Sol as Abi>::decode_error() }
+    fn validate_runtime_head(input_len: u256, base: u256, head_size: u256) {}
+    fn decoder_new() -> AltDec { AltDec { pos: 0, base: 0 } }
+    fn decoder_with_base(_ base: u256) -> AltDec { AltDec { pos: base, base } }
+}
+
+
+msg M {
+    #[selector = 0x11111111]
+    Ping { x: u256 } -> u256,
+    #[selector = 0x33333333]
+    Pong { x: u256 } -> u256,
+}
+
+impl Encode<Alt> for M::Ping { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Alt> for M::Ping {
+    fn decode_payload<D: AbiDecoder<Alt>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        M::Ping { x: 0 }
+    }
+}
+impl Encode<Alt> for M::Pong { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Alt> for M::Pong {
+    fn decode_payload<D: AbiDecoder<Alt>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        M::Pong { x: 0 }
+    }
+}
+
+// Both answer to one selector and return a `bool` for `Alt`: no conflict, and
+// the arms below return `u256`, as `MsgVariant<Sol>` says.
+impl MsgVariant<Alt> for M::Ping { const SELECTOR: u32 = 0x22222222  type Return = bool }
+impl MsgVariant<Alt> for M::Pong { const SELECTOR: u32 = 0x22222222  type Return = bool }
+
+pub contract Fine {
+    recv M {
+        Ping { x } -> u256 { x + 1 }
+        Pong { x } -> u256 { x + 2 }
+    }
+}
+
+// Error: `OnlyAlt` is a message for `Alt` alone.
+pub struct OnlyAlt { pub x: u256 }
+impl AbiSize for OnlyAlt {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Alt> for OnlyAlt { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Alt> for OnlyAlt {
+    fn decode_payload<D: AbiDecoder<Alt>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        OnlyAlt { x: 0 }
+    }
+}
+impl MsgVariant<Alt> for OnlyAlt { const SELECTOR: u32 = 0x44444444  type Return = u256 }
+
+pub contract Bad {
+    recv {
+        OnlyAlt { x } -> u256 { x + 1 }
+    }
+}

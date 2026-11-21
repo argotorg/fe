@@ -16,11 +16,11 @@ pub async fn handle_document_symbols(
     params: async_lsp::lsp_types::DocumentSymbolParams,
 ) -> Result<Option<DocumentSymbolResponse>, ResponseError> {
     let url = backend.map_client_uri_to_internal(params.text_document.uri);
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let file = backend
-        .db
+    let file = analysis_db
         .workspace()
-        .get(&backend.db, &url)
+        .get(&analysis_db, &url)
         .ok_or_else(|| {
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
@@ -28,10 +28,10 @@ pub async fn handle_document_symbols(
             )
         })?;
 
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
     let mut symbols = Vec::new();
 
-    collect_symbols(&backend.db, top_mod, &mut symbols);
+    collect_symbols(&analysis_db, top_mod, &mut symbols);
 
     Ok(Some(DocumentSymbolResponse::Nested(symbols)))
 }

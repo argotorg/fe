@@ -370,7 +370,7 @@ impl WhereClause {
 ast_node! {
     /// A predicate of a `where` clause: a type bound or a const condition.
     pub struct WhereClausePredicate,
-    SK::WherePredicate | SK::WhereConstPredicate,
+    SK::WherePredicate | SK::WhereConstPredicate | SK::QuoteHole,
 }
 impl WhereClausePredicate {
     pub fn kind(&self) -> WherePredicateKind {
@@ -380,6 +380,9 @@ impl WhereClausePredicate {
             }
             SK::WhereConstPredicate => {
                 WherePredicateKind::Const(AstNode::cast(self.syntax().clone()).unwrap())
+            }
+            SK::QuoteHole => {
+                WherePredicateKind::Hole(AstNode::cast(self.syntax().clone()).unwrap())
             }
             _ => unreachable!(),
         }
@@ -391,6 +394,8 @@ pub enum WherePredicateKind {
     Type(WherePredicate),
     /// `N > 0`
     Const(WhereConstPredicate),
+    /// `${pred}` inside a quotation.
+    Hole(super::QuoteHole),
 }
 
 ast_node! {
