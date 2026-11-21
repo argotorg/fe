@@ -2144,9 +2144,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
             ),
-            RExpr::Placeholder { class } => {
-                zero_for_type(&mut self.fb, self.module.ty_for_class(class)?)
-            }
+            RExpr::Placeholder { class } => self.unread_value(class)?,
             RExpr::Builtin(builtin) => {
                 let value = self.lower_builtin(builtin)?;
                 self.coerce_to_dst(value, dst)?
@@ -6075,12 +6073,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         field: RLocalId,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        let ty = self.module.ty_for_class(class)?;
+        // An erased field has no runtime value to read.
         if self.body.value_class(field).is_none() {
-            return Ok(zero_for_type(&mut self.fb, ty));
+            return self.unread_value(class);
         }
+        let ty = self.module.ty_for_class(class)?;
         let value = self.local_value(field)?;
         self.coerce_value_to_ty(value, ty)
+    }
+
+    /// A value of `class` where nothing reads it, as for a MIR placeholder:
+    /// the one value of a zero-sized class, and otherwise `undef`, which
+    /// passes may refine to whatever is cheapest and memory legalization does
+    /// not store.
+    fn unread_value(&mut self, class: &RuntimeClass<'db>) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(class)?;
+        Ok(if class.is_runtime_zst(self.module.db) {
+            zero_for_type(&mut self.fb, ty)
+        } else {
+            self.fb.make_undef_value(ty)
+        })
     }
 
     fn retype_value_for_class(
@@ -7487,13 +7499,13 @@ fn panic_selector_immediate() -> Immediate {
     Immediate::from_i256(bytes_to_i256(&bytes, false), Type::I256)
 }
 
+/// The value of `ty` whose bits are all zero: an immediate for an integer or
+/// enum tag, `zero.T` for the unit value and compound types.
 fn zero_for_type(fb: &mut FunctionBuilder<InstInserter>, ty: Type) -> ValueId {
-    if ty.is_unit() || ty.is_compound() {
-        fb.make_undef_value(ty)
-    } else if ty.is_integral() || ty.is_enum_tag() {
+    if ty.is_integral() || ty.is_enum_tag() {
         fb.make_imm_value(Immediate::zero(ty))
     } else {
-        fb.make_undef_value(ty)
+        fb.make_zero_value(ty)
     }
 }
 
