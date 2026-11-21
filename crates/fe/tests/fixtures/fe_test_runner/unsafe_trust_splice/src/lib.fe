@@ -1,0 +1,43 @@
+// An `unsafe` block is accepted only if every package that contributed to it
+// is trusted: the package whose text contains the block and every package
+// whose quotation placed the block into the code that runs. Here `t` and `t2`
+// are trusted and `u` is not. The package that asks for the generated code is
+// not a contributor.
+use core::derive::{Derive, DeriveInherent}
+use core::meta::{Code, Expr, Item, Record}
+
+// A provider written here splices a fragment that `u` wrote.
+pub struct Mine {}
+
+impl DeriveInherent for Mine {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e: Code<Expr> = u::frag()
+        quote { pub fn spliced(self) -> u256 { ${e} } }
+    }
+}
+
+// `t`'s provider splices a fragment that `u` wrote.
+pub struct ByTrusted {}
+impl ByTrusted with (t::Gen)
+
+pub struct ByOwn {}
+impl ByOwn with (Mine)
+
+// `u`'s provider splices a fragment that the trusted `t2` wrote.
+pub struct ByUntrusted {}
+impl ByUntrusted with (u::SplicesT)
+
+#[test]
+fn trusted_provider_splices_an_untrusted_fragment() {
+    assert(ByTrusted {}.spliced() == 7)
+}
+
+#[test]
+fn own_provider_splices_an_untrusted_fragment() {
+    assert(ByOwn {}.spliced() == 7)
+}
+
+#[test]
+fn untrusted_provider_splices_a_trusted_fragment() {
+    assert(ByUntrusted {}.spliced() == 8)
+}

@@ -1,0 +1,47 @@
+// The same layout with `u` trusted: every splice is accepted.
+use core::derive::{Derive, DeriveInherent}
+use core::meta::{Code, Expr, Item, Record}
+
+// A provider written here splices a fragment that `u` wrote.
+pub struct Mine {}
+
+impl DeriveInherent for Mine {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e: Code<Expr> = u::frag()
+        quote { pub fn spliced(self) -> u256 { ${e} } }
+    }
+}
+
+// `t`'s provider splices a fragment that `u` wrote.
+pub struct ByTrusted {}
+impl ByTrusted with (t::Gen)
+
+pub struct ByOwn {}
+impl ByOwn with (Mine)
+
+// `u`'s provider splices a fragment that the trusted `t2` wrote.
+pub struct ByUntrusted {}
+impl ByUntrusted with (u::SplicesT)
+
+#[test]
+fn trusted_provider_splices_an_untrusted_fragment() {
+    assert(ByTrusted {}.spliced() == 7)
+}
+
+#[test]
+fn own_provider_splices_an_untrusted_fragment() {
+    assert(ByOwn {}.spliced() == 7)
+}
+
+#[test]
+fn untrusted_provider_splices_a_trusted_fragment() {
+    assert(ByUntrusted {}.spliced() == 8)
+}
+
+pub struct ByItem {}
+impl ByItem with (u::SplicesItem)
+
+#[test]
+fn untrusted_provider_splices_a_trusted_item() {
+    assert(unsafe { ByItem {}.unsafe_fn() } == 8)
+}

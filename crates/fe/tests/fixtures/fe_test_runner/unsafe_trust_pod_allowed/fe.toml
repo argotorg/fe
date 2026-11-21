@@ -1,0 +1,7 @@
+[ingot]
+name = "unsafe_trust_pod_allowed"
+version = "0.1.0"
+
+[dependencies]
+t = { path = "../unsafe_trust_pod_vendor/t", allow_unsafe = true }
+v = { path = "../unsafe_trust_pod_vendor/v", allow_unsafe = true }

@@ -11,7 +11,7 @@ use super::{
     },
     pat::LazyPatSpan,
     path::LazyPathSpan,
-    transition::SpanTransitionChain,
+    transition::{ChainRoot, SpanTransitionChain},
     types::{LazyTupleTypeSpan, LazyTySpan},
     use_tree::LazyUseAliasSpan,
 };
@@ -289,9 +289,36 @@ impl<'db> LazyImplSpan<'db> {
         Self(crate::span::transition::SpanTransitionChain::new(i))
     }
 
+    /// The `idx`th associated const of the implementation's HIR, including
+    /// members spliced from quotations.
     pub fn associated_const(self, idx: usize) -> LazyTraitConstSpan<'db> {
-        self.item_list().assoc_const(idx)
+        use crate::span::transition::AssocMemberRoot;
+        match assoc_member_root(&self.0, idx, |root, idx| match root {
+            ChainRoot::Impl(impl_) | ChainRoot::ItemKind(ItemKind::Impl(impl_)) => {
+                Some(AssocMemberRoot::InherentConst(impl_, idx))
+            }
+            _ => None,
+        }) {
+            Some(chain) => LazyTraitConstSpan(chain),
+            None => self.item_list().assoc_const(idx),
+        }
     }
+}
+
+/// A member span rooted at the member itself, when `chain` is the bare span
+/// of its implementation.
+fn assoc_member_root<'db>(
+    chain: &crate::span::transition::SpanTransitionChain<'db>,
+    idx: usize,
+    member: impl FnOnce(ChainRoot<'db>, u16) -> Option<crate::span::transition::AssocMemberRoot<'db>>,
+) -> Option<crate::span::transition::SpanTransitionChain<'db>> {
+    if chain.len() != 0 {
+        return None;
+    }
+    let member = member(chain.root, u16::try_from(idx).ok()?)?;
+    Some(crate::span::transition::SpanTransitionChain::new(
+        ChainRoot::AssocMember(member),
+    ))
 }
 
 define_lazy_span_node!(LazyImplItemListSpan, ast::ImplItemList,);
@@ -509,7 +536,7 @@ impl<'db> LazyTraitUsesSpan<'db> {
 
 define_lazy_span_node!(
     LazyTraitTypeSpan,
-    ast::TraitTypeItem,
+    ast::AssocTypeSyntax,
     @node {
         (bounds, bounds, LazyTypeBoundListSpan),
         (attributes, attr_list, LazyAttrListSpan),
@@ -521,9 +548,8 @@ impl<'db> LazyTraitTypeSpan<'db> {
     pub fn name(mut self) -> LazySpanAtom<'db> {
         fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
             origin.map(|node| {
-                ast::TraitTypeItem::cast(node.clone())
+                ast::AssocTypeSyntax::cast(node)
                     .and_then(|item| item.name())
-                    .or_else(|| ast::TraitShapeItem::cast(node)?.name())
                     .map(Into::into)
             })
         }
@@ -543,9 +569,8 @@ impl<'db> LazyTraitTypeSpan<'db> {
         fn f(origin: ResolvedOrigin, _: LazyArg) -> ResolvedOrigin {
             origin
                 .map(|node| {
-                    ast::TraitTypeItem::cast(node.clone())
+                    ast::AssocTypeSyntax::cast(node)
                         .and_then(|item| item.ty())
-                        .or_else(|| ast::TraitShapeItem::cast(node)?.ty())
                         .map(|ty| ty.syntax().clone().into())
                 })
                 .map_desugared(|root, desugared| match desugared {
@@ -577,7 +602,7 @@ impl<'db> LazyTraitTypeSpan<'db> {
 
 define_lazy_span_node!(
     LazyTraitConstSpan,
-    ast::TraitConstItem,
+    ast::AssocConstSyntax,
     @token {
         (name, name),
     }
@@ -607,12 +632,37 @@ impl<'db> LazyImplTraitSpan<'db> {
         Self(crate::span::transition::SpanTransitionChain::new(i))
     }
 
+    /// The `idx`th associated type of the implementation's HIR, including
+    /// members spliced from quotations.
     pub fn associated_type(self, idx: usize) -> LazyTraitTypeSpan<'db> {
-        self.item_list().assoc_type(idx)
+        use crate::span::transition::AssocMemberRoot;
+        match assoc_member_root(&self.0, idx, |root, idx| {
+            impl_trait_root(root).map(|impl_trait| AssocMemberRoot::TraitType(impl_trait, idx))
+        }) {
+            Some(chain) => LazyTraitTypeSpan(chain),
+            None => self.item_list().assoc_type(idx),
+        }
     }
 
+    /// The `idx`th associated const of the implementation's HIR, including
+    /// members spliced from quotations.
     pub fn associated_const(self, idx: usize) -> LazyTraitConstSpan<'db> {
-        self.item_list().assoc_const(idx)
+        use crate::span::transition::AssocMemberRoot;
+        match assoc_member_root(&self.0, idx, |root, idx| {
+            impl_trait_root(root).map(|impl_trait| AssocMemberRoot::TraitConst(impl_trait, idx))
+        }) {
+            Some(chain) => LazyTraitConstSpan(chain),
+            None => self.item_list().assoc_const(idx),
+        }
+    }
+}
+
+fn impl_trait_root(root: ChainRoot<'_>) -> Option<ImplTrait<'_>> {
+    match root {
+        ChainRoot::ImplTrait(impl_trait) | ChainRoot::ItemKind(ItemKind::ImplTrait(impl_trait)) => {
+            Some(impl_trait)
+        }
+        _ => None,
     }
 }
 

@@ -1,0 +1,14 @@
+// The entry of a contract decodes the arguments of `init` with the `Decode`
+// implementation of their type, and no call names it. `u` wrote the unsafe code
+// in the implementation for `WI` and nothing trusts `u`, so the contract is
+// refused at its `init`.
+use u::WI
+
+pub contract Holder {
+    init(w: WI) {}
+}
+
+#[test]
+fn the_contract_decodes_its_init_arguments() {
+    assert(true)
+}

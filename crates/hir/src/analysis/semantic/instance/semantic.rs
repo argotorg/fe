@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use cranelift_entity::EntityRef;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -24,7 +25,8 @@ use crate::{
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
-                resolve_core_trait, resolve_lib_type_path, runtime_builtin_func_kind,
+                presence_trait, resolve_core_trait, resolve_lib_type_path,
+                runtime_builtin_func_kind,
             },
             effects::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
@@ -50,8 +52,8 @@ use crate::{
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
                 EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
-                ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
-                SmirLoweringIssue, TypedBody,
+                ForLoopStep, LocalBinding, ParamSite, PlaceEntryCalls, ResolvedEffectArg,
+                SemanticExprLowering, SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
@@ -259,6 +261,19 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
     CallSiteFinalization(crate::analysis::semantic::SemanticDiagnosticId<'db>),
     InvalidConcreteType(crate::analysis::semantic::SemanticDiagnosticId<'db>),
     InstanceLimit(crate::analysis::semantic::SemanticDiagnosticId<'db>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+enum EntryCodecFailure<'db> {
+    Diagnostic(SemanticDiagnosticId<'db>),
+}
+
+impl<'db> EntryCodecFailure<'db> {
+    fn diagnostic(self) -> SemanticDiagnosticId<'db> {
+        match self {
+            Self::Diagnostic(diagnostic) => diagnostic,
+        }
+    }
 }
 
 /// A call's effect argument, at the callee effect it is passed as.
@@ -531,7 +546,7 @@ pub fn instantiated_typed_body<'db>(
         db,
         goals,
         supplied,
-        TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
+        TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db), Tier::All),
     );
     let bound = crate::analysis::ty::evidence::BoundEvidence {
         schema: body.bound_schema(),
@@ -1206,6 +1221,11 @@ fn method_arg_map_diagnostic<'db>(
     error: MethodArgMapError<'db>,
     origin: SemOrigin<'db>,
 ) -> SemanticDiagnosticId<'db> {
+    let kind = if matches!(error, MethodArgMapError::DeclaredOnly) {
+        SemanticDiagnosticKind::DeclaredOnlyImplementation
+    } else {
+        SemanticDiagnosticKind::Internal
+    };
     let message = match error {
         MethodArgMapError::SignatureMismatch {
             nominal,
@@ -1229,12 +1249,13 @@ fn method_arg_map_diagnostic<'db>(
                 evidence.pretty_print(db),
             )
         }
+        MethodArgMapError::DeclaredOnly => "this call goes through an implementation that is only declared by a written header; its members are produced by generation and cannot run while a provider evaluates".to_string(),
         error => format!("checked call body argument mapping failed: {error:?}"),
     };
     SemanticDiagnosticId::new(
         db,
         SemanticDiagnostic {
-            kind: SemanticDiagnosticKind::Internal,
+            kind,
             instance,
             primary: SemanticDiagnosticLabel {
                 message,
@@ -1772,23 +1793,32 @@ impl<'db> SemanticInstance<'db> {
     /// after the ordinary associated layout says this entry is packed. The
     /// callable may defer an obligation that becomes closed on substitution;
     /// the shared callee finalizer owns that obligation, as for written calls.
-    #[salsa::tracked(returns(copy))]
     pub fn entry_codec_callees(
         self,
         db: &'db dyn HirAnalysisDb,
         expr: ExprId,
     ) -> Result<[SemanticInstanceKey<'db>; 2], SemanticDiagnosticId<'db>> {
+        self.resolve_entry_codec_callees(db, expr)
+            .map_err(EntryCodecFailure::diagnostic)
+    }
+
+    #[salsa::tracked(returns(copy))]
+    fn resolve_entry_codec_callees(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Result<[SemanticInstanceKey<'db>; 2], EntryCodecFailure<'db>> {
         let calls = self
             .key(db)
             .typed_body(db)
             .place_entry_calls(expr)
             .ok_or_else(|| {
-                method_arg_map_diagnostic(
+                EntryCodecFailure::Diagnostic(method_arg_map_diagnostic(
                     db,
                     self,
                     MethodArgMapError::MissingBody,
                     SemOrigin::Expr(expr),
-                )
+                ))
             })?;
         let failed_choice = || {
             let goal = calls.codec[0]
@@ -1811,9 +1841,16 @@ impl<'db> SemanticInstance<'db> {
             )
         };
         if calls.codec_choice_failed {
-            return Err(failed_choice());
+            return Err(EntryCodecFailure::Diagnostic(failed_choice()));
         }
-        let call_error = |error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr));
+        let call_error = |error| {
+            EntryCodecFailure::Diagnostic(method_arg_map_diagnostic(
+                db,
+                self,
+                error,
+                SemOrigin::Expr(expr),
+            ))
+        };
         let one = |callable: &Callable<'db>| {
             let mut callable = callable.clone();
             if callable.evidence().is_none() {
@@ -1821,19 +1858,18 @@ impl<'db> SemanticInstance<'db> {
                 // deferred proof. Its lexical choices still apply.
                 let outcome = callable.record_evidence(
                     db,
-                    TraitSolveCx::new(db, self.normalization_scope(db))
+                    TraitSolveCx::new(db, self.normalization_scope(db), Tier::All)
                         .with_assumptions(self.assumptions(db))
                         .with_choices(calls.codec_choices),
                 );
                 if outcome.evidence().is_none() && calls.codec_choices.is_some() {
-                    return Err(failed_choice());
+                    return Err(EntryCodecFailure::Diagnostic(failed_choice()));
                 }
             }
-            if calls.codec_choices.is_some()
-                && callable.has_deferred_evidence(db)
-                && callable.complete_deferred_evidence(db).is_none()
-            {
-                return Err(failed_choice());
+            if calls.codec_choices.is_some() && callable.has_deferred_evidence(db) {
+                callable
+                    .complete_deferred_evidence(db)
+                    .map_err(|_| EntryCodecFailure::Diagnostic(failed_choice()))?;
             }
             let callee =
                 semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
@@ -1845,6 +1881,18 @@ impl<'db> SemanticInstance<'db> {
             Ok(callee.key)
         };
         Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+    }
+
+    fn requires_concrete_entry_codec(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        calls: &PlaceEntryCalls<'db>,
+    ) -> bool {
+        !calls.deferred_codec_is_parametric(db)
+            && calls
+                .locate
+                .trait_inst()
+                .is_some_and(|goal| self.state_index_lanes(db, goal.self_ty(db)).is_some())
     }
 
     /// How `ty` packs its elements into lanes when its elements are places
@@ -1982,6 +2030,43 @@ impl<'db> SemanticInstance<'db> {
         collect_semantic_callees(db, self)
     }
 
+    /// The instances that running the body evaluates besides its explicit
+    /// calls: the constants it reads and the codec callees of its place
+    /// entries. A constant is not a callee, but evaluating it runs its body.
+    pub fn implicit_dependencies(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<SemanticInstanceKey<'db>> {
+        let typed_body = self.key(db).typed_body(db);
+        let Some(body) = typed_body.body() else {
+            return Vec::new();
+        };
+        let mut keys = Vec::new();
+        let mut push = |key| {
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        };
+        for expr in body.exprs(db).keys() {
+            if let Some(const_ref) = typed_body.expr_const_ref(expr)
+                && let Some(resolved) = super::const_ref::resolve_semantic_const_ref(
+                    db,
+                    const_ref,
+                    typed_body.expr_ty(db, expr),
+                    SemOrigin::Expr(expr),
+                )
+            {
+                push(resolved.instance(db));
+            }
+            if typed_body.place_entry_calls(expr).is_some()
+                && let Ok(codec) = self.entry_codec_callees(db, expr)
+            {
+                codec.into_iter().for_each(&mut push);
+            }
+        }
+        keys
+    }
+
     /// Borrow checking and runtime lowering consume concrete layouts, so a
     /// concrete instance demands the layout of every type its body consumes:
     /// each expression's and, given the semantic `body`, each local's
@@ -2094,9 +2179,7 @@ impl<'db> SemanticInstance<'db> {
             for (expr, _) in body.exprs(db).iter() {
                 if regions.expr(expr) == region
                     && let Some(calls) = typed_body.place_entry_calls(expr)
-                    && !calls.deferred_codec_is_parametric(db)
-                    && let Some(goal) = calls.locate.trait_inst()
-                    && self.state_index_lanes(db, goal.self_ty(db)).is_some()
+                    && self.requires_concrete_entry_codec(db, calls)
                     && let Err(error) = self.entry_codec_callees(db, expr)
                 {
                     return Err(SemanticBodyAdmissionError::CallSiteFinalization(error));
@@ -2265,7 +2348,9 @@ fn instance_calls<'db>(
     calls.chain(loops).collect()
 }
 
-/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data.
+/// Whether `panic_with_value` can revert with a `ty`, as Sol-encoded data. Off
+/// the EVM the answer decides whether the panic reverts with the value or
+/// traps, so `Encode` declares `#[decides]`; `AbiSize` is its supertrait.
 pub fn panic_payload_encodable<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
@@ -2275,14 +2360,14 @@ pub fn panic_payload_encodable<'db>(
     let Some(abi) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
         return false;
     };
-    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     let satisfied = |inst| {
         matches!(
             is_goal_satisfiable(db, solve_cx, inst),
             GoalSatisfiability::Satisfied(_)
         )
     };
-    resolve_core_trait(db, scope, &["abi", "Encode"])
+    presence_trait(db, scope, "core::abi::Encode")
         .is_some_and(|encode| satisfied(TraitInstId::new_simple(db, encode, vec![ty, abi])))
         && resolve_core_trait(db, scope, &["abi", "AbiSize"])
             .is_some_and(|size| satisfied(TraitInstId::new_simple(db, size, vec![ty])))
@@ -2440,6 +2525,15 @@ fn instance_limit_violation_cycle_initial<'db>(
     _: SemanticInstance<'db>,
 ) -> Option<SemanticDiagnosticId<'db>> {
     None
+}
+
+/// Whether `instance` is past the instance limits, so that it is rejected as
+/// itself where it is checked and its calls need not be followed.
+pub fn exceeds_instance_limits<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> bool {
+    instance_limit_violation(db, instance).is_some()
 }
 
 fn normalize_adt_field_types<'db>(
@@ -3130,7 +3224,7 @@ fn root_provider_satisfies_effect_requirement<'db>(
             matches!(
                 is_goal_satisfiable(
                     db,
-                    TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
+                    TraitSolveCx::new(db, func.scope(), Tier::All).with_assumptions(assumptions),
                     goal,
                 ),
                 GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }

@@ -10,8 +10,8 @@ use super::{
 use crate::{
     hir_def::{
         AttrListId, Body, BodyKind, CompBinOp, EffectParamListId, FuncParamListId, GenericArg,
-        GenericArgListId, GenericParamListId, IdentId, ModeMarker, Partial, PathId, TraitRefId,
-        TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*, params::KindBound,
+        GenericArgListId, GenericParamListId, IdentId, ModeMarker, Partial, PathId, QuoteChain,
+        TraitRefId, TupleTypeId, TypeBound, TypeId, WhereClauseId, item::*, params::KindBound,
     },
     lower::msg::lower_msg_as_mod,
     span::HirOrigin,
@@ -180,13 +180,13 @@ pub(super) fn validate_module_inner_attrs<'db>(
 
 /// Where a function is declared, which decides the attributes it takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum FuncKind {
+pub(super) enum FuncKind {
     Free,
     Associated,
     Extern,
 }
 
-fn validate_func_attrs<'db>(
+pub(super) fn validate_func_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     kind: FuncKind,
@@ -315,7 +315,7 @@ fn validate_type_alias_attrs<'db>(
     );
 }
 
-fn validate_unsupported_item_attrs<'db>(
+pub(super) fn validate_unsupported_item_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     kind: &'static str,
@@ -355,6 +355,28 @@ fn validate_assoc_item_attrs<'db>(
         CFG_TARGETS,
     );
     validate_unsupported_item_attrs(ctxt, attrs, kind, name);
+}
+
+/// A function spliced into a member list from a `Code<Item>` meets the rules of
+/// a function written there.
+fn lower_spliced_func<'db>(ctxt: &mut FileLowerCtxt<'db>, func: ast::Func) {
+    validate_func_attrs(
+        ctxt,
+        func.attr_list(),
+        FuncKind::Associated,
+        func.sig().name().map(|name| name.text().to_string()),
+    );
+    Func::lower_ast(ctxt, func);
+}
+
+/// The constant counterpart of `lower_spliced_func`.
+fn validate_spliced_const<'db>(ctxt: &mut FileLowerCtxt<'db>, c: &ast::Const) {
+    validate_unsupported_item_attrs(
+        ctxt,
+        c.attr_list(),
+        "const",
+        c.name().map(|name| name.text().to_string()),
+    );
 }
 
 pub(super) fn validate_for_loop_attrs<'db>(
@@ -591,7 +613,11 @@ impl<'db> Func<'db> {
 
     fn lower_ast_impl(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Func, is_extern: bool) -> Self {
         let sig = ast.sig();
-        let name = IdentId::lower_token_partial(ctxt, sig.name());
+        let name = if let Some(hole) = sig.name_hole() {
+            ctxt.lower_field_hole_ident(hole.syntax().text_range())
+        } else {
+            IdentId::lower_token_partial(ctxt, sig.name())
+        };
         let id = ctxt.joined_id(TrackedItemVariant::Func(name));
         ctxt.enter_item_scope(id, false);
 
@@ -603,7 +629,7 @@ impl<'db> Func<'db> {
                 .params()
                 .and_then(|params| params.into_iter().last())
                 .is_some_and(|param| param.variadic_token().is_some());
-        let params = sig
+        let params: Partial<FuncParamListId<'db>> = sig
             .params()
             .map(|params| FuncParamListId::lower_ast(ctxt, params, is_extern))
             .into();
@@ -616,13 +642,30 @@ impl<'db> Func<'db> {
             is_variadic,
             ..FuncModifiers::new(vis, is_unsafe, is_const, is_extern)
         };
+        let mut initial_binders = Vec::new();
+        if let Some(param_list) = params.to_opt() {
+            for param in param_list.data(ctxt.db()) {
+                if let Some(ident) = param.name() {
+                    ctxt.record_bound_name(ident.data(ctxt.db()));
+                    initial_binders.push(ident);
+                }
+            }
+        }
+        for effect in effects.data(ctxt.db()) {
+            if let Some(ident) = effect.name {
+                ctxt.record_bound_name(ident.data(ctxt.db()));
+                initial_binders.push(ident);
+            }
+        }
         // A body that declares items is lowered with the module, which resolves
         // their imports and collects their impls. Other bodies are lowered when
-        // first needed (`Func::body`).
+        // first needed (`Func::body`). Bodies lowered under an active quote frame
+        // stay with the module: the frame, which a separately lowered body would
+        // not see, holds the splice values and validates open names.
         let eager_body = ast
             .body()
-            .filter(ast::BlockExpr::declares_items)
-            .map(|body| Body::lower_func_body(ctxt, &ast, body));
+            .filter(|body| body.declares_items() || !ctxt.quote_frames.is_empty())
+            .map(|body| Body::lower_func_body(ctxt, &ast, body, initial_binders));
         let origin = HirOrigin::raw(&ast);
         let top_mod = ctxt.top_mod();
 
@@ -827,6 +870,97 @@ impl<'db> TypeAlias<'db> {
     }
 }
 
+fn merge_target_record_generics<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    target_ty: Option<ast::Type>,
+    explicit_params: GenericParamListId<'db>,
+    explicit_where: WhereClauseId<'db>,
+) -> (GenericParamListId<'db>, WhereClauseId<'db>) {
+    let Some(ty) = target_ty else {
+        return (explicit_params, explicit_where);
+    };
+    let ast::TypeKind::QuoteHole(hole) = ty.kind() else {
+        return (explicit_params, explicit_where);
+    };
+    let Some(common::generation::FrozenHoleValue::Record(record_ref)) =
+        ctxt.current_hole(hole.syntax().text_range())
+    else {
+        return (explicit_params, explicit_where);
+    };
+    let db = ctxt.db();
+    // Generated code is lowered after its record, in the record's own module, so
+    // the header copies the record's lowered binders.
+    let Some(item) = ctxt.local_record_item(&record_ref) else {
+        ctxt.record_generation_error(
+            hole.syntax().text_range(),
+            "an implementation for a reflected record must be generated in the record's module",
+        );
+        return (explicit_params, explicit_where);
+    };
+    // A reference at actual arguments names the record at those arguments: the
+    // target is lowered with them, so the declaration's own binders and
+    // predicates do not belong to the generated header.
+    if record_ref.args.is_some() {
+        return (explicit_params, explicit_where);
+    }
+    let scope = ctxt.authored_record(&record_ref).scope;
+    let (record_params, record_where) = match item {
+        ItemKind::Struct(s) => (s.generic_params(db), s.where_clause(db)),
+        ItemKind::Enum(e) => (e.generic_params(db), e.where_clause(db)),
+        _ => return (explicit_params, explicit_where),
+    };
+    if record_params.data(db).is_empty() && record_where.predicates(db).is_empty() {
+        return (explicit_params, explicit_where);
+    }
+    let mut params: Vec<_> = record_params
+        .data(db)
+        .iter()
+        .cloned()
+        .map(|p| super::types::bind_generic_param_to_scope(ctxt, p, scope, item))
+        .collect();
+    for param in explicit_params.data(db) {
+        let Some(copied) = params.iter_mut().find(|p| p.name() == param.name()) else {
+            params.push(param.clone());
+            continue;
+        };
+        use crate::hir_def::params::GenericParam;
+        match (copied, param) {
+            (GenericParam::Type(target), GenericParam::Type(explicit)) => {
+                // Both declarations refer to the copied target binder. Extra trait
+                // bounds strengthen that binder; a different kind or default cannot
+                // be merged merely by keeping one declaration.
+                if explicit.default_ty.is_some()
+                    || explicit.bounds.iter().any(|bound| {
+                        matches!(bound, TypeBound::Kind(_)) && !target.bounds.contains(bound)
+                    })
+                {
+                    ctxt.record_generation_error(hole.syntax().text_range(),
+                        "quoted impl redeclares a target generic parameter with an unsupported kind or default; use additional where bounds instead");
+                    continue;
+                }
+                for bound in &explicit.bounds {
+                    if !target.bounds.contains(bound) {
+                        target.bounds.push(bound.clone());
+                    }
+                }
+            }
+            _ => ctxt.record_generation_error(hole.syntax().text_range(),
+                "quoted impl redeclares a target generic parameter with an incompatible type or const declaration"),
+        }
+    }
+    let mut predicates: Vec<_> = record_where
+        .predicates(db)
+        .iter()
+        .cloned()
+        .map(|pred| super::types::bind_where_predicate_to_scope(ctxt, pred, scope, item))
+        .collect();
+    predicates.extend(explicit_where.predicates(db).iter().cloned());
+    (
+        GenericParamListId::new(db, params),
+        WhereClauseId::new(db, predicates),
+    )
+}
+
 impl<'db> Impl<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Impl) -> Self {
         let idx = ctxt.next_impl_idx();
@@ -837,12 +971,34 @@ impl<'db> Impl<'db> {
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let (generic_params, where_clause) =
+            merge_target_record_generics(ctxt, ast.ty(), generic_params, where_clause);
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
 
         let mut consts = vec![];
         if let Some(item_list) = ast.item_list() {
-            for impl_item in item_list {
+            for child in item_list.syntax().children() {
+                let Some(impl_item) = ast::ImplItem::cast(child.clone()) else {
+                    if let Some(hole) = ast::QuoteHole::cast(child) {
+                        super::generated::lower_member_hole(ctxt, hole, &mut |ctxt, member| {
+                            match member.item_kind() {
+                                Some(ast::ItemKind::Func(func)) => {
+                                    lower_spliced_func(ctxt, func);
+                                }
+                                Some(ast::ItemKind::Const(c)) => {
+                                    validate_spliced_const(ctxt, &c);
+                                    consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
+                                }
+                                _ => ctxt.record_generation_error(
+                                    member.syntax().text_range(),
+                                    "impl member quotation requires functions or constants",
+                                ),
+                            }
+                        });
+                    }
+                    continue;
+                };
                 match impl_item.kind() {
                     ast::ImplItemKind::Func(func) => {
                         validate_func_attrs(
@@ -866,6 +1022,75 @@ impl<'db> Impl<'db> {
             }
         }
 
+        let db = ctxt.db();
+        let file_url = ctxt.top_mod().file(db).url(db);
+        let header_range = ast.syntax().text_range();
+        let plan = db
+            .generation_inputs()
+            .requests(db)
+            .iter()
+            .find(|plan| {
+                Some(&plan.target_file) == file_url.as_ref()
+                    && plan.request_impl == Some(header_range)
+            })
+            .cloned();
+        if let Some(plan) = plan {
+            // The members of an inherent header: functions and constants of the
+            // header's type, under its binders and requirements, as for the
+            // members of a trait header.
+            let mut lower_member =
+                |ctxt: &mut FileLowerCtxt<'db>, member: super::generated::QuotedMember| {
+                    let what = match member.item_kind() {
+                        Some(ast::ItemKind::Func(func)) => {
+                            validate_func_attrs(
+                                ctxt,
+                                func.attr_list(),
+                                FuncKind::Associated,
+                                func.sig().name().map(|name| name.text().to_string()),
+                            );
+                            let generated = Func::lower_ast(ctxt, func);
+                            ctxt.defer_generated_member_origin(generated.into());
+                            return;
+                        }
+                        Some(ast::ItemKind::Const(c)) => {
+                            validate_spliced_const(ctxt, &c);
+                            consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
+                            return;
+                        }
+                        Some(ast::ItemKind::Impl(_) | ast::ItemKind::ImplTrait(_)) => "an `impl`",
+                        Some(ast::ItemKind::TypeAlias(_)) => "a `type`",
+                        Some(ast::ItemKind::Struct(_)) => "a `struct`",
+                        Some(ast::ItemKind::Enum(_)) => "an `enum`",
+                        Some(ast::ItemKind::Trait(_)) => "a `trait`",
+                        Some(ast::ItemKind::Mod(_)) => "a `mod`",
+                        Some(ast::ItemKind::Use(_)) => "a `use`",
+                        Some(ast::ItemKind::Contract(_)) => "a `contract`",
+                        Some(ast::ItemKind::Msg(_)) => "a `msg`",
+                        Some(ast::ItemKind::Extern(_)) => "an `extern`",
+                        Some(ast::ItemKind::StaticAssert(_)) => "a static assertion",
+                        None => match member {
+                            super::generated::QuotedMember::Shape(_) => "a `shape`",
+                            super::generated::QuotedMember::Item(_) => "an item",
+                        },
+                    };
+                    let loc = ctxt.current_quote_location();
+                    let file = ctxt.top_mod().file(ctxt.db());
+                    ctxt.file_scoped_error(
+                        file,
+                        header_range,
+                        format!(
+                            "A member of an inherent header must be a function or a constant; the quotation at {loc} writes {what}"
+                        ),
+                    );
+                };
+            let enclosing = ctxt.derive_header.replace(header_range);
+            super::generated::lower_derive_members(ctxt, &plan.code, &mut lower_member);
+            ctxt.derive_header = enclosing;
+        }
+
+        let derive_provider = ast
+            .derive_provider()
+            .map(|path| PathId::lower_ast(ctxt, path));
         let impl_ = Self::new(
             ctxt.db(),
             id,
@@ -874,6 +1099,7 @@ impl<'db> Impl<'db> {
             generic_params,
             where_clause,
             consts,
+            derive_provider,
             ctxt.top_mod(),
             origin,
         );
@@ -906,7 +1132,27 @@ impl<'db> Trait<'db> {
         let mut rows = vec![];
 
         if let Some(item_list) = ast.item_list() {
-            for impl_item in item_list {
+            for child in item_list.syntax().children() {
+                let Some(impl_item) = ast::TraitItem::cast(child.clone()) else {
+                    if let Some(hole) = ast::QuoteHole::cast(child) {
+                        super::generated::lower_member_hole(ctxt, hole, &mut |ctxt, member| {
+                            match member.item_kind() {
+                                Some(ast::ItemKind::Func(func)) => {
+                                    lower_spliced_func(ctxt, func);
+                                }
+                                Some(ast::ItemKind::Const(c)) => {
+                                    validate_spliced_const(ctxt, &c);
+                                    consts.push(AssocConstDecl::lower_quoted_const(ctxt, c));
+                                }
+                                _ => ctxt.record_generation_error(
+                                    member.syntax().text_range(),
+                                    "impl member quotation requires functions or constants",
+                                ),
+                            }
+                        });
+                    }
+                    continue;
+                };
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
                         validate_func_attrs(
@@ -1018,9 +1264,12 @@ impl<'db> ImplTrait<'db> {
         // Lower generic params first so they are in scope for trait-ref/type and where-clause lowering.
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, ast.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, ast.where_clause());
+        let (generic_params, where_clause) =
+            merge_target_record_generics(ctxt, ast.ty(), generic_params, where_clause);
         let mut trait_ref = TraitRefId::lower_ast_partial(ctxt, ast.trait_ref());
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let origin = HirOrigin::raw(&ast);
+        let written_trait_ref = trait_ref;
 
         // The `-> R` of a callable trait's sugar,
         // `impl FnMut(u256) -> u256 for F`, is the implementation's
@@ -1046,6 +1295,7 @@ impl<'db> ImplTrait<'db> {
                     name: binding.name,
                     type_ref: binding.ty,
                     is_shape: false,
+                    generated: None,
                 }),
                 _ => None,
             }));
@@ -1061,7 +1311,41 @@ impl<'db> ImplTrait<'db> {
         let mut consts = vec![];
         let mut rows = vec![];
         if let Some(item_list) = ast.item_list() {
-            for impl_item in item_list {
+            for child in item_list.syntax().children() {
+                let Some(impl_item) = ast::TraitItem::cast(child.clone()) else {
+                    if let Some(hole) = ast::QuoteHole::cast(child) {
+                        super::generated::lower_member_hole(ctxt, hole, &mut |ctxt, member| {
+                            let item = match member {
+                                super::generated::QuotedMember::Item(item) => item,
+                                super::generated::QuotedMember::Shape(shape) => {
+                                    types.push(AssocTyDef::lower_quoted_shape(ctxt, shape));
+                                    return;
+                                }
+                            };
+                            match item.kind() {
+                                Some(ast::ItemKind::Func(func)) => {
+                                    lower_spliced_func(ctxt, func);
+                                }
+                                Some(ast::ItemKind::Const(c)) => {
+                                    validate_spliced_const(ctxt, &c);
+                                    consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
+                                }
+                                Some(ast::ItemKind::TypeAlias(alias)) => {
+                                    if let Some(defined) =
+                                        AssocTyDef::lower_quoted_alias(ctxt, alias)
+                                    {
+                                        types.push(defined);
+                                    }
+                                }
+                                _ => ctxt.record_generation_error(
+                                    item.syntax().text_range(),
+                                    "trait impl member quotation requires functions, constants or types",
+                                ),
+                            }
+                        });
+                    }
+                    continue;
+                };
                 match impl_item.kind() {
                     ast::TraitItemKind::Func(func) => {
                         validate_func_attrs(
@@ -1104,10 +1388,73 @@ impl<'db> ImplTrait<'db> {
             }
         }
 
+        // The authored header owns ordinary impl identity; its provider
+        // supplies every member, admitted by the same conformance checks as a
+        // handwritten body.
+        let db = ctxt.db();
+        let file_url = ctxt.top_mod().file(db).url(db);
+        let plan = db
+            .generation_inputs()
+            .requests(db)
+            .iter()
+            .find(|plan| {
+                Some(&plan.target_file) == file_url.as_ref()
+                    && plan.request_impl == Some(ast.syntax().text_range())
+            })
+            .cloned();
+        if let Some(plan) = plan {
+            let mut lower_member =
+                |ctxt: &mut FileLowerCtxt<'db>, member: super::generated::QuotedMember| {
+                    let item = match member {
+                        super::generated::QuotedMember::Item(item) => item,
+                        super::generated::QuotedMember::Shape(shape) => {
+                            types.push(AssocTyDef::lower_quoted_shape(ctxt, shape));
+                            return;
+                        }
+                    };
+                    match item.kind() {
+                        Some(ast::ItemKind::Func(func)) => {
+                            validate_func_attrs(
+                                ctxt,
+                                func.attr_list(),
+                                FuncKind::Associated,
+                                func.sig().name().map(|name| name.text().to_string()),
+                            );
+                            let generated = Func::lower_ast(ctxt, func);
+                            ctxt.defer_generated_member_origin(generated.into());
+                        }
+                        Some(ast::ItemKind::Const(c)) => {
+                            consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
+                        }
+                        Some(ast::ItemKind::TypeAlias(alias)) => {
+                            if let Some(defined) = AssocTyDef::lower_quoted_alias(ctxt, alias) {
+                                types.push(defined);
+                            }
+                        }
+                        _ => ctxt.record_generation_error(
+                            item.syntax().text_range(),
+                            "a derived member must be a function, constant, type or shape",
+                        ),
+                    }
+                };
+            let enclosing = ctxt.derive_header.replace(ast.syntax().text_range());
+            super::generated::lower_derive_members(ctxt, &plan.code, &mut lower_member);
+            ctxt.derive_header = enclosing;
+        }
+
         out_types.retain(|out_type: &AssocTyDef| {
             !types.iter().any(|defined| defined.name == out_type.name)
         });
         types.extend(out_types);
+
+        // Lowered in the header's own scope, so constant arguments of the
+        // provider (`Scaled<10>`) are bodies of this implementation.
+        let derive_provider = ast
+            .derive_provider()
+            .map(|path| PathId::lower_ast(ctxt, path));
+        let is_unsafe = ast.unsafe_kw().is_some();
+        let quote_chain = (is_unsafe && !ctxt.quote_frames.is_empty())
+            .then(|| QuoteChain::new(ctxt.db(), ctxt.quote_chain()));
         let impl_trait = Self::new(
             ctxt.db(),
             id,
@@ -1120,9 +1467,12 @@ impl<'db> ImplTrait<'db> {
             consts,
             rows,
             ImplTraitModifiers {
-                is_unsafe: ast.unsafe_kw().is_some(),
+                is_unsafe,
                 selection_name: IdentId::lower_token_partial(ctxt, ast.selection_name()).to_opt(),
                 vis: super::lower_visibility(&ast),
+                derive_provider,
+                derive_trait_ref: derive_provider.and(written_trait_ref.to_opt()),
+                quote_chain,
             },
             ctxt.top_mod(),
             origin,
@@ -1132,6 +1482,31 @@ impl<'db> ImplTrait<'db> {
 }
 
 impl<'db> AssocTyDef<'db> {
+    /// A generated `type Name = Ty` member. Generic associated types are
+    /// deferred, so a parameterized alias is reported, not lowered.
+    fn lower_quoted_alias(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TypeAlias) -> Option<Self> {
+        if ast.generic_params().is_some() {
+            ctxt.record_generation_error(
+                ast.syntax().text_range(),
+                "a generated associated type cannot take generic parameters",
+            );
+            return None;
+        }
+        validate_unsupported_item_attrs(
+            ctxt,
+            ast.attr_list(),
+            "type",
+            ast.alias().map(|name| name.text().to_string()),
+        );
+        Some(AssocTyDef {
+            attributes: AttrListId::lower_ast_opt(ctxt, ast.attr_list()),
+            name: IdentId::lower_token_partial(ctxt, ast.alias()),
+            type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
+            is_shape: false,
+            generated: Some(ctxt.generated_member_syntax(ast.syntax())),
+        })
+    }
+
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitTypeItem) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         AssocTyDef {
@@ -1139,6 +1514,22 @@ impl<'db> AssocTyDef<'db> {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
             is_shape: false,
+            generated: None,
+        }
+    }
+
+    /// A generated `shape Name = ..` member. Its value keeps the modes it is
+    /// written with, `(own u256, ref T)`, as an authored one does.
+    fn lower_quoted_shape(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitShapeItem) -> Self {
+        validate_unsupported_item_attrs(
+            ctxt,
+            ast.attr_list(),
+            "shape",
+            ast.name().map(|name| name.text().to_string()),
+        );
+        Self {
+            generated: Some(ctxt.generated_member_syntax(ast.syntax())),
+            ..Self::lower_shape_ast(ctxt, ast)
         }
     }
 
@@ -1149,14 +1540,38 @@ impl<'db> AssocTyDef<'db> {
             name: IdentId::lower_token_partial(ctxt, ast.name()),
             type_ref: TypeId::lower_ast_partial(ctxt, ast.ty()),
             is_shape: true,
+            generated: None,
         }
     }
 }
 
 impl<'db> AssocConstDecl<'db> {
+    fn lower_quoted_const(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Const) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let name = if let Some(hole) = ast.name_hole() {
+            ctxt.lower_field_hole_ident(hole.syntax().text_range())
+        } else {
+            IdentId::lower_token_partial(ctxt, ast.name())
+        };
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+        let default = ast
+            .value()
+            .map(|expr| Partial::Present(Body::lower_ast(ctxt, expr)));
+        Self {
+            attributes,
+            name,
+            ty,
+            default,
+        }
+    }
+
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let name = if let Some(hole) = ast.name_hole() {
+            ctxt.lower_field_hole_ident(hole.syntax().text_range())
+        } else {
+            IdentId::lower_token_partial(ctxt, ast.name())
+        };
         let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
         let default = ast
             .value()
@@ -1171,23 +1586,51 @@ impl<'db> AssocConstDecl<'db> {
 }
 
 impl<'db> AssocConstDef<'db> {
+    fn lower_quoted_const(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Const) -> Self {
+        let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
+        let name = if let Some(hole) = ast.name_hole() {
+            ctxt.lower_field_hole_ident(hole.syntax().text_range())
+        } else {
+            IdentId::lower_token_partial(ctxt, ast.name())
+        };
+        let ty = TypeId::lower_ast_partial(ctxt, ast.ty());
+        let value = ast.value().map(|expr| Body::lower_ast(ctxt, expr)).into();
+        Self {
+            attributes,
+            name,
+            ty,
+            value,
+            vis: super::lower_visibility(&ast),
+            generated: Some(ctxt.generated_member_syntax(ast.syntax())),
+        }
+    }
+
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::TraitConstItem) -> Self {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let value = ast.value().map(|expr| Body::lower_ast(ctxt, expr)).into();
 
         AssocConstDef {
             attributes,
-            name: IdentId::lower_token_partial(ctxt, ast.name()),
+            name: if let Some(hole) = ast.name_hole() {
+                ctxt.lower_field_hole_ident(hole.syntax().text_range())
+            } else {
+                IdentId::lower_token_partial(ctxt, ast.name())
+            },
             ty: TypeId::lower_ast_partial(ctxt, ast.ty()),
             value,
             vis: super::lower_visibility(&ast),
+            generated: None,
         }
     }
 }
 
 impl<'db> Const<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::Const) -> Self {
-        let name = IdentId::lower_token_partial(ctxt, ast.name());
+        let name = if let Some(hole) = ast.name_hole() {
+            ctxt.lower_field_hole_ident(hole.syntax().text_range())
+        } else {
+            IdentId::lower_token_partial(ctxt, ast.name())
+        };
         let id = ctxt.joined_id(TrackedItemVariant::Const(name));
         ctxt.enter_item_scope(id, false);
 

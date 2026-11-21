@@ -320,6 +320,7 @@ where
             name: Partial::Present(self.ident(name)),
             type_ref,
             is_shape: false,
+            generated: None,
         }
     }
 

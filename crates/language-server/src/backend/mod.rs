@@ -1,10 +1,11 @@
-use async_lsp::ClientSocket;
+use async_lsp::{ClientSocket, lsp_types::Diagnostic};
+use common::{InputDb, ingot::IngotKind};
 use driver::DriverDataBase;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use url::Url;
 
@@ -39,9 +40,20 @@ impl std::fmt::Display for WorkerError {
 
 impl std::error::Error for WorkerError {}
 
+type PreparedViews =
+    FxHashMap<Url, Result<Option<DriverDataBase>, driver::generation::GenerationError>>;
+type DiagnosticsByFile = FxHashMap<Url, Vec<Diagnostic>>;
+
 pub struct Backend {
     pub(super) client: ClientSocket,
     pub(super) db: DriverDataBase,
+    /// Prepared views, keyed by standalone file URL or by package base URL.
+    /// The authored `db` continues to index every file in the workspace and
+    /// receives edits; any edit clears every view.
+    prepared_views: Mutex<PreparedViews>,
+    /// The most recent nonempty diagnostics from each analysis root. A
+    /// package can report a diagnostic in one of its dependencies.
+    diagnostics_by_root: Mutex<FxHashMap<Url, DiagnosticsByFile>>,
     pub(super) workers: tokio::runtime::Runtime,
     pub(super) virtual_files: Option<VirtualFiles>,
     pub(super) readonly_warnings: FxHashSet<Url>,
@@ -81,6 +93,8 @@ impl Backend {
         Self {
             client,
             db,
+            prepared_views: Mutex::new(FxHashMap::default()),
+            diagnostics_by_root: Mutex::new(FxHashMap::default()),
             workers,
             virtual_files,
             readonly_warnings: FxHashSet::default(),
@@ -142,6 +156,104 @@ impl Backend {
         self.virtual_files.as_mut()
     }
 
+    /// Return the checked output view for a file: its standalone view, the one
+    /// prepared view of its package, or the authored workspace when nothing
+    /// is generated. Generation failures are kept for diagnostics; semantic
+    /// requests can use the authored view while an edit is incomplete.
+    pub fn try_analysis_db_for_url(
+        &self,
+        url: &Url,
+    ) -> Result<DriverDataBase, driver::generation::GenerationError> {
+        let Some(file) = self.db.workspace().get(&self.db, url) else {
+            return Ok(self.db.clone());
+        };
+        let Some(ingot) = file.containing_ingot(&self.db) else {
+            return Ok(self.db.clone());
+        };
+        // Standalone files are prepared one at a time; every file of a package
+        // shares the view prepared for that package and its dependencies.
+        let (key, standalone) = match ingot.kind(&self.db) {
+            IngotKind::StandAlone => (url.clone(), true),
+            IngotKind::Local | IngotKind::External => (ingot.base(&self.db).clone(), false),
+            IngotKind::Core | IngotKind::Std => return Ok(self.db.clone()),
+        };
+        if let Some(view) = self.prepared_views.lock().unwrap().get(&key) {
+            return (*view)
+                .clone()
+                .map(|prepared| prepared.unwrap_or_else(|| self.db.clone()));
+        }
+        let result = if standalone {
+            driver::generation::prepare_file(&self.db, file)
+        } else {
+            driver::generation::prepare_ingots(&self.db, std::slice::from_ref(&key))
+        };
+        self.prepared_views
+            .lock()
+            .unwrap()
+            .insert(key, result.clone());
+        result.map(|prepared| prepared.unwrap_or_else(|| self.db.clone()))
+    }
+
+    pub fn analysis_db_for_url(&self, url: &Url) -> DriverDataBase {
+        self.try_analysis_db_for_url(url)
+            .unwrap_or_else(|_| self.db.clone())
+    }
+
+    pub fn invalidate_analysis_views(&self) {
+        self.prepared_views.lock().unwrap().clear();
+    }
+
+    /// Replace the affected analysis roots' diagnostics and return one
+    /// publication per touched file. A dependency's own empty report must
+    /// leave diagnostics from its consumers in place.
+    pub(super) fn update_diagnostics(
+        &self,
+        mut affected_files: FxHashSet<Url>,
+        updates: Vec<(Url, DiagnosticsByFile)>,
+    ) -> DiagnosticsByFile {
+        let indexed = self.db.workspace().all_files(&self.db);
+        let mut saved = self.diagnostics_by_root.lock().unwrap();
+        saved.retain(|root, files| {
+            let still_indexed = if root.path().ends_with('/') {
+                root.join("fe.toml")
+                    .ok()
+                    .is_some_and(|config| indexed.get(&config).is_some())
+            } else {
+                indexed.get(root).is_some()
+            };
+            if !still_indexed {
+                affected_files.extend(files.keys().cloned());
+            }
+            still_indexed
+        });
+        for (root, mut files) in updates {
+            affected_files.extend(files.keys().cloned());
+            if let Some(previous) = saved.remove(&root) {
+                affected_files.extend(previous.into_keys());
+            }
+            files.retain(|_, diagnostics| !diagnostics.is_empty());
+            if !files.is_empty() {
+                saved.insert(root, files);
+            }
+        }
+        let mut batch: DiagnosticsByFile = affected_files
+            .into_iter()
+            .map(|url| (url, Vec::new()))
+            .collect();
+        for files in saved.values() {
+            for (url, diagnostics) in files {
+                if let Some(combined) = batch.get_mut(url) {
+                    for diagnostic in diagnostics {
+                        if !combined.contains(diagnostic) {
+                            combined.push(diagnostic.clone());
+                        }
+                    }
+                }
+            }
+        }
+        batch
+    }
+
     pub fn supports_definition_link(&self) -> bool {
         self.definition_link_support
     }
@@ -169,8 +281,19 @@ impl Backend {
         F: FnOnce(&DriverDataBase) -> T + Send + 'static,
         T: Send + 'static,
     {
+        self.spawn_on_workers_with_db(self.db.clone(), f)
+    }
+
+    pub fn spawn_on_workers_with_db<F, T>(
+        &self,
+        db: DriverDataBase,
+        f: F,
+    ) -> impl std::future::Future<Output = Result<T, WorkerError>> + 'static
+    where
+        F: FnOnce(&DriverDataBase) -> T + Send + 'static,
+        T: Send + 'static,
+    {
         let (tx, rx) = futures::channel::oneshot::channel();
-        let db = self.db.clone();
         self.workers.handle().spawn_blocking(move || {
             // catch_unwind the actual work so a panic inside `f` becomes a
             // logged, observable error instead of a dropped tx that looks like

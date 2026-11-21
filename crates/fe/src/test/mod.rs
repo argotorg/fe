@@ -1740,6 +1740,22 @@ fn prepare_tests_single_file(
             single_jobs: Vec::new(),
         };
     };
+    match driver::generation::prepare_file(db, file) {
+        Ok(Some(prepared)) => {
+            *db = prepared;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return SuitePreparation {
+                results: suite_error_result(suite, "compile", format!("{error}")),
+                single_jobs: Vec::new(),
+            };
+        }
+    }
+    let file = db
+        .workspace()
+        .get(db, &file_url)
+        .expect("prepared source file");
     let top_mod = db.top_mod(file);
 
     let diagnostics = CompilationDiagnostics::for_top_mod(db, top_mod, &file_url);
@@ -1920,6 +1936,23 @@ fn prepare_tests_ingot(
             single_jobs: Vec::new(),
         };
     }
+    // Test the program the ingot generates. The authored database can be
+    // shared with the workspace's other suites, so it stays unchanged.
+    let prepared = match driver::generation::prepare_ingots(db, std::slice::from_ref(&ingot_url)) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let msg = format!("{error}");
+            let _ = writeln!(output, "{msg}");
+            if let Some(report) = report {
+                write_report_error(report, "compilation_errors.txt", &msg);
+            }
+            return SuitePreparation {
+                results: suite_error_result(suite, "compile", msg),
+                single_jobs: Vec::new(),
+            };
+        }
+    };
+    let db: &DriverDataBase = prepared.as_ref().unwrap_or(db);
 
     let Some(ingot) = db.workspace().containing_ingot(db, ingot_url.clone()) else {
         return SuitePreparation {

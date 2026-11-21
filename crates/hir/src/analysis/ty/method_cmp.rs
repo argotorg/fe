@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Tier;
 use thin_vec::ThinVec;
 
 use super::{
@@ -1238,7 +1239,7 @@ fn compare_constraints<'db>(
         }
         let entailment = classify_constraint_entailment(is_goal_satisfiable(
             db,
-            TraitSolveCx::new(db, trait_m.scope()).with_assumptions(trait_m_constraints),
+            TraitSolveCx::new(db, trait_m.scope(), Tier::All).with_assumptions(trait_m_constraints),
             goal,
         ));
         match entailment {

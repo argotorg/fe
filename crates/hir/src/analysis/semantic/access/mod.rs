@@ -11,6 +11,7 @@
 mod check;
 mod control;
 mod domain;
+mod implicit;
 mod place;
 mod refine;
 mod space;
@@ -53,7 +54,7 @@ use crate::{
             ty_check::{BodyOwner, ReturnProjectionStep},
         },
     },
-    hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
+    hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
 };
 
 use self::{
@@ -356,6 +357,13 @@ fn body_check_cycle_initial<'db>(
     }
 }
 
+pub fn semantic_access_check_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> &'db SemanticAccessCheckResult<'db> {
+    body_check(db, instance)
+}
+
 pub fn check_semantic_accesses<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -433,52 +441,94 @@ fn collect_semantic_access_with_blocked<'db>(
             | ItemKind::Body(_) => {}
         }
     }
+    let trust = UnsafeTrust::for_root(db, top_mod);
     // Each instance carries the call in the module's own code that reached
-    // it, `None` for the module's own bodies.
-    let mut pending: VecDeque<_> = owners
-        .into_iter()
-        .map(|owner| {
-            let key = identity_semantic_instance_key(db, owner);
-            (
-                SemanticInstance::new(db, key),
-                None::<SemanticDiagnosticSpan>,
-            )
+    // it, `None` for the module's own bodies. Code that a provider of an
+    // untrusted package wrote is that package's, although preparation
+    // published it into this module. It is checked like the module's own
+    // bodies, but a call is judged only when it comes from code that a
+    // trusted package wrote, and is judged at that call: the walk from the
+    // trusted bodies comes first, and the untrusted ones are checked after it,
+    // for what it did not reach.
+    let (trusted, untrusted): (Vec<_>, Vec<_>) = owners.into_iter().partition(|owner| {
+        trust
+            .as_ref()
+            .is_none_or(|trust| trust.trusts_authors_of(db, *owner))
+    });
+    let roots = |owners: Vec<BodyOwner<'db>>| -> VecDeque<_> {
+        owners
+            .into_iter()
+            .map(|owner| {
+                let key = identity_semantic_instance_key(db, owner);
+                (
+                    SemanticInstance::new(db, key),
+                    None::<SemanticDiagnosticSpan>,
+                )
+            })
+            .collect()
+    };
+    // A `#[test]` function runs when `fe test` runs, though no call names it.
+    // One with an untrusted contributor, a generated one, is a use of that
+    // contributor's code, judged at the function.
+    let test_uses: Vec<_> = trust
+        .iter()
+        .flat_map(|_| {
+            untrusted
+                .iter()
+                .copied()
+                .filter(|owner| is_test(db, *owner))
         })
         .collect();
+    let (mut trusted, untrusted) = (roots(trusted), roots(untrusted));
     // Warnings are reported once, for the module's own bodies.
-    let own: FxHashSet<_> = pending.iter().map(|(instance, _)| *instance).collect();
-    let trust = UnsafeTrust::for_root(db, top_mod);
+    let own: FxHashSet<_> = trusted
+        .iter()
+        .chain(&untrusted)
+        .map(|(instance, _)| *instance)
+        .collect();
+    let mut test_calls = FxHashSet::default();
+    for owner in test_uses {
+        let call = SemanticDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Body(owner),
+        };
+        test_calls.insert(call.clone());
+        let key = identity_semantic_instance_key(db, owner);
+        trusted.push_back((SemanticInstance::new(db, key), Some(call)));
+    }
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
     let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
-    while let Some((instance, call)) = pending.pop_front() {
-        if !seen.insert(instance) {
-            continue;
-        }
-        let owner = instance.key(db).owner(db);
-        if let (Some(trust), Some(call)) = (&trust, &call)
-            && let Some(site) = trust.untrusted_site(db, owner)
-            && seen_untrusted.insert((owner.scope().ingot(db), call.clone()))
-        {
-            diags.push(Box::new(UntrustedUnsafeUse {
-                root: top_mod.ingot(db),
-                call: call.clone(),
-                user: owner,
-                site,
-            }));
-        }
-        match body_check(db, instance) {
-            SemanticAccessCheckResult::Ok { warnings, .. } => {
-                if own.contains(&instance) {
-                    diags.extend(
-                        warnings
-                            .iter()
-                            .map(|diag| Box::new(*diag) as Box<dyn DiagnosticVoucher + 'db>),
-                    );
-                }
-                let callees: Vec<_> =
-                    match call {
+    for (mut pending, judge) in [(trusted, trust.as_ref()), (untrusted, None)] {
+        while let Some((instance, call)) = pending.pop_front() {
+            if !seen.insert(instance) {
+                continue;
+            }
+            let owner = instance.key(db).owner(db);
+            if let (Some(trust), Some(call)) = (judge, &call)
+                && let Some((site, author)) = trust.untrusted_site(db, owner)
+                && seen_untrusted.insert((author, call.clone()))
+            {
+                diags.push(Box::new(UntrustedUnsafeUse {
+                    root: top_mod.ingot(db),
+                    call: call.clone(),
+                    runs_as_test: test_calls.contains(call),
+                    user: owner,
+                    site,
+                    author,
+                }));
+            }
+            match body_check(db, instance) {
+                SemanticAccessCheckResult::Ok { warnings, .. } => {
+                    if own.contains(&instance) {
+                        diags.extend(
+                            warnings
+                                .iter()
+                                .map(|diag| Box::new(*diag) as Box<dyn DiagnosticVoucher + 'db>),
+                        );
+                    }
+                    let callees: Vec<_> = match call {
                         Some(call) => instance
                             .callees(db)
                             .iter()
@@ -520,19 +570,32 @@ fn collect_semantic_access_with_blocked<'db>(
                             calls.chain(loops).chain(generated).collect()
                         }
                     };
-                pending.extend(
-                    callees
-                        .into_iter()
-                        .map(|(key, call)| (SemanticInstance::new(db, key), Some(call))),
-                );
-            }
-            SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
-            SemanticAccessCheckResult::Err(diag) => {
-                if seen_diags.insert(*diag) {
-                    diags.push(Box::new(*diag));
+                    pending.extend(
+                        callees
+                            .into_iter()
+                            .map(|(key, call)| (SemanticInstance::new(db, key), Some(call))),
+                    );
+                }
+                SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
+                SemanticAccessCheckResult::Err(diag) => {
+                    if seen_diags.insert(*diag) {
+                        diags.push(Box::new(*diag));
+                    }
                 }
             }
         }
+    }
+    // An `unsafe impl` without a function has nothing for a call to reach, so it
+    // is judged where it is declared, once for the program of a trust root.
+    if let Some(trust) = &trust
+        && top_mod == top_mod.ingot(db).root_mod(db)
+    {
+        diags.extend(
+            trust
+                .untrusted_unsafe_impls(db, top_mod.ingot(db))
+                .into_iter()
+                .map(|unsafe_impl| Box::new(unsafe_impl) as Box<dyn DiagnosticVoucher + 'db>),
+        );
     }
     diags
 }
@@ -559,6 +622,10 @@ fn contract_bodies<'db>(
 
 /// The instances the compiler runs for `instance` that no semantic call site
 /// records, each with the statement or body that makes it run:
+/// - for a contract's `init` and each `recv` arm, the dispatcher's decode of
+///   the arguments and encode of the return value (`implicit`);
+/// - for each drop, the `Drop::drop` implementations that drop elaboration
+///   inserts for the parts it destroys (`implicit`);
 /// - for each entry of a place it names, the collection's
 ///   `StateIndex::locate` and, for a collection that packs its elements
 ///   into lanes, its codec's `get` and `set`;
@@ -577,12 +644,24 @@ fn generated_callees<'db>(
             .map(|key| (key, SemOrigin::Body(owner)))
             .collect();
     }
+    let owner = instance.key(db).owner(db);
+    let mut callees: Vec<_> = implicit::dispatcher_callees(db, owner)
+        .into_iter()
+        .map(|key| (key, SemOrigin::Body(owner)))
+        .collect();
     let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
-        return Vec::new();
+        return callees;
     };
     let body = admitted.body(db);
-    let mut callees = Vec::new();
     for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+        if let NStatementKind::Drop { target } = &statement.kind {
+            let origin = implicit::drop_origin(owner, body, statement.origin, target);
+            callees.extend(
+                implicit::drop_callees(db, instance, body, statement.id, target)
+                    .into_iter()
+                    .map(|key| (key, origin)),
+            );
+        }
         let mut visit = |place: &NPlace<'db>| {
             for (idx, projection) in place.path.iter().enumerate() {
                 let NDataProjection::Entry(_, entry) = projection else {
@@ -638,4 +717,12 @@ fn generated_callees<'db>(
         }
     }
     callees
+}
+
+/// Whether `owner` is a function that `fe test` runs: one with `#[test]`.
+fn is_test<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> bool {
+    matches!(owner, BodyOwner::Func(func, _)
+        if ItemKind::from(func)
+            .attrs(db)
+            .is_some_and(|attrs| attrs.has_attr(db, "test")))
 }

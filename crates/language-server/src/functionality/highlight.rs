@@ -100,12 +100,13 @@ pub async fn handle_document_highlight(
     if backend.db.workspace().get(&backend.db, &url).is_none() {
         return Ok(None);
     }
+    let analysis_db = backend.analysis_db_for_url(&url);
 
     let position = params.text_document_position_params.position;
 
     // Spawn heavy highlight resolution on the worker pool
     let highlights: Vec<DocumentHighlight> = backend
-        .spawn_on_workers(move |db| {
+        .spawn_on_workers_with_db(analysis_db, move |db| {
             let Some(file) = db.workspace().get(db, &url) else {
                 return vec![];
             };

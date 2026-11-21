@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_where/polymorphic_recursion_in_a_predicate.fe
+---
+error[8-0093]: const requirement is not satisfied
+  ┌─ polymorphic_recursion_in_a_predicate.fe:8:12
+  │
+5 │ pub struct Poly<T> where { deep<T>(2) } { pub a: T }
+  │                          -------------- required by this predicate
+  ·
+8 │     let p: Poly<u256> = Poly { a: 1 }
+  │            ^^^^^^^^^^ constant evaluation exceeded its recursion limit

@@ -17,12 +17,13 @@ pub async fn handle_selection_range(
     params: SelectionRangeParams,
 ) -> Result<Option<Vec<SelectionRange>>, ResponseError> {
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri);
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &internal_url) else {
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let file_text = file.text(&analysis_db);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     let mut results = Vec::new();
 
@@ -32,15 +33,15 @@ pub async fn handle_selection_range(
         // Collect all items and their spans, sorted by span size (smallest first)
         let mut containing_spans = Vec::new();
 
-        for &item in top_mod.all_items(&backend.db) {
+        for &item in top_mod.all_items(&analysis_db) {
             // Get the full item span
             let item_span: hir::span::DynLazySpan = item.span().into();
-            if let Some(span) = item_span.resolve(&backend.db) {
+            if let Some(span) = item_span.resolve(&analysis_db) {
                 let start: usize = span.range.start().into();
                 let end: usize = span.range.end().into();
                 if start <= cursor.into()
                     && usize::from(cursor) <= end
-                    && let Ok(range) = to_lsp_range_from_span(span.clone(), &backend.db)
+                    && let Ok(range) = to_lsp_range_from_span(span.clone(), &analysis_db)
                 {
                     containing_spans.push((end - start, range));
                 }
@@ -48,13 +49,13 @@ pub async fn handle_selection_range(
 
             // Also add the name span if available (narrower selection)
             if let Some(name_span) = item.name_span()
-                && let Some(span) = name_span.resolve(&backend.db)
+                && let Some(span) = name_span.resolve(&analysis_db)
             {
                 let start: usize = span.range.start().into();
                 let end: usize = span.range.end().into();
                 if start <= cursor.into()
                     && usize::from(cursor) <= end
-                    && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+                    && let Ok(range) = to_lsp_range_from_span(span, &analysis_db)
                 {
                     containing_spans.push((end - start, range));
                 }
@@ -62,15 +63,15 @@ pub async fn handle_selection_range(
 
             // For functions, also add parameter list and body spans
             if let ItemKind::Func(func) = item
-                && let Some(body) = func.body(&backend.db)
+                && let Some(body) = func.body(&analysis_db)
             {
                 let body_span: hir::span::DynLazySpan = body.span().into();
-                if let Some(span) = body_span.resolve(&backend.db) {
+                if let Some(span) = body_span.resolve(&analysis_db) {
                     let start: usize = span.range.start().into();
                     let end: usize = span.range.end().into();
                     if start <= cursor.into()
                         && usize::from(cursor) <= end
-                        && let Ok(range) = to_lsp_range_from_span(span, &backend.db)
+                        && let Ok(range) = to_lsp_range_from_span(span, &analysis_db)
                     {
                         containing_spans.push((end - start, range));
                     }

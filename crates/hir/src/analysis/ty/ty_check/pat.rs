@@ -1,3 +1,4 @@
+use crate::analysis::name_resolution::Decision;
 use std::ops::Range;
 
 use crate::core::hir_def::{
@@ -15,7 +16,8 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
         ExpectedPathKind, NameDomain, NameRes, NameResolutionError, PathRes, PathResError,
-        ResolvedVariant, resolve_ident_to_bucket,
+        ResolvedVariant, Tier, ingot_has_generated_items, resolve_ident_to_bucket,
+        resolve_ident_to_bucket_in, resolve_path_with_minter,
     },
     semantic::{
         EvalOutcome, SemConstScalar, SemConstValue, SemOrigin, eval_const_ref,
@@ -252,12 +254,18 @@ impl<'db> TyChecker<'db> {
                 use_.inst(),
             );
             evidence.record_dispatch(use_.inst(), outcome.evidence());
+            // As for a constant read in an expression: a proof that waits for
+            // a generated implementation is a demand for preparation.
             if choices.is_some() && evidence.dispatch_proof().is_none() {
                 failed_goals.push(use_.inst());
             }
         }
-        failed_goals.extend(cref.record_bound_evidence(self.db, choices));
+        let missing = cref.record_bound_evidence(self.db, choices);
+        failed_goals.extend(missing);
         cref.qualify_evidence(self.db, self.env.owner());
+        // The reference stays with the body, as for a constant read in an
+        // expression, so that what the pattern names can be followed later.
+        self.env.register_pat_const_ref(pat, cref);
         if !failed_goals.is_empty() {
             for goal in failed_goals {
                 self.push_diag(TyDiagCollection::from(
@@ -293,6 +301,8 @@ impl<'db> TyChecker<'db> {
                     ..
                 } => LitKind::Bool(*flag),
                 SemConstValue::Unit
+                | SemConstValue::ItemCode { .. }
+                | SemConstValue::Meta { .. }
                 | SemConstValue::Description(..)
                 | SemConstValue::Tuple { .. }
                 | SemConstValue::Struct { .. }
@@ -461,6 +471,40 @@ impl<'db> TyChecker<'db> {
         self.finish_pat_check(pat, expected, unified, analysis)
     }
 
+    /// Records that a bare identifier pattern, which binds a new variable
+    /// because no written item names a constant `name`, would compare with a
+    /// constant of that name generated in the ingot. Whether a bare name
+    /// compares is a fact about an absent item, so it is decided among the
+    /// items written in the package, like the other facts about absence, and
+    /// the generated constant is refused where it is requested.
+    fn check_not_a_generated_constant(
+        &mut self,
+        path: PathId<'db>,
+        name: IdentId<'db>,
+        site: crate::span::DynLazySpan<'db>,
+    ) {
+        let found = resolve_path_with_minter(
+            self.db,
+            path,
+            self.env.scope(),
+            self.env.assumptions(),
+            true,
+            &LoweringContext::new(),
+        );
+        if let Ok(PathRes::Const(const_def, _)) = found
+            && const_def.scope().is_published(self.db)
+        {
+            self.push_changed_choice(BodyDiag::GenerationChangesChoice {
+                primary: site,
+                decision: Decision::PatternName,
+                trait_: None,
+                ty: None,
+                subject: name.data(self.db).to_string(),
+                generated: Some(const_def.scope()),
+            });
+        }
+    }
+
     fn check_path_pat(
         &mut self,
         pat: PatId,
@@ -486,6 +530,19 @@ impl<'db> TyChecker<'db> {
         };
 
         let span = pat.span(self.body()).into_path_pat();
+
+        // A bare identifier is classified by the items written in the package
+        // alone. If a constant of that name is generated in the ingot, falling
+        // back to it would turn a binding into a comparison, so the generated
+        // items are not consulted and a match with one is reported below.
+        let classified_by_authored = path.as_ident(self.db).is_some()
+            && *ingot_has_generated_items(self.db, self.env.scope().ingot(self.db));
+        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
+        let lowering_cx = if classified_by_authored {
+            lowering_cx.authored_names_only()
+        } else {
+            lowering_cx
+        };
 
         // A bare identifier is a local binding unless it names something a
         // pattern matches, like a constant or a unit variant; a function,
@@ -514,7 +571,11 @@ impl<'db> TyChecker<'db> {
             let named = if generated {
                 None
             } else {
-                let bucket = resolve_ident_to_bucket(self.db, *path, self.env.scope());
+                let bucket = if lowering_cx.names_are_authored_only() {
+                    resolve_ident_to_bucket_in(self.db, *path, self.env.scope(), Tier::Authored)
+                } else {
+                    resolve_ident_to_bucket(self.db, *path, self.env.scope())
+                };
                 [NameDomain::VALUE, NameDomain::TYPE]
                     .into_iter()
                     .find_map(|domain| match bucket.pick(domain) {
@@ -543,8 +604,14 @@ impl<'db> TyChecker<'db> {
                         PatternAnalysisStatus::Invalid,
                     );
                 }
-                Some(Ok(res)) if !shadowed(res) => {}
+                Some(Ok(res)) if !shadowed(res) => {
+                    self.matching_bare_pats.insert(pat);
+                }
                 _ => {
+                    if classified_by_authored && !generated {
+                        self.check_not_a_generated_constant(*path, name, span.clone().into());
+                    }
+                    let bind_name = path.local_ident(self.db).unwrap_or(name);
                     let binding = LocalBinding::local(
                         pat,
                         matches!(
@@ -555,7 +622,7 @@ impl<'db> TyChecker<'db> {
                     let mut is_valid = true;
                     if let Some(LocalBinding::Local {
                         pat: conflict_with, ..
-                    }) = self.env.register_pending_binding(name, binding)
+                    }) = self.env.register_pending_binding(bind_name, binding)
                     {
                         let diag = BodyDiag::DuplicatedBinding {
                             primary: span.into(),
@@ -567,7 +634,7 @@ impl<'db> TyChecker<'db> {
                     }
                     let actual = self.fresh_ty();
                     let analysis = if is_valid {
-                        self.ready_wildcard(expected, Some(self.binding_ref(pat, name)))
+                        self.ready_wildcard(expected, Some(self.binding_ref(pat, bind_name)))
                     } else {
                         PatternAnalysisStatus::Invalid
                     };
@@ -576,7 +643,6 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
         let res = self.resolve_path(
             *path,
             true,

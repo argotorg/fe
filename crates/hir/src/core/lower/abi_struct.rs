@@ -573,6 +573,7 @@ fn lower_sol_compat_impl<'db>(
             Expr::Tuple(elems.iter().map(|(_, expr)| *expr).collect()),
             origin.clone(),
         );
+        let quote_origins = body_ctxt.take_quote_origins();
         let body = Body::new(
             db,
             body_id,
@@ -584,6 +585,7 @@ fn lower_sol_compat_impl<'db>(
             body_ctxt.pats,
             body_ctxt.f_ctxt.top_mod(),
             body_ctxt.f_ctxt.lazy_func(),
+            quote_origins,
             body_ctxt.source_map,
             origin.clone(),
         );
@@ -601,6 +603,7 @@ fn lower_sol_compat_impl<'db>(
             ty: Partial::Present(self_s),
             value: Partial::Present(body),
             vis: Visibility::Public,
+            generated: None,
         };
         let types = vec![builder.assoc_ty("S", Partial::Present(tuple_ty))];
         ImplTrait::new(

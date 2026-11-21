@@ -1,8 +1,51 @@
 ---
 source: crates/language-server/src/functionality/references.rs
+assertion_line: 415
 expression: snapshot
 input_file: test_files/hoverable/src/assoc_const.fe
 ---
+note: 
+  ┌─ assoc_const.fe:1:12
+  │
+1 │ pub struct Counter {}
+  │            ^^^^^^^ def: defined here @ 1:11 (3 refs)
+
+note: 
+  ┌─ assoc_const.fe:3:6
+  │
+3 │ impl Counter {
+  │      ^^^^^^^ ref: 3:5
+
+note: 
+  ┌─ assoc_const.fe:4:9
+  │
+4 │   const MAX: u256 = 100
+  │         ^^^ def: defined here @ 4:8 (2 refs)
+
+note: 
+  ┌─ assoc_const.fe:7:8
+  │
+7 │ pub fn at_limit(n: u256) -> bool {
+  │        ^^^^^^^^ def: defined here @ 7:7 (1 refs)
+
+note: 
+  ┌─ assoc_const.fe:7:17
+  │
+7 │ pub fn at_limit(n: u256) -> bool {
+  │                 ^ def: defined here @ 7:16 (2 refs)
+
+note: 
+  ┌─ assoc_const.fe:8:3
+  │
+8 │   n == Counter::MAX
+  │   ^ ref: 8:2
+
+note: 
+  ┌─ assoc_const.fe:8:8
+  │
+8 │   n == Counter::MAX
+  │        ^^^^^^^^^^^^ ref: 8:16
+
 note: 
   ┌─ lib.fe:1:5
   │
@@ -758,45 +801,3 @@ note:
    │
 31 │     Color::Blue => false
    │     ^^^^^^^^^^^ ref: 31:11
-
-note: 
-  ┌─ assoc_const.fe:1:12
-  │
-1 │ pub struct Counter {}
-  │            ^^^^^^^ def: defined here @ 1:11 (3 refs)
-
-note: 
-  ┌─ assoc_const.fe:3:6
-  │
-3 │ impl Counter {
-  │      ^^^^^^^ ref: 3:5
-
-note: 
-  ┌─ assoc_const.fe:4:9
-  │
-4 │   const MAX: u256 = 100
-  │         ^^^ def: defined here @ 4:8 (2 refs)
-
-note: 
-  ┌─ assoc_const.fe:7:8
-  │
-7 │ pub fn at_limit(n: u256) -> bool {
-  │        ^^^^^^^^ def: defined here @ 7:7 (1 refs)
-
-note: 
-  ┌─ assoc_const.fe:7:17
-  │
-7 │ pub fn at_limit(n: u256) -> bool {
-  │                 ^ def: defined here @ 7:16 (2 refs)
-
-note: 
-  ┌─ assoc_const.fe:8:3
-  │
-8 │   n == Counter::MAX
-  │   ^ ref: 8:2
-
-note: 
-  ┌─ assoc_const.fe:8:8
-  │
-8 │   n == Counter::MAX
-  │        ^^^^^^^^^^^^ ref: 8:16

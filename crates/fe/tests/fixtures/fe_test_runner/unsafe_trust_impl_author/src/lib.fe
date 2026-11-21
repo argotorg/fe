@@ -1,0 +1,8 @@
+// `dep` is trusted and its provider writes no unsafe code, but `hdr` wrote the
+// `unsafe impl` that uses the provider, and nothing trusts `hdr`.
+use dep::Vouching
+
+#[test]
+fn untrusted_unsafe_impl_with_a_trusted_provider() {
+    assert!(hdr::Marked {}.vouch() == 3)
+}

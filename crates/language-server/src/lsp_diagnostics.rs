@@ -2,7 +2,8 @@ use async_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range, Url}
 use camino::Utf8Path;
 use codespan_reporting::files as cs_files;
 use common::{
-    diagnostics::{CompleteDiagnostic, cmp_complete_diagnostics},
+    InputDb,
+    diagnostics::{CompleteDiagnostic, Span, SpanKind, cmp_complete_diagnostics},
     file::{File, IngotFileKind},
     ingot::IngotKind,
 };
@@ -13,7 +14,38 @@ use hir::hir_def::HirIngot;
 use hir::lower::map_file_to_mod;
 use rustc_hash::FxHashMap;
 
-use crate::util::diag_to_lsp;
+use crate::util::{diag_to_lsp, to_lsp_range_from_span};
+
+pub(crate) fn generation_error_diagnostics(
+    db: &DriverDataBase,
+    error: driver::generation::GenerationError,
+) -> FxHashMap<Url, Vec<Diagnostic>> {
+    let range = db
+        .workspace()
+        .get(db, &error.file)
+        .and_then(|file| {
+            to_lsp_range_from_span(
+                Span {
+                    file,
+                    range: error.range,
+                    kind: SpanKind::Original,
+                },
+                db,
+            )
+            .ok()
+        })
+        .unwrap_or_else(|| Range::new(Position::new(0, 0), Position::new(0, 0)));
+    FxHashMap::from_iter([(
+        error.file,
+        vec![Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("fe".into()),
+            message: error.cause,
+            ..Diagnostic::default()
+        }],
+    )])
+}
 
 /// Test-only latch: set to `true` to force the next
 /// `handle_files_need_diagnostics` call to panic (simulating an analysis-pass
@@ -33,6 +65,8 @@ pub struct LspDb<'a>(pub &'a DriverDataBase);
 
 /// Extension trait for LSP-specific functionality on DriverDataBase
 pub trait LspDiagnostics {
+    /// Diagnose an ingot in the supplied view. The backend prepares the view
+    /// for editor requests before running analysis.
     fn diagnostics_for_ingot(&self, ingot: Ingot) -> FxHashMap<Url, Vec<Diagnostic>>;
     #[allow(dead_code)]
     fn file_line_starts(&self, file: File) -> Vec<usize>;

@@ -85,12 +85,13 @@ pub async fn handle_references(
     {
         return Ok(None);
     }
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
 
     let position = params.text_document_position.position;
 
     // Spawn heavy reference resolution on the worker pool with a db snapshot
     let locations: Vec<async_lsp::lsp_types::Location> = backend
-        .spawn_on_workers(move |db| {
+        .spawn_on_workers_with_db(analysis_db, move |db| {
             let Some(file) = db.workspace().get(db, &internal_url) else {
                 return vec![];
             };
@@ -200,7 +201,16 @@ mod tests {
             let mut buffer = writer.buffer();
             let config = term::Config::default();
 
-            for top_mod in self.top_mod_to_file.keys() {
+            // Salsa identities and hash iteration do not define a file order.
+            let mut top_mods = self.top_mod_to_file.keys().copied().collect::<Vec<_>>();
+            top_mods.sort_by_key(|top_mod| {
+                self.code_span_files
+                    .get(self.top_mod_to_file[top_mod])
+                    .unwrap()
+                    .name()
+                    .clone()
+            });
+            for top_mod in &top_mods {
                 if !self.properties.contains_key(top_mod) {
                     continue;
                 }

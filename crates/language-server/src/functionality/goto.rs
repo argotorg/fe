@@ -36,7 +36,8 @@ pub async fn handle_goto_definition(
 ) -> Result<Option<async_lsp::lsp_types::GotoDefinitionResponse>, ResponseError> {
     let params = params.text_document_position_params;
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri.clone());
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &internal_url) else {
         debug!(
             "goto_definition: file not found for uri={}",
             params.text_document.uri
@@ -44,15 +45,15 @@ pub async fn handle_goto_definition(
         return Ok(None);
     };
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor: Cursor = to_offset_from_position(params.position, file_text.as_str());
 
-    let top_mod = map_file_to_mod(&backend.db, file);
-    let resolution = goto_target_at_cursor(&backend.db, top_mod, cursor);
+    let top_mod = map_file_to_mod(&analysis_db, file);
+    let resolution = goto_target_at_cursor(&analysis_db, top_mod, cursor);
 
     // Broadcast doc-navigate for the first scope target
     if let Some(doc_path) = resolution.as_slice().iter().find_map(|t| match t {
-        Target::Scope(scope) => hir::semantic::scope_to_doc_path(&backend.db, *scope),
+        Target::Scope(scope) => hir::semantic::scope_to_doc_path(&analysis_db, *scope),
         Target::Local { .. } => None,
     }) {
         backend.notify_doc_navigate(doc_path);
@@ -63,12 +64,12 @@ pub async fn handle_goto_definition(
     // This range is critical for Zed's hover link caching — without it, every pixel
     // of mouse movement fires a new definition request, causing a request storm.
     let origin_range = top_mod
-        .reference_at(&backend.db, cursor)
+        .reference_at(&analysis_db, cursor)
         .and_then(|r| match r {
             ReferenceView::Path(pv) => {
-                for idx in 0..=pv.path.segment_index(&backend.db) {
+                for idx in 0..=pv.path.segment_index(&analysis_db) {
                     // Use full segment span to check cursor containment (includes generics)
-                    let Some(seg_resolved) = pv.span.clone().segment(idx).resolve(&backend.db)
+                    let Some(seg_resolved) = pv.span.clone().segment(idx).resolve(&analysis_db)
                     else {
                         continue;
                     };
@@ -76,19 +77,19 @@ pub async fn handle_goto_definition(
                         // But return just the ident span (excludes generics like <C::InitArgs>)
                         // so Zed doesn't cache/underline too wide a region
                         if let Some(ident_resolved) =
-                            pv.span.clone().segment(idx).ident().resolve(&backend.db)
+                            pv.span.clone().segment(idx).ident().resolve(&analysis_db)
                         {
-                            return to_lsp_range_from_span(ident_resolved, &backend.db).ok();
+                            return to_lsp_range_from_span(ident_resolved, &analysis_db).ok();
                         }
-                        return to_lsp_range_from_span(seg_resolved, &backend.db).ok();
+                        return to_lsp_range_from_span(seg_resolved, &analysis_db).ok();
                     }
                 }
                 None
             }
             _ => r
                 .span()
-                .resolve(&backend.db)
-                .and_then(|s| to_lsp_range_from_span(s, &backend.db).ok()),
+                .resolve(&analysis_db)
+                .and_then(|s| to_lsp_range_from_span(s, &analysis_db).ok()),
         })
         .or_else(|| {
             // Fallback: compute word boundaries at cursor from the source text.
@@ -130,14 +131,14 @@ pub async fn handle_goto_definition(
             Target::Scope(scope) => {
                 // If this is a method inside an impl trait block, go to the trait method definition
                 if let ItemKind::Func(func) = scope.item()
-                    && let Some(trait_method) = func.trait_method_def(&backend.db)
+                    && let Some(trait_method) = func.trait_method_def(&analysis_db)
                 {
-                    return to_lsp_location_from_scope(&backend.db, trait_method.scope()).ok();
+                    return to_lsp_location_from_scope(&analysis_db, trait_method.scope()).ok();
                 }
-                to_lsp_location_from_scope(&backend.db, *scope).ok()
+                to_lsp_location_from_scope(&analysis_db, *scope).ok()
             }
             Target::Local { span, .. } => {
-                to_lsp_location_from_lazy_span(&backend.db, span.clone()).ok()
+                to_lsp_location_from_lazy_span(&analysis_db, span.clone()).ok()
             }
         })
         .map(|mut location| {

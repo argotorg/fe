@@ -221,6 +221,16 @@ pub fn eval_body_owner_const<'db>(
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
+    eval_const_instance(db, const_body_instance(db, owner, subst))
+}
+
+/// The instance that `eval_body_owner_const` evaluates for `owner` with
+/// `subst`.
+pub fn const_body_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> SemanticInstance<'db> {
     let key = SemanticInstanceKey::of(
         db,
         owner,
@@ -229,7 +239,7 @@ pub fn eval_body_owner_const<'db>(
         ImplEnv::empty(db, owner.scope()),
         EvidenceList::none(db),
     );
-    eval_const_instance(db, SemanticInstance::new(db, key))
+    SemanticInstance::new(db, key)
 }
 
 fn eval_body_owner_const_cycle_initial<'db>(
@@ -531,6 +541,8 @@ impl<'db> CtfeConstValue<'db> {
                 bytes: Rc::from(bytes.as_slice()),
             },
             SemConstValue::Tuple { .. }
+            | SemConstValue::ItemCode { .. }
+            | SemConstValue::Meta { .. }
             | SemConstValue::Struct { .. }
             | SemConstValue::Array { .. }
             | SemConstValue::Enum { .. } => CtfeConstKind::Interned(value),
@@ -544,6 +556,9 @@ impl<'db> CtfeConstValue<'db> {
         value: VerifiedConstValueId<'db>,
     ) -> Self {
         let kind = match value.value().value(db) {
+            SemConstValue::ItemCode { .. } | SemConstValue::Meta { .. } => {
+                CtfeConstKind::Interned(value)
+            }
             SemConstValue::Unit => CtfeConstKind::Unit,
             SemConstValue::Scalar {
                 value: SemConstScalar::Bool(value),
@@ -834,7 +849,10 @@ pub(super) fn sem_const_dependency<'db>(
             .iter()
             .copied()
             .find_map(|field| sem_const_dependency(db, field)),
-        SemConstValue::Unit | SemConstValue::Scalar { .. } => None,
+        SemConstValue::Unit
+        | SemConstValue::Scalar { .. }
+        | SemConstValue::ItemCode { .. }
+        | SemConstValue::Meta { .. } => None,
     }
 }
 
@@ -963,6 +981,28 @@ impl<'a, 'db> CtfeProjected<'a, 'db> {
 }
 
 impl<'db, 'body> CtfeMachine<'db, 'body> {
+    /// The refusal for a reflection that needs ground types when the field type
+    /// is not one. A projection through an implementation that a written
+    /// header only declares is not ground because the implementation's
+    /// members, and so the projection's value, are produced by generation.
+    fn ground_types_message(
+        &self,
+        reflection: &str,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        field_ty: TyId<'db>,
+    ) -> String {
+        let mut message = format!("{reflection} requires concrete ground types");
+        if let Some(projection) =
+            crate::analysis::ty::trait_def::declared_only_projection(self.db, scope, field_ty)
+        {
+            message.push_str(&format!(
+                "; the field type contains `{}`, an associated type of an implementation that is only declared by a written header, so its value is produced by generation and unknown while a provider runs",
+                projection.pretty_print(self.db)
+            ));
+        }
+        message
+    }
+
     fn new(db: &'db dyn HirAnalysisDb, config: CtfeConfig) -> Self {
         Self {
             db,
@@ -1022,9 +1062,11 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .admitted_body(self.db)
                 .map_err(|_| CtfeError::InvalidBody { origin })?;
             self.frames.push(CtfeFrame::new(body, Vec::new()));
+            let frame_idx = self.frames.len() - 1;
             let result = (|| -> EvalResult<'db, _> {
                 let args = self.value_args(args, origin)?;
                 self.eval_extern_const_fn(
+                    frame_idx,
                     instance,
                     func,
                     instance.key(self.db).typed_body(self.db).result_ty(),
@@ -1550,7 +1592,14 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                     let value_args = self.value_args(args, origin)?;
                     return self
-                        .eval_extern_const_fn(instance, func, result_ty, &value_args, origin)
+                        .eval_extern_const_fn(
+                            frame_idx,
+                            instance,
+                            func,
+                            result_ty,
+                            &value_args,
+                            origin,
+                        )
                         .map(CtfeValue::Value);
                 }
                 if let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db)
@@ -1631,6 +1680,36 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 } else {
                     Ok(read)
                 }
+            }
+            SExpr::ItemQuote { expression, holes } => {
+                let values = self.eval_value_args(frame_idx, &holes, origin)?;
+                let values = values
+                    .iter()
+                    .map(|value| value.materialize(self.db))
+                    .collect();
+                let key = self.frames[frame_idx].body.owner.key(self.db);
+                let kind = crate::core::meta::code_kind_from_ty(self.db, result_ty)
+                    .unwrap_or(common::generation::FrozenCodeKind::Item);
+                let code = crate::core::meta::ItemCode::for_quote_with_kind(
+                    self.db, kind, key, expression, values,
+                )
+                .map_err(|message| CtfeError::InvalidOperation {
+                    origin,
+                    message: message.into(),
+                })?;
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::ItemCode {
+                        ty: result_ty,
+                        code,
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeValue::concrete(self.db, verified))
             }
             SExpr::CodeRegionRef { .. } => Err(CtfeError::NotConstEvaluable { origin }.into()),
             SExpr::Const(SConst::Value(value)) => Ok(CtfeValue::concrete(self.db, value)),
@@ -1807,7 +1886,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
     }
 
     fn eval_extern_const_fn(
-        &self,
+        &mut self,
+        frame_idx: usize,
         instance: SemanticInstance<'db>,
         func: crate::hir_def::Func<'db>,
         result_ty: TyId<'db>,
@@ -1815,6 +1895,23 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         origin: SemOrigin<'db>,
     ) -> EvalResult<'db, CtfeConstValue<'db>> {
         let value = match ctfe_extern_intrinsic_kind(self.db, func) {
+            Some(
+                kind @ (CtfeExternIntrinsic::MetaFieldCount
+                | CtfeExternIntrinsic::MetaVariantCount
+                | CtfeExternIntrinsic::MetaVariant
+                | CtfeExternIntrinsic::MetaTypeIs
+                | CtfeExternIntrinsic::MetaField
+                | CtfeExternIntrinsic::MetaFieldType
+                | CtfeExternIntrinsic::MetaTypeRef
+                | CtfeExternIntrinsic::MetaBinders
+                | CtfeExternIntrinsic::MetaBinderAt
+                | CtfeExternIntrinsic::MetaQueryField
+                | CtfeExternIntrinsic::MetaEmpty),
+            ) => {
+                return self.eval_meta_extern_intrinsic(
+                    frame_idx, instance, kind, result_ty, args, origin,
+                );
+            }
             Some(CtfeExternIntrinsic::AddMod) => {
                 self.eval_evm_modular_arithmetic(result_ty, args, EvmModularArithmetic::Add, origin)
             }
@@ -1855,6 +1952,537 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             None => Err(CtfeError::NotConstEvaluable { origin }),
         };
         Ok(value?)
+    }
+
+    fn eval_meta_extern_intrinsic(
+        &mut self,
+        _frame_idx: usize,
+        instance: SemanticInstance<'db>,
+        kind: CtfeExternIntrinsic,
+        result_ty: TyId<'db>,
+        args: &[CtfeConstValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
+        match kind {
+            CtfeExternIntrinsic::MetaFieldCount => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field_count requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                Ok(CtfeConstValue::int(
+                    self.db,
+                    result_ty,
+                    BigInt::from(input.field_count(self.db).map_err(|_| {
+                        CtfeError::InvalidOperation {
+                            origin,
+                            message:
+                                "field_count requires a struct; a whole enum has no selected payload"
+                                    .into(),
+                        }
+                    })?),
+                ))
+            }
+            CtfeExternIntrinsic::MetaVariantCount => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "variant_count requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                let count =
+                    input
+                        .variant_count(self.db)
+                        .map_err(|_| CtfeError::InvalidOperation {
+                            origin,
+                            message: "variant_count requires a whole authored enum".into(),
+                        })?;
+                Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(count)))
+            }
+            CtfeExternIntrinsic::MetaVariant => {
+                let [arg, index] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "variant requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                let index = self
+                    .expect_int(index.clone(), origin)?
+                    .to_usize()
+                    .ok_or(CtfeError::OutOfBounds { origin })?;
+                let selected = input
+                    .variant(self.db, index)
+                    .map_err(|_| CtfeError::OutOfBounds { origin })?;
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::Meta {
+                        ty: result_ty,
+                        value: crate::core::meta::MetaValue::Record(selected),
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaField => {
+                let [arg, index] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                let index = self
+                    .expect_int(index.clone(), origin)?
+                    .to_usize()
+                    .ok_or(CtfeError::OutOfBounds { origin })?;
+                let field = input.field(self.db, index).map_err(|cause| match cause {
+                    crate::core::meta::RecordInputError::WholeEnumHasNoFields => {
+                        CtfeError::InvalidOperation {
+                            origin,
+                            message:
+                                "field requires a struct; a whole enum has no selected payload"
+                                    .into(),
+                        }
+                    }
+                    _ => CtfeError::OutOfBounds { origin },
+                })?;
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::Meta {
+                        ty: result_ty,
+                        value: crate::core::meta::MetaValue::Field(field),
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaTypeRef => {
+                let [ty] = instance.key(self.db).subst(self.db).generic_args(self.db) else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                if !args.is_empty() {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                }
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::Meta {
+                        ty: result_ty,
+                        value: crate::core::meta::MetaValue::TypeRef {
+                            ty: *ty,
+                            scope: instance.key(self.db).owner(self.db).scope(),
+                        },
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaFieldType => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Field(field),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field_type requires a compiler-issued Field".into(),
+                    }
+                    .into());
+                };
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::Meta {
+                        ty: result_ty,
+                        value: crate::core::meta::MetaValue::FieldType(*field),
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaBinders => {
+                let [arg, group] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "binders requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                let group = self
+                    .expect_int(group.clone(), origin)?
+                    .to_usize()
+                    .ok_or(CtfeError::OutOfBounds { origin })?;
+                let code = crate::core::meta::ItemCode::variant_binders(*input, group);
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::ItemCode {
+                        ty: result_ty,
+                        code,
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaBinderAt => {
+                let [pattern, field] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let pattern = pattern.materialize(self.db);
+                let SemConstValue::ItemCode { code, .. } = pattern.value(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "binder_at requires a compiler-issued binder pattern".into(),
+                    }
+                    .into());
+                };
+                let crate::core::meta::CodeData::VariantBinders { record, group } = code.data()
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "binder_at requires a compiler-issued binder pattern".into(),
+                    }
+                    .into());
+                };
+                let field_val = field.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Field(field_ref),
+                    ..
+                } = field_val.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "binder_at requires a compiler-issued Field".into(),
+                    }
+                    .into());
+                };
+                if field_ref.record() != *record {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "`.at` field belongs to another owner or variant".into(),
+                    }
+                    .into());
+                }
+                let code = crate::core::meta::ItemCode::variant_binder_field(
+                    *record,
+                    *group,
+                    field_ref.index(),
+                );
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::ItemCode {
+                        ty: result_ty,
+                        code,
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaTypeIs => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::FieldType(field),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "type_is requires a compiler-issued FieldType".into(),
+                    }
+                    .into());
+                };
+                let key = instance.key(self.db);
+                let [target_ty] = key.subst(self.db).generic_args(self.db) else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                if !matches!(
+                    target_ty.data(self.db),
+                    crate::analysis::ty::ty_def::TyData::TyBase(
+                        crate::analysis::ty::ty_def::TyBase::Prim(
+                            crate::analysis::ty::ty_def::PrimTy::Bool
+                                | crate::analysis::ty::ty_def::PrimTy::U64
+                                | crate::analysis::ty::ty_def::PrimTy::U256
+                        )
+                    )
+                ) {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "type_is supports only bool, u64, and u256 candidates".into(),
+                    }
+                    .into());
+                }
+                let field_ty = field.ty(self.db);
+                if field_ty.has_invalid(self.db)
+                    || target_ty.has_invalid(self.db)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, field_ty)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, *target_ty)
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: self.ground_types_message(
+                            "type_is",
+                            field.record().scope(),
+                            field_ty,
+                        ),
+                    }
+                    .into());
+                }
+                Ok(CtfeConstValue::bool(field_ty == *target_ty))
+            }
+            CtfeExternIntrinsic::MetaQueryField => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::FieldType(field),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "query_field requires a compiler-issued FieldType".into(),
+                    }
+                    .into());
+                };
+                let key = instance.key(self.db);
+                let [family, query_result] = key.subst(self.db).generic_args(self.db) else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let field_ty = field.ty(self.db);
+                if field_ty.has_invalid(self.db)
+                    || family.has_invalid(self.db)
+                    || query_result.has_invalid(self.db)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, field_ty)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, *family)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, *query_result)
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: self.ground_types_message(
+                            "query_field",
+                            field.record().scope(),
+                            field_ty,
+                        ),
+                    }
+                    .into());
+                }
+                let applied = TyId::app(self.db, *family, field_ty);
+                if applied.has_invalid(self.db)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, applied)
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "query_field requires concrete ground types".into(),
+                    }
+                    .into());
+                }
+                let scope = field.record().scope();
+                let assumptions =
+                    crate::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
+                let field_query_trait = crate::analysis::ty::corelib::resolve_core_trait(
+                    self.db,
+                    scope,
+                    &["meta", "FieldQuery"],
+                )
+                .ok_or_else(|| CtfeError::InvalidOperation {
+                    origin,
+                    message: "missing core::meta::FieldQuery trait".into(),
+                })?;
+                let goal = crate::analysis::ty::trait_def::TraitInstId::new_simple(
+                    self.db,
+                    field_query_trait,
+                    vec![applied, *query_result],
+                );
+                let evaluate_ident = crate::hir_def::IdentId::new(self.db, "evaluate".to_string());
+                let evaluate_func = field_query_trait
+                    .method_defs(self.db)
+                    .get(&evaluate_ident)
+                    .copied()
+                    .ok_or_else(|| CtfeError::InvalidOperation {
+                        origin,
+                        message: "query_field requires a FieldQuery::evaluate declaration".into(),
+                    })?;
+                let callee_key = crate::analysis::semantic::generated_callee_key(
+                    self.db,
+                    scope,
+                    assumptions,
+                    evaluate_func,
+                    Some(goal),
+                    &[],
+                )
+                .map_err(|_| CtfeError::InvalidOperation {
+                    origin,
+                    message: "query_field requires a satisfied FieldQuery::evaluate implementation"
+                        .into(),
+                })?;
+                let BodyOwner::Func(evaluate_func, _) = callee_key.owner(self.db) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "query_field requires a function body".into(),
+                    }
+                    .into());
+                };
+                if !evaluate_func.is_const(self.db) {
+                    return Err(CtfeError::NonConstCall { origin }.into());
+                }
+                let callee_instance = self.instance_for_key(callee_key);
+                let mut pending_access = vec![callee_key];
+                let mut seen_access = rustc_hash::FxHashSet::default();
+                while let Some(check_key) = pending_access.pop() {
+                    if !seen_access.insert(check_key) {
+                        continue;
+                    }
+                    if let BodyOwner::Func(f, _) = check_key.owner(self.db)
+                        && crate::analysis::ty::ty_check::check_func_body(self.db, f)
+                            .0
+                            .iter()
+                            .any(|diagnostic| {
+                                diagnostic.severity() == common::diagnostics::Severity::Error
+                            })
+                    {
+                        return Err(CtfeError::InvalidBody { origin }.into());
+                    }
+                    let check_inst = self.instance_for_key(check_key);
+                    if !matches!(
+                        crate::analysis::semantic::access::semantic_access_check_query(
+                            self.db, check_inst,
+                        ),
+                        crate::analysis::semantic::access::SemanticAccessCheckResult::Ok { .. }
+                    ) {
+                        return Err(CtfeError::InvalidBody { origin }.into());
+                    }
+                    if let Ok(admitted) = check_inst.admitted_body(self.db) {
+                        for callee in admitted.callees() {
+                            pending_access.push(callee.key);
+                        }
+                        // A constant that the body reads is not a callee, but
+                        // evaluating it runs its initializer, so it is checked
+                        // like a function that the body calls.
+                        pending_access.extend(check_inst.implicit_dependencies(self.db));
+                    }
+                }
+                let eval_res = match self.eval_instance(callee_instance, vec![], vec![], origin) {
+                    Ok(value) => value,
+                    Err(EvalStop::Blocked(mut info)) => {
+                        info.trace.push(callee_instance.key(self.db));
+                        return Err(EvalStop::Blocked(info));
+                    }
+                    Err(EvalStop::Failed(EvalFailure::Ctfe(err))) => {
+                        return Err(CtfeError::CalleeError {
+                            origin,
+                            callee: callee_instance,
+                            source: Box::new(err),
+                        }
+                        .into());
+                    }
+                    Err(stop) => return Err(stop),
+                };
+                let CtfeValue::Value(result) = eval_res else {
+                    return Err(CtfeError::InvalidBorrow { origin }.into());
+                };
+                Ok(result)
+            }
+            CtfeExternIntrinsic::MetaEmpty => {
+                if !args.is_empty() {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                }
+                let Some(kind) = crate::core::meta::code_kind_from_ty(self.db, result_ty) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "empty requires a valid Code<K> return type".into(),
+                    }
+                    .into());
+                };
+                let code = crate::core::meta::ItemCode::empty(kind);
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::ItemCode {
+                        ty: result_ty,
+                        code,
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn eval_numeric_extern_intrinsic(

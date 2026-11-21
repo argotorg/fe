@@ -7,7 +7,9 @@ ast_node! {
     /// An expression.
     /// Use [`Self::kind`] to determine the type of expression.
     pub struct Expr,
-    SK::BlockExpr
+    SK::QuoteExpr
+    | SK::QuoteHoleExpr
+    | SK::BlockExpr
     | SK::ClosureExpr
     | SK::BinExpr
     | SK::UnExpr
@@ -38,6 +40,8 @@ impl Expr {
     /// Returns the kind of expression.
     pub fn kind(&self) -> ExprKind {
         match self.syntax().kind() {
+            SK::QuoteExpr => ExprKind::Quote(AstNode::cast(self.syntax().clone()).unwrap()),
+            SK::QuoteHoleExpr => ExprKind::QuoteHole(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BlockExpr => ExprKind::Block(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::ClosureExpr => ExprKind::Closure(AstNode::cast(self.syntax().clone()).unwrap()),
             SK::BinExpr => ExprKind::Bin(AstNode::cast(self.syntax().clone()).unwrap()),
@@ -75,7 +79,7 @@ impl Expr {
 ast_node! {
     /// `{ stmt1\n stmt2\n ..}`
     pub struct BlockExpr,
-    SK::BlockExpr,
+    SK::BlockExpr | SK::QuoteItemList,
     IntoIterator<Item=super::Stmt>,
 }
 impl BlockExpr {
@@ -324,6 +328,11 @@ impl FieldExpr {
         self.field_name()
             .or_else(|| self.field_index().map(|i| i.token().clone()))
     }
+
+    /// `${f}` in `x.${f}`.
+    pub fn field_hole(&self) -> Option<QuoteHole> {
+        support::child(self.syntax())
+    }
 }
 
 ast_node! {
@@ -568,6 +577,8 @@ impl AugAssignExpr {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum ExprKind {
+    Quote(QuoteExpr),
+    QuoteHole(QuoteHoleExpr),
     Lit(LitExpr),
     Let(LetExpr),
     Block(BlockExpr),
@@ -611,6 +622,11 @@ impl RecordField {
         support::token(self.syntax(), SK::Ident)
     }
 
+    /// `${f}` in `Foo { ${f}: v }`.
+    pub fn label_hole(&self) -> Option<QuoteHole> {
+        support::child(self.syntax())
+    }
+
     /// Returns the expression of the field.
     pub fn expr(&self) -> Option<Expr> {
         support::child(self.syntax())
@@ -621,6 +637,22 @@ ast_node! {
     pub struct MatchArmList,
     SK::MatchArmList,
     IntoIterator<Item=MatchArm>
+}
+impl MatchArmList {
+    pub fn hole_arms(&self) -> impl Iterator<Item = QuoteHoleArm> {
+        support::children(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `${arms}` in a match arm list.
+    pub struct QuoteHoleArm,
+    SK::QuoteHoleArm
+}
+impl QuoteHoleArm {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
 }
 ast_node! {
     pub struct MatchArm,
@@ -1334,5 +1366,114 @@ mod tests {
         assert!(matches!(range_expr.lhs().unwrap().kind(), ExprKind::Lit(_)));
         // rhs should be (n + 1) since .. has lower precedence
         assert!(matches!(range_expr.rhs().unwrap().kind(), ExprKind::Bin(_)));
+    }
+}
+
+ast_node! {
+    /// The template's exact authored syntax is retained until checked copying.
+    pub struct QuoteExpr,
+    SK::QuoteExpr,
+}
+impl QuoteExpr {
+    pub fn pattern(&self) -> Option<super::Pat> {
+        self.syntax()
+            .children()
+            .find(|node| node.kind() == SK::QuotePat)
+            .and_then(|node| support::child(&node))
+    }
+
+    pub fn open_list(&self) -> Option<QuoteOpenList> {
+        support::child(self.syntax())
+    }
+
+    pub fn body(&self) -> Option<BlockExpr> {
+        support::child(self.syntax())
+    }
+
+    pub fn block(&self) -> Option<BlockExpr> {
+        self.syntax()
+            .children()
+            .find(|n| n.kind() == SK::BlockExpr)
+            .and_then(BlockExpr::cast)
+    }
+
+    pub fn item_list(&self) -> Option<QuoteItemList> {
+        support::child(self.syntax())
+    }
+
+    pub fn arm_list(&self) -> Option<MatchArmList> {
+        support::child(self.syntax())
+    }
+
+    pub fn where_clause(&self) -> Option<QuoteWhere> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `(other, ..)` on `quote(other) { .. }`.
+    pub struct QuoteOpenList,
+    SK::QuoteOpenList,
+}
+impl QuoteOpenList {
+    pub fn names(&self) -> impl Iterator<Item = SyntaxToken> + '_ {
+        self.syntax()
+            .children_with_tokens()
+            .filter_map(|child| match child {
+                rowan::NodeOrToken::Token(tok) if tok.kind() == SK::Ident => Some(tok),
+                _ => None,
+            })
+    }
+}
+
+ast_node! {
+    /// `{ item1\n item2\n .. }` inside a quote.
+    pub struct QuoteItemList,
+    SK::QuoteItemList,
+    IntoIterator<Item=super::Item>,
+}
+impl QuoteItemList {
+    pub fn hole_items(&self) -> impl Iterator<Item = QuoteHole> {
+        support::children(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `{ where T: Trait, .. }` inside a quote.
+    pub struct QuoteWhere,
+    SK::QuoteWhere,
+}
+impl QuoteWhere {
+    pub fn clause(&self) -> Option<super::WhereClause> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    pub struct QuoteHoleExpr,
+    SK::QuoteHoleExpr,
+}
+impl QuoteHoleExpr {
+    pub fn value(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// `${...}` splice for a member, declared name, item, or where predicate.
+    pub struct QuoteHole,
+    SK::QuoteHole,
+}
+impl QuoteHole {
+    pub fn value(&self) -> Option<Expr> {
+        support::child(self.syntax())
+    }
+
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(self.syntax())
     }
 }

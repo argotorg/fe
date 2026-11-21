@@ -29,14 +29,15 @@ use super::{
     diagnostics::ImportDiag,
     name_resolver::{
         NameDerivation, NameDomain, NameRes, NameResBucket, NameResKind, NameResolutionError,
-        NameResolver, QueryDirective,
+        NameResolver, QueryDirective, Tier,
     },
-    visibility_checker::is_use_visible,
+    visibility_checker::{is_authored_module, is_use_visible},
 };
 use crate::{
     analysis::HirAnalysisDb,
     hir_def::{
-        HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy, scope_graph::ScopeId,
+        AuthoredScope, HirIngot, IdentId, Partial, Use, UsePathSegment, prim_ty::PrimTy,
+        scope_graph::ScopeId,
     },
 };
 
@@ -46,11 +47,34 @@ type GlobNames<'db> = FxHashMap<IdentId<'db>, Vec<NameRes<'db>>>;
 /// A failed lookup: the index of the path segment, and the error.
 type SegmentError<'db> = (usize, NameResolutionError<'db>);
 
+/// Lookup follows a path from its root to the scopes that its segments name.
+/// Visibility may follow the quote producer when it supplies a binding or
+/// a local alias in the quotation names an authored module.
+#[derive(Clone, Copy)]
+struct UseLookup<'db> {
+    target: ScopeId<'db>,
+    root: ScopeId<'db>,
+    suffix_producer: Option<AuthoredScope<'db>>,
+    quote_lookup: QuoteLookup,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuoteLookup {
+    Ordinary,
+    Local,
+    Producer,
+}
+
 pub(crate) struct ImportResolver<'db> {
     db: &'db dyn HirAnalysisDb,
 
     /// The ingot that is being resolved.
     ingot: Ingot<'db>,
+
+    /// Whether the imports and the lookups they make see the items generated
+    /// in the ingot. In the authored tier a use that names such an item fails
+    /// and imports nothing; the diagnostics of the tier are not reported.
+    tier: Tier,
 
     /// The imports of the settled uses, which lookups see.
     imports: ResolvedImports<'db>,
@@ -131,10 +155,11 @@ impl<'db> From<SegmentError<'db>> for Stop<'db> {
 }
 
 impl<'db> ImportResolver<'db> {
-    pub(crate) fn new(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> Self {
+    pub(crate) fn new(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>, tier: Tier) -> Self {
         Self {
             db,
             ingot,
+            tier,
             imports: ResolvedImports::default(),
             buckets: FxHashMap::default(),
             glob_targets: FxHashMap::default(),
@@ -386,14 +411,15 @@ impl<'db> ImportResolver<'db> {
         let mut trace = Vec::new();
         let resolved = self
             .resolve_base(use_, forced, &mut trace)
-            .and_then(|target| {
+            .and_then(|lookup| {
                 if use_.is_glob(db) {
-                    return Ok(Resolved::Glob(target));
+                    return Ok(Resolved::Glob(lookup.target));
                 }
                 let segments = use_path(db, use_)?;
                 let idx = segments.len() - 1;
                 let domain = NameDomain::TYPE | NameDomain::VALUE;
-                let mut bucket = self.lookup(use_, target, idx, &segments[idx], domain, forced)?;
+                let (mut bucket, _) =
+                    self.lookup(use_, lookup, idx, &segments[idx], domain, forced)?;
                 bucket.set_derivation(NameDerivation::NamedImported(use_));
                 Ok(Resolved::Bucket(bucket))
             });
@@ -409,7 +435,8 @@ impl<'db> ImportResolver<'db> {
     fn glob_names(&self, use_: Use<'db>, target: ScopeId<'db>) -> GlobNames<'db> {
         let db = self.db;
         let scope = use_scope(db, use_);
-        let mut names = NameResolver::new(db, self).collect_all_resolutions_for_glob(target, scope);
+        let mut names = NameResolver::new(db, self, self.tier.hides(self.ingot))
+            .collect_all_resolutions_for_glob(target, scope);
         names.retain(|&name, resolutions| {
             if self
                 .pending_named(target, name)
@@ -480,28 +507,44 @@ impl<'db> ImportResolver<'db> {
         use_: Use<'db>,
         forced: &Forced<'db>,
         trace: &mut Vec<ScopeId<'db>>,
-    ) -> Result<ScopeId<'db>, Stop<'db>> {
-        let segments = use_path(self.db, use_)?;
-        segments[..segments.len() - 1].iter().enumerate().try_fold(
-            use_scope(self.db, use_),
-            |target, (idx, segment)| {
-                let bucket = self.lookup(use_, target, idx, segment, NameDomain::TYPE, forced)?;
-                let res = bucket
-                    .pick(NameDomain::TYPE)
-                    .as_ref()
-                    .unwrap_or_else(|_| bucket.iter_ok().next().unwrap());
-                if res.is_mod(self.db) || res.is_enum(self.db) {
-                    let scope = res.scope().unwrap();
-                    trace.push(scope);
-                    Ok(scope)
-                } else {
-                    Err(Stop::Failed((
-                        idx,
-                        NameResolutionError::InvalidPathSegment(res.clone()),
-                    )))
-                }
-            },
-        )
+    ) -> Result<UseLookup<'db>, Stop<'db>> {
+        let db = self.db;
+        let segments = use_path(db, use_)?;
+        let path = use_.path(db).unwrap();
+        let authored_root = path.authored_scope(db);
+        let root = authored_root.map_or_else(|| use_scope(db, use_), |origin| origin.resolve(db));
+        let mut lookup = UseLookup {
+            target: root,
+            root,
+            suffix_producer: None,
+            quote_lookup: QuoteLookup::Ordinary,
+        };
+        for (idx, segment) in segments[..segments.len() - 1].iter().enumerate() {
+            let (bucket, producer) =
+                self.lookup(use_, lookup, idx, segment, NameDomain::TYPE, forced)?;
+            let res = bucket
+                .pick(NameDomain::TYPE)
+                .as_ref()
+                .unwrap_or_else(|_| bucket.iter_ok().next().unwrap());
+            if !res.is_mod(db) && !res.is_enum(db) {
+                return Err(Stop::Failed((
+                    idx,
+                    NameResolutionError::InvalidPathSegment(res.clone()),
+                )));
+            }
+            lookup.target = res.scope().unwrap();
+            trace.push(lookup.target);
+            if idx == 0 && authored_root.is_none() {
+                lookup.suffix_producer = producer.or_else(|| {
+                    path.quote_origin(db)
+                        .filter(|&origin| res.quoted_module_alias(db, origin))
+                        .map(|origin| origin.producer)
+                });
+            } else if lookup.suffix_producer.is_some() && !is_authored_module(db, lookup.target) {
+                lookup.suffix_producer = None;
+            }
+        }
+        Ok(lookup)
     }
 
     /// Looks up the `idx`th segment of the path of `use_` in `scope`, for what
@@ -510,14 +553,83 @@ impl<'db> ImportResolver<'db> {
     fn lookup(
         &self,
         use_: Use<'db>,
-        scope: ScopeId<'db>,
+        lookup: UseLookup<'db>,
+        idx: usize,
+        segment: &Partial<UsePathSegment<'db>>,
+        domains: NameDomain,
+        forced: &Forced<'db>,
+    ) -> Result<(NameResBucket<'db>, Option<AuthoredScope<'db>>), Stop<'db>> {
+        let db = self.db;
+        let path = use_.path(db).unwrap();
+        let quote = path.quote_origin(db).filter(|_| {
+            idx == 0
+                && path.authored_scope(db).is_none()
+                && segment
+                    .to_opt()
+                    .and_then(UsePathSegment::ident)
+                    .is_some_and(|name| {
+                        !matches!(name.data(db).as_str(), "ingot" | "self" | "super")
+                    })
+        });
+        let Some(quote) = quote else {
+            return self
+                .lookup_in_scope(use_, lookup, idx, segment, domains, forced)
+                .map(|bucket| (bucket, None));
+        };
+
+        let local = UseLookup {
+            quote_lookup: QuoteLookup::Local,
+            ..lookup
+        };
+        let mut result = NameResBucket::default();
+        let mut type_producer = None;
+        // A one-segment use can bind a local value and an authored type
+        // under the same alias. Look for each domain independently.
+        for domain in domains.iter() {
+            let bucket = match self.lookup_in_scope(use_, local, idx, segment, domain, forced) {
+                Err(Stop::Failed((_, NameResolutionError::NotFound))) => {
+                    let scope = quote.producer.resolve(db);
+                    let producer = UseLookup {
+                        target: scope,
+                        root: scope,
+                        quote_lookup: QuoteLookup::Producer,
+                        ..lookup
+                    };
+                    match self.lookup_in_scope(use_, producer, idx, segment, domain, forced) {
+                        Ok(bucket) => {
+                            if domain == NameDomain::TYPE {
+                                type_producer = Some(quote.producer);
+                            }
+                            bucket
+                        }
+                        Err(Stop::Failed((_, NameResolutionError::NotFound))) => continue,
+                        Err(stop) => return Err(stop),
+                    }
+                }
+                result => result?,
+            };
+            result.bucket.extend(bucket.bucket);
+        }
+        if result.is_empty() {
+            return Err(Stop::Failed((idx, NameResolutionError::NotFound)));
+        }
+        Ok((result, type_producer))
+    }
+
+    fn lookup_in_scope(
+        &self,
+        use_: Use<'db>,
+        lookup: UseLookup<'db>,
         idx: usize,
         segment: &Partial<UsePathSegment<'db>>,
         domain: NameDomain,
         forced: &Forced<'db>,
     ) -> Result<NameResBucket<'db>, Stop<'db>> {
         let db = self.db;
-        let use_scope = use_scope(db, use_);
+        let scope = lookup.target;
+        let visibility_scope = lookup
+            .suffix_producer
+            .map_or(lookup.root, |origin| origin.resolve(db));
         let name = segment
             .to_opt()
             .and_then(UsePathSegment::ident)
@@ -537,18 +649,34 @@ impl<'db> ImportResolver<'db> {
                 NameRes::new_from_scope(root, NameDomain::TYPE, NameDerivation::External).into(),
             );
         }
-        let directive = if idx == 0 {
-            QueryDirective::new()
-        } else {
+        let directive = if lookup.quote_lookup == QuoteLookup::Local {
+            QueryDirective::new().quoted_locals()
+        } else if idx != 0 {
             QueryDirective::new().disallow_lex().disallow_external()
+        } else if lookup.quote_lookup == QuoteLookup::Producer
+            || use_
+                .path(db)
+                .to_opt()
+                .is_some_and(|path| path.authored_scope(db).is_some())
+        {
+            QueryDirective::new().disallow_enclosing_item_bindings()
+        } else {
+            QueryDirective::new()
         };
         let query = EarlyNameQueryId::new(db, name, scope, directive);
-        let mut bucket = NameResolver::new(db, self).resolve_query(query);
+        let mut bucket =
+            NameResolver::new(db, self, self.tier.hides(self.ingot)).resolve_query(query);
+        if lookup.quote_lookup != QuoteLookup::Ordinary {
+            bucket.bucket.retain(|(found, _)| found.intersects(domain));
+            for res in bucket.iter_ok_mut() {
+                res.domain &= domain;
+            }
+        }
 
         let mut invisible = None;
         bucket.bucket.retain(|(_, res)| match res {
             Ok(res) if !res.is_importable() => false,
-            Ok(res) if !res.is_visible(db, use_scope) => {
+            Ok(res) if !res.is_visible(db, visibility_scope) => {
                 if invisible.is_none() {
                     invisible = res.derived_from(db);
                 }
@@ -568,7 +696,7 @@ impl<'db> ImportResolver<'db> {
             .collect();
         let found = found.and_then(|found| found.into_iter().min_by(|a, b| a.cmp_precedence(b)));
         let mut blockers = Vec::new();
-        self.blockers(use_, scope, name, idx == 0, found, &mut blockers);
+        self.blockers(use_, scope, name, directive, found, &mut blockers);
         blockers.retain(|&blocker| !forced.ignores(blocker));
         if !blockers.is_empty() {
             return Err(Stop::Blocked(blockers));
@@ -594,13 +722,15 @@ impl<'db> ImportResolver<'db> {
         // type of the same name, so a use path that starts with it is
         // ambiguous.
         let glob_shadows_external = idx == 0
+            && lookup.quote_lookup != QuoteLookup::Local
             && bucket.pick(NameDomain::TYPE).as_ref().is_ok_and(|res| {
                 matches!(res.derivation.origin(), NameDerivation::GlobImported(_))
-                    && !res.is_external(db, self.ingot)
+                    && !res.is_external(db, lookup.root.ingot(db))
             })
             && (PrimTy::from_name(db, name).is_some()
-                || self
-                    .ingot
+                || lookup
+                    .root
+                    .ingot(db)
                     .resolved_external_ingots(db)
                     .iter()
                     .any(|(ingot_name, _)| *ingot_name == name));
@@ -624,7 +754,7 @@ impl<'db> ImportResolver<'db> {
         use_: Use<'db>,
         scope: ScopeId<'db>,
         name: IdentId<'db>,
-        allow_lex: bool,
+        directive: QueryDirective,
         found: Option<&NameDerivation<'db>>,
         blockers: &mut Vec<(Use<'db>, bool)>,
     ) {
@@ -646,8 +776,10 @@ impl<'db> ImportResolver<'db> {
         if matches!(found, None | Some(NameDerivation::Lex(_))) {
             self.glob_blockers(use_, scope, None, name, &mut FxHashSet::default(), blockers);
         }
-        if allow_lex && let Some(parent) = scope.lex_parent(self.db) {
-            self.blockers(use_, parent, name, true, parent_found, blockers);
+        if directive.allows_lex_at(self.db, scope)
+            && let Some(parent) = scope.lex_parent(self.db)
+        {
+            self.blockers(use_, parent, name, directive, parent_found, blockers);
         }
     }
 
@@ -786,16 +918,27 @@ pub(super) trait Importer<'db> {
     }
 }
 
+/// The imports of the ingot of each scope, as the settled imports of that
+/// ingot. `hide` is the ingot whose generated items the lookup does not see;
+/// every other ingot is seen whole, as its generated items are sealed.
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct DefaultImporter;
+pub(super) struct DefaultImporter<'db> {
+    pub(super) hide: Option<Ingot<'db>>,
+}
 
-impl<'db> Importer<'db> for DefaultImporter {
+impl<'db> Importer<'db> for DefaultImporter<'db> {
     fn imports<'a>(
         &'a self,
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
     ) -> &'a ResolvedImports<'db> {
-        &super::resolve_imports(db, scope.ingot(db)).1
+        let ingot = scope.ingot(db);
+        let tier = if self.hide == Some(ingot) {
+            Tier::Authored
+        } else {
+            Tier::All
+        };
+        &super::resolve_imports(db, ingot, tier).1
     }
 }
 
@@ -809,7 +952,7 @@ impl<'db> Importer<'db> for ImportResolver<'db> {
             self.reads.borrow_mut().insert(scope);
             &self.imports
         } else {
-            DefaultImporter.imports(db, scope)
+            &super::resolve_imports(db, scope.ingot(db), Tier::All).1
         }
     }
 }

@@ -24,11 +24,11 @@ pub async fn handle_completion(
 ) -> Result<Option<CompletionResponse>, ResponseError> {
     let url =
         backend.map_client_uri_to_internal(params.text_document_position.text_document.uri.clone());
+    let analysis_db = backend.analysis_db_for_url(&url);
 
-    let file = backend
-        .db
+    let file = analysis_db
         .workspace()
-        .get(&backend.db, &url)
+        .get(&analysis_db, &url)
         .ok_or_else(|| {
             ResponseError::new(
                 async_lsp::ErrorCode::INTERNAL_ERROR,
@@ -36,9 +36,9 @@ pub async fn handle_completion(
             )
         })?;
 
-    let file_text = file.text(&backend.db);
+    let file_text = file.text(&analysis_db);
     let cursor = to_offset_from_position(params.text_document_position.position, file_text);
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     let mut items = Vec::new();
 
@@ -74,22 +74,22 @@ pub async fn handle_completion(
 
     if is_member_access {
         // Member access completion: show fields and methods for the receiver type
-        collect_member_completions(&backend.db, top_mod, cursor, &mut items);
+        collect_member_completions(&analysis_db, top_mod, cursor, &mut items);
     } else if is_path_completion {
         // Path completion: show items in the module before ::
-        collect_path_completions(&backend.db, top_mod, cursor, file_text, &mut items);
+        collect_path_completions(&analysis_db, top_mod, cursor, file_text, &mut items);
     } else {
         // Regular completion: show items visible in scope
-        let scope = find_scope_at_cursor(&backend.db, top_mod, cursor);
+        let scope = find_scope_at_cursor(&analysis_db, top_mod, cursor);
         if let Some(scope) = scope {
             // Detect whether we're in a type or expression context
             let context = detect_completion_context(file_text, cursor);
 
-            collect_items_from_scope(&backend.db, scope, context, &mut items);
+            collect_items_from_scope(&analysis_db, scope, context, &mut items);
 
             // Also collect auto-import suggestions for symbols not in scope
             collect_auto_import_completions(
-                &backend.db,
+                &analysis_db,
                 top_mod,
                 scope,
                 context,

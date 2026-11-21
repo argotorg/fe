@@ -85,6 +85,7 @@ impl<'db> SpanTransitionChain<'db> {
             ChainRoot::Stmt(s) => s.body.top_mod(db),
             ChainRoot::Expr(e) => e.body.top_mod(db),
             ChainRoot::Pat(p) => p.body.top_mod(db),
+            ChainRoot::AssocMember(m) => m.item().top_mod(db),
         }
     }
 
@@ -111,6 +112,7 @@ impl<'db> SpanTransitionChain<'db> {
             ChainRoot::Stmt(s) => s.body.scope(),
             ChainRoot::Expr(e) => e.body.scope(),
             ChainRoot::Pat(p) => p.body.scope(),
+            ChainRoot::AssocMember(m) => ScopeId::from_item(m.item()),
         }
     }
 
@@ -139,6 +141,103 @@ pub(crate) enum ChainRoot<'db> {
     Stmt(StmtRoot<'db>),
     Expr(ExprRoot<'db>),
     Pat(PatRoot<'db>),
+    AssocMember(AssocMemberRoot<'db>),
+}
+
+/// An associated const or type of an implementation, by its index in the
+/// implementation's HIR member list. Kept as small as the other roots: every
+/// lazy span, and so every diagnostic, carries one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, SalsaValue)]
+pub(crate) enum AssocMemberRoot<'db> {
+    InherentConst(Impl<'db>, u16),
+    TraitConst(ImplTrait<'db>, u16),
+    TraitType(ImplTrait<'db>, u16),
+}
+
+impl<'db> AssocMemberRoot<'db> {
+    pub(crate) fn item(self) -> ItemKind<'db> {
+        match self {
+            Self::InherentConst(impl_, _) => impl_.into(),
+            Self::TraitConst(impl_trait, _) | Self::TraitType(impl_trait, _) => impl_trait.into(),
+        }
+    }
+}
+
+impl ChainInitiator for AssocMemberRoot<'_> {
+    /// A member spliced from a quotation is located where it was written; an
+    /// authored member is the matching member of its implementation's syntax,
+    /// counting only authored members.
+    fn init(&self, db: &dyn crate::SpannedHirDb) -> ResolvedOrigin {
+        let (generated, idx): (Vec<_>, _) = match *self {
+            Self::InherentConst(impl_, idx) => {
+                (impl_.consts(db).iter().map(|c| c.generated).collect(), idx)
+            }
+            Self::TraitConst(impl_trait, idx) => (
+                impl_trait.consts(db).iter().map(|c| c.generated).collect(),
+                idx,
+            ),
+            Self::TraitType(impl_trait, idx) => (
+                impl_trait.types(db).iter().map(|t| t.generated).collect(),
+                idx,
+            ),
+        };
+        let idx = usize::from(idx);
+        if let Some(Some(syntax)) = generated.get(idx) {
+            let root = top_mod_ast(db, syntax.top_mod);
+            let kind = match syntax.node.try_to_node(root.syntax()) {
+                Some(node) => ResolvedOriginKind::Node(node),
+                None => ResolvedOriginKind::None,
+            };
+            return ResolvedOrigin::new(syntax.top_mod.file(db), kind);
+        }
+        let authored = idx
+            - generated[..idx.min(generated.len())]
+                .iter()
+                .filter(|syntax| syntax.is_some())
+                .count();
+        let root = *self;
+        let resolved = match root {
+            Self::InherentConst(impl_, _) => impl_.init(db),
+            Self::TraitConst(impl_trait, _) | Self::TraitType(impl_trait, _) => impl_trait.init(db),
+        };
+        resolved.map(|node| {
+            let member = match root {
+                Self::InherentConst(..) => ast::Impl::cast(node)
+                    .and_then(|impl_| impl_.item_list())
+                    .and_then(|list| {
+                        list.into_iter()
+                            .filter_map(|item| match item.kind() {
+                                ast::ImplItemKind::Const(c) => Some(c.syntax().clone()),
+                                _ => None,
+                            })
+                            .nth(authored)
+                    }),
+                Self::TraitConst(..) | Self::TraitType(..) => {
+                    let types = matches!(root, Self::TraitType(..));
+                    ast::ImplTrait::cast(node)
+                        .and_then(|impl_trait| impl_trait.item_list())
+                        .and_then(|list| {
+                            list.into_iter()
+                                .filter_map(|item| match item.kind() {
+                                    ast::TraitItemKind::Const(c) if !types => {
+                                        Some(c.syntax().clone())
+                                    }
+                                    // Associated types and shapes, in order.
+                                    ast::TraitItemKind::Type(t) if types => {
+                                        Some(t.syntax().clone())
+                                    }
+                                    ast::TraitItemKind::Shape(s) if types => {
+                                        Some(s.syntax().clone())
+                                    }
+                                    _ => None,
+                                })
+                                .nth(authored)
+                        })
+                }
+            };
+            member.map(NodeOrToken::Node)
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -179,16 +278,64 @@ impl ResolvedOrigin {
         ResolvedOrigin::new(top_mod.file(db), kind)
     }
 
+    pub(crate) fn resolve_with_quote_mods<T>(
+        db: &dyn SpannedHirDb,
+        body: Body<'_>,
+        origin: &HirOrigin<T>,
+        node_quote_mod: Option<u16>,
+        quote_mods: &[u16],
+    ) -> ResolvedOrigin
+    where
+        T: AstNode<Language = FeLang>,
+    {
+        let top_mod = body.top_mod(db);
+        let scope_graph = body.scope_graph(db);
+        if let Some(idx) = node_quote_mod
+            && let Some(&quote_top_mod) = scope_graph.quote_mods.get(idx as usize)
+        {
+            let resolved = Self::resolve(db, quote_top_mod, origin);
+            if !matches!(resolved.kind, ResolvedOriginKind::None) {
+                return resolved;
+            }
+        }
+        let resolved = Self::resolve(db, top_mod, origin);
+        if !matches!(resolved.kind, ResolvedOriginKind::None) {
+            return resolved;
+        }
+        for &idx in quote_mods.iter().rev() {
+            if Some(idx) == node_quote_mod {
+                continue;
+            }
+            if let Some(&quote_top_mod) = scope_graph.quote_mods.get(idx as usize) {
+                let resolved = Self::resolve(db, quote_top_mod, origin);
+                if !matches!(resolved.kind, ResolvedOriginKind::None) {
+                    return resolved;
+                }
+            }
+        }
+        if let Some(&quote_top_mod) = scope_graph.quoted_top_mods.get(&ItemKind::from(body)) {
+            let resolved = Self::resolve(db, quote_top_mod, origin);
+            if !matches!(resolved.kind, ResolvedOriginKind::None) {
+                return resolved;
+            }
+        }
+        resolved
+    }
+
     pub(crate) fn map<F>(self, f: F) -> Self
     where
         F: FnOnce(SyntaxNode) -> Option<NodeOrToken>,
     {
         let kind = match self.kind {
-            ResolvedOriginKind::Node(node) => match f(node) {
-                Some(NodeOrToken::Node(node)) => ResolvedOriginKind::Node(node),
-                Some(NodeOrToken::Token(token)) => ResolvedOriginKind::Token(token),
-                None => ResolvedOriginKind::None,
-            },
+            ResolvedOriginKind::Node(node) => {
+                let is_hole = crate::core::meta::QuoteHoleNode::is_hole_kind(node.kind());
+                match f(node.clone()) {
+                    Some(NodeOrToken::Node(node)) => ResolvedOriginKind::Node(node),
+                    Some(NodeOrToken::Token(token)) => ResolvedOriginKind::Token(token),
+                    None if is_hole => ResolvedOriginKind::Node(node),
+                    None => ResolvedOriginKind::None,
+                }
+            }
             kind => kind,
         };
 
@@ -259,6 +406,7 @@ impl ChainInitiator for ChainRoot<'_> {
             Self::Stmt(stmt) => stmt.init(db),
             Self::Expr(expr) => expr.init(db),
             Self::Pat(pat) => pat.init(db),
+            Self::AssocMember(member) => member.init(db),
         }
     }
 }
@@ -309,8 +457,19 @@ macro_rules! impl_chain_root {
         impl<'db> ChainInitiator for $ty {
             fn init(&self, db: &dyn crate::SpannedHirDb) -> ResolvedOrigin {
                 let top_mod = self.top_mod(db);
+                let quote_top_mod = top_mod
+                    .scope_graph(db)
+                    .quoted_top_mods
+                    .get(&ItemKind::from(*self))
+                    .copied()
+                    .unwrap_or(top_mod);
                 let origin = $fn(db, *self);
-                ResolvedOrigin::resolve(db, top_mod, origin)
+                let resolved = ResolvedOrigin::resolve(db, quote_top_mod, origin);
+                if !matches!(resolved.kind, ResolvedOriginKind::None) || quote_top_mod == top_mod {
+                    resolved
+                } else {
+                    ResolvedOrigin::resolve(db, top_mod, origin)
+                }
             }
         })*
     };

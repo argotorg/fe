@@ -1,4 +1,5 @@
 pub use abi::{self, *}
+pub use derive
 pub use evm
 pub use prelude
 pub use env

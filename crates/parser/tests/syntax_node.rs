@@ -67,6 +67,18 @@ fn test_pat(fixture: Fixture<&str>) {
     snap_test!(node, fixture.path());
 }
 
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/test_files/quotation",
+    glob: "attributed_*.fe"
+)]
+fn test_attributed_quotation(fixture: Fixture<&str>) {
+    let runner = TestRunner::item_list(true);
+    let (cst, _) = runner.run(fixture.content());
+    let node = format!("{cst:#?}");
+    assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
+    snap_test!(node, fixture.path());
+}
+
 #[test]
 fn line_start_star_begins_a_dereference_statement() {
     let source = r#"
@@ -204,6 +216,19 @@ mod wasm {
     )]
     fn test_pat(fixture: Fixture<&str>) {
         let (cst, _) = TestRunner::pat_list(true).run(fixture.content());
+        assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
+    }
+
+    #[dir_test::dir_test(
+        dir: "$CARGO_MANIFEST_DIR/test_files/quotation",
+        glob: "attributed_*.fe"
+        postfix: "wasm"
+    )]
+    #[dir_test_attr(
+        #[wasm_bindgen_test]
+    )]
+    fn test_attributed_quotation(fixture: dir_test::Fixture<&str>) {
+        let (cst, _) = TestRunner::item_list(true).run(fixture.content());
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 }

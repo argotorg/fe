@@ -11,20 +11,21 @@ pub async fn handle_folding_range(
     params: FoldingRangeParams,
 ) -> Result<Option<Vec<FoldingRange>>, ResponseError> {
     let internal_url = backend.map_client_uri_to_internal(params.text_document.uri);
-    let Some(file) = backend.db.workspace().get(&backend.db, &internal_url) else {
+    let analysis_db = backend.analysis_db_for_url(&internal_url);
+    let Some(file) = analysis_db.workspace().get(&analysis_db, &internal_url) else {
         return Ok(None);
     };
 
-    let top_mod = map_file_to_mod(&backend.db, file);
+    let top_mod = map_file_to_mod(&analysis_db, file);
 
     let mut ranges = Vec::new();
 
-    for &item in top_mod.all_items(&backend.db) {
+    for &item in top_mod.all_items(&analysis_db) {
         let item_span: hir::span::DynLazySpan = item.span().into();
-        let Some(span) = item_span.resolve(&backend.db) else {
+        let Some(span) = item_span.resolve(&analysis_db) else {
             continue;
         };
-        let Ok(range) = to_lsp_range_from_span(span, &backend.db) else {
+        let Ok(range) = to_lsp_range_from_span(span, &analysis_db) else {
             continue;
         };
 

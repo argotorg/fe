@@ -1,0 +1,99 @@
+// A derive header, `impl Trait for Type with (Provider)`, also serves a type
+// that `#[abi]`, `#[error]` or `#[event]` expands and the struct of a `msg`
+// variant: the provider reads the fields as written, and the members it
+// returns run like a handwritten implementation's.
+use core::derive::Derive
+use core::marker::Copy
+use core::meta::{Code, Item, Record}
+use core::ops::Eq
+
+struct Marks {}
+impl Derive<trait Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> { quote {} }
+}
+
+#[abi]
+struct Point { x: u256, y: u256 }
+struct PointEq {}
+impl Derive<trait Eq> for PointEq {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: Point) -> bool { self.x == other.x && self.y == other.y } }
+    }
+}
+impl Eq for Point with (PointEq)
+impl Copy for Point with (Marks)
+
+#[event]
+struct Moved { x: u256 }
+struct MovedEq {}
+impl Derive<trait Eq> for MovedEq {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: Moved) -> bool { self.x == other.x } }
+    }
+}
+impl Eq for Moved with (MovedEq)
+
+#[error]
+struct Refused { code: u256 }
+struct RefusedEq {}
+impl Derive<trait Eq> for RefusedEq {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: Refused) -> bool { self.code == other.code } }
+    }
+}
+impl Eq for Refused with (RefusedEq)
+
+msg Calls {
+    #[selector = 0x11111111]
+    Ping { v: u256 } -> u256,
+}
+struct PingEq {}
+impl Derive<trait Eq> for PingEq {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn eq(self, _ other: Calls::Ping) -> bool { self.v == other.v } }
+    }
+}
+impl Eq for Calls::Ping with (PingEq)
+
+#[test]
+fn an_abi_struct_compares_by_its_header() {
+    let a = Point { x: 1, y: 2 }
+    let b = Point { x: 1, y: 2 }
+    let c = Point { x: 1, y: 3 }
+    assert(a == b)
+    assert(!(a == c))
+}
+
+#[test]
+fn an_abi_struct_is_copied_by_its_header() {
+    let a = Point { x: 1, y: 2 }
+    let b = a
+    assert(a == b)
+}
+
+#[test]
+fn an_event_struct_compares_by_its_header() {
+    let a = Moved { x: 1 }
+    let b = Moved { x: 1 }
+    let c = Moved { x: 2 }
+    assert(a == b)
+    assert(!(a == c))
+}
+
+#[test]
+fn an_error_struct_compares_by_its_header() {
+    let a = Refused { code: 7 }
+    let b = Refused { code: 7 }
+    let c = Refused { code: 8 }
+    assert(a == b)
+    assert(!(a == c))
+}
+
+#[test]
+fn a_msg_variant_compares_by_its_header() {
+    let a = Calls::Ping { v: 5 }
+    let b = Calls::Ping { v: 5 }
+    let c = Calls::Ping { v: 6 }
+    assert(a == b)
+    assert(!(a == c))
+}

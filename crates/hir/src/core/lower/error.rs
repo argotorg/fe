@@ -354,6 +354,7 @@ fn create_selector_const<'db>(
     );
     let call_id = body_ctxt.push_expr(call, origin.clone());
 
+    let quote_origins = body_ctxt.take_quote_origins();
     let body = Body::new(
         db,
         id,
@@ -365,6 +366,7 @@ fn create_selector_const<'db>(
         body_ctxt.pats,
         body_ctxt.f_ctxt.top_mod(),
         body_ctxt.f_ctxt.lazy_func(),
+        quote_origins,
         body_ctxt.source_map,
         origin,
     );
@@ -376,6 +378,7 @@ fn create_selector_const<'db>(
         ty: Partial::Present(selector_ty),
         value: Partial::Present(body),
         vis: crate::hir_def::Visibility::Public,
+        generated: None,
     }
 }
 

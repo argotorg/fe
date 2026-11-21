@@ -1,0 +1,58 @@
+// An ingot that is built trusts its own code, including the unsafe code that
+// its own providers write in quotations.
+use core::abi::{load_word, store_word}
+use core::derive::{Derive, DeriveInherent}
+use core::meta::{Code, Item, Record}
+use core::ptr
+
+pub trait Reading {
+    fn read(self) -> u256
+}
+
+pub struct ReadsUnsafely {}
+
+impl Derive<trait Reading> for ReadsUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn read(self) -> u256 {
+                let p = ptr::alloc_bytes(32)
+                unsafe {
+                    store_word(ptr: p, value: 7)
+                    load_word(p)
+                }
+            }
+        }
+    }
+}
+
+pub struct WritesUnsafely {}
+
+impl DeriveInherent for WritesUnsafely {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn write(self) -> u256 {
+                let p = ptr::alloc_bytes(32)
+                unsafe {
+                    store_word(ptr: p, value: 9)
+                    load_word(p)
+                }
+            }
+        }
+    }
+}
+
+pub struct Header {}
+impl Reading for Header with (ReadsUnsafely)
+
+pub struct Generated {}
+impl Generated with (WritesUnsafely)
+
+#[test]
+fn own_header_member_runs_unsafe_code() {
+    assert!(Header {}.read() == 7)
+}
+
+#[test]
+fn own_generated_member_runs_unsafe_code() {
+    assert!(Generated {}.write() == 9)
+}

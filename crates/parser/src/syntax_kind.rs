@@ -80,6 +80,9 @@ pub enum SyntaxKind {
     /// `#`
     #[token("#")]
     Pound,
+    /// Scalar/typed splice introducer in a quotation.
+    #[token("$")]
+    Dollar,
     /// `// Comment`
     #[regex(r"//[^\n\r]*")]
     Comment,
@@ -281,6 +284,26 @@ pub enum SyntaxKind {
     BlockExpr,
     /// `|x: u8| -> u8 { x }`
     ClosureExpr,
+    /// Authored checked item template.
+    QuoteExpr,
+    /// `(other, ..)` open binder list on `quote`.
+    QuoteOpenList,
+    /// A provider expression embedded in a template.
+    QuoteHoleExpr,
+    /// `${ty}` splice in type position.
+    QuoteHoleType,
+    /// `${arms}` splice in match-arm position.
+    QuoteHoleArm,
+    /// `${pat}` splice in pattern position.
+    QuoteHolePat,
+    /// `${...}` splice for a member, declared name, item, or where predicate.
+    QuoteHole,
+    /// `{ item1\n item2\n .. }` inside a quote.
+    QuoteItemList,
+    /// `{ where T: Trait, .. }` inside a quote.
+    QuoteWhere,
+    /// A pattern-only quotation body.
+    QuotePat,
     /// `x + 1`
     BinExpr,
     /// `!x`
@@ -653,6 +676,17 @@ impl SyntaxKind {
             SyntaxKind::Byte => "byte literal",
             SyntaxKind::LParen => "`(`",
             SyntaxKind::RParen => "`)`",
+            SyntaxKind::Dollar => "`$`",
+            SyntaxKind::QuoteExpr => "quotation",
+            SyntaxKind::QuoteOpenList => "`quote` open name list",
+            SyntaxKind::QuoteHoleExpr => "quotation hole",
+            SyntaxKind::QuoteHoleType => "`${...}` type splice",
+            SyntaxKind::QuoteHoleArm => "`${...}` match-arm splice",
+            SyntaxKind::QuoteHolePat => "`${...}` pattern splice",
+            SyntaxKind::QuoteHole => "`${...}` splice",
+            SyntaxKind::QuoteItemList => "quoted items",
+            SyntaxKind::QuoteWhere => "quoted where predicates",
+            SyntaxKind::QuotePat => "quoted pattern",
             SyntaxKind::LBrace => "`{`",
             SyntaxKind::RBrace => "`}`",
             SyntaxKind::LBracket => "`[`",
@@ -919,6 +953,7 @@ impl SyntaxKind {
                 | SyntaxKind::Percent
                 | SyntaxKind::Tilde
                 | SyntaxKind::Not
+                | SyntaxKind::Dollar
                 | SyntaxKind::Hat
                 | SyntaxKind::Amp
                 | SyntaxKind::Amp2

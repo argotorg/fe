@@ -1,0 +1,34 @@
+// The same scopes with `u` trusted, and a `drop` written here that needs no trust.
+use core::ops::Drop
+use u::{WD, WE, mk_wd, mk_we, mk_wf}
+
+pub struct Holder { pub w: WE }
+
+#[test]
+fn drops_a_value_of_u() {
+    let d = mk_wd()
+    assert(true)
+}
+
+#[test]
+fn drops_a_value_that_holds_one() {
+    let h = Holder { w: mk_we() }
+    assert(true)
+}
+
+#[test]
+fn drops_an_array_of_values() {
+    let pair = [mk_wf(), mk_wf()]
+    assert(true)
+}
+
+pub struct Local {}
+impl Drop for Local {
+    fn drop(own self) {}
+}
+
+#[test]
+fn drops_a_value_with_a_drop_written_here() {
+    let l = Local {}
+    assert(true)
+}

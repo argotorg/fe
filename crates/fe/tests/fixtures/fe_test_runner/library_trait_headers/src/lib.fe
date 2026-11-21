@@ -1,0 +1,548 @@
+// A derive header, `impl Trait for Type with (Provider)`, implements a trait
+// of core or std when a provider supplies the members. The compiler then
+// reads those members as it reads a handwritten implementation's: drop glue
+// calls the provider's `drop`, the storage codec reads its `BITS`, and an
+// access calls its `locate`.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::derive::Derive
+use core::error::ErrorVariant
+use core::functional::{Fn, FnMut}
+use core::iter::{Bidirectional, Collection, Producer}
+use core::marker::{Copy, Pinned, Snapshot, Storage}
+use core::message::MsgVariant
+use core::meta::{Code, Item, Record}
+use core::ops::{Add, Drop, Eq, LaneCodec, Location, Ord, StateIndex}
+use core::ptr
+use std::abi::Sol
+use std::abi::sol::SolWordRepr
+use std::evm::{
+    Evm, RawStorage, SolArray, SolLanes, SolPacked, SolSlot, StorageKey, array_data_slot,
+}
+
+// ---- Drop ------------------------------------------------------------------
+
+struct CountDrops {}
+impl Derive<trait Drop> for CountDrops {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn drop(own self) {
+                unsafe { *self.counter += 1 }
+            }
+        }
+    }
+}
+
+struct Counted {
+    counter: *u256,
+}
+impl Drop for Counted with (CountDrops)
+
+fn consume(_ value: own Counted) {}
+
+#[test]
+fn drop_glue_runs_the_member_a_provider_wrote() {
+    let counter = ptr::alloc<u256>()
+    unsafe { *counter = 0 }
+    {
+        let _a = Counted { counter }
+        let b = Counted { counter }
+        consume(b)
+        assert(unsafe { *counter } == 1)
+    }
+    assert(unsafe { *counter } == 2)
+}
+
+// ---- Copy and Snapshot: markers, so the provider returns no members ---------
+
+struct Marks {}
+impl Derive<trait Copy> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {}
+    }
+}
+impl Derive<trait Snapshot> for Marks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {}
+    }
+}
+
+struct Dup {
+    v: u256,
+}
+impl Copy for Dup with (Marks)
+impl Snapshot for Dup with (Marks)
+
+fn use_twice(_ p: own Dup) -> u256 {
+    let a = p
+    var b = p
+    b.v = b.v + 10
+    a.v + b.v + p.v
+}
+
+#[test]
+fn a_copy_header_copies_the_value() {
+    assert(use_twice(Dup { v: 3 }) == 3 + 13 + 3)
+}
+
+// ---- Default and Clone: ordinary method traits -----------------------------
+
+struct Fill {}
+impl Derive<trait Default> for Fill {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn default() -> Self {
+                Seeded { v: 7 }
+            }
+        }
+    }
+}
+impl Derive<trait Clone> for Fill {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn clone(self) -> Self {
+                Seeded { v: self.v + 1 }
+            }
+        }
+    }
+}
+
+struct Seeded {
+    v: u256,
+}
+impl Default for Seeded with (Fill)
+impl Clone for Seeded with (Fill)
+
+#[test]
+fn default_and_clone_headers_supply_their_methods() {
+    let s = Seeded::default()
+    assert(s.v == 7)
+    assert(s.clone().v == 8)
+}
+
+// ---- SolPacked: the storage codec reads the provider's BITS -----------------
+
+struct Pack {}
+impl Derive<trait SolPacked> for Pack {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const BITS: u256 = 8
+            fn to_packed(own self) -> u256 { self.a }
+            fn from_packed(_ bits: u256) -> Byte { Byte { a: bits } }
+        }
+    }
+}
+
+struct Byte {
+    a: u256,
+}
+impl SolPacked for Byte with (Pack)
+
+struct Wide {
+    a: u256,
+}
+
+msg Pushes {
+    #[selector = 1]
+    Go -> (u256, u256),
+}
+
+fn read_slot(_ slot: u256) -> u256 uses (storage: mut RawStorage) {
+    unsafe { SolSlot::at(slot) }.read<u256>(offset: 0)
+}
+
+pub contract Packed uses (storage: mut RawStorage) {
+    mut bytes: SolArray<Byte>,
+
+    recv Pushes {
+        Go -> (u256, u256) uses (mut bytes, mut storage) {
+            bytes.push(Byte { a: 1 })
+            bytes.push(Byte { a: 2 })
+            (bytes[1].a, read_slot(array_data_slot(0)))
+        }
+    }
+}
+
+#[test]
+fn a_header_sol_packed_packs_stored_elements() uses (evm: mut Evm) {
+    assert(<SolLanes as LaneCodec<Wide>>::BITS == 256)
+    assert(<SolLanes as LaneCodec<Byte>>::BITS == 8)
+    let c = evm.create2<Packed>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Pushes::Go {})
+    assert!(r.0 == 2)
+    // Both elements share the first slot of the array's data.
+    assert!(r.1 == 0x0201)
+}
+
+// ---- Pinned and StateIndex: an access calls the provider's locate ----------
+
+struct PinStorage {}
+impl Derive<trait Pinned> for PinStorage {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Space = Storage
+        }
+    }
+}
+
+struct Spread {}
+impl Derive<trait StateIndex> for Spread {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Key = u256
+            type Entry = u256
+            fn locate(self, _ root: u256, _ key: u256) -> Location {
+                Location { slot: root + 100 + key, offset: 0 }
+            }
+        }
+    }
+}
+
+struct Cells {
+    len: u256,
+}
+impl Pinned for Cells with (PinStorage)
+unsafe impl StateIndex for Cells with (Spread)
+
+msg Places {
+    #[selector = 1]
+    Go -> (u256, u256),
+}
+
+pub contract Located uses (storage: mut RawStorage) {
+    mut cells: Cells,
+
+    recv Places {
+        Go -> (u256, u256) uses (mut cells, mut storage) {
+            cells[3] = 5
+            (cells[3], read_slot(103))
+        }
+    }
+}
+
+#[test]
+fn a_header_state_index_places_the_entry() uses (evm: mut Evm) {
+    let c = evm.create2<Located>(value: Wei::zero(), args: (), salt: 0)
+    let r: (u256, u256) = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: Places::Go {})
+    assert!(r.0 == 5)
+    assert!(r.1 == 5)
+}
+
+// ---- Producer: a loop runs the provider's members ---------------------------
+
+struct Doubling {}
+impl Derive<trait Producer> for Doubling {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Base = [u256; 3]
+            type State = usize
+            type Out = u256
+            fn start(self, _ base: [u256; 3]) -> usize { 0 }
+            fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+            fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+            fn produce(mut self, _ base: [u256; 3], _ s: usize) -> u256 {
+                Collection::at(base, s) * 2
+            }
+        }
+    }
+}
+
+struct Open {}
+impl Producer for Open with (Doubling)
+
+#[test]
+fn a_producer_header_drives_a_loop() {
+    let xs: [u256; 3] = [10, 20, 30]
+    var sum = 0
+    for x in xs.by(Open {}) {
+        sum += x
+    }
+    assert(sum == 120)
+}
+
+// ---- Eq, Ord and Add: traits whose parameter the header leaves at its default
+
+struct ByValue {}
+impl Derive<trait Eq> for ByValue {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn eq(self, _ other: Level) -> bool { self.v == other.v }
+        }
+    }
+}
+impl Derive<trait Ord> for ByValue {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn lt(self, _ other: Level) -> bool { self.v < other.v }
+            fn le(self, _ other: Level) -> bool { self.v <= other.v }
+            fn gt(self, _ other: Level) -> bool { self.v > other.v }
+            fn ge(self, _ other: Level) -> bool { self.v >= other.v }
+        }
+    }
+}
+impl Derive<trait Add> for ByValue {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn add(own self, _ other: own Level) -> Level { Level { v: self.v + other.v } }
+        }
+    }
+}
+
+struct Level {
+    v: u256,
+}
+impl Eq for Level with (ByValue)
+impl Ord for Level with (ByValue)
+impl Add for Level with (ByValue)
+
+#[test]
+fn eq_ord_and_add_headers_define_the_operators() {
+    let two = Level { v: 2 }
+    let also_two = Level { v: 2 }
+    let three = Level { v: 3 }
+    assert(two == also_two)
+    assert(two != three)
+    assert(two < three)
+    assert(three >= three)
+    assert((two + three).v == 5)
+}
+
+// ---- ErrorVariant<Sol>: a parameter written in the header --------------------
+
+struct Selector {}
+impl Derive<trait ErrorVariant<Sol>> for Selector {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const SELECTOR: u32 = 0x12345678
+        }
+    }
+}
+
+struct Failure {
+    code: u256,
+}
+impl AbiSize for Failure {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for Failure {
+    fn encode(self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.code)
+    }
+}
+impl ErrorVariant<Sol> for Failure with (Selector)
+
+fn fails() -> Result<Failure, u256> {
+    Err(Failure { code: 7 })
+}
+
+#[test(should_revert, selector = 0x12345678)]
+fn an_error_variant_header_prefixes_the_revert_data() uses (evm: mut Evm) {
+    let r = fails()
+    r.unwrap()
+}
+
+// ---- Traits that a provider cannot generate inside the package ------------------
+//
+// A generated implementation of `Collection`, `Bidirectional`, `AbiSize`,
+// `StorageKey` or `SolWordRepr` is refused, because core and std write
+// implementations of deciding traits bounded on them. The header is the
+// explicit request, and counts as written code.
+
+struct Walks {}
+impl Derive<trait Collection> for Walks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            type Cursor = usize
+            type Item = u256
+            fn start(self) -> usize { 0 }
+            fn has(self, _ c: usize) -> bool { c < 3 }
+            fn next(self, _ c: usize) -> usize { c + 1 }
+            fn at(mut? self, _ c: usize) -> mut? u256 { mut? self.v }
+        }
+    }
+}
+impl Derive<trait Bidirectional> for Walks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn last(self) -> usize { 2 }
+            fn prev(self, _ c: usize) -> usize { c.wrapping_sub(1) }
+        }
+    }
+}
+impl Derive<trait AbiSize> for Walks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const HEAD_SIZE: u256 = 32
+            const IS_DYNAMIC: bool = false
+        }
+    }
+}
+impl Derive<trait StorageKey> for Walks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn encoded_len(self) -> u256 { 32 }
+            unsafe fn write_key(ptr: *u8, self) { let _ = ptr }
+        }
+    }
+}
+impl Derive<trait SolWordRepr> for Walks {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const BITS: u256 = 8
+            fn canonical_word(self) -> u256 { self.v }
+        }
+    }
+}
+
+struct Triple {
+    v: u256,
+}
+impl Collection for Triple with (Walks)
+impl Bidirectional for Triple with (Walks)
+impl AbiSize for Triple with (Walks)
+impl StorageKey for Triple with (Walks)
+impl SolWordRepr for Triple with (Walks)
+
+#[test]
+fn collection_and_bidirectional_headers_drive_loops() {
+    let two = Triple { v: 2 }
+    let three = Triple { v: 3 }
+    var forward = 0
+    for x in two {
+        forward += x
+    }
+    var backward = 0
+    for x in three.reversed() {
+        backward += x
+    }
+    assert(forward == 6)
+    assert(backward == 9)
+}
+
+#[test]
+fn abi_size_storage_key_and_word_repr_headers_supply_their_members() {
+    assert(<Triple as AbiSize>::HEAD_SIZE == 32)
+    assert((Triple { v: 1 }).encoded_len() == 32)
+    assert((Triple { v: 5 }).canonical_word() == 5)
+}
+
+// ---- LaneCodec: an access reads and writes through the provider's lanes ----
+
+struct Lanes77 {}
+impl Derive<trait LaneCodec<u8>> for Lanes77 {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const BITS: u256 = 8
+            fn get(_ word: u256, offset: u256) -> u8 { 77 }
+            fn set(_ word: u256, offset: u256, value: own u8) -> u256 { word }
+        }
+    }
+}
+
+struct CellLanes {}
+impl LaneCodec<u8> for CellLanes with (Lanes77)
+
+struct Bytes {
+    len: u256,
+}
+impl Pinned for Bytes with (PinStorage)
+unsafe impl StateIndex for Bytes {
+    type Key = u256
+    type Entry = u8
+    type Lanes = CellLanes
+
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + 100 + key, offset: 0 }
+    }
+}
+
+msg ByteReads {
+    #[selector = 1]
+    Go -> u8,
+}
+
+pub contract Laned uses (storage: mut RawStorage) {
+    mut bytes: Bytes,
+
+    recv ByteReads {
+        Go -> u8 uses (mut bytes) {
+            bytes[3] = 5
+            bytes[3]
+        }
+    }
+}
+
+#[test]
+fn a_lane_codec_header_decides_how_an_entry_is_read() uses (evm: mut Evm) {
+    let c = evm.create2<Laned>(value: Wei::zero(), args: (), salt: 0)
+    let r: u8 = evm.call(addr: c, gas: 300000, value: Wei::zero(), message: ByteReads::Go {})
+    assert!(r == 77)
+}
+
+// ---- MsgVariant<Sol>: a parameter written in the header ----------------------
+
+struct Numbered {}
+impl Derive<trait MsgVariant<Sol>> for Numbered {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            const SELECTOR: u32 = 0x12345678
+            type Return = u256
+        }
+    }
+}
+
+struct Pong {
+    v: u256,
+}
+impl AbiSize for Pong {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for Pong {
+    fn encode(self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.v)
+    }
+}
+impl Decode<Sol> for Pong {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let _ = input
+        Pong { v: 0 }
+    }
+}
+impl MsgVariant<Sol> for Pong with (Numbered)
+
+#[test]
+fn a_msg_variant_header_supplies_the_selector() {
+    assert(<Pong as MsgVariant<Sol>>::SELECTOR == 0x12345678)
+}
+
+// ---- Fn and FnMut: the provider writes the signature the header asks for ----
+
+struct Calls {}
+impl Derive<trait Fn(u256) -> u256> for Calls {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn call(self, _ x: u256) -> u256 { x * 3 }
+        }
+    }
+}
+struct CallsMut {}
+impl Derive<trait FnMut(u256) -> u256> for CallsMut {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn call_mut(mut self, _ x: u256) -> u256 { x * 2 }
+        }
+    }
+}
+struct Scale3 {}
+impl Fn(u256) -> u256 for Scale3 with (Calls)
+struct Scale2 {}
+impl FnMut(u256) -> u256 for Scale2 with (CallsMut)
+
+#[test]
+fn fn_and_fn_mut_headers_answer_a_call() {
+    let triple = Scale3 {}
+    assert(triple(5) == 15)
+    var double = Scale2 {}
+    assert(double(5) == 10)
+}

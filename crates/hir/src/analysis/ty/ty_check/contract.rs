@@ -3,6 +3,7 @@
 //! This module contains functions for checking contract init bodies,
 //! recv blocks, and recv arm bodies.
 
+use crate::analysis::name_resolution::Tier;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{TypedBody, owner::BodyOwner};
@@ -14,7 +15,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{
-            ExpectedPathKind, PathRes, PathResError, diagnostics::PathResDiag, resolve_path,
+            ExpectedPathKind, PathRes, PathResError, diagnostics::PathResDiag,
             resolve_path_with_observer_and_minter,
         },
         semantic::{
@@ -23,7 +24,6 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
-            canonical::Canonical,
             const_ty::LoweringContext,
             corelib::resolve_core_trait,
             diagnostics::{
@@ -31,7 +31,6 @@ use crate::{
             },
             provider::AddressSpace,
             trait_def::TraitInstId,
-            trait_def::impls_for_ty,
             trait_resolution::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
@@ -43,7 +42,7 @@ use crate::{
             ty_error::{emit_invalid_ty_error, path_generic_arg_diags},
         },
     },
-    core::semantic::ValidatedFieldLayoutPlan,
+    core::semantic::{ValidatedFieldLayoutPlan, msg_variant_impl, resolve_sol_abi_ty},
     hir_def::{
         Body, Contract, ContractRecvArm, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId,
         PathKind, Struct, scope_graph::ScopeId,
@@ -51,46 +50,18 @@ use crate::{
     semantic::FieldView,
     span::{DynLazySpan, pat::LazyPatSpan, path::LazyPathSpan},
 };
-use common::ingot::IngotKind;
 
-/// Returns true if a struct implements the core MsgVariant trait.
-fn implements_msg_variant<'db>(db: &'db dyn HirAnalysisDb, struct_: Struct<'db>) -> bool {
-    let Some(msg_variant_trait) =
-        resolve_core_trait(db, struct_.scope(), &["message", "MsgVariant"])
-    else {
-        return false;
-    };
-
-    let adt_def = AdtRef::from(struct_).as_adt(db);
-    let ty = TyId::adt(db, adt_def);
-    let canonical_ty = Canonical::new(db, ty);
-    let ingot = struct_.top_mod(db).ingot(db);
-
-    impls_for_ty(db, ingot, canonical_ty)
-        .iter()
-        .any(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
-}
-
-fn resolve_sol_abi_ty<'db>(
+/// Returns true if `ty` implements the core MsgVariant trait for the ABI of
+/// the recv blocks.
+fn implements_msg_variant<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> Option<TyId<'db>> {
-    let ingot = scope.ingot(db);
-    let std_root = if ingot.kind(db) == IngotKind::Std {
-        IdentId::make_ingot(db)
-    } else {
-        IdentId::new(db, "std".to_string())
+    ty: TyId<'db>,
+) -> bool {
+    let Some(abi) = resolve_sol_abi_ty(db, scope, PredicateListId::empty_list(db)) else {
+        return false;
     };
-
-    let sol_path = PathId::from_ident(db, std_root)
-        .push_ident(db, IdentId::new(db, "abi".to_string()))
-        .push_ident(db, IdentId::new(db, "Sol".to_string()));
-
-    match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
-        _ => None,
-    }
+    msg_variant_impl(db, scope, ty, abi).is_some()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -154,7 +125,7 @@ fn check_recv_variant_param_types_decodable<'db>(
     let Some(decode_trait) = resolve_core_trait(db, contract.scope(), &["abi", "Decode"]) else {
         return;
     };
-    let solve_cx = TraitSolveCx::new(db, contract.scope()).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, contract.scope(), Tier::All).with_assumptions(assumptions);
 
     for field_ty in variant_ty.field_types(db) {
         check_ty_decodable(
@@ -180,7 +151,9 @@ fn msg_variants<'db>(
             ItemKind::Struct(s) => Some(s),
             _ => None,
         })
-        .filter(move |s| implements_msg_variant(db, *s))
+        .filter(move |s| {
+            implements_msg_variant(db, s.scope(), TyId::adt(db, AdtRef::from(*s).as_adt(db)))
+        })
 }
 
 /// The msg a recv block handles.
@@ -422,7 +395,7 @@ pub fn recv_arm_resolution<'db>(
     let Some(variant_struct) = ty
         .adt_def(db)
         .and_then(|adt_def| match adt_def.adt_ref(db) {
-            AdtRef::Struct(variant_struct) if implements_msg_variant(db, variant_struct) => {
+            AdtRef::Struct(variant_struct) if implements_msg_variant(db, contract.scope(), ty) => {
                 Some(variant_struct)
             }
             _ => None,
@@ -473,15 +446,16 @@ fn resolve_recv_path<'db>(
     let scope = contract.scope();
     let mut invisible = None;
     let mut applications = Vec::new();
-    let mut observe_segment = |segment: PathId<'db>, reso: &PathRes<'db>| {
-        applications.extend(constrained_applications(db, reso));
-        if invisible.is_none()
-            && segment.segment_index(db) >= offset
-            && !reso.is_visible_from(db, scope)
-        {
-            invisible = Some((segment, reso.name_span(db)));
-        }
-    };
+    let mut observe_segment =
+        |segment: PathId<'db>, reso: &PathRes<'db>, quoted_visibility: Option<bool>| {
+            applications.extend(constrained_applications(db, reso));
+            if invisible.is_none()
+                && segment.segment_index(db) >= offset
+                && !quoted_visibility.unwrap_or_else(|| reso.is_visible_from(db, scope))
+            {
+                invisible = Some((segment, reso.name_span(db)));
+            }
+        };
     let res = resolve_path_with_observer_and_minter(
         db,
         path,
@@ -641,6 +615,8 @@ pub fn check_contract_recv_blocks<'db>(
     // We use TyId to handle type aliases correctly.
     let mut seen_handlers = FxHashMap::<TyId<'db>, DynLazySpan<'db>>::default();
 
+    let abi = resolve_sol_abi_ty(db, contract.scope(), PredicateListId::empty_list(db));
+
     for (idx, recv) in contract.recvs(db).data(db).iter().enumerate() {
         let recv_span = contract.span().recv(idx);
 
@@ -712,10 +688,11 @@ pub fn check_contract_recv_blocks<'db>(
                 recv_span.clone().arms().arm(arm_idx).pat().into()
             };
 
-            // Check selector conflicts
-            if let Some(selector) =
-                eval_msg_variant_selector(db, variant.ty, contract.scope(), &mut diags)
-            {
+            // Check selector conflicts, among the selectors of the ABI that
+            // the blocks answer to
+            if let Some(selector) = abi.and_then(|abi| {
+                eval_msg_variant_selector(db, variant.ty, abi, contract.scope(), &mut diags)
+            }) {
                 check_selector_conflict(
                     selector,
                     variant.variant_struct,
@@ -787,23 +764,11 @@ fn check_handler_conflict<'db>(
 pub(crate) fn eval_msg_variant_selector<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
+    abi: TyId<'db>,
     scope: ScopeId<'db>,
     diags: &mut Vec<FuncBodyDiag<'db>>,
 ) -> Option<u32> {
-    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
-
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-    let impl_ = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.trait_def(db) == msg_variant_trait)
-            .copied()
-    })?;
+    let impl_ = msg_variant_impl(db, scope, variant_ty, abi)?;
 
     let selector_name = IdentId::new(db, "SELECTOR".to_string());
     let selector_const = impl_
@@ -1038,31 +1003,15 @@ pub fn check_contract_init_body<'db>(
     check_body(db, BodyOwner::ContractInit { contract })
 }
 
-/// Gets the Return type from a type's MsgVariant trait implementation.
-/// Specifically looks for the MsgVariant trait and returns `None` if no impl is found.
+/// Gets the Return type from a type's `MsgVariant<abi>` implementation.
+/// Returns `None` if the type has none for `abi`.
 pub(super) fn get_msg_variant_return_type<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_ty: TyId<'db>,
+    abi: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> Option<TyId<'db>> {
-    let msg_variant_trait = resolve_core_trait(db, scope, &["message", "MsgVariant"])?;
-
-    let canonical_ty = Canonical::new(db, variant_ty);
-    let scope_ingot = scope.ingot(db);
-    let search_ingots = [
-        Some(scope_ingot),
-        variant_ty.ingot(db).filter(|&ingot| ingot != scope_ingot),
-    ];
-
-    // Find the MsgVariant impl specifically, probing both:
-    // - the call-site ingot (for local traits implemented for external types), and
-    // - the receiver type's ingot (for external traits implemented in the type's ingot).
-    let msg_variant_impl = search_ingots.into_iter().flatten().find_map(|ingot| {
-        impls_for_ty(db, ingot, canonical_ty)
-            .iter()
-            .find(|impl_| impl_.trait_def(db).eq(&msg_variant_trait))
-            .copied()
-    })?;
+    let msg_variant_impl = msg_variant_impl(db, scope, variant_ty, abi)?;
 
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());
