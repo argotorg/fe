@@ -77,27 +77,33 @@ impl<A: Abi> RecordWriter<A> {
             remaining: fields,
         }
     }
+
+    #[inline(always)]
+    fn push<F: Encode<A> + AbiSize>(mut self, _ field: F) {
+        self.tails = encode_field<A, F>(field, self.out, head_pos: self.head, tails: self.tails)
+        self.remaining = self.remaining - 1
+        if self.remaining != 0 {
+            self.head = self.head + abi_field_head_size<F>()
+        }
+    }
 }
 
 #[inline(always)]
 fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
-    writer.tails = encode_field<A, F>(field, writer.out, head_pos: writer.head, tails: writer.tails)
-    writer.remaining = writer.remaining - 1
-    if writer.remaining != 0 {
-        writer.head = writer.head + abi_field_head_size<F>()
-    }
+    writer.push(field)
 }
 
 struct WriteField {}
 impl FieldInit for WriteField {
     const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
-        write_field(field)
+        quote(writer) { writer.push(self.${field}) }
     }
 }
 
-/// Write one field of `self` through the splice site's mutable `writer`.
+/// Write one field of `self` through the splice site's mutable `writer` when
+/// the splice is in a different provider module.
 /// Splice once per field counted by `RecordWriter::new`, in encoding order.
-pub(ingot) const fn write_field(_ field: Field) -> Code<Expr> {
+pub(ingot) const fn write_field_from_provider(_ field: Field) -> Code<Expr> {
     quote(writer) { push_record_field(mut writer, self.${field}) }
 }
 

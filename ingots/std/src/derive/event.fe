@@ -4,7 +4,7 @@ use core::meta::{Code, Expr, Item, Record, field, field_count, field_type, field
 use core::ptr::{MemBuffer, allocation_len}
 use ingot::abi::Sol
 use ingot::evm::{Event, Log, TopicValue}
-use super::abi::{RecordWriter, write_field}
+use super::abi::{RecordWriter, write_field_from_provider}
 
 /// Provides the log encoding of an authored event.
 pub struct StructEvent {}
@@ -37,7 +37,7 @@ impl Derive<trait Event> for StructEvent {
                 data_fields += 1
                 head = quote { ${head} + abi_field_head_size<${ty}>() }
                 payload = quote { ${payload} + dynamic_payload_size<${ty}>(self.${f}) }
-                let step = write_field(f)
+                let step = write_field_from_provider(f)
                 steps = quote(writer) {
                     {
                         ${steps}
