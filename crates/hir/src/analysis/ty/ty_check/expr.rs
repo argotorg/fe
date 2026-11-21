@@ -2782,14 +2782,16 @@ impl<'db> TyChecker<'db> {
             use super::super::trait_resolution::ChoiceEntry;
             let start = outer_choices.map_or(0, |outer| outer.items(self.db).len());
             let entries = &choices.items(self.db)[start..];
-            if entries
-                .iter()
-                .any(|entry| matches!(entry, ChoiceEntry::Provider(_)))
+            if entries.len() > 1
+                && entries
+                    .iter()
+                    .any(|entry| matches!(entry, ChoiceEntry::Provider(_)))
             {
                 use super::super::trait_resolution::generation::closed_offers;
 
                 let mut claimed = rustc_hash::FxHashMap::default();
                 let mut conflict = None;
+                let mut exhausted = None;
                 for &entry in entries {
                     let (families, provider) = match entry {
                         ChoiceEntry::Impl(choice) => (
@@ -2798,10 +2800,18 @@ impl<'db> TyChecker<'db> {
                                 choice.implementation().trait_inst(self.db),
                                 self.env.scope(),
                                 self.env.assumptions(),
-                            ),
+                            )
+                            .into_iter()
+                            .collect(),
                             false,
                         ),
-                        ChoiceEntry::Provider(opening) => (closed_offers(self.db, opening), true),
+                        ChoiceEntry::Provider(opening) => match closed_offers(self.db, opening) {
+                            Ok(families) => (families, true),
+                            Err(problem) => {
+                                exhausted = Some((opening, problem));
+                                break;
+                            }
+                        },
                     };
                     for family in families {
                         if let Some(previous_provider) = claimed.insert(family, provider)
@@ -2815,14 +2825,19 @@ impl<'db> TyChecker<'db> {
                         }
                     }
                 }
-                if let Some(message) = conflict {
-                    let opening = entries
-                        .iter()
-                        .find_map(|entry| match entry {
-                            ChoiceEntry::Provider(opening) => Some(*opening),
-                            ChoiceEntry::Impl(_) => None,
-                        })
-                        .expect("provider-containing group");
+                let refused = exhausted.or_else(|| {
+                    conflict.map(|message| {
+                        let opening = entries
+                            .iter()
+                            .find_map(|entry| match entry {
+                                ChoiceEntry::Provider(opening) => Some(*opening),
+                                ChoiceEntry::Impl(_) => None,
+                            })
+                            .expect("provider-containing group");
+                        (opening, message)
+                    })
+                });
+                if let Some((opening, message)) = refused {
                     self.env
                         .generation_demands
                         .refuse(opening.key(self.db).clone(), message);

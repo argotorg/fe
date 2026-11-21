@@ -1998,12 +1998,15 @@ fn finalized_derive_provider<'db>(
     .ok_or("missing canonical derive protocol")?;
     let args = match key {
         DeriveKey::Trait(goal) => {
-            use crate::analysis::ty::trait_resolution::{derive, generation};
-            let family = if requested_by_header {
-                derive::select_family(db, scope, assumptions, derive, provider_ty, goal)
+            use crate::analysis::ty::trait_resolution::derive::{
+                ProviderSearchBudget, select_family,
+            };
+            let budget = if requested_by_header {
+                ProviderSearchBudget::Written
             } else {
-                generation::select_derive_family(db, scope, assumptions, provider_ty, goal)
-            }?;
+                ProviderSearchBudget::Scoped
+            };
+            let family = select_family(db, scope, assumptions, derive, provider_ty, goal, budget)?;
             vec![provider_ty, family]
         }
         DeriveKey::Inherent(_) => vec![provider_ty],
@@ -2158,7 +2161,14 @@ pub fn freeze_generation_request<'db>(
     }
     let trait_args = trait_args
         .iter()
-        .map(|&arg| freeze_generic_arg(db, arg))
+        .map(|&arg| {
+            freeze_generic_arg(db, arg).map_err(|_| {
+                format!(
+                    "scoped derive cannot preserve trait argument `{}`. Use a written implementation header.",
+                    arg.pretty_print(db),
+                )
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if goal.def(db).ingot(db) != opening.scope(db).top_mod(db).ingot(db) {
         return Err(

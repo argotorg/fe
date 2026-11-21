@@ -215,7 +215,7 @@ fn variants_and_payloads_are_compared() {
 
 - `impl Type with (Provider)` adds inherent members. The provider implements `DeriveInherent`.
 - `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<trait Trait>`.
-- `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<trait Trait>`. The trait and the concrete target record must both be declared in the package that contains the block. If all scoped openings are inapplicable, ordinary lookup proceeds. A selected provider whose prerequisites fail reports an error.
+- `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<trait Trait>`. The trait and the concrete target record must both be declared in the package that contains the block. Lookup matches the complete trait application, including its arguments and defaults. Two providers in the same opening list that match one goal cause an ambiguity before either provider runs. If all scoped openings are inapplicable, ordinary lookup proceeds. A selected provider whose prerequisites fail reports an error.
 
 A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
@@ -427,9 +427,11 @@ The check also follows code that runs without a written call. A `Drop` implement
 
 ## What is refused
 
+- A scoped provider must return one function template. Use a written implementation header when a provider supplies multiple functions together.
 - A block for a trait of another package: ``a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)` ``.
 - A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
-- A provider whose trait family does not match the requested trait and its arguments.
+- Scoped derive also requires trait arguments that it can carry into the generated implementation. Use a written implementation header when a trait argument is itself a trait family, such as `Read<trait Mark>`.
+- A written header whose provider has no matching trait family.
 - A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that a bound of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
 - A header inside a function body: `a derive header inside a function body is not supported; declare the header in a module`.
 - A glob import, such as `use m::*`, in a block of a quotation: ``a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}` ``. An import that lists its names declares them in the quotation's block, as in a function body. Quotation content is checked when a request runs the provider. A quotation that no request reaches is never lowered.

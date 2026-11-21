@@ -3282,3 +3282,125 @@ const fn run() -> u256 {
         "{failure}"
     );
 }
+
+#[test]
+fn scoped_provider_search_limits_are_independent_of_registration_order() {
+    use std::fmt::Write;
+
+    for count in [128, 129] {
+        let mut declarations = String::new();
+        for key in 0..count {
+            writeln!(declarations, "struct Key{key} {{}}").unwrap();
+        }
+        for target_first in [true, false] {
+            let mut source = format!(
+                r#"
+use core::derive::Derive
+use core::meta::{{Code, Item, Record}}
+trait Read<K> {{ const fn read() -> usize }}
+struct Packet {{}}
+struct Provider {{}}
+{declarations}
+"#
+            );
+            for offset in 0..count {
+                let key = if target_first {
+                    offset
+                } else {
+                    (offset + 1) % count
+                };
+                writeln!(
+                    source,
+                    r#"impl Derive<trait Read<Key{key}>> for Provider {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn read() -> usize {{ {value} }} }}
+    }}
+}}"#,
+                    value = if key == 0 { 9 } else { 7 },
+                )
+                .unwrap();
+            }
+            if count == 129 && target_first {
+                let small = r#"
+struct Small {}
+impl Derive<trait Read<Key0>> for Small {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn read() -> usize { 7 } }
+    }
+}
+"#;
+                for order in ["Small, Provider", "Provider, Small"] {
+                    let idle = format!(
+                        "{source}{small}\nconst fn idle() -> usize {{ with ({order}) {{ 0 }} }}"
+                    );
+                    let (db, file) = input(&idle);
+                    let Err(error) = prepare_file(&db, file) else {
+                        panic!("expected refusal for incomplete eager comparison");
+                    };
+                    assert!(
+                        error
+                            .cause
+                            .contains("derive provider search exceeded its work limit"),
+                        "{error:?}"
+                    );
+                    let binding = usize::from(error.range.start())..usize::from(error.range.end());
+                    assert_eq!(&idle[binding], "Provider");
+                }
+            }
+            source.push_str(
+                r#"
+impl Read<Key0> for Packet { const fn read() -> usize { 1 } }
+const fn run() -> usize {
+    with (Provider) { <Packet as Read<Key0>>::read() }
+}
+"#,
+            );
+            if count == 128 {
+                assert_eq!(eval_const_fn_u256(&prepare(&source).unwrap(), "run"), "9");
+            } else {
+                let cause = prepare_err(&source);
+                assert!(
+                    cause.contains("derive provider search exceeded its work limit"),
+                    "{cause}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unsupported_scoped_trait_arguments_point_to_written_headers() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Mark {}
+trait Read<F: * -> Constraint> { const fn read() -> usize }
+struct Packet {}
+struct Recipe {}
+impl Derive<trait Read<trait Mark>> for Recipe {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn read() -> usize { 9 } }
+    }
+}
+impl Read<trait Mark> for Packet { const fn read() -> usize { 1 } }
+const fn run() -> usize {
+    with (Recipe) { <Packet as Read<trait Mark>>::read() }
+}
+"#;
+    let cause = prepare_err(source);
+    assert!(
+        cause.contains("scoped derive cannot preserve trait argument")
+            && cause.contains("Use a written implementation header."),
+        "{cause}"
+    );
+    let written = source
+        .replace(
+            "impl Read<trait Mark> for Packet { const fn read() -> usize { 1 } }",
+            "impl Read<trait Mark> for Packet with (Recipe)",
+        )
+        .replace(
+            "with (Recipe) { <Packet as Read<trait Mark>>::read() }",
+            "<Packet as Read<trait Mark>>::read()",
+        );
+    assert_eq!(eval_const_fn_u256(&prepare(&written).unwrap(), "run"), "9");
+}
