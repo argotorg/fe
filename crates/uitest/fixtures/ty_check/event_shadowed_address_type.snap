@@ -3,9 +3,9 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/event_shadowed_address_type.fe
 ---
-1103..1123: generated output admission failed: trait bound is not satisfied; `Address` doesn't implement `TopicValue`
+1130..1150: generated output admission failed: trait bound is not satisfied; `Address` doesn't implement `TopicValue`
 error[6-0003]: trait bound is not satisfied
-   ┌─ src/derive/event.fe:26:37
+   ┌─ src/derive/event.fe:27:37
    │
-26 │                 let topic = quote { self.${f}.as_topic() }
+27 │                 let topic = quote { self.${f}.as_topic() }
    │                                     ^^^^^^^^^^^^^^^^^^^^ `Address` doesn't implement `TopicValue`

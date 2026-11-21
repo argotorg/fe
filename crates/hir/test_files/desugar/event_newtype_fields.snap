@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/desugar.rs
+source: crates/hir/tests/frontend/desugar.rs
 expression: output
 input_file: test_files/desugar/event_newtype_fields.fe
 ---
@@ -25,16 +25,13 @@ impl std::evm::Event for Swap {
         let out = unsafe {
             AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
         }
-        var head_pos: u256 = 0
-        var tails = out.tail(head)
+        var writer = RecordWriter<Sol>::new(out, head_size: head, fields: 2 as usize)
         {
             {
                 ()
-                tails = encode_field<Sol, Int24>(self.tick, out, head_pos: head_pos, tails: tails)
-                head_pos = head_pos + abi_field_head_size<Int24>()
+                push_record_field(mut writer, self.tick)
             }
-            tails = encode_field<Sol, u256>(self.amount, out, head_pos: head_pos, tails: tails)
-            head_pos = head_pos + abi_field_head_size<u256>()
+            push_record_field(mut writer, self.amount)
         }
         let data = buffer.span()
         log.log2(data: data, topic0: Self::TOPIC0, topic1: self.sender.as_topic())

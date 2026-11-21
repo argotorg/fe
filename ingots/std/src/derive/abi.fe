@@ -153,9 +153,12 @@ impl<A: Abi> Derive<trait Encode<A>> for StructAbiEncode {
         quote(writer) {
             #[inline(always)]
             fn encode(self, _ out: AbiFrame) {
-                var writer = RecordWriter<${abi}>::new(
-                    out, head_size: <Self as AbiSize>::HEAD_SIZE, fields: ${count},
-                )
+                var writer: RecordWriter<${abi}> = RecordWriter {
+                    out: out.tail(0),
+                    tails: out.tail(<Self as AbiSize>::HEAD_SIZE),
+                    head: 0,
+                    remaining: ${count},
+                }
                 ${steps}
             }
         }
