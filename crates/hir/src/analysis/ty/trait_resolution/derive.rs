@@ -14,8 +14,8 @@ use super::{
         ty_def::{TyData, TyFlags, TyId},
         unify::UnificationTable,
     },
-    PredicateListId, TraitSolveCx,
-    table_solver::{match_header_args, match_header_type},
+    PredicateListId,
+    table_solver::match_header_type,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
