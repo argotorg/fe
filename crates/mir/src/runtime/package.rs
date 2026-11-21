@@ -1,11 +1,12 @@
 use common::{compilation::Target, indexmap::IndexMap, ingot::IngotKind};
 use hir::analysis::ty::AddressSpace;
-use hir::semantic::{RecvArmAbiInfo, RecvArmView};
+use hir::semantic::{RecvArmAbiInfo, RecvArmInput, RecvArmView};
 use hir::{
     analysis::{
         semantic::{
             ManualContractSection, RootSemanticInstanceError, SemanticInstance,
-            generated_callee_key, root_semantic_instance_key, same_owner_effect_binding,
+            SemanticInstanceKey, generated_callee_key, root_semantic_instance_key,
+            same_owner_effect_binding,
         },
         ty::{
             const_ty::ConstTyData,
@@ -1423,17 +1424,32 @@ fn contract_recv_wrapper<'db>(
         RuntimeInputPlan::None
     } else {
         let host = host.clone().expect("non-unit recv args require a host");
-        RuntimeInputPlan::DecodeHostPayload {
-            msg_ty: abi_info.args_ty,
-            decode_args_fn: resolve_decode_runtime_args_instance(
-                db,
-                contract.scope(),
-                host.declared_ty,
-                host.class.clone(),
-                abi_info.args_ty,
-            )?,
-            host,
-            projected_fields,
+        match arm.input(db).clone().map_err(LowerError::Unsupported)? {
+            RecvArmInput::None => RuntimeInputPlan::None,
+            RecvArmInput::Whole { decode } => RuntimeInputPlan::DecodeHostPayload {
+                msg_ty: abi_info.args_ty,
+                decode_args_fn: host_entry_instance(db, decode, &host),
+                host,
+                projected_fields,
+            },
+            RecvArmInput::InPlace { args, reads } => {
+                let reads = reads
+                    .into_iter()
+                    .map(|(index, key)| {
+                        (
+                            index,
+                            runtime_instance_for_semantic(db, SemanticInstance::new(db, key)),
+                        )
+                    })
+                    .collect();
+                RuntimeInputPlan::ReadHostPayloadInPlace {
+                    msg_ty: abi_info.args_ty,
+                    args_fn: host_entry_instance(db, args, &host),
+                    reads,
+                    host,
+                    projected_fields,
+                }
+            }
         }
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
@@ -2107,40 +2123,21 @@ fn resolve_decode_instance<'db>(
     )
 }
 
-fn resolve_decode_runtime_args_instance<'db>(
+/// The instance `key` that a dispatcher calls with the host of a recv arm as
+/// its first parameter: the instance with the host's class for parameter 0.
+fn host_entry_instance<'db>(
     db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    host_ty: TyId<'db>,
-    host_class: RuntimeClass<'db>,
-    msg_ty: TyId<'db>,
-) -> Result<RuntimeInstance<'db>, LowerError> {
-    let func = resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
-        .ok_or_else(|| {
-            LowerError::Unsupported(
-                "missing required core::contracts::decode_runtime_args".to_string(),
-            )
-        })?;
-    let key = generated_callee_key(
-        db,
-        scope,
-        PredicateListId::empty_list(db),
-        func,
-        None,
-        &[host_ty, sol_abi_ty(db, scope)?, msg_ty],
-    )
-    .map_err(|error| generated_call_error(db, func, error))?;
+    key: SemanticInstanceKey<'db>,
+    host: &TargetRootProviderBinding<'db>,
+) -> RuntimeInstance<'db> {
     let semantic = SemanticInstance::new(db, key);
-    Ok(runtime_instance_for_semantic_with_visible_param_overrides(
-        db,
-        semantic,
-        |entry| {
-            if matches!(entry.binding, LocalBinding::Param { idx: 0, .. }) {
-                Some(host_class.clone())
-            } else {
-                None
-            }
-        },
-    ))
+    runtime_instance_for_semantic_with_visible_param_overrides(db, semantic, |entry| {
+        if matches!(entry.binding, LocalBinding::Param { idx: 0, .. }) {
+            Some(host.class.clone())
+        } else {
+            None
+        }
+    })
 }
 
 /// The instance of `inst`'s `method` an EVM contract entry calls.
@@ -2632,6 +2629,26 @@ fn runtime_input_plan_key<'db>(
             type_identity(db, *msg_ty),
             target_root_provider_binding_sort_key(db, host),
             runtime_instance_key_in_mode(db, *decode_args_fn, mode),
+            projected_fields_sort_key(projected_fields),
+        ),
+        RuntimeInputPlan::ReadHostPayloadInPlace {
+            msg_ty,
+            host,
+            args_fn,
+            reads,
+            projected_fields,
+        } => format!(
+            "in_place:{}:{}:{}:[{}]:[{}]",
+            type_identity(db, *msg_ty),
+            target_root_provider_binding_sort_key(db, host),
+            runtime_instance_key_in_mode(db, *args_fn, mode),
+            reads
+                .iter()
+                .map(|(index, read)| {
+                    format!("{index}:{}", runtime_instance_key_in_mode(db, *read, mode))
+                })
+                .collect::<Vec<_>>()
+                .join(","),
             projected_fields_sort_key(projected_fields),
         ),
     }
@@ -3126,15 +3143,24 @@ pub fn main() -> i32 {
         filter: Option<&str>,
         f: impl for<'db> FnOnce(&'db DriverDataBase, RuntimePackage<'db>) -> T,
     ) -> T {
-        let mut db = DriverDataBase::default();
         let file_url = Url::parse(&format!("file:///{file_name}")).unwrap();
-        let file = db
-            .workspace()
-            .touch(&mut db, file_url, Some(source.to_string()));
+        let (db, file) = prepare_test_file(&file_url, source);
         let top_mod = db.top_mod(file);
         let package =
             build_test_runtime_package(&db, &[top_mod], filter).expect("test package should build");
         f(&db, package)
+    }
+
+    fn prepare_test_file(file_url: &Url, source: &str) -> (DriverDataBase, common::file::File) {
+        let mut db = DriverDataBase::default();
+        let file = db
+            .workspace()
+            .touch(&mut db, file_url.clone(), Some(source.to_string()));
+        let db = driver::generation::prepare_file(&db, file)
+            .expect("prepare fixture")
+            .unwrap_or(db);
+        let file = db.workspace().get(&db, file_url).expect("prepared fixture");
+        (db, file)
     }
 
     #[test]
@@ -3494,14 +3520,11 @@ fn selected() {}
 
     #[test]
     fn contract_recv_wrapper_projects_only_runtime_visible_fields_in_runtime_order() {
-        let mut db = DriverDataBase::default();
         let file_url =
             Url::parse("file:///contract_recv_wrapper_projects_visible_fields.fe").unwrap();
-        db.workspace().touch(
-            &mut db,
-            file_url.clone(),
-            Some(
-                r#"
+        let (db, file) = prepare_test_file(
+            &file_url,
+            r#"
 use std::abi::sol
 
 msg DecodeMsg {
@@ -3517,14 +3540,8 @@ pub contract DecodeHarness {
         Swap { b, a } -> u64 { a }
     }
 }
-"#
-                .to_string(),
-            ),
+"#,
         );
-        let file = db
-            .workspace()
-            .get(&db, &file_url)
-            .expect("file should be loaded");
         let top_mod = db.top_mod(file);
 
         let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
@@ -3550,6 +3567,64 @@ pub contract DecodeHarness {
             projected_fields.as_ref(),
             &[1, 0],
             "recv wrapper must forward decoded fields in runtime-visible binding order, not tuple order"
+        );
+    }
+
+    #[test]
+    fn contract_recv_in_place_plan_reads_forwarded_fields_in_binding_order() {
+        let file_url = Url::parse("file:///contract_recv_in_place_plan.fe").unwrap();
+        let (db, file) = prepare_test_file(
+            &file_url,
+            r#"
+use std::abi::sol
+
+msg DecodeMsg {
+    #[selector = sol("raw(uint256)")]
+    Raw { value: u256 } -> u256,
+    #[selector = sol("swap(uint64,uint64)")]
+    Swap { a: u64, b: u64 } -> u64,
+}
+
+pub contract InPlaceHarness {
+    recv DecodeMsg {
+        Raw { value: _ } -> u256 { 0 }
+        Swap { ref b, a } -> u64 { a }
+    }
+}
+"#,
+        );
+        let top_mod = db.top_mod(file);
+
+        let swap_plan = recv_wrapper_plan(&db, top_mod, "swap(uint64,uint64)");
+        let RuntimeInputPlan::ReadHostPayloadInPlace {
+            projected_fields,
+            reads,
+            ..
+        } = swap_plan.input
+        else {
+            panic!("swap(uint64,uint64) names a field with `ref` and should read in place");
+        };
+        assert_eq!(
+            projected_fields.as_ref(),
+            &[1, 0],
+            "the reads follow the runtime-visible binding order, not the tuple order"
+        );
+        assert_eq!(
+            reads.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            [1, 0],
+            "named fields are read in source pattern order"
+        );
+
+        let raw_plan = recv_wrapper_plan(&db, top_mod, "raw(uint256)");
+        let RuntimeInputPlan::DecodeHostPayload {
+            projected_fields, ..
+        } = raw_plan.input
+        else {
+            panic!("raw(uint256) names no field with `ref` and should decode the whole message");
+        };
+        assert!(
+            projected_fields.is_empty(),
+            "an ignored field is not forwarded: {projected_fields:?}"
         );
     }
 

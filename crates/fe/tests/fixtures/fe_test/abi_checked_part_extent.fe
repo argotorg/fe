@@ -1,0 +1,111 @@
+use core::abi::{Abi, AbiSize, ByteInput, ByteSource, BytesView, DynString, load_word, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::{AbiFields, Bytes, DynArray, Encoded, Part, PartHead, Sol, decode_part_at, record_part}
+
+struct StrictSource { ptr: *u8, len: u64, size_reads: *u8 }
+impl Copy for StrictSource {}
+impl StrictSource {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+
+impl ByteSource for StrictSource {
+    fn size(self) -> u64 {
+        unsafe { store_word(ptr: self.size_reads, value: load_word(self.size_reads) + 1) }
+        self.len
+    }
+    fn word_at(self, _ offset: u256) -> u256 {
+        assert!(offset <= self.len as u256 && 32 <= self.len as u256 - offset)
+        self.span().word_at(offset)
+    }
+    fn byte_at(self, _ offset: u256) -> u8 {
+        assert!(offset < self.len as u256)
+        self.span().byte_at(offset.downcast_unchecked())
+    }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+#[abi]
+struct GeneratedRecord {
+    payload: Bytes,
+    text: DynString,
+}
+
+struct HandwrittenRecord {
+    payload: Bytes,
+    text: DynString,
+}
+
+impl AbiSize for HandwrittenRecord {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = true
+}
+impl AbiFields for HandwrittenRecord {}
+impl<I: ByteInput + Copy, A: Abi> Part<I, A> for HandwrittenRecord {
+    type Of = Encoded<I, HandwrittenRecord, A>
+    fn read(_ part: PartHead<I, HandwrittenRecord>) -> Encoded<I, HandwrittenRecord, A> {
+        record_part(part)
+    }
+}
+
+fn counting_input(_ words: [u256; 7], len: u64) -> StrictSource {
+    let ptr = ptr::alloc_bytes(224)
+    for i in 0..7 {
+        unsafe {
+            store_word(ptr: ptr::offset_bytes(ptr, i * 32), value: words[i])
+        }
+    }
+    let size_reads = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: size_reads, value: 0) }
+    StrictSource { ptr, len, size_reads }
+}
+
+#[test]
+fn each_root_payload_observes_its_source_once() {
+    let input = counting_input([32, 1, 0xab << 248, 0, 0, 0, 0], len: 65)
+    let bytes = decode_part_at<Sol, Bytes, StrictSource>(input, base: 0, head_pos: 0)
+    assert!(bytes.byte_at(0) == 0xab)
+    assert!(unsafe { load_word(input.size_reads) } == 1)
+    let text = decode_part_at<Sol, DynString, StrictSource>(input, base: 0, head_pos: 0)
+    assert!(text.bytes.byte_at(0) == 0xab)
+    assert!(unsafe { load_word(input.size_reads) } == 2)
+}
+
+#[test]
+fn generated_record_two_fields_share_the_root_length() {
+    let input = counting_input([32, 64, 128, 1, 0xab << 248, 1, 0x63 << 248], len: 193)
+    let record = decode_part_at<Sol, GeneratedRecord, StrictSource>(input, base: 0, head_pos: 0)
+    assert!(record.payload.byte_at(0) == 0xab)
+    assert!(record.text.bytes.byte_at(0) == 0x63)
+    assert!(unsafe { load_word(input.size_reads) } == 1)
+}
+
+#[test]
+fn handwritten_record_two_fields_share_the_root_length() {
+    let input = counting_input([32, 64, 128, 1, 0xab << 248, 1, 0x63 << 248], len: 193)
+    let record = decode_part_at<Sol, HandwrittenRecord, StrictSource>(input, base: 0, head_pos: 0)
+    assert!(record.payload.byte_at(0) == 0xab)
+    assert!(record.text.bytes.byte_at(0) == 0x63)
+    assert!(unsafe { load_word(input.size_reads) } == 1)
+}
+
+#[test]
+fn array_element_shares_the_root_length() {
+    let input = counting_input([32, 1, 32, 1, 0xab << 248, 0, 0], len: 129)
+    let array = decode_part_at<Sol, DynArray<Bytes>, StrictSource>(input, base: 0, head_pos: 0)
+    assert!(array[0].byte_at(0) == 0xab)
+    assert!(unsafe { load_word(input.size_reads) } == 1)
+}
+
+#[test]
+fn direct_view_observes_length_once_and_checks_the_range() {
+    let input = counting_input([0, 0, 0, 0, 0, 0, 0], len: 1)
+    assert!(BytesView::try_new(input, start: 2, len: 0).is_none())
+    assert!(unsafe { load_word(input.size_reads) } == 1)
+    let empty = BytesView::try_new(input, start: 1, len: 0).unwrap()
+    assert!(empty.is_empty())
+    assert!(unsafe { load_word(input.size_reads) } == 2)
+}

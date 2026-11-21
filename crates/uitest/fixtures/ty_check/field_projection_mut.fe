@@ -1,0 +1,36 @@
+// The handle's projection yields read accesses only: a write or a `mut`
+// access of a projected field needs `mut ProjectField`, which it lacks.
+use core::ops::{Field, Project, ProjectField}
+
+pub struct View<T> {
+    base: u256,
+}
+
+impl<T> Copy for View<T> {}
+
+impl<T> Project for View<T> {
+    type Target = T
+}
+
+impl<T, F, B> ProjectField<Field<T, F, B>> for View<T> {
+    type Output = u256
+
+    fn project(self) -> ref u256 {
+        self.base
+    }
+}
+
+pub struct Rec {
+    pub a: u256,
+    pub b: u256,
+}
+
+fn write(_ v: View<Rec>) {
+    var w = v
+    w.b = 5
+}
+
+fn borrow(_ v: View<Rec>) {
+    var w = v
+    let _m = mut w.b
+}

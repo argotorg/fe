@@ -129,6 +129,8 @@ fn emit_standalone_trace_bundle(
     let file = db
         .workspace()
         .update(&mut db, file_url.clone(), content.clone());
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .map_err(|error| format!("cannot trace {input_path}: {error}"))?;
     let top_mod = db.top_mod(file);
     ensure_target_compiles(
         &db,
@@ -205,6 +207,8 @@ fn emit_ingot_trace_bundle(
             "{dir_path} is a workspace root; pass a member directory or member name instead"
         ));
     }
+    driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
+        .map_err(|error| format!("cannot trace {dir_path}: {error}"))?;
     let Some(ingot) = db.workspace().containing_ingot(&db, ingot_url.clone()) else {
         return Err(format!("no ingot found at {dir_path}"));
     };
@@ -354,6 +358,16 @@ fn render_json<T: Serialize>(value: &T) -> Result<String, String> {
 mod tests {
     use super::*;
     use dir_test::{Fixture, dir_test};
+
+    #[test]
+    fn trace_compiles_generated_message_codecs() {
+        let fixture =
+            Utf8PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bench_fixtures/bitwise_u256.fe");
+        let bundle = emit_real_trace_bundle(&fixture, true, "dev", codegen::OptLevel::O0)
+            .expect("trace uses the prepared message codecs");
+        let snapshot = TraceSnapshot::new(bundle).expect("generated codecs produce valid facts");
+        assert!(snapshot.validation().summary.instruction_count > 0);
+    }
 
     #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/trace", glob: "shared_init_runtime.fe")]
     fn shared_init_runtime_function_has_unique_backend_facts(fixture: Fixture<&str>) {

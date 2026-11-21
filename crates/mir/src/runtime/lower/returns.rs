@@ -1722,6 +1722,8 @@ pub contract C {
             .workspace()
             .get(&db, &file_url)
             .expect("file should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let package = build_runtime_package(&db, top_mod).expect("runtime package");
         let function = package

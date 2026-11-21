@@ -10,6 +10,8 @@ pub type Vec<T> = DynArray<T>
 pub use sol::{self, *}
 pub use dyn_array::{DynArray, canonical_dyn_array, dyn_array_from}
 pub use array_view::{ArrayView, decode_array_view, decode_array_view_at}
+pub use encoded::{AbiFields, Encoded, HeadsBefore, Part, PartHead, Sequence, decode_part_at, decode_record_at, decode_record_from, message_args, message_field, message_part, record_part}
+pub use record_view::{FieldKey, Keys, RecordView, decode_record_view, decode_record_view_at, decode_record_view_from, keys}
 
 use core::ptr
 use core::abi::store_word

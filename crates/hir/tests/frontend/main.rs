@@ -1,3 +1,6 @@
+#[path = "../common/prepared_fixture.rs"]
+mod prepared_fixture;
+
 mod arithmetic_attr;
 mod attr_semantics;
 mod body_references;

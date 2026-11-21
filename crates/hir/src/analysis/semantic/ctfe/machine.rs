@@ -57,6 +57,11 @@ use super::{
     service::force_const_term_value_with_steps,
 };
 
+/// The refusal of `core::meta::construct` when `FieldInit::init` gives no
+/// expression for a field.
+const EMPTY_FIELD_INITIALIZER: &str =
+    "construct requires an expression for every field; FieldInit::init returned an empty fragment";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
 pub struct CtfeConfig {
     pub step_limit: usize,
@@ -1902,9 +1907,13 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 | CtfeExternIntrinsic::MetaTypeIs
                 | CtfeExternIntrinsic::MetaField
                 | CtfeExternIntrinsic::MetaFieldType
+                | CtfeExternIntrinsic::MetaFieldTypes
                 | CtfeExternIntrinsic::MetaTypeRef
+                | CtfeExternIntrinsic::MetaFieldIsIndexed
                 | CtfeExternIntrinsic::MetaBinders
                 | CtfeExternIntrinsic::MetaBinderAt
+                | CtfeExternIntrinsic::MetaConstruct
+                | CtfeExternIntrinsic::MetaForEachField
                 | CtfeExternIntrinsic::MetaQueryField
                 | CtfeExternIntrinsic::MetaEmpty),
             ) => {
@@ -2154,6 +2163,65 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     })?;
                 Ok(CtfeConstValue::concrete(self.db, verified))
             }
+            CtfeExternIntrinsic::MetaFieldTypes => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(record),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field_types requires a compiler-issued Record".into(),
+                    }
+                    .into());
+                };
+                let ty =
+                    record
+                        .field_type_tree(self.db)
+                        .map_err(|_| CtfeError::InvalidOperation {
+                            origin,
+                            message: "field_types requires a struct or a selected enum payload"
+                                .into(),
+                        })?;
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::Meta {
+                        ty: result_ty,
+                        value: crate::core::meta::MetaValue::FieldTypes {
+                            ty,
+                            record: *record,
+                        },
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
+            }
+            CtfeExternIntrinsic::MetaFieldIsIndexed => {
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Field(field),
+                    ..
+                } = value.value(self.db)
+                else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "field_is_indexed requires a compiler-issued Field".into(),
+                    }
+                    .into());
+                };
+                Ok(CtfeConstValue::bool(field.is_event_indexed(self.db)))
+            }
             CtfeExternIntrinsic::MetaBinders => {
                 let [arg, group] = args else {
                     return Err(CtfeError::NotConstEvaluable { origin }.into());
@@ -2350,8 +2418,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .into());
                 }
                 let scope = field.record().scope();
-                let assumptions =
-                    crate::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
                 let field_query_trait = crate::analysis::ty::corelib::resolve_core_trait(
                     self.db,
                     scope,
@@ -2361,99 +2427,158 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     origin,
                     message: "missing core::meta::FieldQuery trait".into(),
                 })?;
-                let goal = crate::analysis::ty::trait_def::TraitInstId::new_simple(
-                    self.db,
+                let callee = self.checked_reflection_callee(
+                    scope,
                     field_query_trait,
                     vec![applied, *query_result],
-                );
-                let evaluate_ident = crate::hir_def::IdentId::new(self.db, "evaluate".to_string());
-                let evaluate_func = field_query_trait
-                    .method_defs(self.db)
-                    .get(&evaluate_ident)
-                    .copied()
-                    .ok_or_else(|| CtfeError::InvalidOperation {
-                        origin,
-                        message: "query_field requires a FieldQuery::evaluate declaration".into(),
-                    })?;
-                let callee_key = crate::analysis::semantic::generated_callee_key(
-                    self.db,
-                    scope,
-                    assumptions,
-                    evaluate_func,
-                    Some(goal),
-                    &[],
-                )
-                .map_err(|_| CtfeError::InvalidOperation {
+                    "evaluate",
+                    "query_field",
                     origin,
-                    message: "query_field requires a satisfied FieldQuery::evaluate implementation"
-                        .into(),
-                })?;
-                let BodyOwner::Func(evaluate_func, _) = callee_key.owner(self.db) else {
+                )?;
+                self.eval_reflection_callee(callee, vec![], origin)
+            }
+            CtfeExternIntrinsic::MetaConstruct | CtfeExternIntrinsic::MetaForEachField => {
+                use crate::core::meta::RecordFieldOutput;
+                let output = match kind {
+                    CtfeExternIntrinsic::MetaConstruct => RecordFieldOutput::Value,
+                    _ => RecordFieldOutput::Statements,
+                };
+                let operation = output.operation();
+                let empty_initializer = || {
+                    if output == RecordFieldOutput::Value {
+                        EMPTY_FIELD_INITIALIZER.into()
+                    } else {
+                        "for_each_field requires an expression for every field; FieldInit::init returned an empty fragment".into()
+                    }
+                };
+                let [arg] = args else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                let value = arg.materialize(self.db);
+                let SemConstValue::Meta {
+                    value: crate::core::meta::MetaValue::Record(input),
+                    ..
+                } = value.value(self.db)
+                else {
                     return Err(CtfeError::InvalidOperation {
                         origin,
-                        message: "query_field requires a function body".into(),
+                        message: format!("{operation} requires a compiler-issued Record"),
                     }
                     .into());
                 };
-                if !evaluate_func.is_const(self.db) {
-                    return Err(CtfeError::NonConstCall { origin }.into());
-                }
-                let callee_instance = self.instance_for_key(callee_key);
-                let mut pending_access = vec![callee_key];
-                let mut seen_access = rustc_hash::FxHashSet::default();
-                while let Some(check_key) = pending_access.pop() {
-                    if !seen_access.insert(check_key) {
-                        continue;
-                    }
-                    if let BodyOwner::Func(f, _) = check_key.owner(self.db)
-                        && crate::analysis::ty::ty_check::check_func_body(self.db, f)
-                            .0
-                            .iter()
-                            .any(|diagnostic| {
-                                diagnostic.severity() == common::diagnostics::Severity::Error
-                            })
-                    {
-                        return Err(CtfeError::InvalidBody { origin }.into());
-                    }
-                    let check_inst = self.instance_for_key(check_key);
-                    if !matches!(
-                        crate::analysis::semantic::access::semantic_access_check_query(
-                            self.db, check_inst,
+                let count = input
+                    .field_count(self.db)
+                    .map_err(|_| CtfeError::InvalidOperation {
+                        origin,
+                        message: format!(
+                            "{operation} requires a struct or a selected variant; a whole enum has no fields"
                         ),
-                        crate::analysis::semantic::access::SemanticAccessCheckResult::Ok { .. }
-                    ) {
-                        return Err(CtfeError::InvalidBody { origin }.into());
+                    })?;
+                let [step] = instance.key(self.db).subst(self.db).generic_args(self.db) else {
+                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+                };
+                if step.has_invalid(self.db)
+                    || !crate::analysis::ty::const_ty::ty_is_fully_ground(self.db, *step)
+                {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: format!("{operation} requires a concrete ground FieldInit type"),
                     }
-                    if let Ok(admitted) = check_inst.admitted_body(self.db) {
-                        for callee in admitted.callees() {
-                            pending_access.push(callee.key);
-                        }
-                        // A constant that the body reads is not a callee, but
-                        // evaluating it runs its initializer, so it is checked
-                        // like a function that the body calls.
-                        pending_access.extend(check_inst.implicit_dependencies(self.db));
-                    }
+                    .into());
                 }
-                let eval_res = match self.eval_instance(callee_instance, vec![], vec![], origin) {
-                    Ok(value) => value,
-                    Err(EvalStop::Blocked(mut info)) => {
-                        info.trace.push(callee_instance.key(self.db));
-                        return Err(EvalStop::Blocked(info));
+                let scope = input.scope();
+                let field_init_trait = crate::analysis::ty::corelib::resolve_core_trait(
+                    self.db,
+                    scope,
+                    &["meta", "FieldInit"],
+                )
+                .ok_or_else(|| CtfeError::InvalidOperation {
+                    origin,
+                    message: "missing core::meta::FieldInit trait".into(),
+                })?;
+                let callee = self.checked_reflection_callee(
+                    scope,
+                    field_init_trait,
+                    vec![*step],
+                    "init",
+                    operation,
+                    origin,
+                )?;
+                let Some(field_ty) = crate::analysis::ty::corelib::resolve_lib_type_path(
+                    self.db,
+                    scope,
+                    "core::meta::Field",
+                ) else {
+                    return Err(CtfeError::InvalidOperation {
+                        origin,
+                        message: "missing core::meta::Field type".into(),
                     }
-                    Err(EvalStop::Failed(EvalFailure::Ctfe(err))) => {
-                        return Err(CtfeError::CalleeError {
+                    .into());
+                };
+                let mut inits = Vec::with_capacity(count);
+                for index in 0..count {
+                    let field = input
+                        .field(self.db, index)
+                        .map_err(|_| CtfeError::OutOfBounds { origin })?;
+                    let field_value = SemConstId::new(
+                        self.db,
+                        SemConstValue::Meta {
+                            ty: field_ty,
+                            value: crate::core::meta::MetaValue::Field(field),
+                        },
+                    );
+                    let verified =
+                        VerifiedConstValueId::from_complete_execution(self.db, field_value)
+                            .map_err(|message| CtfeError::InvalidOperation {
+                                origin,
+                                message: message.into(),
+                            })?;
+                    let field_value = CtfeConstValue::concrete(self.db, verified);
+                    let index_value =
+                        CtfeConstValue::int(self.db, TyId::usize(self.db), BigInt::from(index));
+                    let result = self
+                        .eval_reflection_callee(
+                            callee,
+                            vec![CtfeValue::Value(field_value), CtfeValue::Value(index_value)],
                             origin,
-                            callee: callee_instance,
-                            source: Box::new(err),
+                        )?
+                        .materialize(self.db);
+                    let SemConstValue::ItemCode { code, .. } = result.value(self.db) else {
+                        return Err(CtfeError::InvalidOperation {
+                            origin,
+                            message: empty_initializer(),
+                        }
+                        .into());
+                    };
+                    if code.kind() != common::generation::FrozenCodeKind::Expr
+                        || matches!(code.data(), crate::core::meta::CodeData::Empty { .. })
+                    {
+                        return Err(CtfeError::InvalidOperation {
+                            origin,
+                            message: empty_initializer(),
                         }
                         .into());
                     }
-                    Err(stop) => return Err(stop),
-                };
-                let CtfeValue::Value(result) = eval_res else {
-                    return Err(CtfeError::InvalidBorrow { origin }.into());
-                };
-                Ok(result)
+                    inits.push(result);
+                }
+                let code = crate::core::meta::ItemCode::record_fields(
+                    *input,
+                    inits.into_boxed_slice(),
+                    output,
+                );
+                let value = SemConstId::new(
+                    self.db,
+                    SemConstValue::ItemCode {
+                        ty: result_ty,
+                        code,
+                    },
+                );
+                let verified = VerifiedConstValueId::from_complete_execution(self.db, value)
+                    .map_err(|message| CtfeError::InvalidOperation {
+                        origin,
+                        message: message.into(),
+                    })?;
+                Ok(CtfeConstValue::concrete(self.db, verified))
             }
             CtfeExternIntrinsic::MetaEmpty => {
                 if !args.is_empty() {
@@ -2483,6 +2608,132 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// The instance of `method` of `reflection_trait`, applied to
+    /// `trait_args`, that a reflection primitive calls. The primitive resolves
+    /// the trait itself, with its path written out. The instance is resolved
+    /// in `scope` among ordinary implementations only, as a `with` choice
+    /// never reaches it. The callee must be a const function, and its body and
+    /// the bodies of everything it reaches must check and pass the access
+    /// analysis, so a primitive grants no authority its callee lacks.
+    fn checked_reflection_callee(
+        &mut self,
+        scope: crate::hir_def::scope_graph::ScopeId<'db>,
+        reflection_trait: crate::hir_def::Trait<'db>,
+        trait_args: Vec<TyId<'db>>,
+        method: &str,
+        primitive: &str,
+        origin: SemOrigin<'db>,
+    ) -> EvalResult<'db, SemanticInstance<'db>> {
+        let trait_name = reflection_trait
+            .name(self.db)
+            .to_opt()
+            .map(|name| name.data(self.db).to_string())
+            .unwrap_or_default();
+        let assumptions =
+            crate::analysis::ty::trait_resolution::PredicateListId::empty_list(self.db);
+        let goal = crate::analysis::ty::trait_def::TraitInstId::new_simple(
+            self.db,
+            reflection_trait,
+            trait_args,
+        );
+        let method_ident = crate::hir_def::IdentId::new(self.db, method.to_string());
+        let method_func = reflection_trait
+            .method_defs(self.db)
+            .get(&method_ident)
+            .copied()
+            .ok_or_else(|| CtfeError::InvalidOperation {
+                origin,
+                message: format!("{primitive} requires a {trait_name}::{method} declaration"),
+            })?;
+        let callee_key = crate::analysis::semantic::generated_callee_key(
+            self.db,
+            scope,
+            assumptions,
+            method_func,
+            Some(goal),
+            &[],
+        )
+        .map_err(|_| CtfeError::InvalidOperation {
+            origin,
+            message: format!(
+                "{primitive} requires a satisfied {trait_name}::{method} implementation"
+            ),
+        })?;
+        let BodyOwner::Func(callee_func, _) = callee_key.owner(self.db) else {
+            return Err(CtfeError::InvalidOperation {
+                origin,
+                message: format!("{primitive} requires a function body"),
+            }
+            .into());
+        };
+        if !callee_func.is_const(self.db) {
+            return Err(CtfeError::NonConstCall { origin }.into());
+        }
+        let callee_instance = self.instance_for_key(callee_key);
+        let mut pending_access = vec![callee_key];
+        let mut seen_access = rustc_hash::FxHashSet::default();
+        while let Some(check_key) = pending_access.pop() {
+            if !seen_access.insert(check_key) {
+                continue;
+            }
+            if let BodyOwner::Func(f, _) = check_key.owner(self.db)
+                && crate::analysis::ty::ty_check::check_func_body(self.db, f)
+                    .0
+                    .iter()
+                    .any(|diagnostic| diagnostic.severity() == common::diagnostics::Severity::Error)
+            {
+                return Err(CtfeError::InvalidBody { origin }.into());
+            }
+            let check_inst = self.instance_for_key(check_key);
+            if !matches!(
+                crate::analysis::semantic::access::semantic_access_check_query(self.db, check_inst),
+                crate::analysis::semantic::access::SemanticAccessCheckResult::Ok { .. }
+            ) {
+                return Err(CtfeError::InvalidBody { origin }.into());
+            }
+            if let Ok(admitted) = check_inst.admitted_body(self.db) {
+                for callee in admitted.callees() {
+                    pending_access.push(callee.key);
+                }
+                // A constant that the body reads is not a callee, but
+                // evaluating it runs its initializer, so it is checked
+                // like a function that the body calls.
+                pending_access.extend(check_inst.implicit_dependencies(self.db));
+            }
+        }
+        Ok(callee_instance)
+    }
+
+    /// Run a callee that `checked_reflection_callee` returned, with its
+    /// failures reported as the failure of the primitive that called it.
+    fn eval_reflection_callee(
+        &mut self,
+        callee: SemanticInstance<'db>,
+        args: Vec<CtfeValue<'db>>,
+        origin: SemOrigin<'db>,
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
+        let eval_res = match self.eval_instance(callee, args, vec![], origin) {
+            Ok(value) => value,
+            Err(EvalStop::Blocked(mut info)) => {
+                info.trace.push(callee.key(self.db));
+                return Err(EvalStop::Blocked(info));
+            }
+            Err(EvalStop::Failed(EvalFailure::Ctfe(err))) => {
+                return Err(CtfeError::CalleeError {
+                    origin,
+                    callee,
+                    source: Box::new(err),
+                }
+                .into());
+            }
+            Err(stop) => return Err(stop),
+        };
+        let CtfeValue::Value(result) = eval_res else {
+            return Err(CtfeError::InvalidBorrow { origin }.into());
+        };
+        Ok(result)
     }
 
     fn eval_numeric_extern_intrinsic(

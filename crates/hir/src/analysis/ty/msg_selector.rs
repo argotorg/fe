@@ -133,6 +133,8 @@ enum FieldAbiFailure<'db> {
     },
     /// A type with no ABI representation.
     Unsupported(String),
+    /// A length whose value is unavailable in the current view.
+    UnresolvedArrayLength(String),
     /// The codec traits the type doesn't implement.
     MissingTraits(Vec<&'static str>),
 }
@@ -173,6 +175,9 @@ fn field_abi_failures<'db>(
                     FieldAbiFailure::InvalidConst { cause, message }
                 }
                 Err(AbiTypeError::Unsupported(reason)) => FieldAbiFailure::Unsupported(reason),
+                Err(AbiTypeError::UnresolvedArrayLength(reason)) => {
+                    FieldAbiFailure::UnresolvedArrayLength(reason)
+                }
                 Ok(_) => {
                     let traits: Vec<_> = [
                         ("AbiSize", abi_size_trait, vec![field_ty]),
@@ -203,11 +208,24 @@ fn field_abi_failures<'db>(
 
 /// Whether the generated impls of the msg variant `struct_` go undiagnosed,
 /// because its fields are reported instead.
-pub(crate) fn msg_variant_reported_at_source<'db>(
+pub(super) fn msg_variant_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     struct_: Struct<'db>,
+    check: super::AbiFieldCheck,
 ) -> bool {
-    !field_abi_failures(db, struct_).is_empty()
+    field_abi_failures(db, struct_)
+        .into_iter()
+        .any(|(_, _, failure)| {
+            // A declared generated constant can supply the length in the prepared
+            // view. Providers can emit a codec using the field's symbolic type.
+            !matches!(
+                (check, failure),
+                (
+                    super::AbiFieldCheck::CodecAdmission,
+                    FieldAbiFailure::UnresolvedArrayLength(_)
+                )
+            )
+        })
 }
 
 fn check_variant_field_abi_requirements<'db>(
@@ -233,7 +251,8 @@ fn check_variant_field_abi_requirements<'db>(
                     reason: message,
                 }
             }
-            FieldAbiFailure::Unsupported(reason) => {
+            FieldAbiFailure::Unsupported(reason)
+            | FieldAbiFailure::UnresolvedArrayLength(reason) => {
                 MsgDiagnosticKind::UnsupportedAbiField { ty, reason }
             }
             FieldAbiFailure::MissingTraits(traits) => {

@@ -915,6 +915,7 @@ fn contract_init_fixed_array_arg_fixture_has_no_type_level_semantic_consts() {
         "semantic_ctfe.fe".into(),
         include_str!("../../../fe/tests/fixtures/fe_test/contract_init_fixed_array_arg.fe"),
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     let mut pending = VecDeque::new();
 

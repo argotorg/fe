@@ -1517,6 +1517,8 @@ pub struct ImplTraitModifiers<'db> {
     /// A derive request uses the written callable signature to select its
     /// provider, including any output that impl lowering moves into members.
     pub derive_trait_ref: Option<TraitRefId<'db>>,
+    /// The source range and slot of an attribute or message derive request.
+    pub short_form_derive_site: Option<(parser::TextRange, u8)>,
     /// For an `unsafe impl` written in a quotation, the quotations that wrote
     /// and placed it, innermost first.
     pub quote_chain: Option<QuoteChain<'db>>,
@@ -1542,6 +1544,10 @@ impl<'db> ImplTrait<'db> {
     /// `impl T for S with (P)`.
     pub fn derive_provider(self, db: &'db dyn HirDb) -> Option<PathId<'db>> {
         self.modifiers(db).derive_provider
+    }
+
+    pub fn short_form_derive_site(self, db: &'db dyn HirDb) -> Option<(parser::TextRange, u8)> {
+        self.modifiers(db).short_form_derive_site
     }
 
     /// The modules of the quotations that wrote and placed this implementation,

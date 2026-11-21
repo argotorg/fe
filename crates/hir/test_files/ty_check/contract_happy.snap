@@ -1,6 +1,5 @@
 ---
 source: crates/hir/tests/frontend/ty_check.rs
-assertion_line: 46
 expression: res
 input_file: test_files/ty_check/contract_happy.fe
 ---
@@ -152,15 +151,3 @@ note:
    │
 21 │             total
    │             ^^^^^ u64
-
-note:
-   ┌─ contract_happy.fe:28:5
-   │
-28 │     Withdraw { amount: u64 } -> bool,
-   │     ^^^^^^^^ () | AbiFrame | Withdraw | __fe_D | __fe_I | fn decode_field<Sol, u64, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64> | u256 | u64
-
-note:
-   ┌─ contract_happy.fe:30:5
-   │
-30 │     Deposit { amount: u64 } -> u64,
-   │     ^^^^^^^ () | AbiFrame | Deposit | __fe_D | __fe_I | fn decode_field<Sol, u64, __fe_D, __fe_I> | fn decode_msg_field_from<Sol, u64, __fe_I> | fn dynamic_payload_size<u64> | fn encode_field<Sol, u64> | u256 | u64

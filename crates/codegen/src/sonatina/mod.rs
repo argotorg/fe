@@ -2530,6 +2530,8 @@ pub fn replace(_ ptr: *u8, _ value: u32) -> u32 {
             .workspace()
             .get(&db, &file_url)
             .expect("file should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let bytecode = emit_module_sonatina_bytecode(&db, top_mod, OptLevel::O0, Some("Foo"))
             .expect("selected contract should compile");
@@ -2571,6 +2573,8 @@ pub contract Power {{
                 )),
             );
             let file = db.workspace().get(&db, &file_url).expect("fixture loaded");
+            let file = driver::generation::prepare_file_in_place(&mut db, file)
+                .expect("fixture generation should succeed");
             let top_mod = db.top_mod(file);
             let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
                 .expect("constant-base power should compile");
@@ -2610,6 +2614,8 @@ pub contract Power {{
 "#,
                     )),
                 );
+                let file = driver::generation::prepare_file_in_place(&mut db, file)
+                    .expect("fixture generation should succeed");
                 let output =
                     emit_module_sonatina_ir_optimized(&db, db.top_mod(file), OptLevel::O1, None)
                         .expect("constant exponent should compile");
@@ -2660,6 +2666,8 @@ pub contract ReturnContract {
             .workspace()
             .get(&db, &file_url)
             .expect("fixture should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let output = emit_module_sonatina_ir_optimized(&db, top_mod, OptLevel::O1, None)
             .expect("static return contract should compile");
@@ -2724,6 +2732,8 @@ pub contract C uses (ctx: Ctx) {
             .workspace()
             .get(&db, &file_url)
             .expect("fixture should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let output = emit_module_sonatina_ir(&db, top_mod).expect("contract should compile");
 
@@ -2844,6 +2854,8 @@ pub contract C uses (ctx: Ctx) {
             .workspace()
             .get(&db, &file_url)
             .expect("file should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let package = build_test_runtime_package(&db, &[top_mod], None)
             .expect("test runtime package should build");

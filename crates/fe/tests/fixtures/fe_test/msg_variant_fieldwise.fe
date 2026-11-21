@@ -1,0 +1,68 @@
+// The variants of a `msg` block are read field by field: a variant is the
+// tuple of its fields, so field syntax on the handle of a message reads each
+// field where it lies, and `get()` decodes the whole message.
+use core::abi::{ByteSource, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::{Bytes, DynArray, Sol, decode_record_from, dyn_array_from}
+use std::evm::Address
+
+/// A memory input. `MemSpan` cannot be stored in a view (it is not `Copy`).
+struct MemInput { ptr: *u8, len: u256 }
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+msg M {
+    #[selector = 0x01]
+    V { a: u8, b: DynArray<u16>, c: Address } -> u256,
+}
+
+/// The four bytes of selector 1, then the encoding of the arguments
+/// `(7, [1, 2, 3], 0xaa)`, in a raw allocation that no drop frees.
+fn message() -> MemInput {
+    let args = (7 as u8, dyn_array_from([1 as u16, 2, 3]), Address::new(0xaa))
+    let buf = core::abi::encode_alloc<Sol, (u8, DynArray<u16>, Address)>(args)
+    let len = 4 + buf.len()
+    let data = ptr::alloc_bytes(len + 32)
+    unsafe {
+        store_word(ptr: data, value: 1 << 224)
+        ptr::copy_raw(ptr::offset_bytes(data, 4), source: buf.ptr(), len: buf.len())
+    }
+    MemInput { ptr: data, len: len as u256 }
+}
+
+#[test]
+fn a_static_field_is_read_in_place() {
+    let h = decode_record_from<Sol, M::V, MemInput>(message(), 4)
+    assert!(h.a == 7)
+}
+
+#[test]
+fn an_array_field_is_read_in_place() {
+    let h = decode_record_from<Sol, M::V, MemInput>(message(), 4)
+    assert!(h.b.len() == 3 && h.b[0] == 1 && h.b[2] == 3)
+}
+
+#[test]
+fn a_field_after_a_dynamic_field_is_read_in_place() {
+    let h = decode_record_from<Sol, M::V, MemInput>(message(), 4)
+    assert!(h.c == Address::new(0xaa))
+}
+
+#[test]
+fn the_whole_message_is_decoded_by_get() {
+    let h = decode_record_from<Sol, M::V, MemInput>(message(), 4)
+    let v = h.get()
+    assert!(v.a == 7 && v.b.len() == 3 && v.b.get(1) == 2 && v.c == Address::new(0xaa))
+}

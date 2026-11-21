@@ -1,0 +1,38 @@
+// A field of an encoded record is read through `std::abi::Encoded` only when
+// its type can be read as a part, and only for a record that states that it
+// is encoded as the tuple of its fields (`AbiFields`).
+use core::abi::AbiSize
+use std::abi::{AbiFields, Encoded, Sol}
+use std::evm::CallData
+
+// Neither `Part` nor `AbiFields`.
+pub struct Leg {
+    pub token: u256,
+    pub amount: u256,
+}
+
+impl AbiSize for Leg {
+    const HEAD_SIZE: u256 = 64
+    const IS_DYNAMIC: bool = false
+}
+
+pub struct Outer {
+    pub id: u256,
+    pub leg: Leg,
+}
+
+impl AbiFields for Outer {}
+
+impl AbiSize for Outer {
+    const HEAD_SIZE: u256 = 96
+    const IS_DYNAMIC: bool = false
+}
+
+fn leg_of(_ h: Encoded<CallData, Outer, Sol>) -> u256 {
+    let _leg = h.leg
+    h.id
+}
+
+fn amount_of(_ h: Encoded<CallData, Leg, Sol>) -> u256 {
+    h.amount
+}

@@ -5,7 +5,8 @@
 //!   its return value, and the entry of a contract decodes the arguments of
 //!   `init`. The code that does so is the `Decode` and `Encode` implementation
 //!   of the types, which a dependency may have written, although no body
-//!   names it.
+//!   names it, and, for an arm that reads its message in place, the reads of
+//!   `std::abi`.
 //! - Drop elaboration inserts a call of `Drop::drop` where a value that owns
 //!   drop glue goes out of scope, and of the fields of a value that a `drop`
 //!   destroys.
@@ -24,7 +25,7 @@ use crate::{
         },
         ty::{
             adt_def::AdtRef,
-            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            corelib::{resolve_core_trait, resolve_lib_type_path},
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
             provider::registered_root_providers,
             trait_def::TraitInstId,
@@ -33,8 +34,8 @@ use crate::{
             ty_def::TyId,
         },
     },
-    hir_def::{Contract, Func, IdentId},
-    semantic::RecvView,
+    hir_def::{Contract, IdentId},
+    semantic::{RecvArmInput, RecvView},
 };
 
 /// The instance of `trait_inst`'s method `name` that a compiler-generated call
@@ -57,23 +58,6 @@ fn trait_method_callee<'db>(
         func,
         Some(trait_inst),
         own_args,
-    )
-    .ok()
-}
-
-fn free_function_callee<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    func: Func<'db>,
-    args: &[TyId<'db>],
-) -> Option<SemanticInstanceKey<'db>> {
-    generated_callee_key(
-        db,
-        contract.scope(),
-        PredicateListId::empty_list(db),
-        func,
-        None,
-        args,
     )
     .ok()
 }
@@ -153,16 +137,13 @@ fn recv_arm_callees<'db>(
         return Vec::new();
     };
     let mut callees = Vec::new();
-    if info.args_ty != TyId::unit(db)
-        && let Some(decode) =
-            resolve_lib_func_path(db, scope, "core::contracts::decode_runtime_args")
-    {
-        callees.extend(free_function_callee(
-            db,
-            contract,
-            decode,
-            &[host_ty, abi_ty, info.args_ty],
-        ));
+    match arm.input(db) {
+        Ok(RecvArmInput::Whole { decode }) => callees.push(*decode),
+        Ok(RecvArmInput::InPlace { args, reads }) => {
+            callees.push(*args);
+            callees.extend(reads.iter().map(|(_, read)| *read));
+        }
+        Ok(RecvArmInput::None) | Err(_) => {}
     }
     if let Some(ret_ty) = info.ret_ty
         && let Some(host) = resolve_core_trait(db, scope, &["contracts", "ContractHost"])

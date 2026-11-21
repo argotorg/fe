@@ -1,5 +1,8 @@
 use core::abi::AbiSize
 use core::meta::{Code, Expr, Field, Record, field, field_count, field_type}
+pub use abi::{StructAbiEncode, StructAbiSize, StructAbiSpan}
+pub use construct::{StructAbiDecode, decode_next_field}
+pub use event::StructEvent
 
 /// One step of a fold over the fields of a record, written as code.
 ///

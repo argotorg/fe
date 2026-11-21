@@ -575,6 +575,26 @@ impl<'db> Expr<'db> {
                 ctxt.f_ctxt.quote_frames.pop();
                 expr_id
             }
+            FrozenCode::Construct { record, fields } => {
+                Self::lower_construct(ctxt, record, fields, origin_ast)
+            }
+            FrozenCode::FieldStatements { fields } => {
+                ctxt.f_ctxt.enter_block_scope();
+                let ptr = SyntaxNodePtr::new(origin_ast.syntax());
+                let mut stmts = Vec::with_capacity(fields.len() + 1);
+                for field in fields {
+                    let expr = Self::lower_code(ctxt, field, origin_ast);
+                    stmts.push(ctxt.push_stmt(Stmt::Expr(expr), HirOrigin::Expanded(ptr)));
+                }
+                let unit = ctxt.push_expr(Self::Tuple(Vec::new()), HirOrigin::Expanded(ptr));
+                stmts.push(ctxt.push_stmt(Stmt::Expr(unit), HirOrigin::Expanded(ptr)));
+                let block = ctxt.push_expr(
+                    Self::Block(stmts, BlockKind::Normal),
+                    HirOrigin::Expanded(ptr),
+                );
+                ctxt.f_ctxt.leave_block_scope(block);
+                block
+            }
             _ => {
                 ctxt.f_ctxt.record_generation_error(
                     origin_ast.syntax().text_range(),
@@ -582,6 +602,112 @@ impl<'db> Expr<'db> {
                 );
                 ctxt.push_invalid_expr(HirOrigin::raw(origin_ast))
             }
+        }
+    }
+
+    /// The constructor of `record`, a struct or a selected variant, applied to
+    /// `fields`, one initializer for each field in declaration order. The
+    /// record and its variant are named by their declarations, so no name at
+    /// the place of the splice can stand for them, and each initializer is
+    /// lowered as the fragment it is, in its own quote frame.
+    fn lower_construct(
+        ctxt: &mut BodyCtxt<'_, 'db>,
+        record: &common::generation::FrozenRecordRef,
+        fields: &[common::generation::FrozenCode],
+        origin_ast: &ast::Expr,
+    ) -> ExprId {
+        use super::AuthoredFields;
+        use crate::hir_def::PathKind;
+
+        let db = ctxt.f_ctxt.db();
+        let authored = ctxt.f_ctxt.authored_record(record);
+        let generic_args = match &record.args {
+            Some(args) => GenericArgListId::thaw(ctxt.f_ctxt, args),
+            None => GenericArgListId::none(db),
+        };
+        let record_path = authored.path(db, generic_args);
+        let range = origin_ast.syntax().text_range();
+        let Some(shape) = authored.fields(db, record.variant_index) else {
+            ctxt.f_ctxt
+                .record_generation_error(range, "invalid record for construct");
+            return ctxt.push_invalid_expr(HirOrigin::raw(origin_ast));
+        };
+        let field_count = match &shape {
+            AuthoredFields::Unit => 0,
+            AuthoredFields::Tuple(len) => *len,
+            AuthoredFields::Named(labels) => labels.len(),
+        };
+        if field_count != fields.len() {
+            ctxt.f_ctxt.record_generation_error(
+                range,
+                "construct initializer count differs from its record",
+            );
+            return ctxt.push_invalid_expr(HirOrigin::raw(origin_ast));
+        }
+        let exprs: Vec<ExprId> = fields
+            .iter()
+            .map(|code| Self::lower_code(ctxt, code, origin_ast))
+            .collect();
+        let call = |ctxt: &mut BodyCtxt<'_, 'db>, callee: PathId<'db>| {
+            let callee = ctxt.push_expr(
+                Self::Path(Partial::Present(callee)),
+                HirOrigin::raw(origin_ast),
+            );
+            let args = exprs
+                .iter()
+                .map(|&expr| CallArg { label: None, expr })
+                .collect();
+            ctxt.push_expr(Self::Call(callee, args), HirOrigin::raw(origin_ast))
+        };
+        let record_init = |ctxt: &mut BodyCtxt<'_, 'db>,
+                           path: PathId<'db>,
+                           labels: Vec<Partial<IdentId<'db>>>| {
+            let fields = labels
+                .into_iter()
+                .zip(exprs.iter().copied())
+                .map(|(label, expr)| Field {
+                    label: label.to_opt(),
+                    expr,
+                })
+                .collect();
+            ctxt.push_expr(
+                Self::RecordInit(Partial::Present(path), fields),
+                HirOrigin::raw(origin_ast),
+            )
+        };
+        match record.variant_index {
+            Some(variant_index) => {
+                let variant_name = authored
+                    .variant(variant_index)
+                    .and_then(|variant| variant.name())
+                    .map(|name| IdentId::new(db, name.text().to_string()))
+                    .into();
+                let variant_path = PathId::new(
+                    db,
+                    PathKind::Ident {
+                        ident: variant_name,
+                        generic_args: GenericArgListId::none(db),
+                    },
+                    Some(record_path),
+                );
+                match shape {
+                    AuthoredFields::Unit => ctxt.push_expr(
+                        Self::Path(Partial::Present(variant_path)),
+                        HirOrigin::raw(origin_ast),
+                    ),
+                    AuthoredFields::Tuple(_) => call(ctxt, variant_path),
+                    AuthoredFields::Named(labels) => record_init(ctxt, variant_path, labels),
+                }
+            }
+            None => match shape {
+                AuthoredFields::Named(_) if authored.is_tuple_struct() => call(ctxt, record_path),
+                AuthoredFields::Named(labels) => record_init(ctxt, record_path, labels),
+                AuthoredFields::Unit | AuthoredFields::Tuple(_) => {
+                    ctxt.f_ctxt
+                        .record_generation_error(range, "invalid record for construct");
+                    ctxt.push_invalid_expr(HirOrigin::raw(origin_ast))
+                }
+            },
         }
     }
 }

@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_not_found.fe
+---
+error[8-0015]: invalid field index
+   ┌─ field_projection_not_found.fe:34:5
+   │
+34 │     v.nothing
+   │     ^^^^^^^^^ field `nothing` is not found in `Rec`
+
+error[8-0015]: invalid field index
+   ┌─ field_projection_not_found.fe:38:5
+   │
+38 │     v.a
+   │     ^^^ field `a` is not found in `T`
+
+error[8-0015]: invalid field index
+   ┌─ field_projection_not_found.fe:46:5
+   │
+46 │     r.nothing
+   │     ^^^^^^^^^ field `nothing` is not found in `Rec`

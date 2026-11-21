@@ -22,11 +22,17 @@ fn ty_check_standalone(db: &mut HirAnalysisTestDb, fixture: &Fixture) {
     let path = Path::new(fixture.path());
     let file_name = path.file_name().and_then(|file| file.to_str()).unwrap();
     let file = db.new_stand_alone(file_name.into(), fixture.content());
+    crate::prepared_fixture::prepare_generation(db, file);
     let (top_mod, mut prop_formatter) = db.top_mod(file);
 
     db.assert_no_diags(top_mod);
 
     for &func in top_mod.all_funcs(db) {
+        // The snapshot annotates the fixture's authored text. A method supplied
+        // by a provider is type-checked above, but its body has separate source.
+        if func.scope().is_in_published_item(db) {
+            continue;
+        }
         if let Some(body) = func.body(db) {
             let typed_body = &check_func_body(db, func).1;
             collect_body_props(db, body, typed_body, &mut prop_formatter);

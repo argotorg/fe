@@ -1,0 +1,48 @@
+use core::abi::{ByteSource, store_word}
+use core::ptr::{self, MemSpan}
+use std::abi::{Bytes, Sol, decode_part_at}
+
+struct StrictSource { ptr: *u8, len: u64 }
+impl Copy for StrictSource {}
+impl StrictSource {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+
+impl ByteSource for StrictSource {
+    fn size(self) -> u64 { self.len }
+    fn word_at(self, _ offset: u256) -> u256 {
+        assert!(offset <= self.len as u256 && 32 <= self.len as u256 - offset)
+        self.span().word_at(offset)
+    }
+    fn byte_at(self, _ offset: u256) -> u8 {
+        assert!(offset < self.len as u256)
+        self.span().byte_at(offset.downcast_unchecked())
+    }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+fn fixture(_ len: u64) -> StrictSource {
+    let ptr = ptr::alloc_bytes(96)
+    unsafe {
+        store_word(ptr: ptr, value: 32)
+        store_word(ptr: ptr::offset_bytes(ptr, 32), value: len as u256)
+        store_word(ptr: ptr::offset_bytes(ptr, 64), value: (0xab as u256) << 248)
+    }
+    StrictSource { ptr, len: 64 + len }
+}
+
+#[test]
+fn partial_payload_reads_as_a_zero_padded_word() {
+    let view = decode_part_at<Sol, Bytes, StrictSource>(fixture(1), base: 0, head_pos: 0)
+    assert!(view.word_at(0) == (0xab as u256) << 248)
+}
+
+#[test]
+fn whole_payload_reads_as_a_word() {
+    let view = decode_part_at<Sol, Bytes, StrictSource>(fixture(32), base: 0, head_pos: 0)
+    assert!(view.word_at(0) == (0xab as u256) << 248)
+}

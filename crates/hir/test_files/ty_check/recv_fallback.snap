@@ -1,14 +1,8 @@
 ---
-source: crates/hir/tests/ty_check.rs
+source: crates/hir/tests/frontend/ty_check.rs
 expression: res
 input_file: test_files/ty_check/recv_fallback.fe
 ---
-note:
-  ┌─ recv_fallback.fe:3:5
-  │
-3 │     Count -> u256,
-  │     ^^^^^ () | Count | u256
-
 note:
    ┌─ recv_fallback.fe:10:9
    │

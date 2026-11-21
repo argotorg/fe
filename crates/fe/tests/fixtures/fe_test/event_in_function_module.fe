@@ -1,0 +1,14 @@
+use std::evm::{Event, Log}
+
+#[test]
+fn emits_an_event_from_a_module_declared_in_a_function() uses (log: mut Log) {
+    mod inner {
+        #[event]
+        pub struct Local {
+            pub value: u256,
+        }
+    }
+
+    assert!(<inner::Local as Event>::TOPIC0 == core::keccak("Local(uint256)"))
+    log.emit(inner::Local { value: 7 })
+}

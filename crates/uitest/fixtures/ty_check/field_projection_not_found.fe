@@ -1,0 +1,47 @@
+// A name that is neither a visible field of the handle nor a field of the
+// record it stands for is reported against the record. A record that is a
+// type parameter has no fields; a generic record has its declared ones.
+use core::ops::{Field, Project, ProjectField}
+
+pub struct View<T> {
+    base: u256,
+}
+
+impl<T> Copy for View<T> {}
+
+impl<T> Project for View<T> {
+    type Target = T
+}
+
+impl<T, F, B> ProjectField<Field<T, F, B>> for View<T> {
+    type Output = u256
+
+    fn project(self) -> ref u256 {
+        self.base
+    }
+}
+
+pub struct Rec {
+    pub a: u256,
+}
+
+pub struct Pair<T> {
+    pub first: T,
+    pub second: u256,
+}
+
+fn missing(_ v: View<Rec>) -> u256 {
+    v.nothing
+}
+
+fn record_is_a_parameter<T>(_ v: View<T>) -> u256 {
+    v.a
+}
+
+fn generic_record<T>(_ v: View<Pair<T>>) -> u256 {
+    v.first + v.second
+}
+
+fn plain(_ r: Rec) -> u256 {
+    r.nothing
+}

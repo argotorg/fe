@@ -33,6 +33,8 @@ fn with_top_mod_for_source<T>(
         .workspace()
         .get(&db, &file_url)
         .expect("file should be loaded");
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     f(&db, top_mod)
 }
@@ -563,7 +565,14 @@ fn check_sonatina_ir(db: &mut DriverDataBase, fixture: &test_utils::fixtures::Fi
     let file_url = Url::from_file_path(fixture.path()).expect("fixture path should be absolute");
     let file = db
         .workspace()
-        .touch(db, file_url, Some(fixture.content().to_string()));
+        .touch(db, file_url.clone(), Some(fixture.content().to_string()));
+    let prepared =
+        driver::generation::prepare_file(db, file).expect("fixture generation should succeed");
+    let db = prepared.as_ref().unwrap_or(db);
+    let file = db
+        .workspace()
+        .get(db, &file_url)
+        .expect("fixture should be present in the checked view");
     let top_mod = db.top_mod(file);
 
     let output = match emit_module_sonatina_ir(db, top_mod) {

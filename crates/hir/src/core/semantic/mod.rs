@@ -26,9 +26,12 @@ mod storage_layout;
 pub mod symbol;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::name_resolution::Tier;
+use crate::analysis::semantic::{SemanticInstanceKey, generated_callee_key};
 use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
-use crate::analysis::ty::corelib::{resolve_lib_func_path, resolve_lib_trait_path};
+use crate::analysis::ty::corelib::{
+    resolve_core_trait, resolve_lib_func_path, resolve_lib_trait_path,
+};
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
 use crate::analysis::ty::fold::TyFoldable;
@@ -1872,6 +1875,230 @@ impl<'db> RecvArmView<'db> {
         .unwrap_or_default()
     }
 
+    /// How the dispatcher of this arm reads the message (see
+    /// `RecvArmReading`). The arm's type check asks it before it checks the
+    /// pattern, so it decides by the pattern's syntax and the message's types
+    /// alone.
+    #[salsa::tracked(returns(ref))]
+    pub fn reading(self, db: &'db dyn HirAnalysisDb) -> RecvArmReading<'db> {
+        use crate::analysis::ty::trait_resolution::{GoalSatisfiability, is_goal_satisfiable};
+
+        let Some(hir_arm) = self.arm(db) else {
+            return RecvArmReading::default();
+        };
+        if hir_arm.is_fallback(db) {
+            return RecvArmReading::default();
+        }
+        let variant_ty = self.variant_ty(db);
+        let Some(variant_struct) = variant_struct_from_ty(db, variant_ty) else {
+            return RecvArmReading::default();
+        };
+        // Not `arg_bindings`: that asks `abi_info`, which evaluates the
+        // selector, and the arm's type check must not wait for it.
+        let bindings =
+            compute_arg_bindings(db, variant_struct, variant_ty, hir_arm.pat, hir_arm.body)
+                .unwrap_or_default();
+        // The marker of a name that a field binds; `None` for a pattern that
+        // binds no name (`_`).
+        let name_marker = |pat: PatId| match pat.data(db, hir_arm.body) {
+            Partial::Present(Pat::Path(Partial::Present(path), marker))
+                if path.as_ident(db).is_some() =>
+            {
+                Some(*marker)
+            }
+            _ => None,
+        };
+        let is_ref = |pat: PatId| name_marker(pat) == Some(BindingMarker::Ref);
+        let in_place = bindings.iter().any(|binding| is_ref(binding.pat));
+        let field_tys = variant_ty.field_types(db);
+        let fields = bindings
+            .iter()
+            .filter(|binding| name_marker(binding.pat).is_some())
+            .map(|binding| RecvFieldReading {
+                pat: binding.pat,
+                tuple_index: binding.tuple_index,
+                field_ty: binding.ty,
+                before_ty: crate::analysis::ty::fields_before_ty(
+                    db,
+                    &field_tys[..binding.tuple_index as usize],
+                ),
+                in_place: in_place && is_ref(binding.pat),
+                binding_ty: binding.ty,
+            })
+            .collect::<Vec<_>>();
+        if !in_place {
+            return RecvArmReading {
+                in_place: false,
+                input_ty: None,
+                fields,
+                failures: Vec::new(),
+            };
+        }
+
+        let mut reading = RecvArmReading {
+            in_place: true,
+            input_ty: None,
+            fields,
+            failures: Vec::new(),
+        };
+        let invalid = TyId::invalid(db, InvalidCause::Other);
+        // A `ref` name that cannot be read in place has the invalid type, so
+        // its uses report nothing more.
+        let unreadable = |reading: &mut RecvArmReading<'db>| {
+            for field in reading.fields.iter_mut().filter(|field| field.in_place) {
+                field.binding_ty = invalid;
+            }
+        };
+
+        let contract = self.contract(db);
+        let scope = contract.scope();
+        let assumptions = PredicateListId::empty_list(db);
+        let recv = self.recv(db);
+        let site = EffectParamSite::ContractRecvArm {
+            contract,
+            recv_idx: recv.recv_idx(db),
+            arm_idx: self.arm_idx(db),
+        };
+        let (Some(host), Some(abi), Some(host_trait)) = (
+            registered_root_providers(db, site).first(),
+            resolve_sol_abi_ty(db, scope, assumptions),
+            resolve_core_trait(db, scope, &["contracts", "ContractHost"]),
+        ) else {
+            // The contract's lowering reports a missing host, as for a whole arm.
+            unreadable(&mut reading);
+            return reading;
+        };
+        let host_inst = TraitInstId::new_simple(db, host_trait, vec![host.provider_ty]);
+        let input_ty = normalize_ty(
+            db,
+            TyId::assoc_ty(
+                db,
+                host_inst.trait_ref(db),
+                IdentId::new(db, "Input".to_string()),
+            ),
+            scope,
+            assumptions,
+        );
+        reading.input_ty = Some(input_ty);
+
+        let solve_cx = TraitSolveCx::new(db, scope, Tier::All);
+        let satisfied = |trait_, args: Vec<TyId<'db>>| {
+            matches!(
+                is_goal_satisfiable(db, solve_cx, TraitInstId::new_simple(db, trait_, args)),
+                GoalSatisfiability::Satisfied(_)
+            )
+        };
+        let (Some(abi_fields), Some(part)) = (
+            resolve_lib_trait_path(db, scope, "std::abi::AbiFields"),
+            resolve_lib_trait_path(db, scope, "std::abi::Part"),
+        ) else {
+            unreadable(&mut reading);
+            return reading;
+        };
+        if !satisfied(abi_fields, vec![variant_ty]) {
+            if let Some(first) = reading.fields.iter().find(|field| field.in_place) {
+                reading.failures.push(RecvReadingFailure::NotFieldwise {
+                    pat: first.pat,
+                    variant_ty,
+                });
+            }
+            unreadable(&mut reading);
+            return reading;
+        }
+        let part_of = IdentId::new(db, "Of".to_string());
+        for field in reading.fields.iter_mut().filter(|field| field.in_place) {
+            let inst = TraitInstId::new_simple(db, part, vec![field.field_ty, input_ty, abi]);
+            if satisfied(part, vec![field.field_ty, input_ty, abi]) {
+                field.binding_ty = normalize_ty(
+                    db,
+                    TyId::assoc_ty(db, inst.trait_ref(db), part_of),
+                    scope,
+                    assumptions,
+                );
+            } else {
+                reading.failures.push(RecvReadingFailure::FieldNotPart {
+                    pat: field.pat,
+                    field_ty: field.field_ty,
+                    input_ty,
+                    abi_ty: abi,
+                });
+                field.binding_ty = invalid;
+            }
+        }
+        reading
+    }
+
+    /// The instances the dispatcher of this arm runs to read the message
+    /// (see `RecvArmInput`), or why it cannot. The arm's type check, the
+    /// trust walk and the lowering of the contract read the same plan.
+    #[salsa::tracked(returns(ref))]
+    pub fn input(self, db: &'db dyn HirAnalysisDb) -> Result<RecvArmInput<'db>, String> {
+        let contract = self.contract(db);
+        let scope = contract.scope();
+        let assumptions = PredicateListId::empty_list(db);
+        let Some(abi) = resolve_sol_abi_ty(db, scope, assumptions) else {
+            return Err("missing std::abi::Sol".to_string());
+        };
+        let info = self.abi_info(db, abi);
+        if info.is_fallback || info.args_ty == TyId::unit(db) {
+            return Ok(RecvArmInput::None);
+        }
+        let recv = self.recv(db);
+        let site = EffectParamSite::ContractRecvArm {
+            contract,
+            recv_idx: recv.recv_idx(db),
+            arm_idx: self.arm_idx(db),
+        };
+        let Some(host) = registered_root_providers(db, site).first() else {
+            return Err(format!(
+                "contract `{}` recv arm has no registered root provider",
+                contract
+                    .name(db)
+                    .to_opt()
+                    .map_or("<unnamed>", |name| name.data(db))
+            ));
+        };
+        let host_ty = host.provider_ty;
+        let reading = self.reading(db);
+        let key = |path: &str, args: &[TyId<'db>]| -> Result<SemanticInstanceKey<'db>, String> {
+            let func = resolve_lib_func_path(db, scope, path)
+                .ok_or_else(|| format!("missing required {path}"))?;
+            generated_callee_key(db, scope, assumptions, func, None, args).map_err(|error| {
+                let name = func
+                    .name(db)
+                    .to_opt()
+                    .map_or("<unnamed>", |name| name.data(db));
+                format!("failed to finalize generated call to `{name}`: {error:?}")
+            })
+        };
+        if !reading.in_place {
+            return Ok(RecvArmInput::Whole {
+                decode: key(
+                    "core::contracts::decode_runtime_args",
+                    &[host_ty, abi, info.args_ty],
+                )?,
+            });
+        }
+        let Some(input_ty) = reading.input_ty.filter(|_| reading.failures.is_empty()) else {
+            return Err("recv arm reads in place but its reads are not valid".to_string());
+        };
+        let args = key("std::abi::message_args", &[host_ty, abi, info.args_ty])?;
+        let mut reads = Vec::with_capacity(reading.fields.len());
+        for field in &reading.fields {
+            let path = if field.in_place {
+                "std::abi::message_part"
+            } else {
+                "std::abi::message_field"
+            };
+            let read = key(
+                path,
+                &[input_ty, info.args_ty, abi, field.field_ty, field.before_ty],
+            )?;
+            reads.push((field.tuple_index, read));
+        }
+        Ok(RecvArmInput::InPlace { args, reads })
+    }
+
     #[salsa::tracked]
     pub fn effective_effect_requirements(
         self,
@@ -1906,6 +2133,68 @@ pub struct ArgBinding<'db> {
     pub pat: PatId,
     pub tuple_index: u32,
     pub ty: TyId<'db>,
+}
+
+/// How the dispatcher of a recv arm reads the message, decided by the arm's
+/// pattern: in place when the pattern names a field with `ref`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, SalsaValue)]
+pub struct RecvArmReading<'db> {
+    pub in_place: bool,
+    /// `<H as core::contracts::ContractHost>::Input` of the arm's host `H`,
+    /// when the arm reads in place and has a host.
+    pub input_ty: Option<TyId<'db>>,
+    /// One entry for each field the pattern binds, in the pattern's order.
+    pub fields: Vec<RecvFieldReading<'db>>,
+    /// Why a `ref` field cannot be read in place; the arm's type check
+    /// reports them.
+    pub failures: Vec<RecvReadingFailure<'db>>,
+}
+
+/// How the dispatcher reads one field that a recv arm binds.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub struct RecvFieldReading<'db> {
+    pub pat: PatId,
+    pub tuple_index: u32,
+    pub field_ty: TyId<'db>,
+    /// The types of the fields before this one, as `core::ops::Field` holds
+    /// them.
+    pub before_ty: TyId<'db>,
+    /// Bound by `ref name`: read where it lies.
+    pub in_place: bool,
+    /// `<F as std::abi::Part<I, A>>::Of` for a `ref` name, else `field_ty`.
+    pub binding_ty: TyId<'db>,
+}
+
+/// Why a `ref` field of a recv arm cannot be read in place.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub enum RecvReadingFailure<'db> {
+    /// The message's type does not implement `std::abi::AbiFields`; reported
+    /// at the first `ref` name.
+    NotFieldwise { pat: PatId, variant_ty: TyId<'db> },
+    /// The field's type does not implement `std::abi::Part<I, A>`; reported
+    /// at its `ref` name.
+    FieldNotPart {
+        pat: PatId,
+        field_ty: TyId<'db>,
+        input_ty: TyId<'db>,
+        abi_ty: TyId<'db>,
+    },
+}
+
+/// The instances the dispatcher of a recv arm runs to read the message.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub enum RecvArmInput<'db> {
+    /// No payload: a fallback arm.
+    None,
+    /// `core::contracts::decode_runtime_args<H, Sol, V>`; each bound field is
+    /// taken from its value.
+    Whole { decode: SemanticInstanceKey<'db> },
+    /// `std::abi::message_args<H, Sol, V>`, then one read for each bound
+    /// field, in the pattern's order.
+    InPlace {
+        args: SemanticInstanceKey<'db>,
+        reads: Vec<(u32, SemanticInstanceKey<'db>)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]

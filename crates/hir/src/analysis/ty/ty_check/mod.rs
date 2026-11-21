@@ -1879,6 +1879,9 @@ pub struct TyChecker<'db> {
     /// Plain names a reported marker on their initializer marks, so the body
     /// checks as the fix reads.
     implied_markers: FxHashMap<PatId, BindingMarker>,
+    /// The `ref` names of a recv arm that reads its message in place, with
+    /// the type of the part each binds.
+    recv_in_place: FxHashMap<PatId, TyId<'db>>,
     /// Markers on initializers, reported once their pattern's names are
     /// known: the marked expression, whether it is `mut`, where it stands
     /// and the plain names it implies a marker for.
@@ -2051,6 +2054,7 @@ impl<'db> TyChecker<'db> {
             let (pat_ty, ret_ty) =
                 self.resolve_recv_arm_types(contract, recv_idx, arm_idx, arm, arm_span);
             self.expected = ret_ty;
+            self.seed_recv_arm_reading(contract, recv_idx, arm_idx);
             self.check_recv_arm_pat(arm.pat, pat_ty);
             // A message selects its arm by its variant alone, so the arm's
             // pattern must match every value of that variant.
@@ -3562,6 +3566,7 @@ impl<'db> TyChecker<'db> {
             effect_provider_keys: FxHashSet::default(),
             first_return_borrow_provider: None,
             implied_markers: FxHashMap::default(),
+            recv_in_place: FxHashMap::default(),
             initializer_markers: Vec::new(),
             mutable_sources: FxHashSet::default(),
             param_pattern_sites: FxHashMap::default(),
@@ -3581,6 +3586,41 @@ impl<'db> TyChecker<'db> {
 
     /// Resolves the pattern type and return type for a recv arm.
     /// Returns (pattern_type, return_type).
+    /// The `ref` names of a recv arm that reads its message where it lies:
+    /// each binds, by value, the part its field is read as. Reports what
+    /// keeps a `ref` name from being read so.
+    fn seed_recv_arm_reading(&mut self, contract: Contract<'db>, recv_idx: u32, arm_idx: u32) {
+        use crate::semantic::{RecvArmView, RecvReadingFailure, RecvView};
+
+        let arm = RecvArmView::new(self.db, RecvView::new(self.db, contract, recv_idx), arm_idx);
+        let reading = arm.reading(self.db);
+        for field in reading.fields.iter().filter(|field| field.in_place) {
+            self.recv_in_place.insert(field.pat, field.binding_ty);
+        }
+        for failure in &reading.failures {
+            let diag = match failure {
+                RecvReadingFailure::NotFieldwise { pat, variant_ty } => {
+                    BodyDiag::RecvArmMessageNotFieldwise {
+                        primary: pat.span(self.body()).into(),
+                        variant_ty: *variant_ty,
+                    }
+                }
+                RecvReadingFailure::FieldNotPart {
+                    pat,
+                    field_ty,
+                    input_ty,
+                    abi_ty,
+                } => BodyDiag::RecvArmRefFieldNotReadable {
+                    primary: pat.span(self.body()).into(),
+                    field_ty: *field_ty,
+                    input_ty: *input_ty,
+                    abi_ty: *abi_ty,
+                },
+            };
+            self.push_diag(diag);
+        }
+    }
+
     fn resolve_recv_arm_types(
         &mut self,
         contract: Contract<'db>,
@@ -3952,6 +3992,9 @@ impl<'db> TyChecker<'db> {
                 self.expr_has_authority(*inner)
             }
             Partial::Present(Expr::Bin(base, _, BinOp::Index)) => self.expr_has_authority(*base),
+            Partial::Present(Expr::Field(base, _)) if self.env.callable_expr(expr).is_some() => {
+                self.expr_has_authority(*base)
+            }
             Partial::Present(Expr::MethodCall(receiver, _, _, args)) => {
                 self.expr_has_authority(*receiver)
                     || args.iter().any(|arg| self.expr_has_authority(arg.expr))
@@ -4065,6 +4108,9 @@ impl<'db> TyChecker<'db> {
         match marker {
             BindingMarker::Plain => self.implied_markers.get(&pat).copied().unwrap_or(marker),
             BindingMarker::MaybeMut => self.maybe_mut_marker(),
+            // A `ref` name of an arm that reads its message in place binds the
+            // part by value, like a plain name.
+            BindingMarker::Ref if self.recv_in_place.contains_key(&pat) => BindingMarker::Plain,
             _ => marker,
         }
     }
@@ -5927,7 +5973,9 @@ impl<'db> TypedBody<'db> {
             }
             Expr::RecordInit(..) if self.record_init_lowering(expr).is_none() => missing_plan(),
             Expr::Field(..)
-                if self.expr_place(expr).is_none() && self.resolved_field_index(expr).is_none() =>
+                if self.expr_place(expr).is_none()
+                    && self.resolved_field_index(expr).is_none()
+                    && self.semantic_expr_lowering(expr).is_none() =>
             {
                 missing_plan()
             }
@@ -6025,6 +6073,7 @@ impl<'db> TypedBody<'db> {
             Expr::Path(..) => self.expr_binding(expr).is_none(),
             Expr::Field(base, field) => {
                 field.to_opt().is_none()
+                    || self.semantic_expr_lowering(expr).is_some()
                     || self.missing_place_is_explained_by_invalid_program(db, *base)
             }
             Expr::Bin(base, _, crate::hir_def::BinOp::Index) => {

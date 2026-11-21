@@ -1,3 +1,6 @@
+#[path = "../common/prepared_fixture.rs"]
+mod prepared_fixture;
+
 mod const_param_assumptions;
 mod constraints;
 mod default_trait_methods;

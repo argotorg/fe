@@ -49,6 +49,8 @@ fn emit_evm_ir(source: String) -> String {
     let url = Url::parse("file:///evm_drops.fe").unwrap();
     db.workspace().touch(&mut db, url.clone(), Some(source));
     let file = db.workspace().get(&db, &url).unwrap();
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     emit_module_sonatina_ir(&db, top_mod).expect("Sonatina IR should emit")
 }
@@ -250,6 +252,8 @@ contract C {
         ),
     );
     let file = db.workspace().get(&db, &url).unwrap();
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let package = build_runtime_package(&db, db.top_mod(file)).expect("runtime package");
     let store = package
         .functions(&db)

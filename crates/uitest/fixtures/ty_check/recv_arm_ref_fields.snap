@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_ref_fields.fe
+---
+error[8-0000]: type mismatch
+    ┌─ recv_arm_ref_fields.fe:105:18
+    │
+105 │             take(o)
+    │                  ^ expected `Inner`, but `Encoded<CallData, Inner, Sol>` is given
+
+error[8-0120]: a `mut` binding needs a place or an access
+   ┌─ recv_arm_ref_fields.fe:95:13
+   │
+95 │         V { mut p } -> u256 {
+   │             ^^^^^ this binds an owned value
+   │
+   = write `var` for a mutable value
+
+error[8-0160]: this arm reads its message where it lies, but `Hand` is not read field by field
+   ┌─ recv_arm_ref_fields.fe:77:16
+   │
+77 │         Hand { ref v } -> u256 {
+   │                ^^^^^ `Hand` does not implement `std::abi::AbiFields`
+   │
+   = a `ref` field reads the message in place, which needs its encoding to be the tuple of its fields; `msg` variants and `#[abi]` structs have it, and a hand-written message states `impl AbiFields for Hand {}`
+
+error[8-0161]: a `ref` field cannot be read where it lies
+   ┌─ recv_arm_ref_fields.fe:86:13
+   │
+86 │         V { ref p } -> u256 {
+   │             ^^^^^ `Plain` does not implement `std::abi::Part<CallData, Sol>`
+   │
+   = declare `Plain` with `#[abi]`, or bind the field by its plain name to decode it

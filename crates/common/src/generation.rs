@@ -143,6 +143,11 @@ pub enum FrozenHoleValue {
     Field(FrozenFieldRef),
     /// A field's declared type, over the record's own parameters.
     FieldType(FrozenFieldRef),
+    /// Ordered field types as written on a record over its own parameters.
+    FieldTypes {
+        record: FrozenRecordRef,
+        count: usize,
+    },
     /// A ground type: the instantiated type of a field of a record with
     /// actual arguments.
     Type(FrozenTy),
@@ -171,6 +176,18 @@ pub enum FrozenCode {
         group: usize,
         field_index: usize,
     },
+    /// A value of `record`, a struct or a selected variant, built from one
+    /// initializer per field in declaration order. Lowering writes the
+    /// record's own constructor: `R { .. }`, `R(..)`, `E::V { .. }`,
+    /// `E::V(..)` or `E::V`.
+    Construct {
+        record: FrozenRecordRef,
+        fields: Vec<FrozenCode>,
+    },
+    /// An ordered, unit-valued block of checked expressions.
+    FieldStatements {
+        fields: Vec<FrozenCode>,
+    },
 }
 
 /// A checked scoped output binds one lexical opening and ground goal to a
@@ -187,6 +204,9 @@ pub struct FrozenGenerationRequest {
     pub scoped_impl: Option<FrozenScopedImpl>,
     /// Authored derive header receiving this generated method.
     pub request_impl: Option<TextRange>,
+    /// The slot of a short form (`#[abi]`, `#[error]`) whose attribute is at
+    /// `request_impl`; `None` for a written header.
+    pub request_slot: Option<u8>,
     pub code: FrozenCode,
 }
 

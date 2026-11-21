@@ -17,7 +17,9 @@ impl std::evm::Event for Approval {
     const TOPIC0: u256 = core::keccak(("Approval", "(", <Address as std::abi::SolCompat>::SOL_TYPE, ",", <Address as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")"))
 
     #[inline(always)]
-    fn emit<__fe_L: std::evm::Log>(own self, _ log: mut __fe_L) {
-        log.log4(data: core::ptr::MemBuffer::empty().span(), topic0: Self::TOPIC0, topic1: self.owner.as_topic(), topic2: self.spender.as_topic(), topic3: self.value.as_topic())
+    fn emit<L: Log>(own self, _ log: mut L) {
+        let buffer = MemBuffer::empty()
+        let data = buffer.span()
+        log.log4(data: data, topic0: Self::TOPIC0, topic1: self.owner.as_topic(), topic2: self.spender.as_topic(), topic3: self.value.as_topic())
     }
 }

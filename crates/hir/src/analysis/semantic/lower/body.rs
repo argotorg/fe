@@ -24,6 +24,7 @@ use crate::{
                 ConstTyData, ConstTyId, const_ty_or_abstract_from_assoc_const_use,
                 const_ty_or_abstract_from_inherent_const_use,
             },
+            corelib::resolve_core_trait,
             normalize::normalize_ty,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
@@ -39,7 +40,7 @@ use crate::{
     core::semantic::storage_slot_span,
     hir_def::{
         ArithBinOp, Body, CallArg, CallableDef, Cond, CondId, Expr, ExprId, Field as HirField,
-        LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId,
+        IdentId, LitKind, MatchArm, Partial, Pat, PatId, PathId, Stmt, StmtId,
         expr::{BinOp, LogicalBinOp, UnOp},
         params::FuncParamMode,
     },
@@ -255,6 +256,12 @@ struct SmirLowerInputs<'a, 'db> {
 
 /// A call's receiver between the resolution of its root, before the call's
 /// arguments, and the opening of its accesses, after them.
+pub(super) struct ReceiverLink<'db> {
+    root: ExprId,
+    args: Vec<ExprId>,
+    callable: &'db Callable<'db>,
+}
+
 pub(super) enum Receiver<'db> {
     /// A temporary, a loop base or an access carrier, evaluated already.
     Value(SValueId),
@@ -264,7 +271,7 @@ pub(super) enum Receiver<'db> {
     Place(Option<SPlace<'db>>),
     /// A projection call in the receiver chain, by its own receiver: its
     /// session opens after the arguments of the call it is the receiver of.
-    Chain(ExprId, Box<Receiver<'db>>),
+    Chain(ReceiverLink<'db>, Box<Receiver<'db>>),
     /// `e.unwrap()` on a sum shape in the receiver chain, by `e` prepared:
     /// `e` opens after the arguments, and its payload is taken then.
     Unwrap(Box<Receiver<'db>>),
@@ -900,6 +907,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let ty = shape.carrier_ty(self.db);
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Call(_, args)) => {
+                // Preparing an assignment or a place in a receiver's grant
+                // can leave a qualified projection's root ready here.
+                if let Some(prepared) = self.prepared_receivers.remove(&expr) {
+                    let link = self.receiver_link(expr).expect("prepared projection call");
+                    return self.lower_callable_expr(
+                        expr,
+                        ty,
+                        Some((link.root, prepared)),
+                        &link.args,
+                        link.callable,
+                    );
+                }
                 let args = args.iter().map(|arg| arg.expr).collect::<Vec<_>>();
                 let receiver = self.typed_body.call_receiver(self.db, expr);
                 self.lower_call_like_expr(expr, ty, receiver, &args)
@@ -913,6 +932,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 if self.typed_body.semantic_expr_lowering(expr).is_some() =>
             {
                 self.lower_call_like_expr(expr, ty, Some(*base), &[*index])
+            }
+            // A projected field (`core::ops::Project`) calls `project`.
+            Partial::Present(Expr::Field(base, _))
+                if self.typed_body.semantic_expr_lowering(expr).is_some() =>
+            {
+                self.lower_call_like_expr(expr, ty, Some(*base), &[])
             }
             Partial::Present(Expr::Try(inner)) => {
                 let value = self.lower_source(*inner);
@@ -1269,6 +1294,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::RecordInit(path, fields) => self.lower_record_init(expr, *path, fields),
             Expr::Field(base, _) => {
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    return self.lower_call_like_expr(expr, ty, Some(*base), &[]);
+                }
                 if let Some(place) = self.try_lower_place(expr) {
                     return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
                 }
@@ -2397,18 +2425,70 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         Receiver::Place(Some(place))
     }
 
+    /// The checked projector, root and operands for a receiver chain link.
+    /// A qualified call to the field projector has a written receiver as
+    /// its sole argument. The checker's mode still governs its access.
+    fn receiver_link(&self, expr: ExprId) -> Option<ReceiverLink<'db>> {
+        let SemanticExprLowering::Call { callable } =
+            self.typed_body.semantic_expr_lowering(expr)?
+        else {
+            return None;
+        };
+        let (root, args) = match expr.data(self.db, self.body) {
+            Partial::Present(Expr::MethodCall(root, _, _, args)) => {
+                (*root, args.iter().map(|arg| arg.expr).collect())
+            }
+            Partial::Present(Expr::Bin(root, index, BinOp::Index)) => (*root, vec![*index]),
+            Partial::Present(Expr::Field(root, _)) => (*root, Vec::new()),
+            Partial::Present(Expr::Call(_, args)) => {
+                let [arg] = args.as_slice() else {
+                    return None;
+                };
+                let trait_def = callable.trait_inst()?.def(self.db);
+                let projector =
+                    resolve_core_trait(self.db, self.body.scope(), &["ops", "ProjectField"])?;
+                let method = IdentId::new(self.db, "project".to_string());
+                if trait_def != projector
+                    || trait_def
+                        .method_defs(self.db)
+                        .get(&method)
+                        .copied()
+                        .map(CallableDef::Func)
+                        != Some(callable.callable_def())
+                {
+                    return None;
+                }
+                // An explicit access operator on the argument was checked
+                // before lowering. Open that access at the receiver's phase.
+                let root = match arg.expr.data(self.db, self.body) {
+                    Partial::Present(Expr::Un(root, UnOp::Mut | UnOp::MaybeMut | UnOp::Ref)) => {
+                        *root
+                    }
+                    _ => arg.expr,
+                };
+                (root, Vec::new())
+            }
+            _ => return None,
+        };
+        Some(ReceiverLink {
+            root,
+            args,
+            callable,
+        })
+    }
+
     /// Prepares `access`, an access a receiver chain grants. A projection
     /// call, and `e.unwrap()` or `e?` on a sum shape, open after the arguments
     /// of the call they are the receiver of; anything else is lowered now.
     fn prepare_access(&mut self, access: ExprId) -> Receiver<'db> {
+        if let Some(link) = self.receiver_link(access) {
+            let root = self.prepare_receiver(link.root, link.callable);
+            return Receiver::Chain(link, Box::new(root));
+        }
         match (
             access.data(self.db, self.body),
             self.typed_body.semantic_expr_lowering(access),
         ) {
-            (
-                Partial::Present(Expr::MethodCall(root, ..) | Expr::Bin(root, _, BinOp::Index)),
-                Some(SemanticExprLowering::Call { callable }),
-            ) => Receiver::Chain(*root, Box::new(self.prepare_receiver(*root, callable))),
             (
                 Partial::Present(Expr::MethodCall(inner, ..)),
                 Some(SemanticExprLowering::SumShape {
@@ -2430,21 +2510,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// session when the place is lowered after them. Returns whether the
     /// path has a projection call.
     fn prepare_place_root(&mut self, place: ExprId) -> bool {
+        if self.typed_body.expr_prop(self.db, place).shape.is_some()
+            && let Some(link) = self.receiver_link(place)
+        {
+            let root = self.prepare_receiver(link.root, link.callable);
+            self.prepared_receivers.insert(place, root);
+            return true;
+        }
         let lowering = self.typed_body.semantic_expr_lowering(place);
         match (place.data(self.db, self.body), lowering) {
-            (Partial::Present(Expr::Field(base, _) | Expr::Try(base)), _)
+            (Partial::Present(Expr::Field(base, _)), None)
+            | (Partial::Present(Expr::Try(base)), _)
             | (Partial::Present(Expr::Bin(base, _, BinOp::Index)), None) => {
                 self.prepare_place_root(*base)
-            }
-            (
-                Partial::Present(
-                    Expr::MethodCall(receiver, ..) | Expr::Bin(receiver, _, BinOp::Index),
-                ),
-                Some(SemanticExprLowering::Call { callable }),
-            ) if self.typed_body.expr_prop(self.db, place).shape.is_some() => {
-                let prepared = self.prepare_receiver(*receiver, callable);
-                self.prepared_receivers.insert(place, prepared);
-                true
             }
             (
                 Partial::Present(Expr::MethodCall(receiver, ..)),
@@ -2517,21 +2595,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         };
         match prepared {
             Receiver::Value(value) => value,
-            Receiver::Chain(root, prepared) => {
-                let Some(SemanticExprLowering::Call { callable: inner }) =
-                    self.typed_body.semantic_expr_lowering(access)
-                else {
-                    unreachable!("a receiver chain link is a call")
-                };
-                let args: Vec<ExprId> = match access.data(self.db, self.body) {
-                    Partial::Present(Expr::MethodCall(_, _, _, args)) => {
-                        args.iter().map(|arg| arg.expr).collect()
-                    }
-                    Partial::Present(Expr::Bin(_, index, BinOp::Index)) => vec![*index],
-                    _ => unreachable!("a receiver chain link has a receiver"),
-                };
-                self.lower_callable_expr(access, ty(), Some((root, *prepared)), &args, inner)
-            }
+            Receiver::Chain(link, prepared) => self.lower_callable_expr(
+                access,
+                ty(),
+                Some((link.root, *prepared)),
+                &link.args,
+                link.callable,
+            ),
             Receiver::Unwrap(prepared) => {
                 let Partial::Present(Expr::MethodCall(inner, ..)) = access.data(self.db, self.body)
                 else {

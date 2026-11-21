@@ -1,0 +1,88 @@
+use core::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, abi_field_head_size, decode_field_from_prechecked_head}
+use core::derive::Derive
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, type_ref}
+
+/// Decodes the field of type `T` whose head is at `head_pos` in a record
+/// whose head starts at `base`, and advances `head_pos` past that head.
+///
+/// The record's head must already be checked against `input_len`, as for
+/// `decode_from_prechecked_head`. Called once per field in declaration
+/// order, it decodes the fields of an ABI record with one running position
+/// instead of a sum of the earlier head sizes per field.
+#[inline(always)]
+pub fn decode_next_field<A: Abi, T, I>(_ head_pos: mut u256, _ input: I, base: u256, input_len: u256) -> T
+    where T: Decode<A> + AbiSize,
+          I: ByteInput
+{
+    let value = decode_field_from_prechecked_head<A, T, I>(input, base: base, head_pos: head_pos, input_len: input_len)
+    head_pos = head_pos + abi_field_head_size<T>()
+    value
+}
+
+/// Provides `Decode<A>` for a record, requested by a header such as
+/// `impl Decode<Sol> for PoolKey with (StructAbiDecode)`. The record must also
+/// implement `AbiSize` (and, to be encoded, `Encode<Sol>`). The fields are
+/// decoded in declaration order. Payload reads use the supplied decoder.
+/// Checked positional reads use each field's positional decode method.
+pub struct StructAbiDecode {}
+impl<A: Abi> Derive<trait Decode<A>> for StructAbiDecode {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let abi = type_ref<A>()
+        let payload = construct<DecodePayloadField>(record)
+        quote(d, input) {
+            const CHECKS_HEAD_FRAME: bool = true
+
+            #[inline(always)]
+            fn decode_payload<D: AbiDecoder<${abi}>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+                ${payload}
+            }
+
+            #[inline(always)]
+            fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+                var reader: PrecheckedRecordDecoder<${abi}> = PrecheckedRecordDecoder {
+                    base: pos, head: pos, input_len,
+                }
+                <Self as Decode<${abi}>>::decode_payload(mut reader, input)
+            }
+        }
+    }
+}
+
+/// A field read by `decode_payload`: the next value of the shared decoder.
+struct DecodePayloadField {}
+impl FieldInit for DecodePayloadField {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        quote(d, input) { d.read_record_field(input) }
+    }
+}
+
+/// Used only by the generated constructor. Leaves use the positional decode
+/// entry point, so they receive the same inputs as a handwritten checked read.
+struct PrecheckedRecordDecoder<A> { base: u256, head: u256, input_len: u256 }
+impl<A: Abi> AbiDecoder<A> for PrecheckedRecordDecoder<A> {
+    fn base(self) -> u256 { self.base }
+    fn set_base(mut self, _ new_base: u256) { self.base = new_base }
+    fn pos(self) -> u256 { self.head }
+    fn set_pos(mut self, _ new_pos: u256) { self.head = new_pos }
+
+    fn read_u8<I: ByteInput>(mut self, _ input: I) -> u8 {
+        let value = input.byte_at(self.head)
+        self.head = self.head + 1
+        value
+    }
+
+    fn read_word<I: ByteInput>(mut self, _ input: I) -> u256 {
+        let value = input.word_at(self.head)
+        self.head = self.head + 32
+        value
+    }
+
+    fn peek_word<I: ByteInput>(self, _ input: I, _ at: u256) -> u256 {
+        input.word_at(at)
+    }
+
+    #[inline(always)]
+    fn read_record_field<T: Decode<A>, I: ByteInput>(mut self, _ input: I) -> T {
+        decode_next_field<A, T, I>(mut self.head, input, base: self.base, input_len: self.input_len)
+    }
+}

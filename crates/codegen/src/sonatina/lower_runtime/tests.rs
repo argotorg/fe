@@ -476,6 +476,8 @@ pub contract SlotContract {
                 .into(),
             ),
         );
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let diagnostics = db.run_on_top_mod(top_mod);
         assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
@@ -716,6 +718,8 @@ pub contract C {
                     Url::parse("file:///stored_lane_reference.fe").unwrap(),
                     Some(SOURCE.into()),
                 );
+                let file = driver::generation::prepare_file_in_place(&mut db, file)
+                    .expect("fixture generation should succeed");
                 let top_mod = db.top_mod(file);
                 let diagnostics = db.run_on_top_mod(top_mod);
                 assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));

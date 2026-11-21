@@ -53,6 +53,7 @@ mod pat;
 mod path;
 mod payable;
 mod scope_builder;
+mod short_form;
 mod stmt;
 mod types;
 mod use_tree;
@@ -543,6 +544,14 @@ impl<'db> AuthoredRecord<'db> {
                 ast::VariantKind::Record(fields) => named(Some(fields)),
             }),
             _ => None,
+        }
+    }
+
+    /// Whether the record is a struct whose fields are written as a tuple.
+    pub(super) fn is_tuple_struct(&self) -> bool {
+        match &self.syntax {
+            RecordSyntax::Struct(s) => s.fields().is_some_and(|fields| fields.is_tuple()),
+            RecordSyntax::Enum(_) | RecordSyntax::MsgVariant(_) => false,
         }
     }
 

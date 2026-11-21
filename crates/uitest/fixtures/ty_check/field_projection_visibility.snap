@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_visibility.fe
+---
+error[2-0003]: `balance` is not visible
+   ┌─ field_projection_visibility.fe:35:7
+   │
+ 8 │         balance: u256,
+   │         ------- `balance` is defined here
+   ·
+35 │     v.balance
+   │       ^^^^^^^ `balance` is not visible

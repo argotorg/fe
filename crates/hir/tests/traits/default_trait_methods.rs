@@ -392,6 +392,7 @@ fn test_large_by_value_array_args() uses (evm: mut Evm) {
 }
 "#,
     );
+    crate::prepared_fixture::prepare_generation(&mut db, file);
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 

@@ -1,0 +1,29 @@
+// `construct` needs a struct or a selected variant; a whole enum is refused.
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct}
+
+struct Numbered {}
+impl FieldInit for Numbered {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let value: u256 = (index as u256) + 1
+        quote { ${value} }
+    }
+}
+
+pub struct Build {}
+impl DeriveInherent for Build {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let value = construct<Numbered>(record)
+        quote {
+            pub const fn built() -> Self {
+                ${value}
+            }
+        }
+    }
+}
+
+pub enum Whole {
+    A,
+    B(u256),
+}
+impl Whole with (Build)

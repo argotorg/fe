@@ -26,59 +26,60 @@ impl core::abi::AbiSize for Key {
 impl core::abi::AbiSpan<std::abi::Sol> for Key {
 
     #[inline(always)]
-    fn payload_end<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, base: u256, pos: u256) -> u256 {
-        return Self::payload_end_with_input_len(__fe_abi_struct_input, base: base, pos: pos, input_len: __fe_abi_struct_input.len())
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        <Self as AbiSpan<Sol> >::payload_end_with_input_len(input, base: base, pos: pos, input_len: input.len())
     }
 
     #[inline(always)]
-    fn payload_end_with_input_len<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, base: u256, pos: u256, input_len: u256) -> u256 {
-        var __fe_end: u256 = core::abi::checked_frame_end<std::abi::Sol>(pos, <Self as core::abi::AbiSize>::HEAD_SIZE, input_len)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, pos, pos, input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u32, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<u256>(), input_len, __fe_end)
-        return __fe_end
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        var cursor = SpanCursor { base: pos, head: pos, input_len, end: checked_frame_end<Sol>(pos, <Self as AbiSize>::HEAD_SIZE, input_len) }
+        <((u256), (u32)) as SpanFields<Sol> >::extend(mut cursor, input, advance: false)
+        cursor.end
     }
 }
 
 impl core::abi::Encode<std::abi::Sol> for Key {
 
     #[inline(always)]
-    fn encode(self, _ __fe_out: core::abi::AbiFrame) {
-        var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
-        var __fe_head_pos = 0
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.currency0, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        core::abi::encode_field<std::abi::Sol, u32>(self.fee, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+    fn encode(self, _ out: AbiFrame) {
+        var writer: RecordWriter<Sol> = RecordWriter { out: out.tail(0), tails: out.tail(<Self as AbiSize>::HEAD_SIZE), head: 0, remaining: 2 as usize }
+        {
+            writer.push(self.currency0)
+            writer.push(self.fee)
+            ()
+        }
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for Key {
+    const CHECKS_HEAD_FRAME: bool = true
 
     #[inline(always)]
-    fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_abi_struct_decoder: mut __fe_D, _ __fe_abi_struct_input: __fe_I) -> Self {
-        let __fe_field_0: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_1: u32 = core::abi::decode_field<std::abi::Sol, u32, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        return Self { currency0: __fe_field_0, fee: __fe_field_1 }
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Key { currency0: d.read_record_field(input), fee: d.read_record_field(input) }
     }
 
-    fn decode_from_prechecked_head<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
-        let __fe_field_0: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos, input_len: __fe_abi_struct_input_len)
-        let __fe_field_1: u32 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u32, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<u256>(), input_len: __fe_abi_struct_input_len)
-        return Self { currency0: __fe_field_0, fee: __fe_field_1 }
-    }
-
-    fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256) -> Self {
-        let __fe_abi_struct_input_len: u256 = __fe_abi_struct_input.len()
-        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
-    }
-
-    fn decode_from_bounded<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
-        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
+    #[inline(always)]
+    fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+        var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
+        <Self as Decode<Sol> >::decode_payload(mut reader, input)
     }
 }
 
 impl std::abi::SolCompat for Key where u256: std::abi::SolCompat, u32: std::abi::SolCompat {
     type S = (std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u32 as std::abi::SolCompat>::S, std::abi::SolPunctuation)
     const SOL_TYPE: Self::S = ("(", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u32 as std::abi::SolCompat>::SOL_TYPE, ")")
+}
+
+impl<__fe_I, __fe_A> std::abi::Part<__fe_I, __fe_A> for Key where __fe_I: core::abi::ByteInput + core::marker::Copy, __fe_A: core::abi::Abi {
+    type Of = std::abi::Encoded<__fe_I, Key, __fe_A>
+
+    fn read(_ part: std::abi::PartHead<__fe_I, Key>) -> std::abi::Encoded<__fe_I, Key, __fe_A> {
+        return std::abi::record_part(part)
+    }
+}
+
+impl std::abi::AbiFields for Key {
 }
 
 pub struct Hop {
@@ -103,77 +104,62 @@ impl core::abi::AbiSize for Hop {
 impl core::abi::AbiSpan<std::abi::Sol> for Hop {
 
     #[inline(always)]
-    fn payload_end<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, base: u256, pos: u256) -> u256 {
-        return Self::payload_end_with_input_len(__fe_abi_struct_input, base: base, pos: pos, input_len: __fe_abi_struct_input.len())
+    fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+        <Self as AbiSpan<Sol> >::payload_end_with_input_len(input, base: base, pos: pos, input_len: input.len())
     }
 
     #[inline(always)]
-    fn payload_end_with_input_len<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, base: u256, pos: u256, input_len: u256) -> u256 {
-        var __fe_end: u256 = core::abi::checked_frame_end<std::abi::Sol>(pos, <Self as core::abi::AbiSize>::HEAD_SIZE, input_len)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, Key, __fe_I>(__fe_abi_struct_input, pos, pos, input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, Bytes, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<Key>(), input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>(), input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>(), input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>(), input_len, __fe_end)
-        __fe_end = core::abi::abi_record_field_end<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, pos, pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>(), input_len, __fe_end)
-        return __fe_end
+    fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+        var cursor = SpanCursor { base: pos, head: pos, input_len, end: checked_frame_end<Sol>(pos, <Self as AbiSize>::HEAD_SIZE, input_len) }
+        <((((Key), (Bytes)), ((u256), (u256))), ((u256), (u256))) as SpanFields<Sol> >::extend(mut cursor, input, advance: false)
+        cursor.end
     }
 }
 
 impl core::abi::Encode<std::abi::Sol> for Hop {
 
     #[inline(always)]
-    fn encode(self, _ __fe_out: core::abi::AbiFrame) {
-        var __fe_tails = __fe_out.tail(<Self as core::abi::AbiSize>::HEAD_SIZE)
-        var __fe_head_pos = 0
-        __fe_tails = core::abi::encode_field<std::abi::Sol, Key>(self.key, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<Key>()
-        __fe_tails = core::abi::encode_field<std::abi::Sol, Bytes>(self.data, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<Bytes>()
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.base, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.pos, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        __fe_tails = core::abi::encode_field<std::abi::Sol, u256>(self.input_len, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
-        __fe_head_pos = __fe_head_pos + core::abi::abi_field_head_size<u256>()
-        core::abi::encode_field<std::abi::Sol, u256>(self.ptr, __fe_out, head_pos: __fe_head_pos, tails: __fe_tails)
+    fn encode(self, _ out: AbiFrame) {
+        var writer: RecordWriter<Sol> = RecordWriter { out: out.tail(0), tails: out.tail(<Self as AbiSize>::HEAD_SIZE), head: 0, remaining: 6 as usize }
+        {
+            writer.push(self.key)
+            writer.push(self.data)
+            writer.push(self.base)
+            writer.push(self.pos)
+            writer.push(self.input_len)
+            writer.push(self.ptr)
+            ()
+        }
     }
 }
 
 impl core::abi::Decode<std::abi::Sol> for Hop {
+    const CHECKS_HEAD_FRAME: bool = true
 
     #[inline(always)]
-    fn decode_payload<__fe_D: core::abi::AbiDecoder<std::abi::Sol>, __fe_I: core::abi::ByteInput>(_ __fe_abi_struct_decoder: mut __fe_D, _ __fe_abi_struct_input: __fe_I) -> Self {
-        let __fe_field_0: Key = core::abi::decode_field<std::abi::Sol, Key, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_1: Bytes = core::abi::decode_field<std::abi::Sol, Bytes, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_2: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_3: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_4: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        let __fe_field_5: u256 = core::abi::decode_field<std::abi::Sol, u256, __fe_D, __fe_I>(mut __fe_abi_struct_decoder, __fe_abi_struct_input)
-        return Self { key: __fe_field_0, data: __fe_field_1, base: __fe_field_2, pos: __fe_field_3, input_len: __fe_field_4, ptr: __fe_field_5 }
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Hop { key: d.read_record_field(input), data: d.read_record_field(input), base: d.read_record_field(input), pos: d.read_record_field(input), input_len: d.read_record_field(input), ptr: d.read_record_field(input) }
     }
 
-    fn decode_from_prechecked_head<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
-        let __fe_field_0: Key = core::abi::decode_field_from_prechecked_head<std::abi::Sol, Key, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos, input_len: __fe_abi_struct_input_len)
-        let __fe_field_1: Bytes = core::abi::decode_field_from_prechecked_head<std::abi::Sol, Bytes, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>(), input_len: __fe_abi_struct_input_len)
-        let __fe_field_2: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>(), input_len: __fe_abi_struct_input_len)
-        let __fe_field_3: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>(), input_len: __fe_abi_struct_input_len)
-        let __fe_field_4: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>(), input_len: __fe_abi_struct_input_len)
-        let __fe_field_5: u256 = core::abi::decode_field_from_prechecked_head<std::abi::Sol, u256, __fe_I>(__fe_abi_struct_input, base: __fe_abi_struct_pos, head_pos: __fe_abi_struct_pos + core::abi::abi_field_head_size<Key>() + core::abi::abi_field_head_size<Bytes>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>() + core::abi::abi_field_head_size<u256>(), input_len: __fe_abi_struct_input_len)
-        return Self { key: __fe_field_0, data: __fe_field_1, base: __fe_field_2, pos: __fe_field_3, input_len: __fe_field_4, ptr: __fe_field_5 }
-    }
-
-    fn decode_from<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256) -> Self {
-        let __fe_abi_struct_input_len: u256 = __fe_abi_struct_input.len()
-        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
-    }
-
-    fn decode_from_bounded<__fe_I: core::abi::ByteInput>(_ __fe_abi_struct_input: __fe_I, _ __fe_abi_struct_pos: u256, _ __fe_abi_struct_input_len: u256) -> Self {
-        return core::abi::decode_frame_from<std::abi::Sol, Self, __fe_I>(__fe_abi_struct_input, __fe_abi_struct_pos, __fe_abi_struct_input_len)
+    #[inline(always)]
+    fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
+        var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
+        <Self as Decode<Sol> >::decode_payload(mut reader, input)
     }
 }
 
 impl std::abi::SolCompat for Hop where Key: std::abi::SolCompat, Bytes: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat, u256: std::abi::SolCompat {
     type S = (std::abi::SolPunctuation, <Key as std::abi::SolCompat>::S, std::abi::SolPunctuation, <Bytes as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation, <u256 as std::abi::SolCompat>::S, std::abi::SolPunctuation)
     const SOL_TYPE: Self::S = ("(", <Key as std::abi::SolCompat>::SOL_TYPE, ",", <Bytes as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")")
+}
+
+impl<__fe_I, __fe_A> std::abi::Part<__fe_I, __fe_A> for Hop where __fe_I: core::abi::ByteInput + core::marker::Copy, __fe_A: core::abi::Abi {
+    type Of = std::abi::Encoded<__fe_I, Hop, __fe_A>
+
+    fn read(_ part: std::abi::PartHead<__fe_I, Hop>) -> std::abi::Encoded<__fe_I, Hop, __fe_A> {
+        return std::abi::record_part(part)
+    }
+}
+
+impl std::abi::AbiFields for Hop {
 }

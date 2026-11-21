@@ -1,0 +1,552 @@
+// The cost of one strict read through the encoded handle, against a
+// hand-written read and the eager decoder. A Seaport-shaped order (arrays of
+// item records and a nested static record) is passed in calldata, and each
+// contract has one arm, at the same selector, that returns one amount of one
+// offer item. Each arm is measured as the gas of a call minus that of an arm
+// returning a constant, with the calldata and the return buffer made once, so
+// that every measured call runs with the same memory.
+use core::abi::{Abi, AbiSize, ByteInput, ByteSource, store_word}
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{AbiFields, Bytes32, DynArray, Encoded, Part, PartHead, Sol, decode_record_from, dyn_array_from, keys, record_part}
+use std::evm::{Address, Call, CallData, Evm}
+
+// Each record read through a view is declared without `#[abi]` and states
+// `AbiFields` and `AbiSize` by hand, so that the reads of a hand-written
+// record are tested. Its `#[abi]` twin `A..` has the same fields and encodes
+// the calls.
+
+pub struct OfferItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+}
+impl AbiFields for OfferItem {}
+impl AbiSize for OfferItem {
+    const HEAD_SIZE: u256 = <AOfferItem as AbiSize>::HEAD_SIZE
+    const IS_DYNAMIC: bool = false
+}
+#[abi]
+pub struct AOfferItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+}
+
+pub struct ConsiderationItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+    pub recipient: Address,
+}
+impl AbiFields for ConsiderationItem {}
+impl AbiSize for ConsiderationItem {
+    const HEAD_SIZE: u256 = <AConsiderationItem as AbiSize>::HEAD_SIZE
+    const IS_DYNAMIC: bool = false
+}
+#[abi]
+pub struct AConsiderationItem {
+    pub item_type: u8,
+    pub token: Address,
+    pub identifier: u256,
+    pub start_amount: u256,
+    pub end_amount: u256,
+    pub recipient: Address,
+}
+
+pub struct Window { pub start_time: u256, pub end_time: u256 }
+impl AbiFields for Window {}
+impl AbiSize for Window {
+    const HEAD_SIZE: u256 = <AWindow as AbiSize>::HEAD_SIZE
+    const IS_DYNAMIC: bool = false
+}
+#[abi]
+pub struct AWindow { pub start_time: u256, pub end_time: u256 }
+
+pub struct OrderParams {
+    pub offerer: Address,
+    pub zone: Address,
+    pub offer: DynArray<OfferItem>,
+    pub consideration: DynArray<ConsiderationItem>,
+    pub order_type: u8,
+    pub window: Window,
+    pub zone_hash: Bytes32,
+    pub salt: u256,
+    pub conduit_key: Bytes32,
+}
+impl AbiFields for OrderParams {}
+impl AbiSize for OrderParams {
+    const HEAD_SIZE: u256 = <AOrderParams as AbiSize>::HEAD_SIZE
+    const IS_DYNAMIC: bool = true
+}
+#[abi]
+pub struct AOrderParams {
+    pub offerer: Address,
+    pub zone: Address,
+    pub offer: DynArray<AOfferItem>,
+    pub consideration: DynArray<AConsiderationItem>,
+    pub order_type: u8,
+    pub window: AWindow,
+    pub zone_hash: Bytes32,
+    pub salt: u256,
+    pub conduit_key: Bytes32,
+}
+
+fn offer_item(_ n: u256) -> AOfferItem {
+    AOfferItem { item_type: 2, token: Address::new(0x700 + n), identifier: n, start_amount: 1000 + n, end_amount: 2000 + n }
+}
+
+fn consideration_item(_ n: u256) -> AConsiderationItem {
+    AConsiderationItem {
+        item_type: 0, token: Address::new(0), identifier: 0, start_amount: 3000 + n, end_amount: 3000 + n,
+        recipient: Address::new(0x900 + n),
+    }
+}
+
+fn order_params() -> AOrderParams {
+    AOrderParams {
+        offerer: Address::new(0x111),
+        zone: Address::new(0x222),
+        offer: dyn_array_from([offer_item(0), offer_item(1), offer_item(2)]),
+        consideration: dyn_array_from([consideration_item(0), consideration_item(1)]),
+        order_type: 3,
+        window: AWindow { start_time: 50, end_time: 60 },
+        zone_hash: Bytes32 { val: 0x5a },
+        salt: 77,
+        conduit_key: Bytes32 { val: 0xc0 },
+    }
+}
+
+msg Raw {
+    #[selector = 0x01]
+    A -> u256,
+}
+msg Typed {
+    #[selector = 0x01]
+    A { order: AOrderParams, index: u256 } -> u256,
+}
+
+/// The constant arm: the reference that every other arm is measured against.
+pub contract MBase {
+    recv Raw {
+        A {} -> u256 {
+            1001
+        }
+    }
+}
+
+/// Hand-written: masked offsets, no bounds checks.
+pub contract MHand {
+    recv Raw {
+        A {} -> u256 {
+            let args = CallData::with_base(4)
+            let index = args.word_at(32)
+            let order = args.word_at(0) & 0xffffffff
+            let offer = order + (args.word_at(order + 64) & 0xffffffff)
+            args.word_at(offer + 32 + index * 160 + 96)
+        }
+    }
+}
+
+/// The read through the encoded handle with keys, the element reached by
+/// `element`.
+pub contract MElement {
+    recv Raw {
+        A {} -> u256 {
+            let args = CallData::with_base(4)
+            let index: usize = args.word_at(32).downcast_unchecked()
+            args.record_view<OrderParams>(0).at(keys<OrderParams>().offer).element(index).at(keys<OfferItem>().start_amount)
+        }
+    }
+}
+
+/// The read through the encoded handle: `RecordView` is the handle under
+/// `Sol`, and the element is reached by an index.
+pub contract MIndex {
+    recv Raw {
+        A {} -> u256 {
+            let args = CallData::with_base(4)
+            let index: usize = args.word_at(32).downcast_unchecked()
+            let order = args.record_view<OrderParams>(0)
+            order.at(keys<OrderParams>().offer)[index].at(keys<OfferItem>().start_amount)
+        }
+    }
+}
+
+/// The same read in field syntax: the same code as `MIndex`.
+pub contract MField {
+    recv Raw {
+        A {} -> u256 {
+            let args = CallData::with_base(4)
+            let index: usize = args.word_at(32).downcast_unchecked()
+            let order = args.record_view<OrderParams>(0)
+            order.offer[index].start_amount
+        }
+    }
+}
+
+/// The eager decoder.
+pub contract MEager {
+    recv Typed {
+        A { order, index } -> u256 {
+            order.offer.get(index.downcast_unchecked()).start_amount
+        }
+    }
+}
+
+#[abi]
+pub struct TypedArgs { pub order: AOrderParams, pub index: u256 }
+
+/// The in-place arm: `order` is read where it lies in the calldata, and
+/// `index` is decoded.
+pub contract MLazy {
+    recv Typed {
+        A { ref order, index } -> u256 {
+            order.offer[index.downcast_unchecked()].start_amount
+        }
+    }
+}
+
+/// The hand-written form of `MLazy`: the handle of the arguments at the
+/// selector offset, `order` read in place from it, and `index` decoded with
+/// the per-field function of the eager decoder.
+pub contract MLazyTwin {
+    recv Raw {
+        A {} -> u256 {
+            let p = decode_record_from<Sol, TypedArgs, CallData>(CallData::new(), 4)
+            let order = p.order
+            let index: u256 = p.get_at(keys<TypedArgs>().index)
+            order.offer[index.downcast_unchecked()].start_amount
+        }
+    }
+}
+
+msg RawTok {
+    #[selector = 0x02]
+    Transfer -> bool,
+}
+msg Tok {
+    #[selector = 0x02]
+    Transfer { to: Address, amount: u256 } -> bool,
+}
+
+/// The constant arm of the small message: the reference of its measurements.
+pub contract TBase {
+    recv RawTok {
+        Transfer {} -> bool {
+            true
+        }
+    }
+}
+
+/// The whole arm of a message of two words.
+pub contract TWhole {
+    recv Tok {
+        Transfer { to, amount } -> bool {
+            to != Address::zero() && amount > 0
+        }
+    }
+}
+
+/// The same arm, with `to` read in place.
+pub contract TInPlace {
+    recv Tok {
+        Transfer { ref to, amount } -> bool {
+            to != Address::zero() && amount > 0
+        }
+    }
+}
+
+/// The same message, reading only `amount`, in place; `to` is not read.
+pub contract TOne {
+    recv Tok {
+        Transfer { to: _, ref amount } -> bool {
+            amount > 0
+        }
+    }
+}
+
+/// A memory input.
+struct MemInput { ptr: *u8, len: u256 }
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+/// The arguments `(order_params(), index)` as encoded in calldata after the
+/// selector, in a raw allocation that no drop frees.
+fn args(_ index: u256) -> MemInput {
+    let buf = core::abi::encode_alloc<Sol, (AOrderParams, u256)>((order_params(), index))
+    let data = ptr::alloc_bytes(buf.len())
+    unsafe { ptr::copy_raw(data, source: buf.ptr(), len: buf.len()) }
+    MemInput { ptr: data, len: buf.len() as u256 }
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+/// Call `addr` with `selector` followed by `payload`.
+fn call_raw(_ addr: Address, selector: u256, payload: MemInput) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + payload.len
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data.ptr(), value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data.ptr(), 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    var ret = MemBuffer::new(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: Wei::zero(),
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+/// The calldata of one call (selector 1 and `payload`) and a return buffer,
+/// made once, so that every measured call runs with the same memory and the
+/// difference between two measurements is the difference of the callees.
+struct Bench { data: *u8, len: u256 }
+impl Copy for Bench {}
+
+fn bench(_ payload: MemInput) -> Bench {
+    let len = 4 + payload.len
+    let data = ptr::alloc_bytes((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data, value: 1 << 224)
+        ptr::copy_raw(ptr::offset_bytes(data, 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    Bench { data, len }
+}
+
+fn gas_of(_ market: Address, _ b: Bench, _ ret: mut MemBuffer) -> u256 uses (evm: mut Evm) {
+    let args = unsafe { MemSpan::from_raw_parts(ptr: b.data, len: b.len.downcast_unchecked()) }
+    let before = evm.gas()
+    let outcome = evm.raw_call(addr: market, gas: 1000000, value: Wei::zero(), args: args, ret: mut ret)
+    let after = evm.gas()
+    assert!(outcome.success() && ret.span().word_at(0) == 1001)
+    before - after
+}
+
+/// The calldata of one call: `selector` and `payload`.
+fn bench_selector(_ selector: u256, _ payload: MemInput) -> Bench {
+    let len = 4 + payload.len
+    let data = ptr::alloc_bytes((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data, value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data, 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    Bench { data, len }
+}
+
+/// The gas of one call that returns the word `expected`.
+fn gas_returning(_ market: Address, _ b: Bench, _ expected: u256, _ ret: mut MemBuffer) -> u256
+uses (evm: mut Evm)
+{
+    let args = unsafe { MemSpan::from_raw_parts(ptr: b.data, len: b.len.downcast_unchecked()) }
+    let before = evm.gas()
+    let outcome = evm.raw_call(addr: market, gas: 1000000, value: Wei::zero(), args: args, ret: mut ret)
+    let after = evm.gas()
+    assert!(outcome.success() && ret.span().word_at(0) == expected)
+    before - after
+}
+
+/// The cost gate of the encoded handle: the strict read through it costs at
+/// most 1.5 times the gas of the hand-written read, and its contract at most
+/// 1.3 times the code, both above the arm that returns a constant. The
+/// field-syntax read is measured as a third arm and must cost exactly what the
+/// `at` form costs.
+#[test]
+fn encoded_read_cost_gate() uses (evm: mut Evm) {
+    let b = bench(args(1))
+    var ret = MemBuffer::new(64)
+    // Two arms may compile to the same code, so each contract has its own salt.
+    let m_base = evm.create2<MBase>(value: Wei::zero(), args: (), salt: 1)
+    let m_hand = evm.create2<MHand>(value: Wei::zero(), args: (), salt: 2)
+    let m_element = evm.create2<MElement>(value: Wei::zero(), args: (), salt: 3)
+    let m_index = evm.create2<MIndex>(value: Wei::zero(), args: (), salt: 4)
+    let m_eager = evm.create2<MEager>(value: Wei::zero(), args: (), salt: 5)
+    let m_field = evm.create2<MField>(value: Wei::zero(), args: (), salt: 6)
+    // A first call of each warms the account; the second is measured.
+    let _ = gas_of(m_base, b, mut ret)
+    let _ = gas_of(m_hand, b, mut ret)
+    let _ = gas_of(m_element, b, mut ret)
+    let _ = gas_of(m_index, b, mut ret)
+    let _ = gas_of(m_eager, b, mut ret)
+    let _ = gas_of(m_field, b, mut ret)
+    let base = gas_of(m_base, b, mut ret)
+    let hand = gas_of(m_hand, b, mut ret) - base
+    let element = gas_of(m_element, b, mut ret) - base
+    let indexed = gas_of(m_index, b, mut ret) - base
+    let eager = gas_of(m_eager, b, mut ret) - base
+    let field = gas_of(m_field, b, mut ret) - base
+    let size_base = evm.extcodesize(m_base)
+    let hand_bytes = evm.extcodesize(m_hand) - size_base
+    let index_bytes = evm.extcodesize(m_index) - size_base
+    let element_bytes = evm.extcodesize(m_element) - size_base
+    let field_bytes = evm.extcodesize(m_field) - size_base
+    // Report: the numbers appear as the selectors of failing calls in the call trace.
+    let empty = MemInput { ptr: b.data, len: 0 }
+    let _ = call_raw(m_base, selector: 0x10000000 + base, payload: empty)
+    let _ = call_raw(m_base, selector: 0x20000000 + element, payload: empty)
+    let _ = call_raw(m_base, selector: 0x30000000 + eager, payload: empty)
+    let _ = call_raw(m_base, selector: 0x40000000 + hand, payload: empty)
+    let _ = call_raw(m_base, selector: 0x60000000 + indexed, payload: empty)
+    let _ = call_raw(m_base, selector: 0x70000000 + (hand_bytes << 12) + index_bytes, payload: empty)
+    let _ = call_raw(m_base, selector: 0x80000000 + element_bytes, payload: empty)
+    let _ = call_raw(m_base, selector: 0x90000000 + field, payload: empty)
+    let _ = call_raw(m_base, selector: 0xa0000000 + field_bytes, payload: empty)
+    assert!(2 * indexed <= 3 * hand)
+    assert!(10 * index_bytes <= 13 * hand_bytes)
+    assert!(2 * field <= 3 * hand)
+    assert!(10 * field_bytes <= 13 * hand_bytes)
+    // Field syntax is the `at` form: the same runtime code.
+    assert!(field == indexed && field_bytes == index_bytes)
+}
+
+/// The cost gate of the in-place arm `A { ref order, index }`, against the
+/// hand-written form that it stands for (`MLazyTwin`), the hand-written masked
+/// read and the eager arm, each above the arm that returns a constant. The arm
+/// makes the check of the message's head that every whole arm makes, which the
+/// twin makes with a different form: the arm costs at most 15 gas and 32 bytes
+/// more than the twin, at most 1.5 times the gas and 1.3 times the code of the
+/// masked read, and less than the eager arm.
+#[test]
+fn in_place_arm_cost_gate() uses (evm: mut Evm) {
+    let b = bench(args(1))
+    var ret = MemBuffer::new(64)
+    // Two arms may compile to the same code, so each contract has its own salt.
+    let m_base = evm.create2<MBase>(value: Wei::zero(), args: (), salt: 1)
+    let m_hand = evm.create2<MHand>(value: Wei::zero(), args: (), salt: 2)
+    let m_eager = evm.create2<MEager>(value: Wei::zero(), args: (), salt: 3)
+    let m_lazy = evm.create2<MLazy>(value: Wei::zero(), args: (), salt: 4)
+    let m_twin = evm.create2<MLazyTwin>(value: Wei::zero(), args: (), salt: 5)
+    // A first call of each warms the account; the second is measured.
+    let _ = gas_of(m_base, b, mut ret)
+    let _ = gas_of(m_hand, b, mut ret)
+    let _ = gas_of(m_eager, b, mut ret)
+    let _ = gas_of(m_lazy, b, mut ret)
+    let _ = gas_of(m_twin, b, mut ret)
+    let base = gas_of(m_base, b, mut ret)
+    let hand = gas_of(m_hand, b, mut ret) - base
+    let eager = gas_of(m_eager, b, mut ret) - base
+    let lazy = gas_of(m_lazy, b, mut ret) - base
+    let twin = gas_of(m_twin, b, mut ret) - base
+    let size_base = evm.extcodesize(m_base)
+    let hand_bytes = evm.extcodesize(m_hand) - size_base
+    let eager_bytes = evm.extcodesize(m_eager) - size_base
+    let lazy_bytes = evm.extcodesize(m_lazy) - size_base
+    let twin_bytes = evm.extcodesize(m_twin) - size_base
+    // Report: the numbers appear as the selectors of failing calls in the call trace.
+    let empty = MemInput { ptr: b.data, len: 0 }
+    let _ = call_raw(m_base, selector: 0x50000000 + eager_bytes, payload: empty)
+    let _ = call_raw(m_base, selector: 0xb0000000 + lazy, payload: empty)
+    let _ = call_raw(m_base, selector: 0xc0000000 + lazy_bytes, payload: empty)
+    let _ = call_raw(m_base, selector: 0xd0000000 + twin, payload: empty)
+    let _ = call_raw(m_base, selector: 0xe0000000 + twin_bytes, payload: empty)
+    assert!(lazy <= twin + 15)
+    assert!(lazy_bytes <= twin_bytes + 32)
+    assert!(2 * lazy <= 3 * hand)
+    assert!(10 * lazy_bytes <= 13 * hand_bytes)
+    assert!(lazy < eager)
+    assert!(lazy_bytes < eager_bytes)
+}
+
+/// The arguments `(to, amount)` of a transfer as encoded in calldata after the
+/// selector, in a raw allocation that no drop frees.
+fn transfer_args() -> MemInput {
+    let buf = core::abi::encode_alloc<Sol, (Address, u256)>((Address::new(0xaa), 5))
+    let data = ptr::alloc_bytes(buf.len())
+    unsafe { ptr::copy_raw(data, source: buf.ptr(), len: buf.len()) }
+    MemInput { ptr: data, len: buf.len() as u256 }
+}
+
+/// A message of two words, as the transfer of a token has, read by a whole
+/// arm, by an in-place arm that reads one field in place and decodes the
+/// other, and by an in-place arm that reads one field. Reading in place costs
+/// at most 15 gas and 32 bytes more than decoding the message, and reading one
+/// field of two costs no more than reading both.
+#[test]
+fn small_message_in_place_cost() uses (evm: mut Evm) {
+    let b = bench_selector(2, transfer_args())
+    var ret = MemBuffer::new(64)
+    let t_base = evm.create2<TBase>(value: Wei::zero(), args: (), salt: 1)
+    let t_whole = evm.create2<TWhole>(value: Wei::zero(), args: (), salt: 2)
+    let t_in_place = evm.create2<TInPlace>(value: Wei::zero(), args: (), salt: 3)
+    let t_one = evm.create2<TOne>(value: Wei::zero(), args: (), salt: 4)
+    // Each arm returns true, which is the word 1.
+    let _ = gas_returning(t_base, b, 1, mut ret)
+    let _ = gas_returning(t_whole, b, 1, mut ret)
+    let _ = gas_returning(t_in_place, b, 1, mut ret)
+    let _ = gas_returning(t_one, b, 1, mut ret)
+    let base = gas_returning(t_base, b, 1, mut ret)
+    let whole = gas_returning(t_whole, b, 1, mut ret) - base
+    let in_place = gas_returning(t_in_place, b, 1, mut ret) - base
+    let one = gas_returning(t_one, b, 1, mut ret) - base
+    let size_base = evm.extcodesize(t_base)
+    let whole_bytes = evm.extcodesize(t_whole) - size_base
+    let in_place_bytes = evm.extcodesize(t_in_place) - size_base
+    // Report: the numbers appear as the selectors of failing calls in the call trace.
+    let empty = MemInput { ptr: b.data, len: 0 }
+    let _ = call_raw(t_base, selector: 0xf0000000 + whole, payload: empty)
+    let _ = call_raw(t_base, selector: 0xf1000000 + in_place, payload: empty)
+    let _ = call_raw(t_base, selector: 0xf2000000 + one, payload: empty)
+    let _ = call_raw(t_base, selector: 0xf3000000 + whole_bytes, payload: empty)
+    let _ = call_raw(t_base, selector: 0xf4000000 + in_place_bytes, payload: empty)
+    assert!(in_place <= whole + 15)
+    assert!(in_place_bytes <= whole_bytes + 32)
+    assert!(one <= in_place)
+}
+
+// Records read as parts of other records or arrays.
+impl<I: ByteInput + Copy, A: Abi> Part<I, A> for OfferItem {
+    type Of = Encoded<I, OfferItem, A>
+    fn read(_ part: PartHead<I, OfferItem>) -> Encoded<I, OfferItem, A> {
+        record_part(part)
+    }
+}
+impl<I: ByteInput + Copy, A: Abi> Part<I, A> for ConsiderationItem {
+    type Of = Encoded<I, ConsiderationItem, A>
+    fn read(_ part: PartHead<I, ConsiderationItem>) -> Encoded<I, ConsiderationItem, A> {
+        record_part(part)
+    }
+}
+impl<I: ByteInput + Copy, A: Abi> Part<I, A> for Window {
+    type Of = Encoded<I, Window, A>
+    fn read(_ part: PartHead<I, Window>) -> Encoded<I, Window, A> {
+        record_part(part)
+    }
+}
+impl<I: ByteInput + Copy, A: Abi> Part<I, A> for OrderParams {
+    type Of = Encoded<I, OrderParams, A>
+    fn read(_ part: PartHead<I, OrderParams>) -> Encoded<I, OrderParams, A> {
+        record_part(part)
+    }
+}

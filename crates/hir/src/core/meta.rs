@@ -180,6 +180,10 @@ pub enum MetaValue<'db> {
     Record(RecordInput<'db>),
     Field(RecordField<'db>),
     FieldType(RecordField<'db>),
+    FieldTypes {
+        record: RecordInput<'db>,
+        ty: TyId<'db>,
+    },
     TypeRef {
         ty: TyId<'db>,
         scope: crate::hir_def::scope_graph::ScopeId<'db>,
@@ -189,7 +193,7 @@ pub enum MetaValue<'db> {
 impl<'db> MetaValue<'db> {
     pub(crate) fn scope(self) -> crate::hir_def::scope_graph::ScopeId<'db> {
         match self {
-            Self::Record(record) => record.scope(),
+            Self::Record(record) | Self::FieldTypes { record, .. } => record.scope(),
             Self::Field(field) | Self::FieldType(field) => field.record().scope(),
             Self::TypeRef { scope, .. } => scope,
         }
@@ -200,7 +204,7 @@ impl<'db> MetaValue<'db> {
             Self::Record(_) => "core::meta::Record",
             Self::Field(_) => "core::meta::Field",
             Self::FieldType(_) => "core::meta::FieldType",
-            Self::TypeRef { .. } => "core::meta::TypeRef",
+            Self::TypeRef { .. } | Self::FieldTypes { .. } => "core::meta::TypeRef",
         }
     }
 }
@@ -517,6 +521,40 @@ impl<'db> RecordInput<'db> {
         })
     }
 
+    pub(crate) fn field_type_tree(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<TyId<'db>, RecordInputError> {
+        let fields = match (self.owner, self.variant_index) {
+            (RecordOwner::Struct(_), None) => self.ty.field_types(db),
+            (RecordOwner::Enum(_), Some(_)) => (0..self.field_count(db)?)
+                .map(|index| {
+                    RecordField {
+                        record: self,
+                        index,
+                    }
+                    .ty(db)
+                })
+                .collect(),
+            _ => return Err(RecordInputError::WholeEnumHasNoFields),
+        };
+        Ok(crate::analysis::ty::fields_before_ty(db, &fields))
+    }
+
+    fn over_its_declared_parameters(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Result<Self, &'static str> {
+        let adt = self
+            .ty
+            .adt_def(db)
+            .ok_or("field type splice has no authored record")?;
+        Ok(Self {
+            ty: TyId::foldl(db, TyId::adt(db, adt), adt.params(db)),
+            ..self
+        })
+    }
+
     pub fn freeze(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -591,6 +629,13 @@ impl<'db> RecordField<'db> {
                 VariantKind::Tuple(_) | VariantKind::Unit => None,
             },
             _ => None,
+        }
+    }
+
+    pub fn is_event_indexed(self, db: &'db dyn HirAnalysisDb) -> bool {
+        match self.record.owner {
+            RecordOwner::Struct(s) => s.hir_fields(db).data(db)[self.index].is_event_indexed,
+            RecordOwner::Enum(_) => false,
         }
     }
 
@@ -828,15 +873,49 @@ impl QuoteHoleNode {
 pub const MAX_QUOTE_TEMPLATE_BYTES: usize = 4096;
 pub const MAX_QUOTE_HOLES: usize = 64;
 pub const MAX_GENERATED_AST_NODES: usize = 4096;
+const MAX_REFLECTED_TYPE_NODES: usize = 4096;
 
-/// Take `cost` nodes from the remaining expansion budget of a generated code
-/// tree.
-fn charge_expanded_nodes(remaining_nodes: &mut usize, cost: usize) -> Result<(), &'static str> {
-    if cost > *remaining_nodes {
-        return Err("generated code tree exceeds the expanded AST node limit of 4096");
+struct QuoteBudget {
+    ast_nodes: usize,
+    type_nodes: usize,
+}
+
+impl QuoteBudget {
+    fn new() -> Self {
+        Self {
+            ast_nodes: MAX_GENERATED_AST_NODES,
+            type_nodes: MAX_REFLECTED_TYPE_NODES,
+        }
     }
-    *remaining_nodes -= cost;
-    Ok(())
+
+    fn charge_ast(&mut self, cost: usize) -> Result<(), &'static str> {
+        self.ast_nodes = self
+            .ast_nodes
+            .checked_sub(cost)
+            .ok_or("generated code tree exceeds the expanded AST node limit of 4096")?;
+        Ok(())
+    }
+
+    /// Frozen type applications store each occurrence, even when the input
+    /// types share interned nodes. Count each occurrence across all type holes.
+    fn charge_type<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        ty: TyId<'db>,
+    ) -> Result<(), &'static str> {
+        use crate::analysis::ty::ty_def::TyData;
+        let mut pending = vec![ty];
+        while let Some(ty) = pending.pop() {
+            self.type_nodes = self
+                .type_nodes
+                .checked_sub(1)
+                .ok_or("generated code tree exceeds the reflected type node limit of 4096")?;
+            if let TyData::TyApp(left, right) = ty.data(db) {
+                pending.extend([*left, *right]);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The patterns a binder pattern is copied into: one pattern for the payload
@@ -1003,6 +1082,35 @@ pub enum CodeData<'db> {
         group: usize,
         field_index: usize,
     },
+    /// One checked expression per field in declaration order.
+    RecordFields {
+        record: RecordInput<'db>,
+        inits: Box<[crate::analysis::semantic::SemConstId<'db>]>,
+        output: RecordFieldOutput,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub enum RecordFieldOutput {
+    Value,
+    Statements,
+}
+
+impl RecordFieldOutput {
+    pub(crate) fn operation(self) -> &'static str {
+        match self {
+            Self::Value => "construct",
+            Self::Statements => "for_each_field",
+        }
+    }
+
+    fn nodes(self, field_count: usize) -> usize {
+        match self {
+            Self::Value => 1 + field_count,
+            // The block, one statement per field, and the unit tail.
+            Self::Statements => 3 + field_count,
+        }
+    }
 }
 
 /// A checked code template or hygienic binder fragment in the existing producer
@@ -1039,6 +1147,20 @@ impl<'db> ItemCode<'db> {
         }
     }
 
+    pub fn record_fields(
+        record: RecordInput<'db>,
+        inits: Box<[crate::analysis::semantic::SemConstId<'db>]>,
+        output: RecordFieldOutput,
+    ) -> Self {
+        Self {
+            data: CodeData::RecordFields {
+                record,
+                inits,
+                output,
+            },
+        }
+    }
+
     pub fn data(&self) -> &CodeData<'db> {
         &self.data
     }
@@ -1048,7 +1170,9 @@ impl<'db> ItemCode<'db> {
         match &self.data {
             CodeData::Template { kind, .. } | CodeData::Empty { kind } => *kind,
             CodeData::VariantBinders { .. } => FrozenCodeKind::Pat,
-            CodeData::VariantBinderField { .. } => FrozenCodeKind::Expr,
+            CodeData::VariantBinderField { .. } | CodeData::RecordFields { .. } => {
+                FrozenCodeKind::Expr
+            }
         }
     }
 
@@ -1096,6 +1220,7 @@ impl<'db> ItemCode<'db> {
     pub fn holes(&self) -> &[crate::analysis::semantic::SemConstId<'db>] {
         match &self.data {
             CodeData::Template { holes, .. } => holes,
+            CodeData::RecordFields { inits, .. } => inits,
             _ => &[],
         }
     }
@@ -1206,21 +1331,20 @@ impl<'db> ItemCode<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Result<common::generation::FrozenCode, &'static str> {
         self.validate(db)?;
-        let mut remaining_nodes = MAX_GENERATED_AST_NODES;
-        self.freeze_with_budget(db, &mut remaining_nodes)
+        self.freeze_with_budget(db, &mut QuoteBudget::new())
     }
 
     fn freeze_with_budget(
         &self,
         db: &'db dyn HirAnalysisDb,
-        remaining_nodes: &mut usize,
+        budget: &mut QuoteBudget,
     ) -> Result<common::generation::FrozenCode, &'static str> {
         use crate::analysis::semantic::SemConstValue;
         use common::generation::{FrozenCode, FrozenHoleValue};
         match &self.data {
             CodeData::Empty { kind } => Ok(FrozenCode::Empty { kind: *kind }),
             CodeData::VariantBinders { record, group } => {
-                charge_expanded_nodes(remaining_nodes, binder_pattern_nodes(db, *record))?;
+                budget.charge_ast(binder_pattern_nodes(db, *record))?;
                 Ok(FrozenCode::VariantBinders {
                     record: record.freeze(db)?,
                     group: *group,
@@ -1231,11 +1355,32 @@ impl<'db> ItemCode<'db> {
                 group,
                 field_index,
             } => {
-                charge_expanded_nodes(remaining_nodes, 1)?;
+                budget.charge_ast(1)?;
                 Ok(FrozenCode::VariantBinderField {
                     record: record.freeze(db)?,
                     group: *group,
                     field_index: *field_index,
+                })
+            }
+            CodeData::RecordFields {
+                record,
+                inits,
+                output,
+            } => {
+                budget.charge_ast(output.nodes(inits.len()))?;
+                let fields = inits
+                    .iter()
+                    .map(|init| match init.value(db) {
+                        SemConstValue::ItemCode { code, .. } => code.freeze_with_budget(db, budget),
+                        _ => Err("field traversal requires Code<Expr> fragments"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(match output {
+                    RecordFieldOutput::Value => FrozenCode::Construct {
+                        record: record.freeze(db)?,
+                        fields,
+                    },
+                    RecordFieldOutput::Statements => FrozenCode::FieldStatements { fields },
                 })
             }
             CodeData::Template {
@@ -1253,10 +1398,7 @@ impl<'db> ItemCode<'db> {
                     .descendants()
                     .take(MAX_GENERATED_AST_NODES + 1)
                     .count();
-                if node_count > *remaining_nodes {
-                    return Err("generated code tree exceeds the expanded AST node limit of 4096");
-                }
-                *remaining_nodes -= node_count;
+                budget.charge_ast(node_count)?;
                 let producer_block = producer_block_range(&quote);
                 let producer_module = quote
                     .syntax()
@@ -1277,17 +1419,32 @@ impl<'db> ItemCode<'db> {
                                 Ok(FrozenHoleValue::Field(field.freeze(db)?))
                             }
                             MetaValue::TypeRef { ty, .. } => {
+                                budget.charge_type(db, *ty)?;
                                 Ok(FrozenHoleValue::Type(freeze_ty(db, *ty)?))
+                            }
+                            MetaValue::FieldTypes { record, ty } => {
+                                budget.charge_type(db, *ty)?;
+                                // The declared shape can keep symbolic field types.
+                                // An applied record needs its instantiated type tree:
+                                // equal normalized leaves can still have different binders.
+                                if record.ty() == record.over_its_declared_parameters(db)?.ty() {
+                                    let count = record
+                                        .field_count(db)
+                                        .map_err(|_| "field types require a struct or selected variant")?;
+                                    Ok(FrozenHoleValue::FieldTypes {
+                                        record: record.freeze(db)?,
+                                        count,
+                                    })
+                                } else {
+                                    Ok(FrozenHoleValue::Type(freeze_ty(db, *ty)?))
+                                }
                             }
                             MetaValue::FieldType(field) => {
                                 let record = field.record();
-                                let adt = record.ty().adt_def(db)
-                                    .ok_or("field type splice has no authored record")?;
-                                let identity = RecordInput {
-                                    ty: TyId::foldl(db, TyId::adt(db, adt), adt.params(db)),
-                                    ..record
+                                let authored_field = RecordField {
+                                    record: record.over_its_declared_parameters(db)?,
+                                    index: field.index(),
                                 };
-                                let authored_field = RecordField { record: identity, index: field.index() };
                                 // A type written without the record's parameters keeps its
                                 // written form; one over them is the instantiated type.
                                 if field.ty(db) != authored_field.ty(db) {
@@ -1304,9 +1461,9 @@ impl<'db> ItemCode<'db> {
                                 Ok(FrozenHoleValue::FieldType(field.freeze(db)?))
                             }
                         },
-                        SemConstValue::ItemCode { code, .. } => Ok(FrozenHoleValue::Code(
-                            code.freeze_with_budget(db, remaining_nodes)?,
-                        )),
+                        SemConstValue::ItemCode { code, .. } => {
+                            Ok(FrozenHoleValue::Code(code.freeze_with_budget(db, budget)?))
+                        }
                         _ => Err("unsupported quotation splice value"),
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1336,6 +1493,7 @@ impl<'db> ItemCode<'db> {
                 .url(db)
                 .ok_or("generation target has no source URL")?,
             request_impl: None,
+            request_slot: None,
             code: self.freeze(db)?,
         })
     }
@@ -1359,24 +1517,51 @@ impl<'db> ItemCode<'db> {
     }
 
     pub(crate) fn validate(&self, db: &'db dyn HirAnalysisDb) -> Result<(), &'static str> {
-        let mut remaining_nodes = MAX_GENERATED_AST_NODES;
-        self.validate_with_budget(db, &mut remaining_nodes)
+        self.validate_with_budget(db, &mut QuoteBudget::new())
     }
 
     fn validate_with_budget(
         &self,
         db: &'db dyn HirAnalysisDb,
-        remaining_nodes: &mut usize,
+        budget: &mut QuoteBudget,
     ) -> Result<(), &'static str> {
         use crate::analysis::semantic::SemConstValue;
         use common::generation::FrozenCodeKind;
         match &self.data {
             CodeData::Empty { .. } => return Ok(()),
             CodeData::VariantBinders { record, .. } => {
-                return charge_expanded_nodes(remaining_nodes, binder_pattern_nodes(db, *record));
+                return budget.charge_ast(binder_pattern_nodes(db, *record));
             }
             CodeData::VariantBinderField { .. } => {
-                return charge_expanded_nodes(remaining_nodes, 1);
+                return budget.charge_ast(1);
+            }
+            CodeData::RecordFields {
+                record,
+                inits,
+                output,
+            } => {
+                record.validate(db)?;
+                match record.field_count(db) {
+                    Ok(count) if count == inits.len() => {}
+                    Ok(_) => return Err("field expression count differs from its record"),
+                    Err(_) => {
+                        return Err("field traversal requires a struct or a selected variant");
+                    }
+                }
+                budget.charge_ast(output.nodes(inits.len()))?;
+                for init in inits.iter() {
+                    crate::analysis::semantic::consts::verify_sem_const_shape(db, *init)?;
+                    match init.value(db) {
+                        SemConstValue::ItemCode { code, .. }
+                            if code.kind() == FrozenCodeKind::Expr
+                                && !matches!(code.data(), CodeData::Empty { .. }) =>
+                        {
+                            code.validate_with_budget(db, budget)?;
+                        }
+                        _ => return Err("field traversal requires Code<Expr> fragments"),
+                    }
+                }
+                return Ok(());
             }
             CodeData::Template { .. } => {}
         }
@@ -1408,10 +1593,7 @@ impl<'db> ItemCode<'db> {
             .descendants()
             .take(MAX_GENERATED_AST_NODES + 1)
             .count();
-        if node_count > *remaining_nodes {
-            return Err("generated code tree exceeds the expanded AST node limit of 4096");
-        }
-        *remaining_nodes -= node_count;
+        budget.charge_ast(node_count)?;
 
         let all_code_hole_block = matches!(
             *kind,
@@ -1428,7 +1610,11 @@ impl<'db> ItemCode<'db> {
                             ..
                         } if record.variant_index().is_none() => {}
                         SemConstValue::Meta {
-                            value: MetaValue::FieldType(_) | MetaValue::TypeRef { .. },
+                            value: MetaValue::TypeRef { ty, .. } | MetaValue::FieldTypes { ty, .. },
+                            ..
+                        } => budget.charge_type(db, *ty)?,
+                        SemConstValue::Meta {
+                            value: MetaValue::FieldType(_),
                             ..
                         } => {}
                         _ => {
@@ -1569,7 +1755,7 @@ impl<'db> ItemCode<'db> {
             match value.value(db) {
                 SemConstValue::Scalar { .. } | SemConstValue::Meta { .. } => {}
                 SemConstValue::ItemCode { code, .. } => {
-                    code.validate_with_budget(db, remaining_nodes)?;
+                    code.validate_with_budget(db, budget)?;
                 }
                 _ => {
                     return Err(
@@ -2379,51 +2565,65 @@ pub fn authored_derive_request<'db>(
         })
 }
 
-/// The header syntax of an implementation, read from the module it was
-/// written in: a generated implementation is written in its producer's quote.
-fn impl_trait_syntax<'db>(
+/// The identity of a derive request: the module it was written in, the range of
+/// its header, and the slot of a short form (`None` for a written header). A
+/// generated implementation is written in its producer's quote and has none.
+type RequestKey<'db> = (
+    crate::hir_def::TopLevelMod<'db>,
+    parser::TextRange,
+    Option<u8>,
+);
+
+/// The key of an implementation that is a derive request, read from the module
+/// it was written in.
+fn request_key<'db>(
     db: &'db dyn HirAnalysisDb,
     implementation: crate::hir_def::ImplTrait<'db>,
-) -> Option<(crate::hir_def::TopLevelMod<'db>, ast::ImplTrait)> {
+) -> Option<RequestKey<'db>> {
+    if let Some((range, slot)) = implementation.short_form_derive_site(db) {
+        return Some((implementation.scope().syntax_top_mod(db), range, Some(slot)));
+    }
     let HirOrigin::Raw(ptr) = implementation.origin(db) else {
         return None;
     };
     let module = implementation.scope().syntax_top_mod(db);
     let root = crate::core::lower::top_mod_ast(db, module);
-    Some((module, ptr.to_node(root.syntax())))
+    let ast = ptr.to_node(root.syntax());
+    ast.derive_provider()
+        .is_some()
+        .then(|| (module, ast.syntax().text_range(), None))
 }
 
-/// An explicit derive header `impl Tr for T with (P)`. Every member under it
-/// is generated from the provider's quotations, not authored here.
+/// A trait implementation whose header requests prepared members.
 pub(crate) fn is_derive_request(
     db: &dyn HirAnalysisDb,
     request: crate::hir_def::ImplTrait<'_>,
 ) -> bool {
-    impl_trait_syntax(db, request).is_some_and(|(_, ast)| ast.derive_provider().is_some())
+    request_key(db, request).is_some()
 }
 
 /// A header-only request is not an implementation before its output plan exists:
 /// preparation has not given it members yet, and a program is not accepted
 /// until it has. The header is still a fact. In the input view of a
 /// preparation, which sets `declared_headers`, lookup treats it as an
-/// implementor whose members are unavailable, so admission and providers can
-/// rely on its existence and cannot run it. Everywhere else it is no
+/// implementor whose generated members are unavailable, so admission and
+/// providers can rely on the header and its authored members. Everywhere else it is no
 /// implementation and supplies no proof.
 pub(crate) fn is_unfulfilled_derive_request(
     db: &dyn HirAnalysisDb,
     request: crate::hir_def::ImplTrait<'_>,
 ) -> bool {
-    let Some((module, ast)) = impl_trait_syntax(db, request) else {
+    let Some((module, range, slot)) = request_key(db, request) else {
         return false;
     };
     // A plan only fulfils a header written in its target file; a quoted header
     // has no authored identity to prepare against and stays unfulfilled.
-    ast.derive_provider().is_some()
-        && !(module == request.top_mod(db)
-            && db.generation_inputs().requests(db).iter().any(|plan| {
-                plan.request_impl == Some(ast.syntax().text_range())
-                    && Some(plan.target_file.clone()) == module.file(db).url(db)
-            }))
+    !(module == request.top_mod(db)
+        && db.generation_inputs().requests(db).iter().any(|plan| {
+            plan.request_impl == Some(range)
+                && plan.request_slot == slot
+                && Some(plan.target_file.clone()) == module.file(db).url(db)
+        }))
 }
 
 /// Whether `request` is a header that lookup must not treat as an implementor:
@@ -2493,6 +2693,7 @@ pub(crate) fn is_unfulfilled_inherent_derive_request(
         && !(module == request.top_mod(db)
             && db.generation_inputs().requests(db).iter().any(|plan| {
                 plan.request_impl == Some(range)
+                    && plan.request_slot.is_none()
                     && Some(plan.target_file.clone()) == module.file(db).url(db)
             }))
 }

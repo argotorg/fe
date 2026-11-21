@@ -15,6 +15,7 @@ use hir::{
         expr::{ArithBinOp, BinOp, CompBinOp},
     },
 };
+use rustc_hash::FxHashMap;
 
 use crate::{
     db::MirDb,
@@ -575,22 +576,51 @@ impl<'db> SyntheticBodyBuilder<'db> {
         };
 
         let mut call_args = Vec::new();
-        if let RuntimeInputPlan::DecodeHostPayload {
-            msg_ty,
-            host,
-            decode_args_fn,
-            projected_fields,
-        } = plan.input
-        {
-            let host = self.emit_target_root_provider(cont_bb, &host)?;
-            if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
-                call_args.extend(self.extract_selected_tuple_fields(
-                    cont_bb,
-                    decoded,
-                    msg_ty,
-                    plan.contract.scope(),
-                    &projected_fields,
-                ));
+        match plan.input {
+            RuntimeInputPlan::None => {}
+            RuntimeInputPlan::DecodeHostPayload {
+                msg_ty,
+                host,
+                decode_args_fn,
+                projected_fields,
+            } => {
+                let host = self.emit_target_root_provider(cont_bb, &host)?;
+                if let Some(decoded) = self.push_call(cont_bb, decode_args_fn, vec![host]) {
+                    call_args.extend(self.extract_selected_tuple_fields(
+                        cont_bb,
+                        decoded,
+                        msg_ty,
+                        plan.contract.scope(),
+                        &projected_fields,
+                    ));
+                }
+            }
+            RuntimeInputPlan::ReadHostPayloadInPlace {
+                host,
+                args_fn,
+                reads,
+                projected_fields,
+                ..
+            } => {
+                let host = self.emit_target_root_provider(cont_bb, &host)?;
+                let args = self
+                    .push_call(cont_bb, args_fn, vec![host])
+                    .expect("message_args returns the handle");
+                // A named field is read even if its type has no runtime value.
+                // Forward only the fields the handler's calling convention takes.
+                let mut values = FxHashMap::default();
+                for &(index, read) in &reads {
+                    if let Some(value) = self.push_call(cont_bb, read, vec![args]) {
+                        values.insert(index, value);
+                    }
+                }
+                for index in &projected_fields {
+                    call_args.push(*values.get(index).ok_or_else(|| {
+                        LowerError::Unsupported(
+                            "recv arm forwards a field without a runtime value".to_string(),
+                        )
+                    })?);
+                }
             }
         }
         call_args.extend(self.owner_call_args(
@@ -1702,6 +1732,8 @@ pub contract ReturnContract {
                 .to_string(),
             ),
         );
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
         let wrapper = package
