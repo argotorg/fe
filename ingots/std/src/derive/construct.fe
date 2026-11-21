@@ -22,8 +22,8 @@ pub fn decode_next_field<A: Abi, T, I>(_ head_pos: mut u256, _ input: I, base: u
 /// Provides `Decode<A>` for a record, requested by a header such as
 /// `impl Decode<Sol> for PoolKey with (StructAbiDecode)`. The record must also
 /// implement `AbiSize` (and, to be encoded, `Encode<Sol>`). The fields are
-/// decoded in declaration order. The same constructor takes fields from the
-/// supplied decoder or from the head positions of an already-checked record.
+/// decoded in declaration order. Payload reads use the supplied decoder.
+/// Checked positional reads use each field's positional decode method.
 pub struct StructAbiDecode {}
 impl<A: Abi> Derive<trait Decode<A>> for StructAbiDecode {
     const fn derive(_ record: Record) -> Code<Item> {
