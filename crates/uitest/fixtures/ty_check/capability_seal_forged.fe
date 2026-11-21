@@ -1,0 +1,17 @@
+use std::evm::RawStorage
+
+struct Forged {}
+
+// std's capability seals are private to std, so naming one to implement it
+// is refused.
+impl std::evm::effects::EvmCapabilitySeal for Forged {}
+impl std::native::HostCapabilitySeal for Forged {}
+
+impl RawStorage for Forged {
+    unsafe fn sload(self, _ slot: u256) -> u256 {
+        0
+    }
+
+    unsafe fn sstore(mut self, slot: u256, value: u256) {
+    }
+}

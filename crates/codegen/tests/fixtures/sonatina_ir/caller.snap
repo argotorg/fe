@@ -13,8 +13,8 @@ func private %caller() -> @layout_0 {
 
     block1:
         v0.i256 = evm_caller;
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        return v3;
+        v1.@layout_0 = agg.make @layout_0 v0;
+        return v1;
 }
 
 func private %main() -> @layout_0 {

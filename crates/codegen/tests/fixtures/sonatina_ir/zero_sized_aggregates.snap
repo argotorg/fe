@@ -14,11 +14,9 @@ func private %empty_field_assign() {
         jump block1;
 
     block1:
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v6.@layout_1 = insert_value v5 1.i256 1.i256;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v10.@layout_1 = insert_value v9 1.i256 1.i256;
-        obj.store v0 v10;
+        v3.@layout_1 = agg.make @layout_1 zero.@layout_0 1.i256;
+        v5.@layout_1 = agg.make @layout_1 zero.@layout_0 1.i256;
+        obj.store v0 v5;
         return;
 }
 
@@ -48,10 +46,8 @@ func private %struct_with_empty() -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v6.@layout_1 = insert_value v4 1.i256 7.i256;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v10.@layout_1 = insert_value v9 1.i256 7.i256;
+        v2.@layout_1 = agg.make @layout_1 zero.@layout_0 7.i256;
+        v4.@layout_1 = agg.make @layout_1 zero.@layout_0 7.i256;
         return 7.i256;
 }
 
@@ -68,10 +64,8 @@ func private %tuple_with_empty() -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v6.@layout_1 = insert_value v4 1.i256 5.i256;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 undef.@layout_0;
-        v10.@layout_1 = insert_value v9 1.i256 5.i256;
+        v2.@layout_1 = agg.make @layout_1 zero.@layout_0 5.i256;
+        v4.@layout_1 = agg.make @layout_1 zero.@layout_0 5.i256;
         return 5.i256;
 }
 

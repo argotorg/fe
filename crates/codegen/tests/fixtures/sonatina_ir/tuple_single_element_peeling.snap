@@ -19,14 +19,11 @@ func private %main() -> @layout_0 {
         v2.i256 = call %tuple_single_passthrough 1.i256;
         v4.i256 = call %tuple_single_nested_passthrough 2.i256;
         v6.i256 = call %tuple_single_struct_newtype_nested 3.i256;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 1.i1;
-        obj.store v0 v10;
-        v11.i8 = call %match_single_element_tuple v0;
-        v13.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v14.@layout_0 = insert_value v13 1.i256 v4;
-        v15.@layout_0 = insert_value v14 2.i256 v6;
-        v16.@layout_0 = insert_value v15 3.i256 v11;
-        return v16;
+        v8.@layout_1 = agg.make @layout_1 1.i1;
+        obj.store v0 v8;
+        v9.i8 = call %match_single_element_tuple v0;
+        v10.@layout_0 = agg.make @layout_0 v2 v4 v6 v9;
+        return v10;
 }
 
 func private %main_root() {
@@ -71,11 +68,11 @@ func private %tuple_single_nested_passthrough(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v6.@layout_3 = insert_value undef.@layout_3 0.i256 v4;
-        v7.@layout_2 = extract_value v6 0.i256;
-        v8.i256 = extract_value v7 0.i256;
-        return v8;
+        v2.@layout_2 = agg.make @layout_2 v0;
+        v3.@layout_3 = agg.make @layout_3 v2;
+        v5.@layout_2 = extract_value v3 0.i256;
+        v6.i256 = extract_value v5 0.i256;
+        return v6;
 }
 
 func private %tuple_single_passthrough(v0.i256) -> i256 {
@@ -83,9 +80,9 @@ func private %tuple_single_passthrough(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v5.i256 = extract_value v4 0.i256;
-        return v5;
+        v2.@layout_2 = agg.make @layout_2 v0;
+        v4.i256 = extract_value v2 0.i256;
+        return v4;
 }
 
 func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
@@ -93,11 +90,11 @@ func private %tuple_single_struct_newtype_nested(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v4.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v6.@layout_3 = insert_value undef.@layout_3 0.i256 v4;
-        v7.@layout_2 = extract_value v6 0.i256;
-        v8.i256 = extract_value v7 0.i256;
-        return v8;
+        v2.@layout_2 = agg.make @layout_2 v0;
+        v3.@layout_3 = agg.make @layout_3 v2;
+        v5.@layout_2 = extract_value v3 0.i256;
+        v6.i256 = extract_value v5 0.i256;
+        return v6;
 }
 
 
