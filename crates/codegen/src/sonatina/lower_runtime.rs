@@ -44,7 +44,7 @@ use mir::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
-use sonatina_codegen::cfg_edit::{CfgEditor, CleanupMode};
+use sonatina_codegen::cfg_edit::CfgEditor;
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, HasInst, I256, Immediate, InstExt, InstId,
     InstSetBase, Linkage, Module, Signature, Type, Value, ValueId,
@@ -1683,7 +1683,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if dead.is_empty() {
             return;
         }
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for block in dead {
             // The branch takes its first edge, to the revert, out of bounds.
             editor.retain_out_edges(block, &[true, false]);
