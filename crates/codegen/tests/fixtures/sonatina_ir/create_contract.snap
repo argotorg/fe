@@ -711,7 +711,7 @@ func inline(always) private %decode_field(noalias nocapture v0.objref<@layout_1>
         br 0.i1 block2 block3;
 
     block2:
-        v5.i256 = call %read_word v0 v1;
+        v5.i256 = call %read_word__g140d v0 v1;
         v6.i256 = call %base v0;
         v7.i256 = call %pos v0;
         v8.i256 = call %checked_tail v6 v5;
@@ -767,8 +767,18 @@ func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
 
     block1:
         v6.i256 = call %checked_frame_end v1 32.i256 v2;
-        v8.i256 = call %decode_from v0 v1;
-        return v8;
+        br 0.i1 block2 block3;
+
+    block2:
+        v11.i256 = call %decode_from_prechecked_head__g5ccd v0 v1 v2;
+        return v11;
+
+    block3:
+        jump block4;
+
+    block4:
+        v14.i256 = call %decode_from v0 v1;
+        return v14;
 }
 
 func inline(always) private %impl_trait_Deploy__decode_from_prechecked_head__g8f43(v0.@layout_3, v1.i256, v2.i256) -> @layout_1 {
@@ -799,6 +809,28 @@ func inline(always) private %impl_trait_Deploy2__decode_from_prechecked_head__g8
         return v14;
 }
 
+func inline(always) private %decode_from_prechecked_head__g5ccd(v0.@layout_3, v1.i256, v2.i256) -> i256 {
+    block0:
+        v3.objref<@layout_1> = obj.alloc @layout_1;
+        jump block1;
+
+    block1:
+        br 0.i1 block2 block3;
+
+    block2:
+        v6.@layout_1 = call %decoder_with_base v1;
+        obj.store v3 v6;
+        v8.i256 = call %decode_payload__gf7fd v3 v0;
+        return v8;
+
+    block3:
+        jump block4;
+
+    block4:
+        v11.i256 = call %decode_from v0 v1;
+        return v11;
+}
+
 func inline(always) private %decode_next_field(noalias nocapture v0.objref<i256>, v1.@layout_3, v2.i256, v3.i256) -> i256 {
     block0:
         jump block1;
@@ -825,7 +857,7 @@ func inline(always) private %decode_payload__gdc8c(noalias nocapture v0.objref<@
         jump block1;
 
     block1:
-        v4.i256 = call %read_word v0 v1;
+        v4.i256 = call %read_word__g140d v0 v1;
         return v4;
 }
 
@@ -853,6 +885,15 @@ func inline(always) private %impl_trait_Deploy__decode_payload__g76e1(noalias no
         v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
         v10.@layout_1 = insert_value v8 1.i256 v5;
         return v10;
+}
+
+func inline(always) private %decode_payload__gf7fd(noalias nocapture v0.objref<@layout_1>, v1.@layout_3) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %read_word__g8f43 v0 v1;
+        return v4;
 }
 
 func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> @layout_1 {
@@ -898,6 +939,15 @@ func private %decoder_new() -> @layout_1 {
     block1:
         v1.@layout_1 = call %with_base 0.i256;
         return v1;
+}
+
+func private %decoder_with_base(v0.i256) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_1 = call %with_base v0;
+        return v2;
 }
 
 func private %downcast_truncate__gaa81(v0.i256) -> i64 {
@@ -1372,7 +1422,48 @@ func inline(always) private %read_record_field(noalias nocapture v0.objref<@layo
         return v12;
 }
 
-func inline(always) private %read_word(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> i256 {
+func inline(always) private %read_word__g8f43(noalias nocapture v0.objref<@layout_1>, v1.@layout_3) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        (v7.i256, v8.i1) = uaddo v5 32.i256;
+        br v8 block6 block7;
+
+    block2:
+        evm_revert 0.i256 0.i256;
+
+    block3:
+        jump block4;
+
+    block4:
+        v18.objref<i256> = obj.proj v0 0.i256;
+        v19.i256 = obj.load v18;
+        v21.i256 = call %impl_trait_CallData__word_at v1 v19;
+        v23.objref<i256> = obj.proj v0 0.i256;
+        obj.store v23 v7;
+        return v21;
+
+    block5:
+        v25.i256 = call %len__g8f43 v1;
+        v27.i1 = gt v7 v25;
+        br v27 block2 block3;
+
+    block6:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block7:
+        v14.objref<i256> = obj.proj v0 0.i256;
+        v15.i256 = obj.load v14;
+        v16.i1 = lt v7 v15;
+        br v16 block2 block5;
+}
+
+func inline(always) private %read_word__g140d(noalias nocapture v0.objref<@layout_1>, noalias nocapture readonly v1.objref<@layout_5>) -> i256 {
     block0:
         jump block1;
 

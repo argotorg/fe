@@ -48,6 +48,7 @@ mod CounterMsg {
     }
 
     impl core::abi::Decode<std::abi::Sol> for Increment {
+        const CHECKS_HEAD_FRAME: bool = true
 
         #[inline(always)]
         fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
@@ -58,15 +59,6 @@ mod CounterMsg {
         fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
             var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
             <Self as Decode<Sol> >::decode_payload(mut reader, input)
-        }
-
-        fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-            let input_len: u256 = input.len()
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
-        }
-
-        fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
         }
     }
 
@@ -106,6 +98,7 @@ mod CounterMsg {
     }
 
     impl core::abi::Decode<std::abi::Sol> for Get {
+        const CHECKS_HEAD_FRAME: bool = true
 
         #[inline(always)]
         fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
@@ -116,15 +109,6 @@ mod CounterMsg {
         fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
             var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
             <Self as Decode<Sol> >::decode_payload(mut reader, input)
-        }
-
-        fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-            let input_len: u256 = input.len()
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
-        }
-
-        fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
         }
     }
 
@@ -168,6 +152,7 @@ mod CounterMsg {
     }
 
     impl core::abi::Decode<std::abi::Sol> for Set {
+        const CHECKS_HEAD_FRAME: bool = true
 
         #[inline(always)]
         fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
@@ -178,15 +163,6 @@ mod CounterMsg {
         fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
             var reader: PrecheckedRecordDecoder<Sol> = PrecheckedRecordDecoder { base: pos, head: pos, input_len }
             <Self as Decode<Sol> >::decode_payload(mut reader, input)
-        }
-
-        fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-            let input_len: u256 = input.len()
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
-        }
-
-        fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-            decode_frame_from<Sol, Self, I>(input, pos, input_len)
         }
     }
 }

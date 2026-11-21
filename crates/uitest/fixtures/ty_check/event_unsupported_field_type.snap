@@ -10,9 +10,9 @@ error[6-0003]: trait bound is not satisfied
  37 │                 head = quote { ${head} + abi_field_head_size<${ty}>() }
     │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:362:37
+    ┌─ src/abi.fe:378:37
     │
-362 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
+378 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
     │                                     ------- required by this bound on `abi_field_head_size`
 
 error[6-0003]: trait bound is not satisfied
@@ -21,9 +21,9 @@ error[6-0003]: trait bound is not satisfied
  38 │                 payload = quote { ${payload} + dynamic_payload_size<${ty}>(self.${f}) }
     │                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:422:32
+    ┌─ src/abi.fe:438:32
     │
-422 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
+438 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
     │                                ------- required by this bound on `dynamic_payload_size`
 
 error[6-0003]: trait bound is not satisfied
@@ -32,9 +32,9 @@ error[6-0003]: trait bound is not satisfied
  42 │                         tails = encode_field<Sol, ${ty}>(self.${f}, out, head_pos: head_pos, tails: tails)
     │                                 ^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `Encode<Sol>`
     │
-    ┌─ src/abi.fe:519:14
+    ┌─ src/abi.fe:535:14
     │
-519 │     where T: Encode<A> + AbiSize
+535 │     where T: Encode<A> + AbiSize
     │              --------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -43,9 +43,9 @@ error[6-0003]: trait bound is not satisfied
  42 │                         tails = encode_field<Sol, ${ty}>(self.${f}, out, head_pos: head_pos, tails: tails)
     │                                 ^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:519:26
+    ┌─ src/abi.fe:535:26
     │
-519 │     where T: Encode<A> + AbiSize
+535 │     where T: Encode<A> + AbiSize
     │                          ------- required by this bound on `encode_field`
 
 error[6-0003]: trait bound is not satisfied
@@ -54,7 +54,7 @@ error[6-0003]: trait bound is not satisfied
  43 │                         head_pos = head_pos + abi_field_head_size<${ty}>()
     │                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
     │
-    ┌─ src/abi.fe:362:37
+    ┌─ src/abi.fe:378:37
     │
-362 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
+378 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
     │                                     ------- required by this bound on `abi_field_head_size`
