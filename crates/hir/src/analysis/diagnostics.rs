@@ -553,6 +553,14 @@ impl DiagnosticVoucher for crate::AttrMisuseError {
                 format!("unsupported `{attr}` attribute on {target}"),
                 format!("expected {expected_attrs}"),
             ),
+            crate::AttrMisuseErrorKind::Unknown { suggestion } => (
+                8,
+                format!("unknown attribute `{attr}` on {target}"),
+                match suggestion {
+                    Some(name) => format!("did you mean `#[{name}]`?"),
+                    None => "the compiler does not recognize this attribute".to_string(),
+                },
+            ),
         };
 
         CompleteDiagnostic::new(

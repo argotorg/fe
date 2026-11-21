@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/attr_test_args.fe
+---
+error[12-0002]: invalid `#[test]` attribute form on fn `timestamp`
+   ┌─ attr_test_args.fe:20:1
+   │
+20 │ #[test(timestamp = 1000)]
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `#[test]`, or `#[test(..)]` with arguments among `should_revert`, `panic = ..`, `selector = ..` and `balance = ..`
+
+error[12-0002]: invalid `#[test]` attribute form on fn `misspelled`
+   ┌─ attr_test_args.fe:25:1
+   │
+25 │ #[test(should_revrt)]
+   │ ^^^^^^^^^^^^^^^^^^^^^ expected `#[test]`, or `#[test(..)]` with arguments among `should_revert`, `panic = ..`, `selector = ..` and `balance = ..`
+
+error[12-0002]: invalid `#[test]` attribute form on fn `positional`
+   ┌─ attr_test_args.fe:28:1
+   │
+28 │ #[test(1)]
+   │ ^^^^^^^^^^ expected `#[test]`, or `#[test(..)]` with arguments among `should_revert`, `panic = ..`, `selector = ..` and `balance = ..`
+
+error[12-0002]: invalid `#[test]` attribute form on fn `value_form`
+   ┌─ attr_test_args.fe:31:1
+   │
+31 │ #[test = true]
+   │ ^^^^^^^^^^^^^^ expected `#[test]`, or `#[test(..)]` with arguments among `should_revert`, `panic = ..`, `selector = ..` and `balance = ..`
+
+error[12-0003]: duplicate `#[test]` attribute on fn `duplicate`
+   ┌─ attr_test_args.fe:35:1
+   │
+35 │ #[test]
+   │ ^^^^^^^ remove the extra `#[test]` attribute

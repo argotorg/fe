@@ -157,7 +157,7 @@ fn lower_contract_field_def<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: ast::RecordFieldDef,
 ) -> FieldDef<'db> {
-    super::item::report_unsupported_member_attrs(ctxt, ast.attr_list(), "field", None);
+    super::item::validate_member_attrs(ctxt, ast.attr_list(), "field", None);
     let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
     let name = IdentId::lower_token_partial(ctxt, ast.name());
     let type_ref = TypeId::lower_ast_partial(ctxt, ast.ty());
