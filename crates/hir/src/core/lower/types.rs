@@ -49,6 +49,9 @@ impl<'db> TypeId<'db> {
             }
 
             ast::TypeKind::Never(_) => TypeKind::Never,
+            ast::TypeKind::TraitFamily(family) => {
+                TypeKind::TraitFamily(TraitRefId::lower_ast_partial(ctxt, family.trait_ref()))
+            }
         };
 
         TypeId::new(ctxt.db(), kind)

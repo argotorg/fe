@@ -891,6 +891,11 @@ impl ToDoc for ast::Type {
             TypeKind::Mode(mode) => mode.to_doc(ctx),
             TypeKind::Ptr(ptr) => ptr.to_doc(ctx),
             TypeKind::Path(path) => path.to_doc(ctx),
+            TypeKind::TraitFamily(family) => ctx.alloc.text("trait ").append(
+                family
+                    .trait_ref()
+                    .map_or_else(|| ctx.alloc.nil(), |reference| reference.to_doc(ctx)),
+            ),
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),
             TypeKind::Array(array) => array.to_doc(ctx),
             TypeKind::Never(never) => never.to_doc(ctx),
