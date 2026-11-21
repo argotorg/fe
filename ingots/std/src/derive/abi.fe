@@ -58,7 +58,7 @@ impl Derive<trait AbiSize> for StructAbiSize {
     }
 }
 
-struct RecordWriter<A> {
+pub(ingot) struct RecordWriter<A> {
     out: AbiFrame,
     tails: AbiFrame,
     head: u256,
@@ -67,20 +67,35 @@ struct RecordWriter<A> {
 
 impl<A: Abi> RecordWriter<A> {
     #[inline(always)]
-    fn push<F: Encode<A> + AbiSize>(mut self, _ field: F) {
-        self.tails = encode_field<A, F>(field, self.out, head_pos: self.head, tails: self.tails)
-        self.remaining = self.remaining - 1
-        if self.remaining != 0 {
-            self.head = self.head + abi_field_head_size<F>()
+    pub(ingot) fn new(_ out: AbiFrame, head_size: u256, fields: usize) -> Self {
+        RecordWriter {
+            out: out.tail(0),
+            tails: out.tail(head_size),
+            head: 0,
+            remaining: fields,
         }
+    }
+
+}
+
+#[inline(always)]
+fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
+    writer.tails = encode_field<A, F>(field, writer.out, head_pos: writer.head, tails: writer.tails)
+    writer.remaining = writer.remaining - 1
+    if writer.remaining != 0 {
+        writer.head = writer.head + abi_field_head_size<F>()
     }
 }
 
 struct WriteField {}
 impl FieldInit for WriteField {
     const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
-        quote(writer) { writer.push(self.${field}) }
+        write_field(field)
     }
+}
+
+pub(ingot) const fn write_field(_ field: Field) -> Code<Expr> {
+    quote(writer) { push_record_field(mut writer, self.${field}) }
 }
 
 struct SpanCursor {
@@ -129,12 +144,9 @@ impl<A: Abi> Derive<trait Encode<A>> for StructAbiEncode {
         quote(writer) {
             #[inline(always)]
             fn encode(self, _ out: AbiFrame) {
-                var writer: RecordWriter<${abi}> = RecordWriter {
-                    out: out.tail(0),
-                    tails: out.tail(<Self as AbiSize>::HEAD_SIZE),
-                    head: 0,
-                    remaining: ${count},
-                }
+                var writer = RecordWriter<${abi}>::new(
+                    out, head_size: <Self as AbiSize>::HEAD_SIZE, fields: ${count},
+                )
                 ${steps}
             }
         }
