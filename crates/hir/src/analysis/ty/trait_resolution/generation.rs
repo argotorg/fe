@@ -1,6 +1,5 @@
 //! A lexical offer and the preparation dependency it can introduce. Neither
 //! is evidence: only an admitted generated implementation can produce proof.
-use crate::analysis::name_resolution::Tier;
 use common::{
     generation::{ScopedDeriveDemand, ScopedDeriveOpeningKey},
     indexmap::IndexSet,
@@ -16,13 +15,15 @@ use crate::{
 };
 
 use super::super::{
-    canonical::Canonical,
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorOrigin, TraitInstId},
     ty_def::TyId,
     visitor::{TyVisitable, TyVisitor},
 };
-use super::PredicateListId;
+use super::{
+    PredicateListId,
+    derive::{OfferHead, ProviderSearch},
+};
 
 #[salsa::interned]
 #[derive(Debug)]
@@ -209,40 +210,6 @@ impl<'a> IntoIterator for &'a GenerationDemands {
     }
 }
 
-/// The head information available before a goal is known. A closed family
-/// can be compared eagerly. An open head keeps only a name hint.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum OfferHead<'db> {
-    Family(TyId<'db>),
-    Trait(Trait<'db>),
-    Any,
-}
-
-impl<'db> OfferHead<'db> {
-    fn trait_hint(self, db: &'db dyn HirAnalysisDb) -> Option<Trait<'db>> {
-        match self {
-            Self::Family(ty) => match ty.data(db) {
-                super::super::ty_def::TyData::TraitFamily(family) => Some(family.def(db)),
-                _ => unreachable!("a family offer always contains a trait family"),
-            },
-            Self::Trait(trait_) => Some(trait_),
-            Self::Any => None,
-        }
-    }
-
-    fn intersect(self, db: &'db dyn HirAnalysisDb, rhs: Self) -> Option<Self> {
-        match (self, rhs) {
-            (Self::Any, other) | (other, Self::Any) => Some(other),
-            (lhs, rhs) if lhs == rhs => Some(lhs),
-            (Self::Family(_), Self::Family(_)) => None,
-            (lhs, rhs) if lhs.trait_hint(db) == rhs.trait_hint(db) => {
-                lhs.trait_hint(db).map(Self::Trait)
-            }
-            _ => None,
-        }
-    }
-}
-
 /// Discover names for lexical method lookup. Actual eligibility is checked on
 /// the requested family, before the ordinary solver discharges prerequisites.
 pub(crate) fn provider_hints<'db>(
@@ -253,9 +220,14 @@ pub(crate) fn provider_hints<'db>(
     if provider_ty.has_invalid(db) || provider_ty.has_var(db) {
         return None;
     }
-    let (offers, problem) = provider_headers(db, scope, provider_ty);
+    let Ok(offers) = provider_headers(db, scope, provider_ty) else {
+        return Some(ProviderHints {
+            traits: Vec::new(),
+            open: true,
+        });
+    };
     let mut traits = IndexSet::default();
-    let mut open = problem.is_some();
+    let mut open = false;
     for (head, _) in offers {
         if let Some(trait_) = head.trait_hint(db) {
             traits.insert(trait_);
@@ -272,17 +244,16 @@ pub(crate) fn provider_hints<'db>(
 pub(crate) fn closed_offers<'db>(
     db: &'db dyn HirAnalysisDb,
     opening: ProviderOpening<'db>,
-) -> Vec<TyId<'db>> {
-    let (offers, _) = provider_headers(db, opening.scope(db), opening.provider_ty(db));
-    offers
-        .into_iter()
-        .filter_map(|(head, _)| match head {
-            OfferHead::Family(family) => Some(family),
-            _ => None,
-        })
-        .collect::<common::indexmap::IndexSet<_>>()
-        .into_iter()
-        .collect()
+) -> Result<IndexSet<TyId<'db>>, &'static str> {
+    Ok(
+        provider_headers(db, opening.scope(db), opening.provider_ty(db))?
+            .into_iter()
+            .filter_map(|(head, _)| match head {
+                OfferHead::Family(family) => Some(family),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 pub(crate) fn provider_offers_goal<'db>(
@@ -296,246 +267,43 @@ pub(crate) fn provider_offers_goal<'db>(
     let scope = opening.scope(db);
     let assumptions = PredicateListId::empty_list(db);
     let families = crate::core::meta::derive_families(db, goal, scope, assumptions);
-    let (offers, problem) =
-        matching_provider_headers(db, scope, assumptions, opening.provider_ty(db), &families);
-    if !offers.is_empty() {
-        Ok(true)
-    } else if let Some(problem) = problem {
-        Err(problem)
-    } else {
-        Ok(false)
-    }
+    Ok(
+        !matching_provider_headers(db, scope, assumptions, opening.provider_ty(db), &families)?
+            .is_empty(),
+    )
 }
 
-type OfferedHeader<'db> = (OfferHead<'db>, ImplementorOrigin<'db>);
+fn provider_search<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<ProviderSearch<'db>> {
+    let derive = super::super::corelib::resolve_core_trait(db, scope, &["derive", "Derive"])?;
+    Some(ProviderSearch::new(db, scope, assumptions, derive))
+}
 
 fn provider_headers<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     provider_ty: TyId<'db>,
-) -> (Vec<OfferedHeader<'db>>, Option<&'static str>) {
-    let Some(mut search) = ProviderSearch::new(db, scope, PredicateListId::empty_list(db)) else {
-        return (Vec::new(), None);
+) -> Result<Vec<(OfferHead<'db>, ImplementorOrigin<'db>)>, &'static str> {
+    let Some(mut search) = provider_search(db, scope, PredicateListId::empty_list(db)) else {
+        return Ok(Vec::new());
     };
-    (search.headers(provider_ty), search.problem)
+    search.headers(provider_ty)
 }
 
-/// Discover the concrete protocol keys for one elaborated goal. Every key
-/// uses the same inventory and the search budget spans the whole request.
 fn matching_provider_headers<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
     provider_ty: TyId<'db>,
     families: &[TyId<'db>],
-) -> (
-    Vec<(TyId<'db>, ImplementorOrigin<'db>)>,
-    Option<&'static str>,
-) {
-    let Some(mut search) = ProviderSearch::new(db, scope, assumptions) else {
-        return (Vec::new(), None);
+) -> Result<Vec<(TyId<'db>, ImplementorOrigin<'db>)>, &'static str> {
+    let Some(mut search) = provider_search(db, scope, assumptions) else {
+        return Ok(Vec::new());
     };
-    let mut offers = Vec::new();
-    for &family in families {
-        search.wanted = Some(Canonical::new(db, family));
-        offers.extend(
-            search
-                .headers(provider_ty)
-                .into_iter()
-                .map(|(_, origin)| (family, origin)),
-        );
-    }
-    (offers, search.problem)
-}
-
-/// A defaulted goal can fit distinct ordinary protocol keys. Resolve this
-/// choice from the matching headers before proving any provider prerequisite.
-/// Once the key is chosen, the ordinary call supplies its proof and body.
-pub(crate) fn select_derive_family<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    provider_ty: TyId<'db>,
-    goal: TraitInstId<'db>,
-) -> Result<TyId<'db>, String> {
-    let families = crate::core::meta::derive_families(db, goal, scope, assumptions);
-    if let [family] = families.as_slice() {
-        return Ok(*family);
-    }
-    let (offers, problem) =
-        matching_provider_headers(db, scope, assumptions, provider_ty, &families);
-    if let Some(problem) = problem {
-        return Err(problem.into());
-    }
-    let matching = offers
-        .into_iter()
-        .map(|(family, _)| family)
-        .collect::<IndexSet<_>>();
-    super::derive::choose_family(db, provider_ty, &families, matching.into_iter().collect())
-}
-
-/// Structural domain matching for the ordinary Derive protocol. Only a bare
-/// family variable can be restricted by same-family provider bounds. All other
-/// prerequisites are obligations of the chosen application.
-struct ProviderSearch<'db> {
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    derive: Trait<'db>,
-    assumptions: PredicateListId<'db>,
-    wanted: Option<Canonical<TyId<'db>>>,
-    active: Vec<(TyId<'db>, ImplementorOrigin<'db>)>,
-    remaining: usize,
-    problem: Option<&'static str>,
-}
-
-impl<'db> ProviderSearch<'db> {
-    fn new(
-        db: &'db dyn HirAnalysisDb,
-        scope: ScopeId<'db>,
-        assumptions: PredicateListId<'db>,
-    ) -> Option<Self> {
-        Some(Self {
-            db,
-            scope,
-            derive: super::super::corelib::resolve_core_trait(db, scope, &["derive", "Derive"])?,
-            assumptions,
-            wanted: None,
-            active: Vec::new(),
-            remaining: 128,
-            problem: None,
-        })
-    }
-
-    fn headers(&mut self, receiver: TyId<'db>) -> Vec<OfferedHeader<'db>> {
-        use super::super::{
-            normalize::normalize_ty,
-            trait_def::impls_for_trait_in_ingots,
-            ty_def::{TyData, TyFlags},
-            unify::UnificationTable,
-        };
-
-        let db = self.db;
-        let receiver = if receiver.flags(db).contains(TyFlags::HAS_PROJECTION) {
-            normalize_ty(db, receiver, self.scope, self.assumptions)
-        } else {
-            receiver
-        };
-        if receiver
-            .flags(db)
-            .intersects(TyFlags::HAS_INVALID | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION)
-        {
-            self.problem = Some(
-                "scoped derive could not determine the type of a provider required by its forwarding bounds",
-            );
-            return Vec::new();
-        }
-        // The index uses only the Derive declaration and the receiver's ingot.
-        let inventory = TraitInstId::new_simple(db, self.derive, vec![receiver, TyId::unit(db)]);
-        let (primary, secondary) = super::TraitSolveCx::new(db, self.scope, Tier::All)
-            .search_ingots_for_trait_inst(db, inventory);
-        let mut headers = Vec::new();
-        for &header in impls_for_trait_in_ingots(
-            db,
-            primary,
-            secondary,
-            Canonical::new(db, inventory),
-            Tier::All,
-            self.scope.ingot(db),
-        ) {
-            let mut table = UnificationTable::new(db);
-            let candidate = table.instantiate_with_fresh_vars(header);
-            if table
-                .unify_header(candidate.trait_inst(db).self_ty(db), receiver)
-                .is_err()
-            {
-                continue;
-            }
-            if self.remaining == 0 {
-                self.problem = Some("scoped derive provider search exceeded its work limit");
-                break;
-            }
-            self.remaining -= 1;
-            let Some(&family) = candidate.trait_inst(db).args(db).get(1) else {
-                continue;
-            };
-            let family = family.fold_with(db, &mut table);
-            let symbolic = matches!(family.data(db), TyData::TyVar(_));
-            let restrictors: Vec<_> = if symbolic {
-                candidate
-                    .constraints(db)
-                    .list(db)
-                    .iter()
-                    .copied()
-                    .filter(|condition| {
-                        condition.def(db) == self.derive
-                            && condition
-                                .args(db)
-                                .get(1)
-                                .is_some_and(|key| key.fold_with(db, &mut table) == family)
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            if let Some(wanted) = self.wanted {
-                let wanted = wanted.extract_identity(&mut table);
-                let requested = TraitInstId::new_simple(db, self.derive, vec![receiver, wanted]);
-                if super::table_solver::match_header_args(
-                    db,
-                    &mut table,
-                    candidate.trait_inst(db),
-                    requested,
-                    self.scope,
-                    [self.assumptions; 2],
-                )
-                .is_err()
-                {
-                    continue;
-                }
-            }
-            let family = family.fold_with(db, &mut table);
-            let family = if family.has_projection(db) {
-                normalize_ty(db, family, self.scope, self.assumptions)
-            } else {
-                family
-            };
-            let head = match family.data(db) {
-                TyData::TraitFamily(family_id)
-                    if family.has_var(db) || family.has_param(db) || family.has_projection(db) =>
-                {
-                    OfferHead::Trait(family_id.def(db))
-                }
-                TyData::TraitFamily(_) => OfferHead::Family(family),
-                TyData::TyVar(_) => OfferHead::Any,
-                _ => continue,
-            };
-            let origin = candidate.origin(db);
-            let visit = (receiver, origin);
-            if self.active.contains(&visit) {
-                continue;
-            }
-            self.active.push(visit);
-            let mut domain = IndexSet::from_iter([head]);
-            for restriction in restrictors {
-                let other = restriction.self_ty(db).fold_with(db, &mut table);
-                let offered = self.headers(other);
-                domain = domain
-                    .into_iter()
-                    .flat_map(|lhs| {
-                        offered
-                            .iter()
-                            .filter_map(move |(rhs, _)| lhs.intersect(db, *rhs))
-                    })
-                    .collect();
-                if domain.is_empty() {
-                    break;
-                }
-            }
-            self.active.pop();
-            headers.extend(domain.into_iter().map(|head| (head, origin)));
-        }
-        headers
-    }
+    search.matching_headers(provider_ty, families)
 }
 
 /// The demands met by running the instance `key`: those of its own body and,
@@ -608,7 +376,14 @@ pub fn admission_demands<'db>(
     let scope = opening.scope(db);
     let assumptions = PredicateListId::empty_list(db);
     let families = crate::core::meta::derive_families(db, goal, scope, assumptions);
-    let (headers, _) = matching_provider_headers(db, scope, assumptions, provider_ty, &families);
+    let headers = match matching_provider_headers(db, scope, assumptions, provider_ty, &families) {
+        Ok(headers) => headers,
+        Err(problem) => {
+            let mut demands = GenerationDemands::default();
+            demands.refuse(opening.key(db).clone(), problem);
+            return demands;
+        }
+    };
     let origins: IndexSet<_> = headers.into_iter().map(|(_, origin)| origin).collect();
     for origin in origins {
         if let ImplementorOrigin::Hir(implementation) = origin {

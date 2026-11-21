@@ -3282,3 +3282,61 @@ const fn run() -> u256 {
         "{failure}"
     );
 }
+
+#[test]
+fn scoped_provider_search_limits_are_independent_of_registration_order() {
+    use std::fmt::Write;
+
+    for count in [128, 129] {
+        let mut declarations = String::new();
+        for key in 0..count {
+            writeln!(declarations, "struct Key{key} {{}}").unwrap();
+        }
+        for target_first in [true, false] {
+            let mut source = format!(
+                r#"
+use core::derive::Derive
+use core::meta::{{Code, Item, Record}}
+trait Read<K> {{ const fn read() -> usize }}
+struct Packet {{}}
+struct Provider {{}}
+{declarations}
+"#
+            );
+            for offset in 0..count {
+                let key = if target_first {
+                    offset
+                } else {
+                    (offset + 1) % count
+                };
+                writeln!(
+                    source,
+                    r#"impl Derive<trait Read<Key{key}>> for Provider {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn read() -> usize {{ {value} }} }}
+    }}
+}}"#,
+                    value = if key == 0 { 9 } else { 7 },
+                )
+                .unwrap();
+            }
+            source.push_str(
+                r#"
+impl Read<Key0> for Packet { const fn read() -> usize { 1 } }
+const fn run() -> usize {
+    with (Provider) { <Packet as Read<Key0>>::read() }
+}
+"#,
+            );
+            if count == 128 {
+                assert_eq!(eval_const_fn_u256(&prepare(&source).unwrap(), "run"), "9");
+            } else {
+                let cause = prepare_err(&source);
+                assert!(
+                    cause.contains("derive provider search exceeded its work limit"),
+                    "{cause}"
+                );
+            }
+        }
+    }
+}
