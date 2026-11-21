@@ -6578,6 +6578,23 @@ fn named_storage_deferred_lexical_choices_keep_their_source_parameters() {
 }
 
 #[test]
+fn named_storage_scoped_provider_is_prepared_for_a_sibling_call() {
+    let fixture = fe_test_runner_fixture_dir("late_storage_codec");
+    for level in ["0", "2"] {
+        let (output, exit) = run_fe_command_with_args(
+            "test",
+            fixture.to_str().unwrap(),
+            &["--backend", "sonatina", "-O", level],
+        );
+        assert_eq!(exit, 0, "optimization level {level}: {output}");
+        assert!(
+            output.contains("1 passed; 0 failed"),
+            "optimization level {level}: {output}"
+        );
+    }
+}
+
+#[test]
 fn named_storage_qualified_clearable_opening_checks_aggregate_fields() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("clearable_opening.fe");

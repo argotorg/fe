@@ -6,7 +6,8 @@ pub use const_requirements::{
     admit_header_type_application,
 };
 pub(crate) use const_requirements::{
-    check_declared_type_requirements, retained_bound_requirements,
+    check_declared_type_requirements, retained_bound_requirements, type_admission_instances,
+    written_const_bodies_of,
 };
 mod contract;
 mod effect_env;
@@ -102,7 +103,7 @@ use super::{
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
         BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, UseEvidence,
-        declared_bound_evidence, impl_const_bound_evidence, instantiated_selection,
+        declared_bound_evidence_with_pending, impl_const_bound_evidence, instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
     instantiate_trait_self,
@@ -129,6 +130,7 @@ use crate::analysis::semantic::{
     eval_body_owner_const, eval_const_instance, reify_runtime_const_for_ty,
     runtime_size_bytes_with_source,
 };
+use crate::analysis::ty::trait_resolution::generation::GenerationDemands;
 use crate::analysis::ty::ty_def::{ClosureDef, ClosureTy, TyBase, TyData};
 use crate::analysis::ty::{
     closure::{CallableTrait, CallableValue},
@@ -168,9 +170,14 @@ pub fn check_func_body<'db>(
     func: Func<'db>,
 ) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
     let mut bodies = BodyOwner::func_bodies(db, func).map(|owner| check_body(db, owner));
-    let (mut diags, typed) = bodies.next().expect("a function has a body");
+    let (mut diags, mut typed) = bodies.next().expect("a function has a body");
     let mut other_diags = Vec::new();
-    for (mode_diags, _) in bodies {
+    for (mode_diags, mode_typed) in bodies {
+        // Every mode's body is checked, so every mode's demands are owed.
+        typed
+            .tables_mut()
+            .generation_demands
+            .extend(mode_typed.generation_demands());
         other_diags.extend(mode_diags);
     }
     for diag in other_diags {
@@ -684,6 +691,36 @@ fn predicate_awaits_uses<'db>(
     })
 }
 
+/// The const predicates of `owner` that declaration checking evaluates at the
+/// empty substitution: those that are conditions, well formed, supported in
+/// their generic context and not kept for the declaration's uses.
+pub(crate) fn evaluated_const_predicates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: WhereClauseOwner<'db>,
+) -> Vec<Body<'db>> {
+    let generic_declaration = generic_declaration_of(db, owner);
+    if !const_predicates_supported(db, owner, generic_declaration) {
+        return Vec::new();
+    }
+    owner
+        .where_clause(db)
+        .const_predicates(db)
+        .iter()
+        .copied()
+        .filter(|&body| {
+            let pred_owner = BodyOwner::const_predicate(db, body);
+            !predicate_names_a_type(db, body)
+                && !matches!(body.expr(db).data(db, body), Partial::Absent)
+                && diags_allow_evaluation(db, &infer_body(db, pred_owner).0)
+                && !matches!(
+                    const_requirements::check_predicate_formation(db, body).status,
+                    const_requirements::FormationStatus::Recursive
+                )
+                && !predicate_awaits_uses(db, body, generic_declaration)
+        })
+        .collect()
+}
+
 /// What a boolean compile-time condition evaluated to. Only `True` holds: a
 /// blocked or failed evaluation never counts as a satisfied condition.
 pub(super) enum ConditionOutcome<'db> {
@@ -1164,6 +1201,77 @@ pub(crate) fn module_body_owners<'db>(
     owners
 }
 
+pub(crate) fn provider_opening_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: &common::generation::ScopedDeriveOpeningKey,
+    offered_trait: crate::hir_def::Trait<'db>,
+) -> Option<super::trait_resolution::generation::ProviderOpening<'db>> {
+    let file = db.workspace().get(db, &key.file)?;
+    let module = crate::lower::map_file_to_mod_impl(db, file);
+    let mut retained = None;
+    for owner in module_body_owners(db, module) {
+        let typed = &infer_body(db, owner).1;
+        for &opening in &typed.tables.provider_openings {
+            if opening.key(db) == key && opening.may_offer(db, offered_trait) {
+                if retained.is_some_and(|previous| previous != opening) {
+                    return None;
+                }
+                retained = Some(opening);
+            }
+        }
+    }
+    retained
+}
+
+/// The generation demands of `owner`'s checked body, requirement checks
+/// included. A closure is checked inline in its parent's body.
+pub fn checked_body_demands<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> GenerationDemands {
+    body_demands_query(db, BodyInferenceKey::new(db, owner)).clone()
+}
+
+#[salsa::tracked(cycle_initial=body_demands_cycle_initial)]
+fn body_demands_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: BodyInferenceKey<'db>,
+) -> GenerationDemands {
+    let owner = key.owner(db);
+    if let BodyOwner::Closure { def, .. } = owner {
+        return BodyOwner::closure_parent(db, def)
+            .map(|parent| checked_body_demands(db, parent))
+            .unwrap_or_default();
+    }
+    if let BodyOwner::Func(func, None) = owner {
+        let mut demands = GenerationDemands::default();
+        for mode_owner in BodyOwner::func_bodies(db, func) {
+            let (diags, typed) = infer_body(db, mode_owner);
+            demands.extend(typed.generation_demands());
+            if diags_allow_evaluation(db, diags) {
+                demands.extend(
+                    &const_requirements::check_body_requirements(db, mode_owner, typed).demands,
+                );
+            }
+        }
+        return demands;
+    }
+    let (diags, typed) = infer_body(db, owner);
+    let mut demands = typed.generation_demands().clone();
+    if diags_allow_evaluation(db, diags) {
+        demands.extend(&const_requirements::check_body_requirements(db, owner, typed).demands);
+    }
+    demands
+}
+
+fn body_demands_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _key: BodyInferenceKey<'db>,
+) -> GenerationDemands {
+    GenerationDemands::default()
+}
+
 /// The diagnostics of `owner`'s checked body, requirement checks included. A
 /// closure is checked inline in its parent's body.
 pub(crate) fn checked_body_diags<'db>(
@@ -1227,12 +1335,16 @@ pub(super) fn checked_body<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> CheckedBody<'db> {
-    let (mut diags, typed) = infer_body(db, owner).clone();
+    let (mut diags, mut typed) = infer_body(db, owner).clone();
     let mut recursive = false;
     if diags_allow_evaluation(db, &diags) {
         let requirements = const_requirements::check_body_requirements(db, owner, &typed);
         recursive = requirements.recursive;
         diags.extend(requirements.diags);
+        typed
+            .tables_mut()
+            .generation_demands
+            .extend(&requirements.demands);
     }
     CheckedBody {
         diags,
@@ -1724,6 +1836,8 @@ fn typed_body_for_bodyless_func<'db>(
         inspected_places: FxHashSet::default(),
         covered_providers: FxHashSet::default(),
         named_impl_operands: FxHashSet::default(),
+        provider_openings: Vec::new(),
+        generation_demands: Default::default(),
         expr_choices: SecondaryMap::new(),
         const_refs: SecondaryMap::new(),
         pat_const_refs: SecondaryMap::new(),
@@ -2803,6 +2917,7 @@ impl<'db> TyChecker<'db> {
                 let first_projected = ambiguous
                     .first()
                     .map(|solution| Canonical::new(db, solution.value.inst));
+                let mut fallback_pending = Vec::new();
                 let fallback_proved_complete = completion.hit_root_answer_limit()
                     && first_projected.is_some_and(|first_projected| {
                         ambiguous.iter().all(|solution| {
@@ -2812,8 +2927,10 @@ impl<'db> TyChecker<'db> {
                             solve_cx,
                             &query,
                             first_projected,
+                            &mut fallback_pending,
                         )
                     });
+                self.env.generation_demands.requests(db, fallback_pending);
                 let answers_complete_for_inference =
                     completion.is_saturated() || fallback_proved_complete;
 
@@ -2894,6 +3011,11 @@ impl<'db> TyChecker<'db> {
                 } else {
                     TraitObligationOutcome::Requeue(obligation)
                 }
+            }
+            GoalSatisfiability::NeedsGeneration(request) => {
+                self.env.generation_demands.request(db, request);
+                self.push_diag(BodyDiag::unprepared_provider(obligation.span));
+                TraitObligationOutcome::Discharged
             }
             GoalSatisfiability::ContainsInvalid => TraitObligationOutcome::Discharged,
         }
@@ -3676,6 +3798,7 @@ impl<'db> TyChecker<'db> {
 
         // A qualified path resolves to a type that no longer mentions the
         // types written inside it, so check those where they are written.
+        let mut wf_pending = Vec::new();
         for diag in qualified_path_wf_diags_under_choices(
             self.db,
             self.env.scope(),
@@ -3683,9 +3806,11 @@ impl<'db> TyChecker<'db> {
             span.clone(),
             self.env.assumptions(),
             self.env.solve_cx(),
+            &mut wf_pending,
         ) {
             self.push_diag(diag);
         }
+        self.env.generation_demands.requests(self.db, wf_pending);
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()).or_else(|| {
             normalization_limit_diag(
@@ -4826,14 +4951,18 @@ impl<'db> ConstRef<'db> {
     }
 
     /// Proves, in the use's context, the bounds the trait's default value
-    /// body declares, instantiated for the use, as `declared_bound_evidence`
+    /// body declares, instantiated for the use, as `declared_bound_evidence_with_pending`
     /// records them. Return missing dictionaries when lexical selection requires
-    /// complete evidence.
+    /// complete evidence, using the same validation as callable signatures, and
+    /// the generation requests the proofs stopped on.
     pub(super) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
-    ) -> Vec<TraitInstId<'db>> {
+    ) -> (
+        Vec<TraitInstId<'db>>,
+        Vec<crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>>,
+    ) {
         let ConstRef::TraitConst { use_, evidence, .. } = self else {
             return Default::default();
         };
@@ -4848,7 +4977,7 @@ impl<'db> ConstRef<'db> {
         };
         let declared = const_body_assumptions(db, body.scope());
         let signature = declared.extend_all_bounds(db);
-        let recorded = declared_bound_evidence(
+        let (recorded, requests) = declared_bound_evidence_with_pending(
             db,
             declared,
             signature,
@@ -4867,11 +4996,12 @@ impl<'db> ConstRef<'db> {
             ),
             entries: recorded,
         });
-        if choices.is_some() {
+        let missing = if choices.is_some() {
             recorded.missing_bound_goals(db, signature, &subst)
         } else {
             Vec::new()
-        }
+        };
+        (missing, requests)
     }
 }
 
@@ -5058,6 +5188,13 @@ mod typed_body_tables {
         /// `with` values whose resources the function's own authority covers.
         pub(super) covered_providers: FxHashSet<ExprId>,
         pub(super) named_impl_operands: FxHashSet<ExprId>,
+        pub(super) provider_openings:
+            Vec<crate::analysis::ty::trait_resolution::generation::ProviderOpening<'db>>,
+        /// What preparation must settle before this body's result can be
+        /// trusted: the requests its proofs stopped on and the openings it
+        /// refused.
+        pub(super) generation_demands:
+            crate::analysis::ty::trait_resolution::generation::GenerationDemands,
         pub(super) expr_choices:
             SecondaryMap<ExprId, Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>>,
         pub(super) const_refs: SecondaryMap<ExprId, Option<ConstRef<'db>>>,
@@ -5922,6 +6059,17 @@ impl<'db> TypedBody<'db> {
             }
             scope = scope.parent(db)?;
         }
+    }
+
+    /// What preparation must settle before this body's result can be
+    /// trusted: the generation requests its proofs stopped on and the
+    /// provider openings it refused.
+    pub fn generation_demands(&self) -> &GenerationDemands {
+        &self.tables.generation_demands
+    }
+
+    pub(crate) fn has_scoped_provider_openings(&self) -> bool {
+        !self.tables.provider_openings.is_empty()
     }
 
     pub fn is_named_impl_operand(&self, expr: ExprId) -> bool {
@@ -7647,6 +7795,8 @@ impl<'db> TypedBody<'db> {
             inspected_places: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
             named_impl_operands: FxHashSet::default(),
+            provider_openings: Vec::new(),
+            generation_demands: Default::default(),
             expr_choices: SecondaryMap::new(),
             const_refs: SecondaryMap::new(),
             pat_const_refs: SecondaryMap::new(),

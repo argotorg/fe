@@ -544,16 +544,7 @@ impl<'db> TyFoldable<'db> for TraitSolverQuery<'db> {
             goal: self.goal.fold_with(db, folder),
             assumptions: self.assumptions.fold_with(db, folder),
             require_impl: self.require_impl,
-            choices: self.choices.map(|choices| {
-                super::trait_resolution::ChosenImpls::new(
-                    db,
-                    choices
-                        .items(db)
-                        .iter()
-                        .map(|item| item.fold_with(db, folder))
-                        .collect::<Vec<_>>(),
-                )
-            }),
+            choices: self.choices.map(|choices| choices.fold_with(db, folder)),
         }
     }
 }

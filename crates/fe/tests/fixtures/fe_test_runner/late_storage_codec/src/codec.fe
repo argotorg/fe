@@ -1,0 +1,32 @@
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::{SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+
+pub struct Arg { value: u8 }
+impl Gate for Arg {
+    fn code(_ value: u8) -> u8 { value }
+}
+
+struct ProvideGate {}
+impl Derive<trait Gate> for ProvideGate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn code(_ value: u8) -> u8 { value ^ 1 } }
+    }
+}
+
+pub struct Elem<K, T> { pub value: u8 }
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+pub fn write<K>(array: mut SolArray<Elem<K, Arg>>) {
+    with (ProvideGate) { array[0] = Elem { value: 7 } }
+}
