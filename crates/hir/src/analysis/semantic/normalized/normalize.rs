@@ -1676,7 +1676,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     self.projection_values[local.index()] = Some(index.value);
                     NDataProjection::Index(NIndex::Value(index.value))
                 }
-                Projection::Entry(local) => {
+                Projection::Entry(local, entry) => {
                     let key = self.read_scalar_operand(
                         block,
                         origin,
@@ -1684,7 +1684,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         Some(ReadMode::Copy),
                     )?;
                     self.projection_values[local.index()] = Some(key.value);
-                    NDataProjection::Entry(key.value)
+                    NDataProjection::Entry(key.value, *entry)
                 }
                 Projection::Index(IndexSource::Any)
                 | Projection::Deref
@@ -2186,7 +2186,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                         NIndex::Value(_) => None,
                     }))
                 }
-                NDataProjection::Entry(_) => None,
+                NDataProjection::Entry(..) => None,
             })
             .collect::<Option<Vec<_>>>()
         else {
@@ -2287,7 +2287,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                 // A layout source never reaches through an entry, which lies at
                 // a slot computed at runtime.
                 Projection::Index(IndexSource::Any)
-                | Projection::Entry(_)
+                | Projection::Entry(..)
                 | Projection::Deref
                 | Projection::Discriminant => {
                     return Err(NormalizeError::UnsupportedPlaceProjection);
@@ -2493,7 +2493,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
                     .normalized_enum_variant_field_tys(self.db, ty, *variant)
                     .get(*field_idx)?,
                 // An element or entry is never an access.
-                Projection::Index(_) | Projection::Entry(_) | Projection::Discriminant => {
+                Projection::Index(_) | Projection::Entry(..) | Projection::Discriminant => {
                     return deref();
                 }
             };
@@ -3212,7 +3212,7 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                     NDataProjection::Index(NIndex::Value(value)) => Some(*value),
                     NDataProjection::Field(_)
                     | NDataProjection::VariantField { .. }
-                    | NDataProjection::Entry(_)
+                    | NDataProjection::Entry(..)
                     | NDataProjection::Index(NIndex::Const(_)) => None,
                 }),
                 NStatementKind::Define {
@@ -3222,7 +3222,7 @@ fn read_twice(var _ index: own usize, values: [u256; 2]) -> u256 {
                     NDataProjection::Index(NIndex::Value(value)) => Some(*value),
                     NDataProjection::Field(_)
                     | NDataProjection::VariantField { .. }
-                    | NDataProjection::Entry(_)
+                    | NDataProjection::Entry(..)
                     | NDataProjection::Index(NIndex::Const(_)) => None,
                 }),
                 NStatementKind::Define { .. }

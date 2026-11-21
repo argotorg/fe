@@ -338,6 +338,23 @@ fn direct_row_components<'db>(
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, key.inst) else {
         return None;
     };
+    implementation_row_components(db, resolved, name)
+}
+
+/// The row supplied by this selected implementation at its actual arguments.
+pub(crate) fn implementation_row_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    resolved: crate::analysis::ty::trait_def::ResolvedImplInstance<'db>,
+    name: IdentId<'db>,
+) -> Option<Vec<RowComponent<'db>>> {
+    let row_effects = |impl_trait: ImplTrait<'db>| {
+        impl_trait
+            .rows(db)
+            .iter()
+            .find(|row| row.name.to_opt() == Some(name))
+            .and_then(|row| row.effects)
+            .filter(|effects| !effects.data(db).is_empty())
+    };
     let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db) else {
         return None;
     };

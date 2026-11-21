@@ -128,10 +128,7 @@ impl super::Parse for ItemScope {
         {
             parser.error("expected `fn`, `trait` or `impl` after `unsafe` keyword");
         } else if modifiers.is_pub
-            && matches!(
-                parser.current_kind(),
-                Some(ImplKw | ExternKw | StaticAssertKw)
-            )
+            && matches!(parser.current_kind(), Some(ExternKw | StaticAssertKw))
         {
             let error_msg = format!(
                 "`pub` can't be used for `{}`",
@@ -167,7 +164,10 @@ impl super::Parse for ItemScope {
             Some(MsgKw) => parser.parse_cp(MsgScope::default(), checkpoint),
             Some(EnumKw) => parser.parse_cp(EnumScope::default(), checkpoint),
             Some(TraitKw) => parser.parse_cp(TraitScope::default(), checkpoint),
-            Some(ImplKw) => parser.parse_cp(ImplScope::new(modifiers.is_unsafe), checkpoint),
+            Some(ImplKw) => parser.parse_cp(
+                ImplScope::new(modifiers.is_unsafe, modifiers.is_pub),
+                checkpoint,
+            ),
             Some(UseKw) => parser.parse_cp(UseScope::default(), checkpoint),
             Some(ConstKw) => {
                 if is_fn_item_head(parser) {
@@ -846,7 +846,7 @@ impl super::Parse for TraitConstItemScope {
     }
 }
 
-define_scope! { ImplScope { is_unsafe: bool }, Impl, (ForKw, LBrace) }
+define_scope! { ImplScope { is_unsafe: bool, is_pub: bool }, Impl, (ForKw, LBrace) }
 impl super::Parse for ImplScope {
     type Error = Recovery<ErrProof>;
 
@@ -882,6 +882,28 @@ impl super::Parse for ImplScope {
         }
 
         parse_type(parser, None)?;
+
+        // A malformed selection name is reported without losing the impl body.
+        // `pub` makes an implementation's name visible as an item's is;
+        // an unnamed implementation has no name to publish.
+        if self.is_pub && parser.current_kind() != Some(SyntaxKind::AsKw) {
+            parser.error("`pub` can be used for an `impl` only when it names the implementation (`impl Trait for Type as Name`)");
+        }
+        if parser.bump_if(SyntaxKind::AsKw) {
+            if !is_impl_trait {
+                parser.error("only trait impls can be named");
+            }
+            if parser.bump_if(SyntaxKind::Ident) {
+                if matches!(
+                    parser.current_kind(),
+                    Some(SyntaxKind::Colon2 | SyntaxKind::Lt)
+                ) {
+                    parser.error("an impl name is a single identifier");
+                }
+            } else {
+                parser.error("expected a name for the impl after `as`");
+            }
+        }
 
         parser.expect_and_pop_recovery_stack()?;
         parse_where_clause_opt(parser, ItemBlock::Required)?;

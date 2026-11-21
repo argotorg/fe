@@ -425,7 +425,7 @@ impl<'db> TypeNormalizer<'db> {
             return false;
         }
         UnificationTable::new(self.db)
-            .unify::<TraitRefId<'db>>(target, candidate)
+            .unify_header(target, candidate)
             .is_ok()
     }
 
@@ -457,19 +457,15 @@ impl<'db> TypeNormalizer<'db> {
                     else {
                         continue;
                     };
-                    let candidate = cx.with_impl_assoc_ty(
-                        implementor,
-                        target_inst.self_ty(self.db),
-                        assoc.name,
-                        |cx, inst, assoc_ty| {
-                            cx.unify::<TraitInstId<'db>>(inst, target_inst).ok()?;
+                    let candidate =
+                        cx.with_impl_assoc_ty(implementor, assoc.name, |cx, inst, assoc_ty| {
+                            cx.match_projection_header(inst, target_inst).ok()?;
                             if cx.try_extract::<TraitInstId<'db>>(target_inst) != original_target {
                                 return None;
                             }
                             let assoc_ty = cx.resolve::<TyId<'db>>(assoc_ty);
                             cx.try_extract::<TyId<'db>>(assoc_ty)
-                        },
-                    );
+                        });
 
                     // Extract into the caller's inference environment before
                     // continuing normalization, so scratch-local vars never

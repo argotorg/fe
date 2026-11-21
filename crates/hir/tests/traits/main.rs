@@ -6,6 +6,7 @@ mod effect_key_normalization;
 mod evidence;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
+mod named_evidence;
 mod param_env;
 mod trait_resolution_conformance;
 mod trait_resolution_cross_ingot;

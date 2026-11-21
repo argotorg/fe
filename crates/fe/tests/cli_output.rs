@@ -3899,6 +3899,9 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "multicall",
     "mut_self_storage_receiver_regression",
     "mutex_lock_slot_no_transient_collision",
+    "named_storage_codecs",
+    "named_storage_deferred_codec",
+    "named_storage_evidence",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -5692,4 +5695,316 @@ fn test_cli_build_payable_return_abi() {
         deposit["outputs"],
         serde_json::json!([{"name": "", "type": "uint256"}])
     );
+}
+
+#[test]
+fn named_storage_preserves_dispatch_at_both_optimization_levels() {
+    for fixture in [
+        "named_storage_evidence.fe",
+        "named_storage_codecs.fe",
+        "named_storage_deferred_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        for level in ["0", "1"] {
+            let (output, exit) = run_fe_main(&[
+                "test",
+                "--backend",
+                "sonatina",
+                "--jobs",
+                "1",
+                "-O",
+                level,
+                path.to_str().unwrap(),
+            ]);
+            assert_eq!(exit, 0, "{fixture} at O{level}: {output}");
+        }
+    }
+}
+
+#[test]
+fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
+    let source = include_str!("fixtures/named_storage_alias.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("alias.fe");
+    for (choice, should_pass) in [("<Words as StateIndex>", true), ("Shifted", false)] {
+        fs::write(
+            &path,
+            source.replace("with (Shifted)", &format!("with ({choice})")),
+        )
+        .unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "ordinary distinct keys: {output}");
+        } else {
+            assert_ne!(
+                exit, 0,
+                "different dictionaries may select the same location"
+            );
+            assert!(
+                output.contains("16-0001") && output.contains("access conflict"),
+                "{output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
+    let source = include_str!("fixtures/named_storage_codec_failure.fe");
+    let prerequisite = include_str!("fixtures/named_storage_codec_prerequisite.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("codec.fe");
+    for (name, source, should_pass) in [
+        ("failed packed choice", source.to_string(), false),
+        (
+            "satisfied choice",
+            format!("{source}\nimpl Missing for Arg {{}}\n"),
+            true,
+        ),
+        (
+            "unused whole-slot codec",
+            source.replace("BITS: u256 = 32", "BITS: u256 = 256"),
+            true,
+        ),
+    ] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "{name}: {output}");
+        } else {
+            assert_ne!(exit, 0, "failed chosen codec must not select ordinarily");
+            assert!(
+                output.contains("16-0008") && output.contains("implementation choices"),
+                "{output}"
+            );
+        }
+    }
+    for (choice, encoded) in [
+        ("Broken", "7"),
+        ("Chosen<T>, Broken", "6"),
+        ("Chosen, Broken", "6"),
+    ] {
+        let selected = prerequisite.replace("with (Broken)", &format!("with ({choice})"));
+        fs::write(&path, &selected).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "failed prerequisite for {choice}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{output}"
+        );
+
+        let runtime = selected.replace("raw == 7", &format!("raw == {encoded}"));
+        fs::write(&path, format!("{runtime}\nimpl Missing for u8 {{}}\n")).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "execute the satisfied specialization for {choice}: {output}"
+        );
+        assert!(output.contains("1 passed; 0 failed"), "{output}");
+    }
+}
+
+#[test]
+fn named_storage_keeps_choices_in_deferred_codec_proofs() {
+    let direct = include_str!("fixtures/named_storage_codec_failure.fe");
+    let erased = direct
+        .replace(
+            "fn read_bound",
+            "fn fill<T>(counters: mut Counters<Codec>) {\n    with (Encoded<T>) { counters[1] = 6 }\n}\nfn read_bound",
+        )
+        .replace(
+            "with (Encoded<Arg>) { counters[1] = 6 }",
+            "fill<Arg>(counters: mut counters)",
+        )
+        .replace("with (Encoded<Arg>) { counters[1] }", "raw");
+    let runtime = r#"
+impl Missing for Arg {}
+
+#[test]
+fn deferred_argument_selects_the_codec() uses (evm: mut std::evm::Evm) {
+    let c = evm.create2<C>(value: std::evm::Wei::zero(), args: (), salt: 0)
+    let values: (u32, u32, u32) = evm.call(
+        addr: c, gas: 400000, value: std::evm::Wei::zero(), message: M::Exercise {},
+    )
+    assert!(values.0 == 5 && values.2 == 17)
+}
+"#;
+    let sol = include_str!("fixtures/named_storage_sol_codec_prerequisite.fe");
+    let temp = tempdir().unwrap();
+    for (name, source, satisfied, bits) in [
+        (
+            "erased_argument",
+            erased.as_str(),
+            format!("{erased}{runtime}"),
+            "32",
+        ),
+        (
+            "solidity_prerequisite",
+            sol,
+            format!("{sol}\nimpl Missing for u8 {{}}\n"),
+            "8",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{name}: {output}"
+        );
+
+        fs::write(&path, satisfied).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("1 passed; 0 failed"), "{name}: {output}");
+
+        let whole_slot = source.replace(&format!("BITS: u256 = {bits}"), "BITS: u256 = 256");
+        fs::write(&path, whole_slot).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}, unused whole-slot codec: {output}");
+    }
+}
+
+#[test]
+fn named_storage_late_codec_uses_declared_bound_evidence() {
+    let source = include_str!("fixtures/named_storage_codec_bound_evidence.fe");
+    let repeated = source.replace("SolPacked for Elem<u8, T>", "SolPacked for Elem<T, T>");
+    let applied = include_str!("fixtures/named_storage_codec_applied_choice.fe");
+    let stronger = include_str!("fixtures/named_storage_codec_stronger_bound.fe");
+    let projected = include_str!("fixtures/named_storage_codec_projected_bound.fe");
+    let projected_stronger = projected
+        .replace("trait Gate {", "trait Gate {\n    type Tag")
+        .replace("trait Missing {}\n", "")
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("impl Gate for u8 {", "impl Gate for u8 {\n    type Tag = u8")
+        .replace(
+            "impl<T: Missing> Gate for T as Encoded {",
+            "impl Gate for u8 as Encoded {\n    type Tag = u8",
+        )
+        .replace("Encoded<u8>", "Encoded")
+        .replace(
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate",
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate<Tag = u8>",
+        );
+    let blanket = stronger
+        .replace("impl Gate for u8 {", "impl<T> Gate for T {")
+        .replace(".1 == 6", ".1 == 7");
+    let blanket_known_key = blanket.replace(
+        "fn write<K, T: Gate<Tag = u8>>(array: mut SolArray<Elem<K, T>>)",
+        "fn write<T: Gate<Tag = u8>>(array: mut SolArray<Elem<u8, T>>)",
+    );
+    let temp = tempdir().unwrap();
+    for (name, source, expected) in [
+        ("distinct", source, "2 passed; 0 failed"),
+        ("repeated", repeated.as_str(), "2 passed; 0 failed"),
+        ("applied", applied, "1 passed; 0 failed"),
+        ("stronger_bound", stronger, "2 passed; 0 failed"),
+        ("projected_bound", projected, "2 passed; 0 failed"),
+        (
+            "stronger_projected_bound",
+            projected_stronger.as_str(),
+            "2 passed; 0 failed",
+        ),
+        ("blanket_impl", blanket.as_str(), "2 passed; 0 failed"),
+        (
+            "blanket_impl_known_key",
+            blanket_known_key.as_str(),
+            "2 passed; 0 failed",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains(expected), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_storage_deferred_lexical_choices_keep_their_source_parameters() {
+    let source = include_str!("fixtures/named_storage_codec_lexical_origin.fe");
+    let matching = source
+        .replace("Encoded<A>", "Encoded<T>")
+        .replace("raw == 7", "raw == 6");
+    let unrelated_failure = source
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("A: Missing", "A")
+        .replace("T: Gate + Missing", "T: Gate");
+    let temp = tempdir().unwrap();
+    for (name, source) in [
+        ("unrelated_choice", source),
+        ("matching_choice", matching.as_str()),
+        ("unrelated_failed_choice", unrelated_failure.as_str()),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("2 passed; 0 failed"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_storage_qualified_clearable_opening_checks_aggregate_fields() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("clearable_opening.fe");
+    let source = r#"
+use core::marker::Clearable
+struct Protected { unsafe invariant: u8 }
+fn open() { with (<(Protected,) as Clearable>) {} }
+"#;
+    fs::write(&path, source.replace("(Protected,)", "(u8,)")).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+
+    fs::write(&path, source).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(
+        output.contains("Protected") && output.contains("Clearable"),
+        "{output}"
+    );
+}
+
+#[test]
+fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic_codec.fe");
+    fs::write(
+        &path,
+        r#"
+use std::evm::SolArray
+trait Marker {}
+struct Item {}
+impl Marker for Item as Unrelated {}
+fn fill<T>(array: mut SolArray<T>, value: own T) {
+    with (Unrelated) { array[0] = value }
+}
+pub fn root(array: mut SolArray<u8>) { fill(array: mut array, value: 1) }
+"#,
+    )
+    .unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(
+        exit, 0,
+        "unrelated choice must not turn a deferred codec into a failed choice: {output}"
+    );
+}
+
+#[test]
+fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
+    let source = include_str!("fixtures/named_storage_generic_codec.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic.fe");
+    for source in [source.to_string(), source.replace("with (Unrelated)", "")] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "unrelated choice cannot reject ordinary generic codec: {output}"
+        );
+    }
 }

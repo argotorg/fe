@@ -32,9 +32,131 @@ use salsa::SalsaValue;
 pub(crate) mod constraint;
 mod table_solver;
 
-pub(crate) use table_solver::answering_assumption;
+pub(crate) use table_solver::{
+    answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
+    match_header_args, match_prepared_header, match_prepared_type,
+};
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
+
+/// A template, optionally applied to explicit lexical arguments. Applied
+/// arguments belong to the caller and must never be freshened as impl binders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub struct ChosenImpl<'db> {
+    pub template: ImplementorId<'db>,
+    pub applied: Option<ImplementorId<'db>>,
+}
+impl<'db> ChosenImpl<'db> {
+    pub fn implementation(self) -> ImplementorId<'db> {
+        self.applied.unwrap_or(self.template)
+    }
+    pub(crate) fn instantiate<S: super::unify::UnificationStore<'db>>(
+        self,
+        table: &mut super::unify::UnificationTableBase<'db, S>,
+    ) -> ImplementorId<'db> {
+        self.applied.unwrap_or_else(|| {
+            let db = table.db;
+            if let super::trait_def::ImplementorOrigin::Hir(owner) = self.template.origin(db) {
+                let inherited = crate::hir_def::GenericParamOwner::from(owner)
+                    .parent(db)
+                    .filter(|_| owner.selection_name(db).is_some())
+                    .map(|parent| {
+                        super::ty_lower::collect_generic_params(db, parent)
+                            .params(db)
+                            .to_vec()
+                    })
+                    .unwrap_or_default();
+                let mut params = inherited;
+                params.extend(table.instantiate_with_fresh_vars(
+                    self.template.params(db)[params.len()..].to_vec(),
+                ));
+                super::binder::Binder::bind(owner.into(), self.template).instantiate(db, &params)
+            } else {
+                table.instantiate_with_fresh_vars(self.template)
+            }
+        })
+    }
+}
+impl<'db> TyFoldable<'db> for ChosenImpl<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self {
+            template: self.template,
+            applied: self.applied.map(|applied| applied.fold_with(db, folder)),
+        }
+    }
+}
+fn is_named<'db>(db: &'db dyn HirAnalysisDb, implementation: ImplementorId<'db>) -> bool {
+    matches!(implementation.origin(db), super::trait_def::ImplementorOrigin::Hir(item)
+        if item.selection_name(db).is_some())
+}
+
+impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        if let Some(applied) = self.applied {
+            applied.visit_with(visitor);
+        }
+    }
+}
+
+/// Explicit implementations in lexical order, outermost first. This is input
+/// to proof construction, never an ambient environment attached to a callee.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct ChosenImpls<'db> {
+    pub items: Vec<ChosenImpl<'db>>,
+}
+
+impl<'db> ChosenImpls<'db> {
+    pub fn push(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        implementation: ImplementorId<'db>,
+    ) -> Self {
+        let mut items = outer
+            .map(|outer| outer.items(db).clone())
+            .unwrap_or_default();
+        items.push(ChosenImpl {
+            template: implementation,
+            applied: None,
+        });
+        Self::new(db, items)
+    }
+    pub fn push_applied(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        template: ImplementorId<'db>,
+        applied: ImplementorId<'db>,
+    ) -> Self {
+        let mut items = outer
+            .map(|outer| outer.items(db).clone())
+            .unwrap_or_default();
+        items.push(ChosenImpl {
+            template,
+            applied: Some(applied),
+        });
+        Self::new(db, items)
+    }
+}
+
+impl<'db> TyFoldable<'db> for ChosenImpls<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self::new(db, self.items(db).clone().fold_with(db, folder))
+    }
+}
+
+impl<'db> TyVisitable<'db> for ChosenImpls<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.items(visitor.db()).as_slice().visit_with(visitor);
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct TraitSolverQuery<'db> {
@@ -42,6 +164,7 @@ pub struct TraitSolverQuery<'db> {
     pub assumptions: PredicateListId<'db>,
     /// Select an implementation at this goal; obligations still use assumptions.
     pub require_impl: bool,
+    pub choices: Option<ChosenImpls<'db>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +186,7 @@ impl<'db> CanonicalGoalQuery<'db> {
                 goal,
                 assumptions: assumptions.extend_all_bounds(db),
                 require_impl: false,
+                choices: None,
             },
         )
     }
@@ -123,6 +247,7 @@ pub enum Selection<T> {
 pub struct TraitSolveCx<'db> {
     origin_ingot: Ingot<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
 }
 
 impl<'db> TraitSolveCx<'db> {
@@ -130,6 +255,7 @@ impl<'db> TraitSolveCx<'db> {
         Self {
             origin_ingot: scope.ingot(db),
             assumptions: PredicateListId::empty_list(db),
+            choices: None,
         }
     }
 
@@ -138,6 +264,98 @@ impl<'db> TraitSolveCx<'db> {
             assumptions,
             ..self
         }
+    }
+
+    pub fn with_choices(self, choices: Option<ChosenImpls<'db>>) -> Self {
+        Self { choices, ..self }
+    }
+
+    pub(crate) fn has_matching_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> bool {
+        self.matching_choice(db, goal).is_some()
+    }
+
+    pub(super) fn matching_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> Option<(usize, ImplementorId<'db>)> {
+        self.choices?;
+        let (query, mut table) = self.prepare_goal(db, goal);
+        let scope = self.normalization_scope_for_trait_inst(db, query.goal);
+        let goal =
+            normalize_trait_inst_preserving_validity(db, query.goal, scope, query.assumptions);
+        let (index, application) = table_solver::matching_choice(
+            db,
+            &mut table,
+            query.choices,
+            goal,
+            scope,
+            query.assumptions,
+        )?;
+        Some((index, application.fold_with(db, &mut table)))
+    }
+
+    pub(super) fn prepare_goal(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> (
+        TraitSolverQuery<'db>,
+        super::unify::PersistentUnificationTable<'db>,
+    ) {
+        let mut table = super::unify::PersistentUnificationTable::new(db);
+        let query = self
+            .query(db, goal)
+            .canonical()
+            .extract_identity(&mut table);
+        (query, table)
+    }
+
+    pub(crate) fn matching_named_choice(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> bool {
+        self.matching_choice(db, goal)
+            .is_some_and(|(_, application)| is_named(db, application))
+    }
+
+    /// Remove named overrides while retaining ordinary openings in lexical order.
+    pub(crate) fn without_named_choices(self, db: &'db dyn HirAnalysisDb) -> Option<Self> {
+        let choices = self.choices?.items(db);
+        let ordinary = choices
+            .iter()
+            .copied()
+            .filter(|choice| !is_named(db, choice.template))
+            .collect::<Vec<_>>();
+        (ordinary.len() != choices.len()).then(|| {
+            let retained = (!ordinary.is_empty()).then(|| ChosenImpls::new(db, ordinary));
+            self.with_choices(retained)
+        })
+    }
+
+    pub fn choices(self) -> Option<ChosenImpls<'db>> {
+        self.choices
+    }
+
+    pub fn query(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> CanonicalGoalQuery<'db> {
+        CanonicalGoalQuery::from_query(
+            db,
+            TraitSolverQuery {
+                goal,
+                assumptions: self.assumptions.extend_all_bounds(db),
+                require_impl: false,
+                choices: self.choices,
+            },
+        )
     }
 
     pub fn assumptions(self) -> PredicateListId<'db> {
@@ -153,40 +371,61 @@ impl<'db> TraitSolveCx<'db> {
         db: &'db dyn HirAnalysisDb,
         inst: TraitInstId<'db>,
     ) -> Selection<ImplementorId<'db>> {
+        match self.select_impl_solution(db, inst) {
+            Selection::Unique(solution) => Selection::Unique(solution.implementor),
+            Selection::Ambiguous(solutions) => Selection::Ambiguous(
+                solutions
+                    .iter()
+                    .map(|solution| solution.implementor)
+                    .collect(),
+            ),
+            Selection::NotFound => Selection::NotFound,
+        }
+    }
+
+    pub(super) fn select_impl_solution(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        inst: TraitInstId<'db>,
+    ) -> Selection<TraitGoalSolution<'db>> {
         let scope = self.normalization_scope_for_trait_inst(db, inst);
         let inst = normalize_trait_inst_preserving_validity(db, inst, scope, self.assumptions);
         // An assumption proves a bound; it is not a second implementation.
         // Keep inference goals on the ordinary proof query: an assumption may
         // select a different substitution from the implementations in scope.
-        let result = if inst.args(db).iter().any(|ty| ty.has_var(db))
-            || inst
+        let require_impl = !inst.args(db).iter().any(|ty| ty.has_var(db))
+            && !inst
                 .assoc_type_bindings(db)
                 .values()
-                .any(|ty| ty.has_var(db))
-        {
-            is_goal_satisfiable(db, self, inst)
-        } else {
-            let query = CanonicalGoalQuery::from_query(
-                db,
-                TraitSolverQuery {
-                    goal: inst,
-                    assumptions: self.assumptions.extend_all_bounds(db),
-                    require_impl: true,
-                },
-            );
-            match is_goal_query_satisfiable(db, self, &query) {
-                // A bound with no provable implementation can still be supplied
-                // by the caller. Incomplete searches cannot establish this.
-                GoalSatisfiability::UnSat(_) => is_goal_satisfiable(db, self, inst),
-                result => result,
-            }
-        };
+                .any(|ty| ty.has_var(db));
+        let mut query = CanonicalGoalQuery::from_query(
+            db,
+            TraitSolverQuery {
+                goal: inst,
+                assumptions: self.assumptions.extend_all_bounds(db),
+                require_impl,
+                choices: self.choices,
+            },
+        );
+        let mut result = is_goal_query_satisfiable(db, self, &query);
+        // A bound with no provable implementation can still be supplied by
+        // the caller. Incomplete searches cannot establish this.
+        if require_impl && matches!(result, GoalSatisfiability::UnSat(_)) {
+            query = self.query(db, inst);
+            result = is_goal_query_satisfiable(db, self, &query);
+        }
         match result {
             GoalSatisfiability::Satisfied(solution) => {
-                Selection::Unique(solution.value.implementor)
+                let solution = if solution.value.chosen.is_some() {
+                    let mut table = super::unify::UnificationTable::new(db);
+                    query.extract_solution(&mut table, solution)
+                } else {
+                    solution.value
+                };
+                Selection::Unique(solution)
             }
             GoalSatisfiability::NeedsConfirmation { solutions, .. } => {
-                Selection::Ambiguous(solutions.iter().map(|s| s.value.implementor).collect())
+                Selection::Ambiguous(solutions.iter().map(|s| s.value).collect())
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => {
                 Selection::NotFound
@@ -387,7 +626,7 @@ pub fn is_goal_satisfiable<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> GoalSatisfiability<'db> {
-    let query = CanonicalGoalQuery::new(db, goal, solve_cx.assumptions());
+    let query = solve_cx.query(db, goal);
     is_goal_query_satisfiable(db, solve_cx, &query)
 }
 
@@ -813,6 +1052,8 @@ pub(crate) fn mentions_ty<'db>(
 pub struct TraitGoalSolution<'db> {
     pub(crate) inst: TraitInstId<'db>,
     pub(crate) implementor: ImplementorId<'db>,
+    /// The application of an opening selected before proving its conditions.
+    pub(super) chosen: Option<ImplementorId<'db>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -829,6 +1070,8 @@ pub enum TraitSolveCompletion {
     PendingWorkLimit { limit: usize },
     /// Fe's bounded-type-growth guard stopped the search.
     MaximumTypeDepth,
+    /// A preferred header would decide an inference argument prematurely.
+    UnresolvedChoice,
     /// Salsa is iterating a recursive query to a fixpoint.
     Cycle,
 }

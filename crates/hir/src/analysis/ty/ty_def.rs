@@ -1367,7 +1367,7 @@ pub struct ClosureTy<'db> {
     /// Generic arguments of the item whose body defines the closure. The
     /// closure's semantic instances substitute the parent's typed-body
     /// template with these.
-    pub parent_args: Vec<TyId<'db>>,
+    pub context: ClosureContext<'db>,
     /// Environment field types, one per captured binding, in capture order.
     pub captures: Vec<TyId<'db>>,
     /// The parameters' shapes: each an owned value, a view or `mut`
@@ -1380,7 +1380,26 @@ pub struct ClosureTy<'db> {
     pub effects: Vec<RowComponent<'db>>,
 }
 
+/// Type arguments and dictionaries captured from the enclosing declaration.
+/// This contains no semantic instance key, including for recursive closures.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub struct ClosureContext<'db> {
+    pub args: Vec<TyId<'db>>,
+    pub evidence: Option<super::evidence::BoundEvidence<'db>>,
+}
+
 impl<'db> ClosureTy<'db> {
+    pub fn parent_args(self, db: &'db dyn HirAnalysisDb) -> &'db Vec<TyId<'db>> {
+        &self.context(db).args
+    }
+
+    pub fn bound_evidence(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<super::evidence::BoundEvidence<'db>> {
+        self.context(db).evidence
+    }
+
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         let params = self
             .params(db)

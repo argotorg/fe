@@ -620,6 +620,94 @@ pub(crate) fn resolve_type_path_definition<'db>(
     None
 }
 
+/// What a path names in the implementation-name domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ImplNameRes<'db> {
+    Found(crate::hir_def::ImplTrait<'db>),
+    /// Found, but neither it nor a module on its path is visible from the
+    /// use: a name is private by default (`pub impl` publishes it).
+    NotVisible {
+        name: IdentId<'db>,
+        definition: Option<DynLazySpan<'db>>,
+    },
+    Ambiguous,
+    NotFound,
+}
+
+/// The named implementation a `with` operand's path names: its last segment
+/// in the implementation-name domain, found as any item is, through the
+/// lexical scope and imports for a bare name and through module paths
+/// otherwise, and visible from `scope`. A segment with generic arguments
+/// names nothing yet.
+pub(crate) fn resolve_impl_name<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+) -> ImplNameRes<'db> {
+    let mut parent_scope = None;
+    for segment_idx in 0..path.len(db) {
+        let Some(segment) = path.segment(db, segment_idx) else {
+            return ImplNameRes::NotFound;
+        };
+        if !matches!(segment.kind(db), PathKind::Ident { .. })
+            || segment_idx + 1 != path.len(db) && !segment.generic_args(db).is_empty(db)
+        {
+            return ImplNameRes::NotFound;
+        }
+        let Some(name) = segment.ident(db).to_opt() else {
+            return ImplNameRes::NotFound;
+        };
+        let query = make_query(db, segment, parent_scope.unwrap_or(scope));
+        let bucket = resolve_query(db, query);
+        if segment_idx + 1 == path.len(db) {
+            return match bucket.pick(NameDomain::IMPL) {
+                Ok(res) => match res.kind {
+                    NameResKind::Scope(ScopeId::Item(ItemKind::ImplTrait(implementation))) => {
+                        if res.is_visible(db, scope) {
+                            ImplNameRes::Found(implementation)
+                        } else {
+                            ImplNameRes::NotVisible {
+                                name,
+                                definition: res.kind.name_span(db),
+                            }
+                        }
+                    }
+                    _ => ImplNameRes::NotFound,
+                },
+                Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
+                    ImplNameRes::Ambiguous
+                }
+                Err(NameResolutionError::Invisible(definition)) => ImplNameRes::NotVisible {
+                    name,
+                    definition: definition.clone(),
+                },
+                Err(_) => ImplNameRes::NotFound,
+            };
+        }
+        let res = match bucket.pick(NameDomain::TYPE) {
+            Ok(res) => res,
+            Err(NameResolutionError::Invisible(definition)) => {
+                return ImplNameRes::NotVisible {
+                    name,
+                    definition: definition.clone(),
+                };
+            }
+            Err(_) => return ImplNameRes::NotFound,
+        };
+        if !res.is_visible(db, scope) {
+            return ImplNameRes::NotVisible {
+                name,
+                definition: res.kind.name_span(db),
+            };
+        }
+        let Some(next) = res.scope() else {
+            return ImplNameRes::NotFound;
+        };
+        parent_scope = Some(next);
+    }
+    ImplNameRes::NotFound
+}
+
 /// Makes the query for the last segment of `path` in `scope`. Only a path's
 /// first segment is looked up in lexical parents and external ingots.
 fn make_query<'db>(
@@ -1460,7 +1548,14 @@ fn resolve_segment<'db>(
 
                 // Probe impls across both the call-site scope and the receiver type's ingot so
                 // `OtherIngotType::CONST` and `ExternalType::LOCAL_TRAIT_CONST` both resolve.
-                match select_assoc_const_candidate(db, ty, ident, scope, assumptions) {
+                match select_assoc_const_candidate(
+                    db,
+                    ty,
+                    ident,
+                    scope,
+                    assumptions,
+                    lowering_cx.choices(),
+                ) {
                     AssocConstSelection::Found(inst) => {
                         *decided_by_value = true;
                         reject_generic_args(db, path)?;
@@ -2001,6 +2096,7 @@ fn select_assoc_const_candidate<'db>(
     name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
 ) -> AssocConstSelection<'db> {
     // Qualified type: `<A as T>::C` must resolve against the explicit trait instance.
     if let TyData::QualifiedTy(trait_inst) = receiver_ty.data(db) {
@@ -2099,12 +2195,27 @@ fn select_assoc_const_candidate<'db>(
     let mut enclosing: IndexSet<TraitInstId<'db>> = IndexSet::default();
     receiver.with_materialized(db, |cx| {
         let receiver_ty = cx.query();
+        for &pred in assumptions.extend_all_bounds(db).list(db) {
+            if pred.def(db).const_(db, name).is_none() {
+                continue;
+            }
+            let snapshot = cx.snapshot();
+            let self_ty = cx.materialize_to_term(pred.self_ty(db));
+            let pred = cx.materialize(pred);
+            if cx.unify::<TyId<'db>>(receiver_ty, self_ty).is_ok()
+                && let Some(pred) = cx.try_extract::<TraitInstId<'db>>(pred)
+            {
+                matches.insert(pred);
+            }
+            cx.rollback_to(snapshot);
+        }
         for ingot in search_ingots.into_iter().flatten() {
             for candidate in impls_for_ty_with_satisfied_constraints(
                 db,
                 ingot,
                 receiver.canonical(),
                 assumptions,
+                choices,
             ) {
                 let declared = candidate.trait_(db);
                 if declared.def(db).const_(db, name).is_none() {
@@ -2362,9 +2473,13 @@ fn find_associated_type_in_mode<'db>(
         // traits on external types and external traits on local types are both visible.
         if !matches!(original_ty.data(db), TyData::TyParam(_)) {
             for ingot in search_ingots.into_iter().flatten() {
-                for impl_ in
-                    impls_for_ty_with_satisfied_constraints(db, ingot, canonical_ty, assumptions)
-                {
+                for impl_ in impls_for_ty_with_satisfied_constraints(
+                    db,
+                    ingot,
+                    canonical_ty,
+                    assumptions,
+                    None,
+                ) {
                     let impl_ = match const_bodies {
                         ConstBodyLowering::Eager => {
                             let Some(impl_) = complete_impl_assoc_ty(db, impl_, name) else {
@@ -2381,7 +2496,8 @@ fn find_associated_type_in_mode<'db>(
                         }
                     };
                     if let Some(Some((inst, assoc_ty))) =
-                        cx.with_impl_assoc_ty(impl_, lhs_ty, name, |cx, inst, assoc_ty| {
+                        cx.with_impl_assoc_ty(impl_, name, |cx, inst, assoc_ty| {
+                            cx.match_projection_receiver(lhs_ty, inst).ok()?;
                             Some((
                                 cx.try_extract::<TraitInstId<'db>>(inst)?,
                                 cx.try_extract::<TyId<'db>>(assoc_ty)?,
