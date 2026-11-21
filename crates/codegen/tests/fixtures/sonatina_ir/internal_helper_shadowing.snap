@@ -23,9 +23,8 @@ func private %call_internal_helpers(v0.i64, v1.i64) -> @layout_0 {
 
     block3:
         v13.i64 = call %saturating_add v0 v1;
-        v15.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v17.@layout_0 = insert_value v15 1.i256 v13;
-        return v17;
+        v14.@layout_0 = agg.make @layout_0 v4 v13;
+        return v14;
 }
 
 func private %call_user_helpers(v0.i64, v1.i64) -> @layout_0 {
@@ -35,9 +34,8 @@ func private %call_user_helpers(v0.i64, v1.i64) -> @layout_0 {
     block1:
         v4.i64 = call %checked_add_u64 v0 v1;
         v5.i64 = call %saturating_add_u64 v0 v1;
-        v8.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v10.@layout_0 = insert_value v8 1.i256 v5;
-        return v10;
+        v6.@layout_0 = agg.make @layout_0 v4 v5;
+        return v6;
 }
 
 func private %checked_add_u64(v0.i64, v1.i64) -> i64 {
@@ -55,9 +53,8 @@ func private %main() -> @layout_1 {
     block1:
         v2.@layout_0 = call %call_user_helpers 1.i64 2.i64;
         v3.@layout_0 = call %call_internal_helpers 1.i64 2.i64;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v2;
-        v8.@layout_1 = insert_value v6 1.i256 v3;
-        return v8;
+        v4.@layout_1 = agg.make @layout_1 v2 v3;
+        return v4;
 }
 
 func private %main_root() {
