@@ -1943,3 +1943,64 @@ const fn wide() -> u256 {
     assert_eq!(eval(&output, "narrow"), "42");
     assert_eq!(eval(&output, "wide"), "84");
 }
+
+#[test]
+fn written_forwarding_provider_preserves_its_family_domain() {
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Match<Rhs = Self> { const fn score(_ rhs: Rhs) -> usize }
+struct Packet {}
+struct Recipe<T> {}
+struct Via<P> {}
+trait Enabled {}
+struct On {}
+struct Off {}
+impl Enabled for On {}
+impl<G: * -> Constraint, P: Derive<G>> Derive<G> for Via<P> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+impl<T: Enabled> Derive<trait Match> for Recipe<T> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score(_ rhs: Packet) -> usize { 9 } }
+    }
+}
+"#;
+    for (family, provider) in [
+        ("Match", "Recipe<On>"),
+        ("Match", "Via<Recipe<On>>"),
+        ("Match<Packet>", "Via<Recipe<On>>"),
+    ] {
+        let source = format!(
+            "{prelude}\nimpl {family} for Packet with ({provider})\n\
+             const fn run() -> usize {{ <Packet as Match>::score(Packet {{}}) }}"
+        );
+        assert_eq!(eval(&prepare(&source).unwrap(), "run"), "9");
+    }
+
+    let disabled = format!("{prelude}\nimpl Match for Packet with (Via<Recipe<Off>>)");
+    let cause = prepare_err(&disabled);
+    assert!(
+        cause.contains("has no `impl Derive<trait Match>` that applies")
+            || cause
+                .contains("no ordinary Derive<trait Match> provider implementation was admitted"),
+        "{cause}"
+    );
+    let both = format!(
+        r#"{prelude}
+impl<T> Derive<trait Match<Packet>> for Recipe<T> {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn score(_ rhs: Packet) -> usize {{ 7 }} }}
+    }}
+}}
+impl Match for Packet with (Via<Recipe<Off>>)
+"#
+    );
+    let cause = prepare_err(&both);
+    assert!(
+        cause.contains("multiple derive families for the same trait application"),
+        "{cause}"
+    );
+}
