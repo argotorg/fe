@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 416
+assertion_line: 588
 expression: output
 input_file: crates/codegen/tests/fixtures/match_tuple_nested.fe
 ---
@@ -29,9 +29,8 @@ func private %main() -> @layout_0 {
         v6.constref<@layout_2> = const.ref $const_region_3;
         v7.constref<@layout_3> = const.ref $const_region_4;
         v8.i8 = call %match_deeply_nested v7;
-        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v13.@layout_0 = insert_value v11 1.i256 v8;
-        return v13;
+        v9.@layout_0 = agg.make @layout_0 v4 v8;
+        return v9;
 }
 
 func private %main_root() {

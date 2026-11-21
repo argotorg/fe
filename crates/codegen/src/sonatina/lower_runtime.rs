@@ -44,7 +44,7 @@ use mir::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
-use sonatina_codegen::cfg_edit::{CfgEditor, CleanupMode};
+use sonatina_codegen::cfg_edit::CfgEditor;
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, HasInst, I256, Immediate, InstExt, InstId,
     InstSetBase, Linkage, Module, Signature, Type, Value, ValueId,
@@ -56,9 +56,9 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, PhiArgs, Return, Unreachable},
         data::{
-            Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
-            EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
+            AggMake, Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef,
+            EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant,
+            EnumMake, EnumProj, EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, Memcopy,
             Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
             ObjProj, ObjStore, Sha256Compress, SymAddr, SymSize, SymbolRef,
         },
@@ -137,6 +137,7 @@ define_lowering_inst_set!(
     Phi,
     Return,
     Unreachable,
+    AggMake,
     Alloca,
     ConstIndex,
     ConstLoad,
@@ -154,7 +155,6 @@ define_lowering_inst_set!(
     EnumWriteVariant,
     ExtractValue,
     Gep,
-    InsertValue,
     Memcopy,
     Memzero,
     Mload,
@@ -517,12 +517,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     // A `HostText` is a struct of the address and the length, held
                     // in an object when the function takes it by reference.
                     let value_ty = pointee.unwrap_or(ty);
-                    let mut text = fb.make_undef_value(value_ty);
-                    for field in 0..2u64 {
-                        let part = next()?;
-                        let index = fb.make_imm_value(I256::from(field));
-                        text = fb.insert_inst(InsertValue::new(is, text, index, part), value_ty);
-                    }
+                    let parts = smallvec![next()?, next()?];
+                    let text = fb.insert_inst(AggMake::new(is, value_ty, parts), value_ty);
                     if pointee.is_some() {
                         let object = fb.insert_inst(ObjAlloc::new(is, value_ty), ty);
                         fb.insert_inst_no_result(ObjStore::new(is, object, text));
@@ -1683,7 +1679,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if dead.is_empty() {
             return;
         }
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for block in dead {
             // The branch takes its first edge, to the revert, out of bounds.
             editor.retain_out_edges(block, &[true, false]);
@@ -2148,9 +2144,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
             ),
-            RExpr::Placeholder { class } => {
-                zero_for_type(&mut self.fb, self.module.ty_for_class(class)?)
-            }
+            RExpr::Placeholder { class } => self.unread_value(class)?,
             RExpr::Builtin(builtin) => {
                 let value = self.lower_builtin(builtin)?;
                 self.coerce_to_dst(value, dst)?
@@ -5350,10 +5344,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 };
                 let field = self.lane_value(&fields[0], scalar)?;
                 let ty = self.module.ty_for_layout(*layout)?;
-                let undef = self.fb.make_undef_value(ty);
-                let idx = self.index_value(0);
                 Ok(self.fb.insert_inst(
-                    InsertValue::new(self.module.inst_set(), undef, idx, field),
+                    AggMake::new(self.module.inst_set(), ty, smallvec![field]),
                     ty,
                 ))
             }
@@ -5633,7 +5625,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 // Packed fields of one word share a single load.
                 let mut packed: Option<(u64, ValueId)> = None;
                 for (idx, field) in data.fields.iter().enumerate() {
@@ -5675,17 +5667,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             "aggregate ptr load field type mismatch: layout={layout:?} idx={idx} class={field:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?}"
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
-                        ty,
-                    );
+                    values.push(field_value);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 for idx in 0..data.len as usize {
                     let elem_addr = self.referent_field_address(addr, memory, &class, idx)?;
                     let elem = self.load_memory_value(elem_addr, memory, &data.elem)?;
@@ -5697,13 +5687,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             data.elem
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, elem),
-                        ty,
-                    );
+                    values.push(elem);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(data) => {
                 self.load_enum_from_ptr(addr, memory, layout, &data, EnumLoad::Value)
@@ -6048,12 +6036,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, (field, class)) in fields.iter().zip(data.fields.iter()).enumerate() {
-                    let field_value = self.aggregate_make_field_value(*field, class)?;
-                    value = self.insert_aggregate_field(value, ty, idx, field_value);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .zip(data.fields.iter())
+                    .map(|(field, class)| self.aggregate_make_field_value(*field, class))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 if data.len as usize != fields.len() {
@@ -6064,12 +6054,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, field) in fields.iter().enumerate() {
-                    let elem = self.aggregate_make_field_value(*field, &data.elem)?;
-                    value = self.insert_aggregate_field(value, ty, idx, elem);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .map(|field| self.aggregate_make_field_value(*field, &data.elem))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(_) => Err(LowerError::Internal(
                 "aggregate make should not build enum layouts".to_string(),
@@ -6082,26 +6073,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         field: RLocalId,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        let ty = self.module.ty_for_class(class)?;
+        // An erased field has no runtime value to read.
         if self.body.value_class(field).is_none() {
-            return Ok(zero_for_type(&mut self.fb, ty));
+            return self.unread_value(class);
         }
+        let ty = self.module.ty_for_class(class)?;
         let value = self.local_value(field)?;
         self.coerce_value_to_ty(value, ty)
     }
 
-    fn insert_aggregate_field(
-        &mut self,
-        value: ValueId,
-        ty: Type,
-        idx: usize,
-        field: ValueId,
-    ) -> ValueId {
-        let idx = self.index_value(idx as u64);
-        self.fb.insert_inst(
-            InsertValue::new(self.module.inst_set(), value, idx, field),
-            ty,
-        )
+    /// A value of `class` where nothing reads it, as for a MIR placeholder:
+    /// the one value of a zero-sized class, and otherwise `undef`, which
+    /// passes may refine to whatever is cheapest and memory legalization does
+    /// not store.
+    fn unread_value(&mut self, class: &RuntimeClass<'db>) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(class)?;
+        Ok(if class.is_runtime_zst(self.module.db) {
+            zero_for_type(&mut self.fb, ty)
+        } else {
+            self.fb.make_undef_value(ty)
+        })
     }
 
     fn retype_value_for_class(
@@ -6170,19 +6161,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for (idx, (source_field, target_field)) in
-                    source.fields.iter().zip(target.fields.iter()).enumerate()
-                {
-                    let field = self.extract_aggregate_field(value, idx, source_field)?;
-                    let field = self.retype_value_for_class(field, source_field, target_field)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let fields = source
+                    .fields
+                    .iter()
+                    .zip(target.fields.iter())
+                    .enumerate()
+                    .map(|(idx, (source_field, target_field))| {
+                        let field = self.extract_aggregate_field(value, idx, source_field)?;
+                        self.retype_value_for_class(field, source_field, target_field)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, fields),
+                    target_ty,
+                ))
             }
             (Layout::Array(source), Layout::Array(target)) => {
                 if source.len != target.len {
@@ -6190,17 +6182,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for idx in 0..source.len as usize {
-                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
-                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let elems = (0..source.len as usize)
+                    .map(|idx| {
+                        let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                        self.retype_value_for_class(elem, &source.elem, &target.elem)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, elems),
+                    target_ty,
+                ))
             }
             (Layout::Enum(source), Layout::Enum(target)) => {
                 self.retype_enum_value(value, source_layout, &source, target_layout, &target)
@@ -7508,13 +7499,13 @@ fn panic_selector_immediate() -> Immediate {
     Immediate::from_i256(bytes_to_i256(&bytes, false), Type::I256)
 }
 
+/// The value of `ty` whose bits are all zero: an immediate for an integer or
+/// enum tag, `zero.T` for the unit value and compound types.
 fn zero_for_type(fb: &mut FunctionBuilder<InstInserter>, ty: Type) -> ValueId {
-    if ty.is_unit() || ty.is_compound() {
-        fb.make_undef_value(ty)
-    } else if ty.is_integral() || ty.is_enum_tag() {
+    if ty.is_integral() || ty.is_enum_tag() {
         fb.make_imm_value(Immediate::zero(ty))
     } else {
-        fb.make_undef_value(ty)
+        fb.make_zero_value(ty)
     }
 }
 

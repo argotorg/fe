@@ -56,19 +56,17 @@ func private %newtype_field_mut_method_call(v0.i256) -> i256 {
         jump block1;
 
     block1:
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v7.@layout_0 = insert_value v5 1.i256 0.i256;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v7;
-        v11.@layout_2 = insert_value undef.@layout_2 0.i256 0.i256;
-        v12.@layout_2 = insert_value v11 1.i256 v9;
-        obj.store v1 v12;
-        v13.objref<@layout_1> = obj.proj v1 1.i256;
-        call %bump v13;
-        v15.objref<@layout_1> = obj.proj v1 1.i256;
-        v16.objref<@layout_0> = obj.proj v15 0.i256;
-        v17.objref<i256> = obj.proj v16 0.i256;
-        v18.i256 = obj.load v17;
-        return v18;
+        v4.@layout_0 = agg.make @layout_0 v0 0.i256;
+        v5.@layout_1 = agg.make @layout_1 v4;
+        v6.@layout_2 = agg.make @layout_2 0.i256 v5;
+        obj.store v1 v6;
+        v8.objref<@layout_1> = obj.proj v1 1.i256;
+        call %bump v8;
+        v10.objref<@layout_1> = obj.proj v1 1.i256;
+        v11.objref<@layout_0> = obj.proj v10 0.i256;
+        v12.objref<i256> = obj.proj v11 0.i256;
+        v13.i256 = obj.load v12;
+        return v13;
 }
 
 

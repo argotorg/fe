@@ -36,3 +36,16 @@ trait WithAssoc {
 impl inner::Open for S {}
 impl inner::Parent for S {}
 fn ok_bound<T: inner::Open + inner::Parent>(_ x: T) {}
+
+mod outer {
+    mod sealed {
+        pub trait Deep {}
+    }
+
+    pub struct Local {}
+    // The private module's parent: allowed.
+    impl sealed::Deep for Local {}
+}
+
+// A private module on the path: refused, though the trait is `pub`.
+impl outer::sealed::Deep for S {}
