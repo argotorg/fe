@@ -66,6 +66,8 @@ pub(ingot) struct RecordWriter<A> {
 }
 
 impl<A: Abi> RecordWriter<A> {
+    /// Start at the first head in `out`. `fields` counts the fields that will
+    /// be written, and `head_size` is the sum of their ABI head sizes.
     #[inline(always)]
     pub(ingot) fn new(_ out: AbiFrame, head_size: u256, fields: usize) -> Self {
         RecordWriter {
@@ -75,7 +77,6 @@ impl<A: Abi> RecordWriter<A> {
             remaining: fields,
         }
     }
-
 }
 
 #[inline(always)]
@@ -94,6 +95,8 @@ impl FieldInit for WriteField {
     }
 }
 
+/// Write one field of `self` through the splice site's mutable `writer`.
+/// Splice once per field counted by `RecordWriter::new`, in encoding order.
 pub(ingot) const fn write_field(_ field: Field) -> Code<Expr> {
     quote(writer) { push_record_field(mut writer, self.${field}) }
 }
