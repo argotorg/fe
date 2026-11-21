@@ -43,6 +43,7 @@ pub enum PlaceProjection<'db> {
     /// The element at a key of a collection whose elements are places
     /// (`core::ops::StateIndex`), such as a storage map's entry.
     Entry {
+        entry_expr: ExprId,
         key_expr: ExprId,
         result_ty: TyId<'db>,
     },
@@ -190,6 +191,7 @@ impl<'db> Place<'db> {
                 let result_ty = expr_ty(expr);
                 place.push_projection(if is_entry(expr) {
                     PlaceProjection::Entry {
+                        entry_expr: expr,
                         key_expr: *index,
                         result_ty,
                     }

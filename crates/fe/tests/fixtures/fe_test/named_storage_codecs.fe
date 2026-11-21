@@ -1,0 +1,58 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{Evm, keccak_words}
+
+struct Codec {}
+impl LaneCodec<u32> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+impl LaneCodec<u32> for Codec as Encoded {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        with (<Codec as LaneCodec<u32>>) { Codec::get(word, offset: offset) + 1 }
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        with (<Codec as LaneCodec<u32>>) { Codec::set(word, offset: offset, value: value - 1) }
+    }
+}
+struct Counters<C> {}
+impl<C> Pinned for Counters<C> { type Space = Storage }
+unsafe impl<C: LaneCodec<u32>> StateIndex for Counters<C> {
+    type Key = u256
+    type Entry = u32
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: keccak_words([key / 8, root]), offset: (key % 8) * 32 }
+    }
+}
+fn read_bound<C: LaneCodec<u32>>(_ counters: Counters<C>) -> u32 { counters[1] }
+msg M {
+    #[selector = 1]
+    Exercise -> (u32, u32, u32),
+}
+pub contract C {
+    mut counters: Counters<Codec>
+    recv M {
+        Exercise -> (u32, u32, u32) uses (mut counters) {
+            counters[2] = 17
+            with (Encoded) { counters[1] = 6 }
+            let raw = counters[1]
+            let chosen = with (Encoded) { read_bound(counters) }
+            (raw, chosen, counters[2])
+        }
+    }
+}
+#[test]
+fn chosen_lane_codecs_retain_their_proof() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let v: (u32, u32, u32) = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Exercise {})
+    assert!(v.0 == 5)
+    assert!(v.1 == 6)
+    assert!(v.2 == 17)
+}

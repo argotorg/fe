@@ -1,0 +1,27 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{Location, StateIndex}
+use std::evm::keccak_words
+struct Words {}
+impl Pinned for Words { type Space = Storage }
+unsafe impl StateIndex for Words {
+    type Key = u256
+    type Entry = u256
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: keccak_words([key, root]), offset: 0 }
+    }
+}
+unsafe impl StateIndex for Words as Shifted {
+    type Key = u256
+    type Entry = u256
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: keccak_words([key + 1, root]), offset: 0 }
+    }
+}
+fn conflict(words: mut Words) {
+    let a = mut words[2]
+    with (Shifted) {
+        let b = mut words[1]
+        a += 3
+        b += 4
+    }
+}

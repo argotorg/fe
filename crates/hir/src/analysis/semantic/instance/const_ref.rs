@@ -1,6 +1,6 @@
 use super::{
-    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
-    SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
+    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, InstanceEvidencePolicy,
+    SemanticInstance, SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
     resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
 use crate::{
@@ -464,7 +464,8 @@ pub fn generated_callee_key<'db>(
     // the checker proves a written call's.
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
     callable.record_evidence(db, solve_cx);
-    callable.record_bound_evidence(db, solve_cx);
+    // A generated call carries no effect arguments.
+    callable.record_bound_evidence(db, solve_cx, &[]);
     let callee = semantic_callee_key_with_assumptions(
         db,
         None,
@@ -515,6 +516,16 @@ fn semantic_callee_key_with_assumptions<'db>(
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    let mut completed;
+    let callable = if callable.has_deferred_evidence(db) {
+        completed = callable.clone();
+        completed
+            .complete_deferred_evidence(db)
+            .ok_or(MethodArgMapError::MissingBody)?;
+        &completed
+    } else {
+        callable
+    };
     let CallableDef::Func(nominal_func) = callable.callable_def() else {
         return Ok(None);
     };
@@ -547,7 +558,9 @@ fn semantic_callee_key_with_assumptions<'db>(
                 subst,
                 EffectProviderSubst::empty(db),
                 ImplEnv::empty(db, owner.scope()),
-                EvidenceList::none(db),
+                closure
+                    .bound_evidence(db)
+                    .map_or_else(|| EvidenceList::none(db), |bound| bound.entries),
             ),
         );
         let effect_pairs: Vec<_> = rows
@@ -590,6 +603,25 @@ fn semantic_callee_key_with_assumptions<'db>(
             })
         })
         .collect::<Vec<_>>();
+        let rows = callable
+            .bound_evidence()
+            .into_iter()
+            .flat_map(|bound| bound.rows(db))
+            .filter_map(|row| {
+                let (&entry, steps) = row.path.steps.split_first()?;
+                Some(crate::analysis::ty::evidence::RowEvidence {
+                    path: RowPath {
+                        entry,
+                        steps: steps.to_vec(),
+                    },
+                    ..row.clone()
+                })
+            })
+            .collect();
+        let captured = closure
+            .bound_evidence(db)
+            .map_or_else(|| EvidenceList::none(db), |bound| bound.entries)
+            .with_rows(db, rows);
         return Ok(Some(SemanticCallCallee {
             key: SemanticInstanceKey::of(
                 db,
@@ -597,7 +629,7 @@ fn semantic_callee_key_with_assumptions<'db>(
                 subst,
                 EffectProviderSubst::new(db, providers, Vec::new()),
                 ImplEnv::empty(db, owner.scope()),
-                EvidenceList::none(db),
+                captured,
             ),
             concrete_dispatch: true,
             effect_pairs,
@@ -615,7 +647,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             normalize_ty(db, inst, impl_env.normalization_scope(db), assumptions),
         )
     {
-        let target = Callable::new(db, item, DynLazySpan::invalid(), None)
+        let mut target = Callable::new(db, item, DynLazySpan::invalid(), None)
             .expect("a function item is callable");
         let CallableDef::Func(func) = target.callable_def() else {
             unreachable!("a callable function item is a function")
@@ -700,6 +732,9 @@ fn semantic_callee_key_with_assumptions<'db>(
                 Some(specialization)
             })
             .collect();
+        if let Some(evidence) = callable.bound_evidence() {
+            target.supply_function_item_effect_evidence(db, evidence, assumptions);
+        }
         let Some(callee) = semantic_callee_key_with_assumptions(
             db,
             caller,
@@ -1131,9 +1166,48 @@ fn semantic_callee_key_with_assumptions<'db>(
                 selection,
                 bound,
                 subst,
+                assumptions,
             )
         }
         _ => EvidenceList::none(db),
+    };
+    let evidence = if body_func == nominal_func {
+        evidence
+    } else {
+        let (_, nominal_rows) = instantiated_effects(
+            db,
+            (nominal_func, callable.mode()),
+            callable.generic_args(),
+            impl_env.normalization_scope(db),
+            assumptions,
+        );
+        let (_, body_rows) = instantiated_effects(
+            db,
+            (body_func, owner.mode()),
+            subst.generic_args(db),
+            impl_env.normalization_scope(db),
+            assumptions,
+        );
+        let rows = callable
+            .bound_evidence()
+            .into_iter()
+            .flat_map(|bounds| bounds.rows(db))
+            .filter_map(|row| {
+                let nominal = nominal_rows.component(&row.path)?.requirement.binding_idx;
+                let body = provider_pairs.iter().find(|(from, _)| *from == nominal)?.1;
+                let path = body_rows
+                    .components
+                    .iter()
+                    .find(|component| component.requirement.binding_idx == body)?
+                    .path
+                    .clone();
+                Some(crate::analysis::ty::evidence::RowEvidence {
+                    path,
+                    ..row.clone()
+                })
+            })
+            .collect();
+        evidence.with_rows(db, rows)
     };
     let evidence = if collect_flags(db, evidence).contains(TyFlags::HAS_PROJECTION) {
         normalize_ty(db, evidence, impl_env.normalization_scope(db), assumptions)
@@ -1142,7 +1216,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     };
     Ok(Some(SemanticCallCallee {
         concrete_dispatch: callable.trait_inst().is_none() || selected_impl,
-        key: SemanticInstanceKey::of(
+        key: SemanticInstanceKey::with_evidence_policy(
             db,
             owner,
             subst,
@@ -1156,6 +1230,9 @@ fn semantic_callee_key_with_assumptions<'db>(
             ),
             impl_env,
             evidence,
+            caller.map_or_else(InstanceEvidencePolicy::default, |caller| {
+                caller.key(db).evidence_policy(db)
+            }),
         ),
         effect_pairs,
         provider_pairs,
@@ -1271,6 +1348,22 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
     ty: TyId<'db>,
     origin: SemOrigin<'db>,
 ) -> Option<SemanticConstRef<'db>> {
+    resolve_semantic_const_ref_with_policy(
+        db,
+        const_ref,
+        ty,
+        origin,
+        InstanceEvidencePolicy::ReconstructOrdinary,
+    )
+}
+
+pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
+    db: &'db dyn HirAnalysisDb,
+    const_ref: ConstRef<'db>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+    policy: InstanceEvidencePolicy,
+) -> Option<SemanticConstRef<'db>> {
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst { use_, .. } => {
@@ -1281,7 +1374,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
                 evidence
             };
             let subst = GenericSubst::complete(db, subst);
-            Some(SemanticInstanceKey::of(
+            Some(SemanticInstanceKey::with_evidence_policy(
                 db,
                 BodyOwner::AnonConstBody { body, expected: ty },
                 subst,
@@ -1293,6 +1386,7 @@ pub(crate) fn resolve_semantic_const_ref<'db>(
                     vec![use_.inst()],
                 ),
                 evidence,
+                policy,
             ))
         }
         ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),

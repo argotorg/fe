@@ -571,6 +571,10 @@ pub enum MarkerPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
+    ChosenTypeRead {
+        primary: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -772,6 +776,20 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         first: DynLazySpan<'db>,
         key: PathId<'db>,
+    },
+
+    /// Two implementation operands of one `with` can answer the same goal.
+    DuplicateWithChoice {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        possible: bool,
+    },
+
+    /// A bare `with` operand that names no implementation and no value.
+    UnknownWithOperand {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -1558,7 +1576,7 @@ impl<'db> BodyDiag<'db> {
             Self::RecordFieldNotFound { .. } => 9,
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
-            Self::UndefinedVariable(..) => 12,
+            Self::UndefinedVariable(..) | Self::UnknownWithOperand { .. } => 12,
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
@@ -1571,6 +1589,7 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::DuplicateWithKey { .. } => 159,
+            Self::DuplicateWithChoice { .. } => 160,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
@@ -1691,12 +1710,52 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectfulCall { .. } => 63,
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
+            Self::ChosenTypeRead { .. } => 138,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum TraitLowerDiag<'db> {
+    NamedOutputsNeedOrdinary {
+        primary: ImplTrait<'db>,
+    },
+    /// A named implementation that no use can choose (see
+    /// `trait_def::unchoosable_named_trait`).
+    UnchoosableNamedImplementation {
+        primary: ImplTrait<'db>,
+        name: IdentId<'db>,
+        reason: crate::analysis::ty::trait_def::UnchoosableReason,
+    },
+    NamedAssociatedConstMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+    },
+    NamedAssociatedTypeMismatch {
+        primary: ImplTrait<'db>,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// Named implementations of a slot with no ordinary implementation
+    /// agree on its associated types.
+    NamedAssociatedTypeDisagreement {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// A named implementation gives a slot's associated effect row as
+    /// the slot's ordinary implementation does, or, with none, as each
+    /// other named implementation does.
+    NamedAssociatedRowMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        name: IdentId<'db>,
+    },
     ConflictTraitImpl {
         primary: ImplTrait<'db>,
         conflict_with: ImplTrait<'db>,
@@ -1727,7 +1786,13 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
-            Self::AccessItemDefault { .. } => 5,
+            Self::AccessItemDefault { .. }
+            | Self::NamedAssociatedTypeMismatch { .. }
+            | Self::NamedAssociatedTypeDisagreement { .. }
+            | Self::NamedAssociatedRowMismatch { .. }
+            | Self::NamedAssociatedConstMismatch { .. }
+            | Self::UnchoosableNamedImplementation { .. }
+            | Self::NamedOutputsNeedOrdinary { .. } => 5,
             Self::ImplHeaderAssocTypeBinding { .. } => 6,
         }
     }

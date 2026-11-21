@@ -1522,6 +1522,17 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     .eval_args(frame_idx, &args, origin)?
                     .into_iter()
                     .collect::<Vec<_>>();
+                // The implementation of this trait call is selected by each
+                // instance, and this evaluation runs over generic parameters:
+                // it waits, and does not run the trait's declaration or
+                // default body, which an implementation may replace.
+                if let Some(self_ty) = callee.pending_selection {
+                    return Err(EvalStop::Blocked(BlockedInfo::new(
+                        ConstDemandKind::CallableSelection,
+                        ConstDependency::Type(self_ty),
+                        origin,
+                    )));
+                }
                 let instance = self.instance_for_key(callee.key);
                 if !effect_args.is_empty() {
                     let BodyOwner::Func(func, mode) = instance.key(self.db).owner(self.db) else {
@@ -2474,7 +2485,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         message: "analysis wildcard index is not valid in CTFE".into(),
                     });
                 }
-                Projection::Entry(_) => {
+                Projection::Entry(..) => {
                     return Err(CtfeError::InvalidOperation {
                         origin,
                         message: "an entry of a storage collection is not available in CTFE".into(),

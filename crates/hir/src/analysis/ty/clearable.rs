@@ -28,14 +28,7 @@ pub(crate) fn clearable_implementor<'db>(
     db: &'db dyn HirAnalysisDb,
     goal: TraitInstId<'db>,
 ) -> Option<(ImplementorId<'db>, Vec<TraitInstId<'db>>)> {
-    let clearable = resolve_core_trait(db, goal.def(db).scope(), &["marker", "Clearable"])?;
-    if goal.def(db) != clearable {
-        return None;
-    }
-    let components = clearable_components(db, goal.self_ty(db))?
-        .into_iter()
-        .map(|component| TraitInstId::new_simple(db, clearable, vec![component]))
-        .collect();
+    let components = clearable_prerequisites(db, goal)?;
     let implementor = ImplementorId::new(
         db,
         goal,
@@ -44,6 +37,22 @@ pub(crate) fn clearable_implementor<'db>(
         ImplementorOrigin::Structural,
     );
     Some((implementor, components))
+}
+
+pub(super) fn clearable_prerequisites<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> Option<Vec<TraitInstId<'db>>> {
+    let clearable = resolve_core_trait(db, goal.def(db).scope(), &["marker", "Clearable"])?;
+    if goal.def(db) != clearable {
+        return None;
+    }
+    Some(
+        clearable_components(db, goal.self_ty(db))?
+            .into_iter()
+            .map(|component| TraitInstId::new_simple(db, clearable, vec![component]))
+            .collect(),
+    )
 }
 
 /// The types `ty` is clearable through, or `None` when it is not: a pinned

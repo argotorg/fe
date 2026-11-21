@@ -33,7 +33,7 @@ use crate::analysis::{
             BindingRef, ConstructorKind, PatternAnalysisStatus, ValidatedPat, ValidatedPatKind,
         },
         trait_def::TraitInstId,
-        trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
+        trait_resolution::{GoalSatisfiability, is_goal_satisfiable},
         ty_def::{InvalidCause, Kind, TyFlags, TyId, TyVarSort},
         visitor::collect_flags,
     },
@@ -235,7 +235,7 @@ impl<'db> TyChecker<'db> {
     fn const_pattern_status(
         &mut self,
         pat: PatId,
-        cref: ConstRef<'db>,
+        mut cref: ConstRef<'db>,
         ty: TyId<'db>,
         expected: TyId<'db>,
     ) -> PatternAnalysisStatus {
@@ -243,6 +243,34 @@ impl<'db> TyChecker<'db> {
             .as_capability(self.db)
             .map_or(expected, |(_, inner)| inner);
         let primary: DynLazySpan<'db> = pat.span(self.body()).into();
+        let choices = self.env.choices;
+        let mut failed_goals = Vec::new();
+        if let ConstRef::TraitConst { use_, evidence, .. } = &mut cref {
+            let outcome = crate::analysis::ty::evidence::prove_outcome(
+                self.db,
+                use_.solve_cx(self.db).with_choices(choices),
+                use_.inst(),
+            );
+            evidence.record_dispatch(use_.inst(), outcome.evidence());
+            if choices.is_some() && evidence.dispatch_proof().is_none() {
+                failed_goals.push(use_.inst());
+            }
+        }
+        failed_goals.extend(cref.record_bound_evidence(self.db, choices));
+        cref.qualify_evidence(self.db, self.env.owner());
+        if !failed_goals.is_empty() {
+            for goal in failed_goals {
+                self.push_diag(TyDiagCollection::from(
+                    TraitConstraintDiag::TraitBoundNotSat {
+                        span: primary.clone(),
+                        primary_goal: goal,
+                        unsat_subgoal: None,
+                        required_by: None,
+                    },
+                ));
+            }
+            return PatternAnalysisStatus::Invalid;
+        }
         let lit = match resolve_semantic_const_ref(self.db, cref, value_ty, SemOrigin::Synthetic)
             .map(|cref| {
                 let owner = cref.instance(self.db).owner(self.db);
@@ -548,7 +576,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        let lowering_cx = LoweringContext::new();
+        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
         let res = self.resolve_path(
             *path,
             true,
@@ -594,12 +622,8 @@ impl<'db> TyChecker<'db> {
 
                 let trait_ = inst.def(self.db);
                 if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                    && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        inst,
-                    )
+                    && let GoalSatisfiability::UnSat(_) =
+                        is_goal_satisfiable(self.db, self.env.solve_cx(), inst)
                 {
                     self.push_diag(TyDiagCollection::from(
                         TraitConstraintDiag::TraitBoundNotSat {
@@ -629,8 +653,7 @@ impl<'db> TyChecker<'db> {
                             inst,
                             name,
                         ),
-                        evidence: None,
-                        bound_evidence: None,
+                        evidence: Default::default(),
                     };
                     (ty, self.const_pattern_status(pat, cref, ty, expected))
                 } else {
