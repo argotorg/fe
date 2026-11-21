@@ -1818,6 +1818,7 @@ fn finalized_derive_provider<'db>(
                 derive,
                 provider_ty,
                 goal,
+                crate::analysis::ty::trait_resolution::derive::ProviderSearchBudget::Written,
             )?;
             vec![provider_ty, family]
         }

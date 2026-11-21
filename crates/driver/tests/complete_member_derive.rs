@@ -1975,3 +1975,77 @@ impl Match for Packet with (Via<Recipe<Off>>)
         "{cause}"
     );
 }
+
+#[test]
+fn wide_written_provider_inventories_keep_direct_and_forwarded_defaults() {
+    use std::fmt::Write;
+
+    let mut source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Match<Rhs = Self> { const fn score(_ rhs: Rhs) -> usize }
+struct Packet {}
+struct Recipe {}
+struct Via<P> {}
+impl Derive<trait Match> for Recipe {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score(_ rhs: Packet) -> usize { 9 } }
+    }
+}
+impl<G: * -> Constraint, P: Derive<G>> Derive<G> for Via<P> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+"#
+    .to_string();
+    for key in 0..64 {
+        writeln!(
+            source,
+            r#"struct Key{key} {{}}
+impl Derive<trait Match<Key{key}>> for Recipe {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn score(_ rhs: Key{key}) -> usize {{ 7 }} }}
+    }}
+}}"#,
+        )
+        .unwrap();
+    }
+    for provider in ["Recipe", "Via<Recipe>"] {
+        let request = format!(
+            "{source}\nimpl Match for Packet with ({provider})\n\
+             const fn run() -> usize {{ <Packet as Match>::score(Packet {{}}) }}"
+        );
+        assert_eq!(eval(&prepare(&request).unwrap(), "run"), "9");
+    }
+}
+
+#[test]
+fn written_provider_matches_the_projected_receiver_in_the_complete_head() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+trait Match<Rhs = Self> { const fn score(_ rhs: Rhs) -> usize }
+trait Config { type Key }
+struct Standard {}
+impl Config for Standard { type Key = u8 }
+struct Packet {}
+struct Recipe<C, K> {}
+impl<C: Config> Derive<trait Match> for Recipe<C, <C as Config>::Key> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn score(_ rhs: Packet) -> usize { 9 } }
+    }
+}
+impl Match for Packet with (Recipe<Standard, u8>)
+const fn run() -> usize { <Packet as Match>::score(Packet {}) }
+"#;
+    assert_eq!(eval(&prepare(source).unwrap(), "run"), "9");
+    let cause = prepare_err(&source.replace(
+        "with (Recipe<Standard, u8>)",
+        "with (Recipe<Standard, u16>)",
+    ));
+    assert!(
+        cause.contains("has no `impl Derive<trait Match>` that applies"),
+        "{cause}"
+    );
+}
