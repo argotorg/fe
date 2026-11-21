@@ -18,11 +18,8 @@ func private %main() -> @layout_2 {
         v3.@layout_0 = call %saturating_ops_u64 1.i64 2.i64;
         v6.@layout_1 = call %wrapping_ops_u256 1.i256 2.i256;
         v7.@layout_1 = call %saturating_ops_u256 1.i256 2.i256;
-        v10.@layout_2 = insert_value undef.@layout_2 0.i256 v2;
-        v11.@layout_2 = insert_value v10 1.i256 v3;
-        v12.@layout_2 = insert_value v11 2.i256 v6;
-        v14.@layout_2 = insert_value v12 3.i256 v7;
-        return v14;
+        v8.@layout_2 = agg.make @layout_2 v2 v3 v6 v7;
+        return v8;
 }
 
 func private %main_root() {
@@ -78,10 +75,8 @@ func private %saturating_ops_u256(v0.i256, v1.i256) -> @layout_1 {
         v4.i256 = call %impl_trait_u256__saturating_add v0 v1;
         v5.i256 = call %impl_trait_u256__saturating_sub v0 v1;
         v6.i256 = call %impl_trait_u256__saturating_mul v0 v1;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
-        v11.@layout_1 = insert_value v9 1.i256 v5;
-        v13.@layout_1 = insert_value v11 2.i256 v6;
-        return v13;
+        v7.@layout_1 = agg.make @layout_1 v4 v5 v6;
+        return v7;
 }
 
 func private %saturating_ops_u64(v0.i64, v1.i64) -> @layout_0 {
@@ -92,10 +87,8 @@ func private %saturating_ops_u64(v0.i64, v1.i64) -> @layout_0 {
         v4.i64 = call %impl_trait_u64__saturating_add v0 v1;
         v5.i64 = call %impl_trait_u64__saturating_sub v0 v1;
         v6.i64 = call %impl_trait_u64__saturating_mul v0 v1;
-        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v11.@layout_0 = insert_value v9 1.i256 v5;
-        v13.@layout_0 = insert_value v11 2.i256 v6;
-        return v13;
+        v7.@layout_0 = agg.make @layout_0 v4 v5 v6;
+        return v7;
 }
 
 func private %impl_trait_u256__saturating_sub(v0.i256, v1.i256) -> i256 {
@@ -160,10 +153,8 @@ func private %wrapping_ops_u256(v0.i256, v1.i256) -> @layout_1 {
         v4.i256 = call %impl_trait_u256__wrapping_add v0 v1;
         v5.i256 = call %impl_trait_u256__wrapping_sub v0 v1;
         v6.i256 = call %impl_trait_u256__wrapping_mul v0 v1;
-        v9.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
-        v11.@layout_1 = insert_value v9 1.i256 v5;
-        v13.@layout_1 = insert_value v11 2.i256 v6;
-        return v13;
+        v7.@layout_1 = agg.make @layout_1 v4 v5 v6;
+        return v7;
 }
 
 func private %wrapping_ops_u64(v0.i64, v1.i64) -> @layout_0 {
@@ -174,10 +165,8 @@ func private %wrapping_ops_u64(v0.i64, v1.i64) -> @layout_0 {
         v4.i64 = call %impl_trait_u64__wrapping_add v0 v1;
         v5.i64 = call %impl_trait_u64__wrapping_sub v0 v1;
         v6.i64 = call %impl_trait_u64__wrapping_mul v0 v1;
-        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v11.@layout_0 = insert_value v9 1.i256 v5;
-        v13.@layout_0 = insert_value v11 2.i256 v6;
-        return v13;
+        v7.@layout_0 = agg.make @layout_0 v4 v5 v6;
+        return v7;
 }
 
 func private %impl_trait_u64__wrapping_sub(v0.i64, v1.i64) -> i64 {

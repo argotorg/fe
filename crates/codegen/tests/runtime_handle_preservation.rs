@@ -599,7 +599,7 @@ pub fn main() -> Inner {
     let repack = sonatina_function_body(&output, "repack");
 
     let repacks_full_payload =
-        contains_op_subsequence(repack, &["extract_value", "extract_value", "insert_value"])
+        contains_op_subsequence(repack, &["extract_value", "extract_value", "agg.make"])
             || (repack.contains("obj.load") && repack.contains("obj.store"));
     assert!(
         repacks_full_payload,
@@ -1802,7 +1802,7 @@ pub contract CodeView {
     assert!(
         !forward.contains("evm_code_copy")
             && !forward.contains("evm_code_load")
-            && !forward.contains("insert_value"),
+            && !forward.contains("agg.make"),
         "forwarding an immutable code view should retain its address:\n{ir}"
     );
     let pick = sonatina_function_body(&ir, "pick");
@@ -1846,7 +1846,7 @@ fn forward(_ values: [u256; 3]) -> u256 {{ pick(values) }}
         );
         let forward = sonatina_function_body(&ir, "forward");
         assert!(
-            !forward.contains(load) && !forward.contains("insert_value"),
+            !forward.contains(load) && !forward.contains("agg.make"),
             "immutable array forwarding should retain its backing:\n{ir}"
         );
         let pick = sonatina_function_body(&ir, "pick");
@@ -2522,7 +2522,7 @@ fn initializers() {
             for (name, ty) in [("zeroed_bytes", "[i8; 64]"), ("copied_table", "[i256; 4]")] {
                 let body = sonatina_function_body(&output, name);
                 assert!(
-                    body.contains(&format!("{ty} = const.load")) && !body.contains("insert_value"),
+                    body.contains(&format!("{ty} = const.load")) && !body.contains("agg.make"),
                     "a constant initializer should load its const data whole:\n{body}"
                 );
                 assert_eq!(

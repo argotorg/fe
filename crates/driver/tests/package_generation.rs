@@ -2018,3 +2018,58 @@ pub const fn fragment() -> Code<Item> { outer::fragment() }
         assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "3", "{body}");
     }
 }
+
+#[test]
+fn quoted_trait_references_check_visibility_from_the_producer() {
+    let library = r#"
+use core::meta::{Code, Item}
+
+pub mod helpers {
+    pub(ingot) trait Marker {}
+}
+
+pub const fn fragment() -> Code<Item> {
+    quote {
+        const fn score() -> u8 {
+            use ingot::helpers as local
+            fn check<T: local::Marker>() {}
+            7
+        }
+    }
+}
+"#;
+    let app = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Score { const fn score() -> u8 }
+struct Target {}
+struct Provider {}
+impl Derive<trait Score> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> { lib::fragment() }
+}
+
+impl Score for Target with (Provider)
+pub const fn result() -> u8 { Target::score() }
+"#;
+    let prepare_library = |library| {
+        let db = project(&[
+            ("app/fe.toml", APP_WITH_LIB_TOML),
+            ("app/src/lib.fe", app),
+            ("lib/fe.toml", LIB_TOML),
+            ("lib/src/lib.fe", library),
+        ]);
+        prepare(&db, "app/")
+    };
+    let accepted = prepare_library(library);
+    assert_eq!(ingot_errors(&accepted, "app/"), "");
+    assert_eq!(eval(&accepted, "app/src/lib.fe", "result"), "7");
+
+    let hidden = library.replace("pub(ingot) trait Marker", "trait Marker");
+    let refused = prepare_library(&hidden);
+    let diagnostics = ingot_errors(&refused, "app/");
+    assert!(
+        diagnostics.contains("2-0003") && diagnostics.contains("`Marker` is not visible"),
+        "{diagnostics}"
+    );
+}

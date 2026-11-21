@@ -47,3 +47,12 @@ error[2-0003]: `Hidden` is not visible
    ·
 32 │     type Out: inner::Hidden
    │                      ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `sealed` is not visible
+   ┌─ trait_ref_visibility.fe:51:13
+   │
+41 │     mod sealed {
+   │         ------ `sealed` is defined here
+   ·
+51 │ impl outer::sealed::Deep for S {}
+   │             ^^^^^^ `sealed` is not visible

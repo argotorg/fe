@@ -49,10 +49,9 @@ func private %view_param_aggregate_value(v0.i256, v1.i256) -> i256 {
         jump block1;
 
     block1:
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v8.@layout_0 = insert_value v6 1.i256 v1;
-        v9.i256 = call %sum v8;
-        return v9;
+        v4.@layout_0 = agg.make @layout_0 v0 v1;
+        v5.i256 = call %sum v4;
+        return v5;
 }
 
 

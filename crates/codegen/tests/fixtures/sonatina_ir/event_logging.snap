@@ -118,9 +118,8 @@ func inline(always) private %emit(v0.@layout_1) {
         jump block2;
 
     block5:
-        v42.@layout_2 = insert_value undef.@layout_2 0.i256 v37;
-        v44.@layout_2 = insert_value v42 1.i256 v38;
-        obj.store v2 v44;
+        v42.@layout_2 = agg.make @layout_2 v37 v38;
+        obj.store v2 v42;
         jump block4;
 
     block6:
@@ -161,10 +160,8 @@ func private %emit_transfer(v0.@layout_0, v1.@layout_0, v2.i256) {
         jump block1;
 
     block1:
-        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
-        v10.@layout_1 = insert_value v8 1.i256 v1;
-        v12.@layout_1 = insert_value v10 2.i256 v2;
-        call %emit v12;
+        v6.@layout_1 = agg.make @layout_1 v0 v1 v2;
+        call %emit v6;
         return;
 }
 
@@ -209,9 +206,8 @@ func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_2 {
         jump block1;
 
     block1:
-        v6.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v8.@layout_2 = insert_value v6 1.i256 v1;
-        return v8;
+        v4.@layout_2 = agg.make @layout_2 v0 v1;
+        return v4;
 }
 
 func private %index_out_of_bounds() {
@@ -269,9 +265,9 @@ func private %main() {
         jump block1;
 
     block1:
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 1.i256;
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 2.i256;
-        call %emit_transfer v3 v6 100.i256;
+        v1.@layout_0 = agg.make @layout_0 1.i256;
+        v3.@layout_0 = agg.make @layout_0 2.i256;
+        call %emit_transfer v1 v3 100.i256;
         return;
 }
 
@@ -291,11 +287,8 @@ func inline(always) private %new__gf13e(v0.@layout_2, v1.i256, v2.i256) -> @layo
     block1:
         v5.@layout_2 = call %tail v0 0.i256;
         v7.@layout_2 = call %tail v0 v1;
-        v10.@layout_3 = insert_value undef.@layout_3 0.i256 v5;
-        v12.@layout_3 = insert_value v10 1.i256 v7;
-        v14.@layout_3 = insert_value v12 2.i256 0.i256;
-        v16.@layout_3 = insert_value v14 3.i256 v2;
-        return v16;
+        v9.@layout_3 = agg.make @layout_3 v5 v7 0.i256 v2;
+        return v9;
 }
 
 func private %impl_MemBuffer__new(v0.i256) -> @layout_4 {
@@ -315,10 +308,8 @@ func private %new_uninit(v0.i256) -> @layout_4 {
 
     block1:
         v2.i256 = call %alloc_bytes v0;
-        v5.@layout_4 = insert_value undef.@layout_4 0.i256 v2;
-        v7.@layout_4 = insert_value v5 1.i256 v0;
-        v9.@layout_4 = insert_value v7 2.i256 v0;
-        return v9;
+        v3.@layout_4 = agg.make @layout_4 v2 v0 v0;
+        return v3;
 }
 
 func private %payload_size(v0.i256) -> i256 {
@@ -436,15 +427,14 @@ func inline(always) private %core__lib__abi__impl_AbiFrame_8419__slice_0873(v0.@
     block4:
         v10.i256 = extract_value v0 0.i256;
         v12.i256 = call %ptr_offset v10 v1;
-        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v12;
-        v16.@layout_2 = insert_value v15 1.i256 v2;
-        return v16;
+        v14.@layout_2 = agg.make @layout_2 v12 v2;
+        return v14;
 
     block5:
-        v19.i256 = extract_value v0 1.i256;
-        v21.i256 = sub v19 v1;
-        v22.i1 = gt v2 v21;
-        br v22 block2 block3;
+        v17.i256 = extract_value v0 1.i256;
+        v19.i256 = sub v17 v1;
+        v20.i1 = gt v2 v19;
+        br v20 block2 block3;
 }
 
 func inline(always) private %core__lib__abi__impl_AbiFrame_8419__slice_67c7(noalias nocapture readonly v0.objref<@layout_2>, v1.i256, v2.i256) -> @layout_2 {
@@ -468,16 +458,15 @@ func inline(always) private %core__lib__abi__impl_AbiFrame_8419__slice_67c7(noal
         v11.objref<i256> = obj.proj v0 0.i256;
         v12.i256 = obj.load v11;
         v14.i256 = call %ptr_offset v12 v1;
-        v17.@layout_2 = insert_value undef.@layout_2 0.i256 v14;
-        v18.@layout_2 = insert_value v17 1.i256 v2;
-        return v18;
+        v16.@layout_2 = agg.make @layout_2 v14 v2;
+        return v16;
 
     block5:
-        v21.objref<i256> = obj.proj v0 1.i256;
-        v22.i256 = obj.load v21;
-        v24.i256 = sub v22 v1;
-        v25.i1 = gt v2 v24;
-        br v25 block2 block3;
+        v19.objref<i256> = obj.proj v0 1.i256;
+        v20.i256 = obj.load v19;
+        v22.i256 = sub v20 v1;
+        v23.i1 = gt v2 v22;
+        br v23 block2 block3;
 }
 
 func inline(always) private %core__lib__abi__impl_AbiFrame_8419__store_word_0458(noalias nocapture readonly v0.objref<@layout_2>, v1.i256, v2.i256) {
@@ -533,9 +522,8 @@ func inline(always) private %tail(v0.@layout_2, v1.i256) -> @layout_2 {
         v11.i256 = call %ptr_offset v9 v1;
         v12.i256 = extract_value v0 1.i256;
         v13.i256 = sub v12 v1;
-        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v11;
-        v16.@layout_2 = insert_value v15 1.i256 v13;
-        return v16;
+        v14.@layout_2 = agg.make @layout_2 v11 v13;
+        return v14;
 }
 
 func inline(always) private %word_to_usize(v0.i256) -> i256 {

@@ -205,14 +205,14 @@ func private %test_generic_type_collision() -> i32 {
         jump block1;
 
     block1:
-        v3.@layout_1 = insert_value undef.@layout_1 0.i256 1.i32;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 1.i32;
-        v8.@layout_0 = insert_value undef.@layout_0 0.i256 2.i64;
-        v10.@layout_0 = insert_value undef.@layout_0 0.i256 2.i64;
-        v12.@layout_1 = insert_value undef.@layout_1 0.i256 1.i32;
-        v13.@layout_1 = call %generic_fn__gb148 v12;
-        v15.@layout_0 = insert_value undef.@layout_0 0.i256 2.i64;
-        v16.@layout_0 = call %generic_fn__gf088 v15;
+        v1.@layout_1 = agg.make @layout_1 1.i32;
+        v2.@layout_1 = agg.make @layout_1 1.i32;
+        v4.@layout_0 = agg.make @layout_0 2.i64;
+        v5.@layout_0 = agg.make @layout_0 2.i64;
+        v6.@layout_1 = agg.make @layout_1 1.i32;
+        v7.@layout_1 = call %generic_fn__gb148 v6;
+        v8.@layout_0 = agg.make @layout_0 2.i64;
+        v9.@layout_0 = call %generic_fn__gf088 v8;
         return 42.i32;
 }
 
@@ -221,13 +221,13 @@ func private %test_impl_method_collision() -> i32 {
         jump block1;
 
     block1:
-        v3.@layout_1 = insert_value undef.@layout_1 0.i256 10.i32;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 10.i32;
-        v8.@layout_0 = insert_value undef.@layout_0 0.i256 20.i64;
-        v10.@layout_0 = insert_value undef.@layout_0 0.i256 20.i64;
-        v11.i32 = call %name_collisions__impl_a__impl_Widget__process v5;
-        v12.i64 = call %name_collisions__impl_b__impl_Widget__process v10;
-        return v11;
+        v1.@layout_1 = agg.make @layout_1 10.i32;
+        v2.@layout_1 = agg.make @layout_1 10.i32;
+        v4.@layout_0 = agg.make @layout_0 20.i64;
+        v5.@layout_0 = agg.make @layout_0 20.i64;
+        v6.i32 = call %name_collisions__impl_a__impl_Widget__process v2;
+        v7.i64 = call %name_collisions__impl_b__impl_Widget__process v5;
+        return v6;
 }
 
 func private %test_module_qualifier_flatten_collision() -> i32 {
@@ -272,14 +272,14 @@ func private %test_trait_method_collision() -> i32 {
         jump block1;
 
     block1:
-        v3.@layout_1 = insert_value undef.@layout_1 0.i256 100.i32;
-        v5.@layout_1 = insert_value undef.@layout_1 0.i256 100.i32;
-        v6.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v5;
-        v8.@layout_1 = insert_value undef.@layout_1 0.i256 100.i32;
-        v10.@layout_1 = insert_value undef.@layout_1 0.i256 100.i32;
-        v11.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v10;
-        (v12.i32, v13.i1) = uaddo v6 v11;
-        br v13 block2 block3;
+        v1.@layout_1 = agg.make @layout_1 100.i32;
+        v2.@layout_1 = agg.make @layout_1 100.i32;
+        v3.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v2;
+        v4.@layout_1 = agg.make @layout_1 100.i32;
+        v5.@layout_1 = agg.make @layout_1 100.i32;
+        v6.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v5;
+        (v7.i32, v8.i1) = uaddo v3 v6;
+        br v8 block2 block3;
 
     block2:
         mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
@@ -287,7 +287,7 @@ func private %test_trait_method_collision() -> i32 {
         evm_revert 0.i256 36.i256;
 
     block3:
-        return v12;
+        return v7;
 }
 
 func private %test_user_defined_conversion_pattern_name() -> i256 {

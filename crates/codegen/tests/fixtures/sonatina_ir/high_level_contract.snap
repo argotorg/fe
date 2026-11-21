@@ -145,8 +145,8 @@ func inline(always) private %alloc_uninit__g03ed() -> @layout_0 {
 
     block1:
         v1.i256 = call %alloc_bytes 64.i256;
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
-        return v4;
+        v2.@layout_0 = agg.make @layout_0 v1;
+        return v2;
 }
 
 func inline(always) private %alloc_uninit__g1d2b() -> @layout_0 {
@@ -155,8 +155,8 @@ func inline(always) private %alloc_uninit__g1d2b() -> @layout_0 {
 
     block1:
         v1.i256 = call %alloc_bytes 32.i256;
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
-        return v4;
+        v2.@layout_0 = agg.make @layout_0 v1;
+        return v2;
 }
 
 func inline(always) private %allocation_len(v0.i256) -> i256 {
@@ -515,10 +515,8 @@ func inline(always) private %impl_trait_Answer__decode_from_prechecked_head__g8f
         jump block1;
 
     block1:
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v1;
-        v10.@layout_4 = insert_value v8 1.i256 v1;
-        v12.@layout_4 = insert_value v10 2.i256 v2;
-        obj.store v3 v12;
+        v6.@layout_4 = agg.make @layout_4 v1 v1 v2;
+        obj.store v3 v6;
         call %impl_trait_Answer__decode_payload__g76e1 v3 v0;
         return;
 }
@@ -529,12 +527,10 @@ func inline(always) private %impl_trait_Echo__decode_from_prechecked_head__g8f43
         jump block1;
 
     block1:
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v1;
-        v10.@layout_4 = insert_value v8 1.i256 v1;
-        v12.@layout_4 = insert_value v10 2.i256 v2;
-        obj.store v3 v12;
-        v14.@layout_3 = call %impl_trait_Echo__decode_payload__g76e1 v3 v0;
-        return v14;
+        v6.@layout_4 = agg.make @layout_4 v1 v1 v2;
+        obj.store v3 v6;
+        v8.@layout_3 = call %impl_trait_Echo__decode_payload__g76e1 v3 v0;
+        return v8;
 }
 
 func inline(always) private %impl_trait_GetX__decode_from_prechecked_head__g8f43(v0.@layout_3, v1.i256, v2.i256) {
@@ -543,10 +539,8 @@ func inline(always) private %impl_trait_GetX__decode_from_prechecked_head__g8f43
         jump block1;
 
     block1:
-        v8.@layout_4 = insert_value undef.@layout_4 0.i256 v1;
-        v10.@layout_4 = insert_value v8 1.i256 v1;
-        v12.@layout_4 = insert_value v10 2.i256 v2;
-        obj.store v3 v12;
+        v6.@layout_4 = agg.make @layout_4 v1 v1 v2;
+        obj.store v3 v6;
         call %impl_trait_GetX__decode_payload__g76e1 v3 v0;
         return;
 }
@@ -579,9 +573,8 @@ func private %decode_payload__g6c12(noalias nocapture v0.objref<@layout_1>, noal
     block1:
         v4.i256 = call %decode_field v0 v1;
         v5.i256 = call %decode_field v0 v1;
-        v8.@layout_1 = insert_value undef.@layout_1 0.i256 v4;
-        v10.@layout_1 = insert_value v8 1.i256 v5;
-        return v10;
+        v6.@layout_1 = agg.make @layout_1 v4 v5;
+        return v6;
 }
 
 func inline(always) private %impl_trait_GetX__decode_payload__g76e1(noalias nocapture v0.objref<@layout_4>, v1.@layout_3) {
@@ -616,8 +609,8 @@ func inline(always) private %impl_trait_Echo__decode_payload__g76e1(noalias noca
 
     block1:
         v4.i256 = call %read_record_field v0 v1;
-        v7.@layout_3 = insert_value undef.@layout_3 0.i256 v4;
-        return v7;
+        v5.@layout_3 = agg.make @layout_3 v4;
+        return v5;
 }
 
 func inline(always) private %impl_trait_Answer__decode_payload__g76e1(noalias nocapture v0.objref<@layout_4>, v1.@layout_3) {
@@ -817,9 +810,8 @@ func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_2 {
         jump block1;
 
     block1:
-        v6.@layout_2 = insert_value undef.@layout_2 0.i256 v0;
-        v8.@layout_2 = insert_value v6 1.i256 v1;
-        return v8;
+        v4.@layout_2 = agg.make @layout_2 v0 v1;
+        return v4;
 }
 
 func private %impl_trait_u64__from_word(v0.i256) -> i64 {
@@ -902,8 +894,8 @@ func inline(always) private %impl_CallData__new() -> @layout_3 {
         jump block1;
 
     block1:
-        v2.@layout_3 = insert_value undef.@layout_3 0.i256 0.i256;
-        return v2;
+        v1.@layout_3 = agg.make @layout_3 0.i256;
+        return v1;
 }
 
 func private %impl_MemBuffer__new(v0.i256) -> @layout_7 {
@@ -923,10 +915,8 @@ func private %new_uninit(v0.i256) -> @layout_7 {
 
     block1:
         v2.i256 = call %alloc_bytes v0;
-        v5.@layout_7 = insert_value undef.@layout_7 0.i256 v2;
-        v7.@layout_7 = insert_value v5 1.i256 v0;
-        v9.@layout_7 = insert_value v7 2.i256 v0;
-        return v9;
+        v3.@layout_7 = agg.make @layout_7 v2 v0 v0;
+        return v3;
 }
 
 func private %payload_size(v0.i256) -> i256 {
@@ -1166,9 +1156,8 @@ func private %return_value(v0.i256) {
         jump block8;
 
     block11:
-        v37.@layout_2 = insert_value undef.@layout_2 0.i256 v31;
-        v39.@layout_2 = insert_value v37 1.i256 v33;
-        obj.store v1 v39;
+        v37.@layout_2 = agg.make @layout_2 v31 v33;
+        obj.store v1 v37;
         jump block10;
 
     block12:
@@ -1176,9 +1165,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block13:
-        v43.@layout_2 = insert_value undef.@layout_2 0.i256 v15;
-        v45.@layout_2 = insert_value v43 1.i256 32.i256;
-        obj.store v2 v45;
+        v41.@layout_2 = agg.make @layout_2 v15 32.i256;
+        obj.store v2 v41;
         jump block12;
 
     block14:
@@ -1186,9 +1174,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block15:
-        v49.@layout_2 = insert_value undef.@layout_2 0.i256 v22;
-        v51.@layout_2 = insert_value v49 1.i256 32.i256;
-        obj.store v3 v51;
+        v45.@layout_2 = agg.make @layout_2 v22 32.i256;
+        obj.store v3 v45;
         jump block14;
 
     block16:
@@ -1196,17 +1183,16 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block17:
-        v54.i256 = extract_value v23 0.i256;
-        v55.i256 = extract_value v23 1.i256;
+        v48.i256 = extract_value v23 0.i256;
+        v49.i256 = extract_value v23 1.i256;
         jump block19;
 
     block18:
         jump block16;
 
     block19:
-        v59.@layout_2 = insert_value undef.@layout_2 0.i256 v54;
-        v61.@layout_2 = insert_value v59 1.i256 v55;
-        obj.store v4 v61;
+        v53.@layout_2 = agg.make @layout_2 v48 v49;
+        obj.store v4 v53;
         jump block18;
 }
 
@@ -1300,15 +1286,14 @@ func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 
     block4:
         v10.i256 = extract_value v0 0.i256;
         v12.i256 = call %ptr_offset v10 v1;
-        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v12;
-        v16.@layout_2 = insert_value v15 1.i256 v2;
-        return v16;
+        v14.@layout_2 = agg.make @layout_2 v12 v2;
+        return v14;
 
     block5:
-        v19.i256 = extract_value v0 1.i256;
-        v21.i256 = sub v19 v1;
-        v22.i1 = gt v2 v21;
-        br v22 block2 block3;
+        v17.i256 = extract_value v0 1.i256;
+        v19.i256 = sub v17 v1;
+        v20.i1 = gt v2 v19;
+        br v20 block2 block3;
 }
 
 func private %lib__abi__store_word(v0.i256, v1.i256) {
@@ -1353,9 +1338,8 @@ func inline(always) private %tail(v0.@layout_2, v1.i256) -> @layout_2 {
         v11.i256 = call %ptr_offset v9 v1;
         v12.i256 = extract_value v0 1.i256;
         v13.i256 = sub v12 v1;
-        v15.@layout_2 = insert_value undef.@layout_2 0.i256 v11;
-        v16.@layout_2 = insert_value v15 1.i256 v13;
-        return v16;
+        v14.@layout_2 = agg.make @layout_2 v11 v13;
+        return v14;
 }
 
 func private %impl_trait_usize__to_word(v0.i256) -> i256 {
@@ -1411,9 +1395,8 @@ func inline(always) private %with_base(v0.i256) -> @layout_1 {
         jump block1;
 
     block1:
-        v4.@layout_1 = insert_value undef.@layout_1 0.i256 v0;
-        v6.@layout_1 = insert_value v4 1.i256 v0;
-        return v6;
+        v2.@layout_1 = agg.make @layout_1 v0 v0;
+        return v2;
 }
 
 func inline(always) private %impl_trait_CallData__word_at(v0.@layout_3, v1.i256) -> i256 {
