@@ -317,6 +317,41 @@ impl<T, const N: usize> Len for [T; N] {
     }
 }
 
+/// `h.f` for an `h` whose type has no field `f` visible where it is
+/// written: when the type implements `Project`, `f` names a field of
+/// `Target`, and `h.f` calls `ProjectField::project` with the descriptor of
+/// that field (see `Field`). A handle to encoded data implements it with the
+/// record it stands for, so that `order.offer[i].amount` reads one field of
+/// the encoding. The handle's own visible fields come first.
+pub trait Project {
+    /// The type whose fields `h.f` names.
+    type Target
+}
+
+/// The field of type `F` of the record `T` that follows fields of the types
+/// in `Before`, which holds them in declaration order as a tree: `()` for
+/// no field, `(A,)` for one field of type `A`, and `(L, R)` for the fields of
+/// `L` followed by those of `R`. For `e` in
+/// `struct S { a: A, b: B, c: C, d: D, e: E }` it is
+/// `Field<S, E, (((A,), (B,)), ((C,), (D,)))>`, and for `c` it is
+/// `Field<S, C, ((A,), (B,))>`. The depth of the tree grows with the
+/// logarithm of the number of fields; where it splits is the compiler's
+/// choice, so a layout computes where the field lies by folding over the
+/// tree in order. The compiler names this type for `h.f`; it has no values.
+pub struct Field<T, F, Before> {}
+
+/// Reaching the field `D`, a `Field<T, F, Before>` of `Project::Target`:
+/// `h.f` calls `project`, at `mut` where the context needs a mutable place,
+/// as `c[k]` calls `Index::index`. An implementation may yield a computed
+/// value.
+pub trait ProjectField<D> {
+    /// The effects of reaching a field.
+    uses E
+    type Output
+
+    fn project(mut? self) -> mut? Self::Output uses E
+}
+
 // Augmented assignment operators (return unit)
 pub trait AddAssign<T = Self> {
     fn add_assign(mut self, _ other: own T)

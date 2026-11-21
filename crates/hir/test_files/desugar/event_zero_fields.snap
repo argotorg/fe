@@ -12,7 +12,9 @@ impl std::evm::Event for Paused {
     const TOPIC0: u256 = core::keccak(("Paused", "(", ")"))
 
     #[inline(always)]
-    fn emit<__fe_L: std::evm::Log>(own self, _ log: mut __fe_L) {
-        log.log1(data: core::ptr::MemBuffer::empty().span(), topic0: Self::TOPIC0)
+    fn emit<L: Log>(own self, _ log: mut L) {
+        let buffer = MemBuffer::empty()
+        let data = buffer.span()
+        log.log1(data: data, topic0: Self::TOPIC0)
     }
 }

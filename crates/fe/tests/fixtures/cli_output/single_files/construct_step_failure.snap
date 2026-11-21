@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/construct_step_failure.fe
+---
+=== STDERR ===
+file://<project>/crates/fe/tests/fixtures/cli_output/single_files/construct_step_failure.fe:342..364: division by zero in const context
+
+=== EXIT CODE: 1 ===

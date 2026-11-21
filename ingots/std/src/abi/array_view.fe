@@ -12,6 +12,7 @@ use core::abi::{
     decode_field_from_prechecked_head,
 }
 use ingot::abi::{Bytes, DynArray, Sol}
+use ingot::abi::encoded::{dynamic_frame, frame_at}
 use ingot::abi::sol::{decode_bytes_view_at, decode_string_view_at}
 use ingot::evm::panic::{PANIC_INDEX_OUT_OF_BOUNDS, Panic}
 use ingot::evm::revert_error
@@ -81,23 +82,36 @@ pub fn decode_array_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) ->
     where I: ByteInput + Copy, T: AbiSize
 {
     let input_len = input.len()
-    let head_at = checked_tail<Sol>(base, head_pos)
-    checked_frame_end<Sol>(head_at, 32, input_len)
-    let tail_at = checked_tail<Sol>(base, input.word_at(head_at))
-    let elems = checked_frame_end<Sol>(tail_at, 32, input_len)
-    let len = input.word_at(tail_at)
-    let stride = abi_field_head_size<T>()
-    // `elems <= input_len` holds after the frame check, and the division
-    // bounds `len * stride` without overflow.
-    if (stride == 0 && len >= 0x10000000000000000) || (stride != 0 && len > (input_len - elems) / stride) {
-        Sol::decode_error()
+    let head_at = frame_at<Sol>(base, head_pos, 32, input_len)
+    let tail_at = dynamic_frame<I, Sol>(input, base: base, head: head_at, width: 32, end: input_len)
+    let elems = tail_at + 32
+    let len = checked_array_len<Sol>(input.word_at(tail_at), abi_field_head_size<T>(), input_len - elems)
+    ArrayView { input, elems, len }
+}
+
+// A stride wider than the source length fits only an empty array.
+// Otherwise two u64 operands make the multiplication exact.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub(ingot) fn checked_array_len<A: Abi>(_ count: u256, _ stride: u256, _ capacity: u256) -> usize {
+    let len: usize = count.downcast_saturate()
+    let beyond = if (stride >> 64) != 0 { count != 0 } else { count * stride > capacity }
+    if ((count >> 64) | (((len as u256) != count) as u256) | (beyond as u256)) != 0 {
+        A::decode_error()
     }
-    ArrayView { input, elems, len: len.downcast_unchecked() }
+    len
 }
 
 impl<I, T> ArrayView<I, T>
     where I: ByteInput + Copy, T: AbiSize
 {
+    /// An empty view over `input`, for an array that is absent: it has no
+    /// elements, reads nothing and allocates nothing. `BytesView::new(input,
+    /// start: 0, len: 0)` is the counterpart for `bytes`.
+    pub fn empty(_ input: own I) -> Self {
+        ArrayView { input, elems: 0, len: 0 }
+    }
+
     /// Number of elements.
     pub fn len(self) -> usize {
         self.len
@@ -176,7 +190,8 @@ impl<I, T> ArrayView<I, T>
     /// (`T::HEAD_SIZE` bytes, e.g. the length word of a `bytes`) lies within
     /// the input. Fields of a struct element can then be read with `T`'s
     /// field decoders or with
-    /// `decode_array_view_at(input, base: pos, head_pos: field_offset)`.
+    /// `decode_array_view_at(input, base: pos, head_pos: field_offset)`, or
+    /// through `record_at`, which views the element as a `RecordView`.
     ///
     /// Reverts with `Panic(0x32)` if `index >= len()`.
     #[arithmetic(unchecked)]

@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_mut.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_mut.fe:30:5
+   │
+30 │     w.b = 5
+   │     ^^^ `View<Rec>` doesn't implement `mut ProjectField<Field<Rec, u256, (u256)>>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_mut.fe:35:18
+   │
+35 │     let _m = mut w.b
+   │                  ^^^ `View<Rec>` doesn't implement `mut ProjectField<Field<Rec, u256, (u256)>>`

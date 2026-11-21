@@ -1,3 +1,6 @@
+#[path = "common/prepared_source.rs"]
+mod prepared_source;
+
 use std::collections::BTreeSet;
 
 use common::{
@@ -28,13 +31,12 @@ fn run_ty_check(db: &mut DriverDataBase, fixture: &Fixture) {
 
 /// The diagnostics of a program checked as a standalone file.
 fn diagnostics(db: &mut DriverDataBase, path: &str, content: &str) -> String {
-    let file = db.workspace().touch(
+    prepared_source::diagnostics(
         db,
         Url::from_file_path(path).expect("path should be absolute"),
-        Some(content.to_string()),
-    );
-    let top_mod = db.top_mod(file);
-    db.run_on_top_mod(top_mod).format_diags(db)
+        content,
+        |db, file| db.run_on_top_mod(db.top_mod(file)).format_diags(db),
+    )
 }
 
 /// The error headlines of a program checked as a standalone file, in order.

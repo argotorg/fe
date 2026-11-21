@@ -447,6 +447,7 @@ fn lower_scoped_derive<'db>(
             vis: Visibility::Private,
             derive_provider: None,
             derive_trait_ref: None,
+            short_form_derive_site: None,
             quote_chain: None,
         },
         ctxt.top_mod(),

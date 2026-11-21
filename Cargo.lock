@@ -2605,6 +2605,7 @@ dependencies = [
  "ena",
  "fe-common",
  "fe-dataflow",
+ "fe-driver",
  "fe-parser",
  "fe-test-utils",
  "fe-trace-facts",

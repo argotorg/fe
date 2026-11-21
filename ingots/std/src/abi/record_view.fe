@@ -1,0 +1,122 @@
+use core::abi::{AbiSize, ByteInput}
+use core::ops::{Field, Project, ProjectField}
+use ingot::abi::{AbiFields, ArrayView, Encoded, HeadsBefore, Sol, decode_record_at, decode_record_from}
+
+/// The field of the Solidity ABI record `T` whose type is `F`.
+///
+/// A key holds the byte offset of the field's head within the head of an
+/// encoded `T`: the sum of the head sizes of the fields declared before it,
+/// where a dynamic field takes the one word that holds its tail offset.
+/// `keys<T>().f` is the key of the field `f`. A key is read through an
+/// `Encoded<I, T, A>` handle (a `RecordView<I, T>` under the strict
+/// encoding); the key of another record does not type-check there.
+pub struct FieldKey<T, F> {
+    offset: u256,
+}
+
+impl<T, F> Copy for FieldKey<T, F> {}
+
+impl<T, F> FieldKey<T, F> {
+    /// The key of the field whose head starts `offset` bytes into the head of
+    /// `T`. The generated keys are made this way. A key made by hand with
+    /// another offset reads whatever lies at that offset of the input.
+    pub const fn new(_ offset: u256) -> Self {
+        FieldKey { offset }
+    }
+
+    /// Byte offset of the field's head from the start of the record's head.
+    pub const fn offset(self) -> u256 {
+        self.offset
+    }
+}
+
+/// The keys of the fields of the record `T`: `keys<T>().f` is the key of
+/// the field `f`, for the methods of `Encoded` that take one (`at`,
+/// `get_at`, `word`, `head_pos`).
+pub struct Keys<T> {}
+
+impl<T> Copy for Keys<T> {}
+
+/// The keys of the fields of `T` (see `Keys`).
+pub fn keys<T>() -> Keys<T> {
+    Keys {}
+}
+
+impl<T> Project for Keys<T> {
+    type Target = T
+}
+
+impl<T, F, B> ProjectField<Field<T, F, B>> for Keys<T>
+    where T: AbiFields, B: HeadsBefore
+{
+    type Output = FieldKey<T, F>
+
+    fn project(self) -> ref FieldKey<T, F> {
+        FieldKey::new(B::SIZE)
+    }
+}
+
+/// A lazy view of a Solidity ABI record `T` (a struct, encoded as the tuple
+/// of its fields) inside a `ByteInput`: the encoded handle under the strict
+/// encoding `Sol`.
+///
+/// This is the equivalent of a Solidity `T calldata` struct parameter:
+/// creating the view checks only that the record's head lies within the
+/// input, and each field is read when it is accessed:
+///
+/// ```fe
+/// let order = CallData::with_base(4).record_view<Order>(0)
+/// let amount = order.offer[1].start_amount
+/// ```
+///
+/// See `Encoded` for the reads and for the relation to eager decoding.
+/// Validation failures revert with empty returndata, like Solidity ABI
+/// decoding errors.
+pub type RecordView<I, T> = Encoded<I, T, Sol>
+
+/// View the record `T` whose head word is at `head_pos` of the tuple at
+/// `base` of `input`, as a field or an argument: a static `T` lies in place,
+/// and the head word of a dynamic `T` holds the offset of its encoding,
+/// relative to `base`. For the `k`-th argument of an external call use
+/// `CallData::with_base(4)` with `base: 0, head_pos: k * 32` (or
+/// `CallData::record_view`).
+///
+/// Reverts with empty returndata unless the head word lies within the input,
+/// the offset of a dynamic `T` is below `2**64`, and the head of the record
+/// (`T::HEAD_SIZE` bytes) lies within the input. Fields are not inspected.
+pub fn decode_record_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) -> RecordView<I, T>
+    where I: ByteInput + Copy, T: AbiSize
+{
+    decode_record_at<Sol, T, I>(input, base: base, head_pos: head_pos)
+}
+
+/// View the record `T` whose head word is at byte 0 of `input`.
+///
+/// Equivalent to `decode_record_view_at(input, base: 0, head_pos: 0)`; use it
+/// for a return payload of a single `T` value.
+pub fn decode_record_view<T, I>(_ input: own I) -> RecordView<I, T>
+    where I: ByteInput + Copy, T: AbiSize
+{
+    decode_record_at<Sol, T, I>(input, base: 0, head_pos: 0)
+}
+
+/// View the record `T` whose encoding starts at `pos` of `input`, as
+/// `Decode::decode_from(input, pos)` decodes it. Reverts with empty
+/// returndata unless the record's head lies within the input.
+pub fn decode_record_view_from<T, I>(_ input: own I, _ pos: u256) -> RecordView<I, T>
+    where I: ByteInput + Copy, T: AbiSize
+{
+    decode_record_from<Sol, T, I>(input, pos)
+}
+
+impl<I, T> ArrayView<I, T>
+    where I: ByteInput + Copy, T: AbiSize
+{
+    /// A lazy view of the record element `index`, at its validated position
+    /// (`element_pos`): for a dynamic `T` the element's tail offset is
+    /// checked and its head must lie within the input. Reverts with
+    /// `Panic(0x32)` if `index >= len()`.
+    pub fn record_at(self, _ index: usize) -> RecordView<I, T> {
+        decode_record_view_from(self.input(), self.element_pos(index))
+    }
+}

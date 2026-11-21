@@ -1,0 +1,27 @@
+use core::ops::{Field, Project, ProjectField}
+
+struct Record { pub value: u256 }
+struct View { active: usize, words: [u256; 2] }
+impl Project for View { type Target = Record }
+impl ProjectField<Field<Record, u256, ()>> for View {
+    type Output = u256
+    fn project(mut? self) -> mut? u256 {
+        mut? self.words[self.active]
+    }
+}
+
+fn change_root(_ view: mut View) -> u256 {
+    view.active = 1
+    99
+}
+
+#[test]
+fn the_assignment_observes_the_rhs_update_in_both_spellings() {
+    var field = View { active: 0, words: [10, 20] }
+    field.value = change_root(mut field)
+    assert!(field.words[0] == 10 && field.words[1] == 99)
+
+    var written = View { active: 0, words: [10, 20] }
+    <View as ProjectField<Field<Record, u256, ()>>>::project(mut written) = change_root(mut written)
+    assert!(written.words[0] == 10 && written.words[1] == 99)
+}

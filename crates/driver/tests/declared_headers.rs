@@ -424,3 +424,116 @@ pub const fn run() -> u256 { <S as Tr>::v() + S::INHERENT_C + S::inherent_v() }
         );
     }
 }
+
+#[test]
+fn an_authored_event_signature_is_available_during_preparation() {
+    let source = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::Event
+
+#[event]
+struct Notice { value: u256 }
+
+trait Topic { const VALUE: u256 }
+struct Provider {}
+impl Derive<trait Topic> for Provider {
+    const fn derive(_: Record) -> Code<Item> {
+        let topic = <Notice as Event>::TOPIC0
+        quote { const VALUE: u256 = ${topic} }
+    }
+}
+struct Probe {}
+impl Topic for Probe with (Provider)
+
+const fn run() -> u256 {
+    if <Probe as Topic>::VALUE == core::keccak(\"Notice(uint256)\") { 1 } else { 0 }
+}
+";
+    let output = prepare(source).expect("the authored event supplies its signature");
+    assert_eq!(value_of(&output, "run"), "1");
+}
+
+#[test]
+fn abi_layout_is_available_before_the_fe_codec_is_prepared() {
+    let source = r#"
+use core::abi::AbiSize
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::abi::SolCompat
+
+#[abi]
+struct Pair { amount: u256, ready: bool }
+
+trait Layout { const VALUE: u256 }
+struct Inspect {}
+impl Derive<trait Layout> for Inspect {
+    const fn derive(_: Record) -> Code<Item> {
+        let words = <Pair as AbiSize>::HEAD_SIZE
+        let signature = core::keccak(<Pair as SolCompat>::SOL_TYPE)
+        let layout: u256 = if words == 64 && signature == core::keccak("(uint256,bool)") { 1 } else { 0 }
+        quote { const VALUE: u256 = ${layout} }
+    }
+}
+
+struct Check {}
+impl Layout for Check with (Inspect)
+const fn run() -> u256 { <Check as Layout>::VALUE }
+"#;
+    let output = prepare(source).expect("authored layout is available during codec preparation");
+    let requests = output.generation_inputs().requests(&output);
+    assert_eq!(requests.len(), 4);
+    let mut codec_slots: Vec<_> = requests
+        .iter()
+        .filter_map(|request| request.request_slot)
+        .collect();
+    codec_slots.sort_unstable();
+    assert_eq!(codec_slots, [0, 1, 2]);
+    assert_eq!(value_of(&output, "run"), "1");
+}
+
+#[test]
+fn message_codecs_prepare_with_a_declared_array_length() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Width { const N: usize }
+struct Target {}
+struct GenerateWidth {}
+impl Derive<trait Width> for GenerateWidth {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const N: usize = 2 }
+    }
+}
+impl Width for Target with (GenerateWidth)
+
+msg M {
+    #[selector = 1]
+    Read { value: [u8; <Target as Width>::N] } -> u8,
+}
+contract C {
+    recv M {
+        Read { value } -> u8 { value[0] }
+    }
+}
+"#;
+    let output = prepare(source).expect("message codecs can use a symbolic length");
+    let file = output
+        .workspace()
+        .get(&output, &Url::parse(URL).unwrap())
+        .unwrap();
+    let diagnostics = output.run_on_top_mod(output.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&output),
+        "{}",
+        diagnostics.format_diags(&output)
+    );
+    let mut codec_slots: Vec<_> = output
+        .generation_inputs()
+        .requests(&output)
+        .iter()
+        .filter_map(|request| request.request_slot)
+        .collect();
+    codec_slots.sort_unstable();
+    assert_eq!(codec_slots, [0, 1, 2]);
+}

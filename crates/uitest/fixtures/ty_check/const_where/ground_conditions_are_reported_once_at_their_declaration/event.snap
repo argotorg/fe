@@ -3,6 +3,7 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/const_where/ground_conditions_are_reported_once_at_their_declaration/event.fe
 ---
+191..196: derive target admission failed: declaration is not admitted: const where predicate failed; condition evaluated to `false`
 error[8-0091]: const where predicate failed
   ┌─ event.fe:5:20
   │

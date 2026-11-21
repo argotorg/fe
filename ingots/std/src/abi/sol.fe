@@ -159,6 +159,11 @@ impl Abi for Sol {
         }
     }
 
+    // A complete physical head on a ByteInput fits in u64, which implies
+    // the signed-size check above.
+    #[inline(always)]
+    fn validate_runtime_head_policy(input_len: u256, base: u256, head_size: u256) {}
+
     fn decoder_new() -> SolDecoder {
         SolDecoder::with_base(0)
     }

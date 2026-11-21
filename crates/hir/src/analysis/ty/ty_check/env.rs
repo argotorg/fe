@@ -713,6 +713,7 @@ impl<'db> TyCheckEnv<'db> {
             |expr| self.typed_expr(expr).and_then(|p| p.binding),
             |expr| self.typed_expr_ty(expr),
             |expr| self.place_entries.contains_key(&expr),
+            |expr| self.semantic_expr_lowering[expr].is_some(),
         )
     }
 
@@ -1973,6 +1974,7 @@ impl<'db> TyCheckEnv<'db> {
                     )
                 },
                 |expr| self.place_entries.contains_key(&expr),
+                |expr| self.semantic_expr_lowering[expr].is_some(),
             ) {
                 let place_id = expr_places.push(place);
                 expr_place[expr] = place_id.into();

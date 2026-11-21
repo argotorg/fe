@@ -1,3 +1,4 @@
+use common::ingot::IngotKind;
 use parser::ast::{self, prelude::*};
 
 use super::{
@@ -13,13 +14,13 @@ use crate::{
     HirDb,
     hir_def::{
         AssocConstDef, AttrListId, BindingMarker, Body, BodyKind, Expr, ExprId, FieldDefListId,
-        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId,
+        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericArgListId, GenericParam,
         GenericParamListId, IdentId, ImplTrait, ImplTraitModifiers, LitKind, ModeMarker, Partial,
         Pat, PathId, PathKind, Stmt, StringId, Struct, TrackedItemVariant, TraitRefId, TupleTypeId,
-        TypeBound, TypeId, TypeKind, Visibility, WhereClauseId, WhereClausePredicate,
-        WherePredicate, expr::CallArg,
+        TypeBound, TypeGenericParam, TypeId, TypeKind, Visibility, WhereClauseId,
+        WhereClausePredicate, WherePredicate, expr::CallArg,
     },
-    span::{AbiStructDesugared, HirOrigin},
+    span::{AbiStructDesugared, DesugaredOrigin, HirOrigin},
 };
 
 /// Diagnostics for `#[abi]` struct declarations.
@@ -70,9 +71,11 @@ pub(super) fn report_abi_attr_conflict<'db>(ctxt: &mut FileLowerCtxt<'db>, ast: 
 /// pub struct PoolKey { pub currency0: Address, pub fee: Uint24 }
 /// ```
 ///
-/// gets `impl AbiSize`, `impl AbiSpan<Sol>`, `impl Encode<Sol>` and
-/// `impl Decode<Sol>`, so it can be used in `msg` fields, return types,
-/// arrays and other `#[abi]` structs.
+/// gets `impl AbiSize`, `impl AbiSpan<Sol>`, `impl Encode<Sol>`,
+/// `impl Decode<Sol>`, `impl SolCompat`, `impl std::abi::Part` and
+/// `impl std::abi::AbiFields`, so it can be used in `msg` fields, return
+/// types, arrays and other `#[abi]` structs, and read by field syntax through
+/// an `Encoded` handle.
 pub(super) fn lower_abi_struct<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     ast: ast::Struct,
@@ -123,10 +126,47 @@ pub(super) fn lower_abi_struct<'db>(
         TypeKind::Path(Partial::Present(PathId::from_ident(db, name))),
     );
     lower_abi_size_impl(&mut builder, self_ty, &field_specs);
-    lower_abi_span_impl(&mut builder, self_ty, &field_specs);
-    lower_encode_impl(&mut builder, self_ty, &field_specs);
-    lower_decode_impl(&mut builder, self_ty, &field_specs);
+    if matches!(
+        builder.top_mod().ingot(db).kind(db),
+        IngotKind::Core | IngotKind::Std
+    ) {
+        // Embedded libraries are loaded before package preparation.
+        lower_abi_span_impl(&mut builder, self_ty, &field_specs);
+        lower_encode_impl(&mut builder, self_ty, &field_specs);
+        lower_decode_impl(&mut builder, self_ty, &field_specs);
+    } else if let Some(attr) = named_attr_specs(ast.attr_list(), "abi").first() {
+        for (slot, trait_ref, provider) in [
+            (
+                0,
+                builder.core_abi_trait_ref_sol("AbiSpan"),
+                "StructAbiSpan",
+            ),
+            (
+                1,
+                builder.core_abi_trait_ref_sol("Encode"),
+                "StructAbiEncode",
+            ),
+            (
+                2,
+                builder.core_abi_trait_ref_sol("Decode"),
+                "StructAbiDecode",
+            ),
+        ] {
+            super::short_form::lower_derive_slot(
+                &mut builder,
+                self_ty,
+                trait_ref,
+                provider,
+                (attr.range, slot),
+                |_| Vec::new(),
+            );
+        }
+    }
+    // Selectors and authored providers can use the layout and type name
+    // before any codec bodies have been prepared.
     lower_sol_compat_impl(&mut builder, self_ty, &field_specs);
+    lower_part_impl(&mut builder, self_ty);
+    lower_abi_fields_impl(&mut builder, self_ty);
 
     struct_
 }
@@ -622,4 +662,130 @@ fn lower_sol_compat_impl<'db>(
             builder.origin(),
         )
     });
+}
+
+/// `impl<I, A> std::abi::Part<I, A> for S where I: ByteInput + Copy, A: Abi`:
+/// read as a part of an encoding (a field, an array element or an argument),
+/// the record is the handle `Encoded<I, S, A>` that `record_part` makes, so
+/// that `h.f` and `h[i]` on an `Encoded` handle reach it.
+fn lower_part_impl<'db>(
+    builder: &mut HirBuilder<'_, 'db, AbiStructDesugared>,
+    self_ty: TypeId<'db>,
+) {
+    let db = builder.db();
+    let roots = builder.roots();
+    let [input_ident, abi_ident] = ["I", "A"].map(|name| builder.generated_ident(name));
+    let input_ty = builder.ty_ident(input_ident);
+    let abi_ty = builder.ty_ident(abi_ident);
+    let std_abi = builder.path_from_root(roots.std, &["abi"]);
+    let trait_ref = TraitRefId::new(
+        db,
+        Partial::Present(std_abi.push_str_args(
+            db,
+            "Part",
+            GenericArgListId::given_types(db, [input_ty, abi_ty]),
+        )),
+    );
+    let encoded_ty = builder.ty_path(std_abi.push_str_args(
+        db,
+        "Encoded",
+        GenericArgListId::given_types(db, [input_ty, self_ty, abi_ty]),
+    ));
+    let generic_params = GenericParamListId::new(
+        db,
+        [input_ident, abi_ident]
+            .map(|name| {
+                GenericParam::Type(TypeGenericParam {
+                    name: Partial::Present(name),
+                    bounds: vec![],
+                    default_ty: None,
+                })
+            })
+            .to_vec(),
+    );
+    let bound = |path: PathId<'db>| {
+        TypeBound::Trait(
+            TraitRefId::new(db, Partial::Present(path)),
+            ModeMarker::None,
+        )
+    };
+    let where_clause = WhereClauseId::new(
+        db,
+        vec![
+            WhereClausePredicate::Type(WherePredicate {
+                ty: Partial::Present(input_ty),
+                bounds: vec![
+                    bound(builder.path_from_root(roots.core, &["abi", "ByteInput"])),
+                    bound(builder.path_from_root(roots.core, &["marker", "Copy"])),
+                ],
+            }),
+            WhereClausePredicate::Type(WherePredicate {
+                ty: Partial::Present(abi_ty),
+                bounds: vec![bound(builder.path_from_root(roots.core, &["abi", "Abi"]))],
+            }),
+        ],
+    );
+
+    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
+    builder.with_item_scope(
+        TrackedItemVariant::ImplTrait(impl_trait_idx),
+        |builder, id| {
+            let types = vec![builder.assoc_ty("Of", Partial::Present(encoded_ty))];
+            let impl_trait = builder.new_impl_trait_with_generics(
+                id,
+                Partial::Present(trait_ref),
+                Partial::Present(self_ty),
+                generic_params,
+                where_clause,
+                types,
+                vec![],
+                builder.origin(),
+            );
+
+            let part_ty = builder.ty_path(std_abi.push_str_args(
+                db,
+                "PartHead",
+                GenericArgListId::given_types(db, [input_ty, self_ty]),
+            ));
+            let part_param = builder.ident("part");
+            let params = builder.params([builder.param_underscore_named(part_param, part_ty)]);
+            builder.func_with_body_spec(
+                FuncBodySpec {
+                    name: builder.ident("read"),
+                    attrs: builder.empty_attrs(),
+                    generic_params: builder.empty_generic_params(),
+                    params,
+                    ret_ty: Some(encoded_ty),
+                    modifiers: FuncModifiers::new(Visibility::Private, false, false, false),
+                },
+                |body| {
+                    let db = body.db();
+                    let callee = body.path_expr(
+                        PathId::from_ident(db, body.roots().std)
+                            .push_str(db, "abi")
+                            .push_str(db, "record_part"),
+                    );
+                    let part = body.ident_expr(part_param);
+                    let call = body.call_expr(callee, vec![part]);
+                    body.emit_return(Some(call));
+                },
+            );
+            impl_trait
+        },
+    );
+}
+
+/// `impl std::abi::AbiFields for S {}`: the record is encoded as the tuple of
+/// its fields in declaration order, which is what field syntax on an
+/// `Encoded` handle relies on (see `std::abi::AbiFields`).
+pub(super) fn lower_abi_fields_impl<'db, O: Clone + Into<DesugaredOrigin>>(
+    builder: &mut HirBuilder<'_, 'db, O>,
+    self_ty: TypeId<'db>,
+) {
+    let db = builder.db();
+    let trait_ref = TraitRefId::new(
+        db,
+        Partial::Present(builder.path_from_root(builder.roots().std, &["abi", "AbiFields"])),
+    );
+    builder.impl_trait(trait_ref, self_ty, |_| {});
 }

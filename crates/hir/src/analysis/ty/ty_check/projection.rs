@@ -321,6 +321,8 @@ impl<'db> TyChecker<'db> {
             Partial::Present(Expr::Bin(base, index, BinOp::Index)) => {
                 (Some(*base), vec![*base, *index])
             }
+            // `h.f` calls `ProjectField::project` with `h` as its receiver.
+            Partial::Present(Expr::Field(base, _)) => (Some(*base), vec![*base]),
             _ => return false,
         };
         for (param, arg) in func.params(self.db).zip(args) {
@@ -346,7 +348,10 @@ impl<'db> TyChecker<'db> {
                 && !self.select_mut_place(arg)
                 && self.env.is_place_expr(arg)
             {
-                if matches!(self.env.expr_data(expr), Partial::Present(Expr::Bin(..))) {
+                if matches!(
+                    self.env.expr_data(expr),
+                    Partial::Present(Expr::Bin(..) | Expr::Field(..))
+                ) {
                     return false;
                 }
                 self.report_cannot_borrow_mut(arg, arg.span(self.body()).into());

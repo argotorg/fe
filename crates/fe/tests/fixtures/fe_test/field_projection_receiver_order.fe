@@ -1,0 +1,69 @@
+use core::abi::{load_word, store_word}
+use core::ops::{Field, Project, ProjectField}
+use core::ptr
+
+fn mark(_ trace: *u8, _ digit: u256) {
+    unsafe { store_word(ptr: trace, value: load_word(trace) * 10 + digit) }
+}
+
+struct Payload { trace: *u8, word: u256 }
+impl Payload {
+    fn combine(self, _ a: u256, _ b: u256) -> u256 {
+        mark(self.trace, 6)
+        self.word + a + b
+    }
+}
+
+struct InnerRecord { pub payload: Payload }
+struct Inner { trace: *u8, data: Payload }
+impl Project for Inner { type Target = InnerRecord }
+impl ProjectField<Field<InnerRecord, Payload, ()>> for Inner {
+    type Output = Payload
+    fn project(self) -> ref Payload {
+        mark(self.trace, 5)
+        ref self.data
+    }
+}
+
+struct OuterRecord { pub child: Inner }
+struct Outer { trace: *u8, data: Inner }
+impl Project for Outer { type Target = OuterRecord }
+impl ProjectField<Field<OuterRecord, Inner, ()>> for Outer {
+    type Output = Inner
+    fn project(self) -> ref Inner {
+        mark(self.trace, 4)
+        ref self.data
+    }
+}
+
+fn make(_ trace: *u8) -> Outer {
+    mark(trace, 1)
+    Outer { trace, data: Inner { trace, data: Payload { trace, word: 8 } } }
+}
+
+fn argument(_ trace: *u8, _ digit: u256) -> u256 {
+    mark(trace, digit)
+    digit
+}
+
+#[test]
+fn field_receiver_links_open_after_the_arguments() {
+    let trace = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: trace, value: 0) }
+    let by_field = make(trace).child.payload.combine(argument(trace, 2), argument(trace, 3))
+    assert!(by_field == 13)
+    unsafe { assert!(load_word(trace) == 123456) }
+
+    unsafe { store_word(ptr: trace, value: 0) }
+}
+
+#[test]
+fn mixed_receiver_links_open_after_the_arguments() {
+    let trace = ptr::alloc_bytes(32)
+    unsafe { store_word(ptr: trace, value: 0) }
+    let by_mix =
+        <Inner as ProjectField<Field<InnerRecord, Payload, ()>>>::project(make(trace).child)
+            .combine(argument(trace, 2), argument(trace, 3))
+    assert!(by_mix == 13)
+    unsafe { assert!(load_word(trace) == 123456) }
+}

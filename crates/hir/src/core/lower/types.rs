@@ -101,6 +101,37 @@ impl<'db> TypeId<'db> {
                         );
                         TypeKind::Path(Partial::Absent)
                     }
+                    Some(common::generation::FrozenHoleValue::FieldTypes { record, count }) => {
+                        let authored = ctxt.authored_record(&record);
+                        let source_count = match authored.fields(db, record.variant_index) {
+                            Some(super::AuthoredFields::Unit) => Some(0),
+                            Some(super::AuthoredFields::Tuple(count)) => Some(count),
+                            Some(super::AuthoredFields::Named(fields)) => Some(fields.len()),
+                            None => None,
+                        };
+                        if source_count != Some(count) {
+                            ctxt.record_generation_error(
+                                hole.syntax().text_range(),
+                                "invalid field type tree splice",
+                            );
+                            TypeKind::Path(Partial::Absent)
+                        } else {
+                            let fields: Vec<_> = (0..count)
+                                .map(|index| {
+                                    Partial::Present(TypeId::new(
+                                        db,
+                                        TypeKind::AuthoredField(AuthoredFieldType::new(
+                                            db,
+                                            authored.scope,
+                                            record.variant_index,
+                                            index,
+                                        )),
+                                    ))
+                                })
+                                .collect();
+                            return lower_field_type_tree(db, &fields);
+                        }
+                    }
                     _ => {
                         ctxt.record_generation_error(
                             hole.syntax().text_range(),
@@ -164,6 +195,22 @@ impl<'db> TypeId<'db> {
     ) -> Partial<Self> {
         ast.map(|ast| Self::lower_ast(ctxt, ast)).into()
     }
+}
+
+fn lower_field_type_tree<'db>(
+    db: &'db dyn crate::HirDb,
+    fields: &[Partial<TypeId<'db>>],
+) -> TypeId<'db> {
+    let elements = match fields {
+        [] | [_] => fields.to_vec(),
+        _ => {
+            let split = crate::analysis::ty::field_tree_split(fields.len());
+            let left = lower_field_type_tree(db, &fields[..split]);
+            let right = lower_field_type_tree(db, &fields[split..]);
+            vec![Partial::Present(left), Partial::Present(right)]
+        }
+    };
+    TupleTypeId::new(db, elements).to_ty(db)
 }
 
 impl<'db> TupleTypeId<'db> {

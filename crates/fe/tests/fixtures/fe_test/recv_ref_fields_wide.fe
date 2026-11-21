@@ -1,0 +1,396 @@
+// A message of 200 fields, read in place. A whole arm of a message of this
+// size does not build within two minutes, so no whole arm of `Wide` is
+// written: the arms below read it in place, by name. `Mid` compares an arm
+// that names every field by plain name with the same arm in place. The fields
+// `f7`, `f57`, `f107` and `f157` are `u8`, so a word above 255 in one of them
+// is malformed; `f199` is an `Address`; field `k` of an input holds `k + 1`,
+// and `f199` holds `0xaa`.
+use core::abi::store_word
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::evm::{Address, Call, Evm}
+
+msg Wide {
+    #[selector = 0x05]
+    V {
+        f0: u256, f1: u256, f2: u256, f3: u256, f4: u256,
+        f5: u256, f6: u256, f7: u8, f8: u256, f9: u256,
+        f10: u256, f11: u256, f12: u256, f13: u256, f14: u256,
+        f15: u256, f16: u256, f17: u256, f18: u256, f19: u256,
+        f20: u256, f21: u256, f22: u256, f23: u256, f24: u256,
+        f25: u256, f26: u256, f27: u256, f28: u256, f29: u256,
+        f30: u256, f31: u256, f32: u256, f33: u256, f34: u256,
+        f35: u256, f36: u256, f37: u256, f38: u256, f39: u256,
+        f40: u256, f41: u256, f42: u256, f43: u256, f44: u256,
+        f45: u256, f46: u256, f47: u256, f48: u256, f49: u256,
+        f50: u256, f51: u256, f52: u256, f53: u256, f54: u256,
+        f55: u256, f56: u256, f57: u8, f58: u256, f59: u256,
+        f60: u256, f61: u256, f62: u256, f63: u256, f64: u256,
+        f65: u256, f66: u256, f67: u256, f68: u256, f69: u256,
+        f70: u256, f71: u256, f72: u256, f73: u256, f74: u256,
+        f75: u256, f76: u256, f77: u256, f78: u256, f79: u256,
+        f80: u256, f81: u256, f82: u256, f83: u256, f84: u256,
+        f85: u256, f86: u256, f87: u256, f88: u256, f89: u256,
+        f90: u256, f91: u256, f92: u256, f93: u256, f94: u256,
+        f95: u256, f96: u256, f97: u256, f98: u256, f99: u256,
+        f100: u256, f101: u256, f102: u256, f103: u256, f104: u256,
+        f105: u256, f106: u256, f107: u8, f108: u256, f109: u256,
+        f110: u256, f111: u256, f112: u256, f113: u256, f114: u256,
+        f115: u256, f116: u256, f117: u256, f118: u256, f119: u256,
+        f120: u256, f121: u256, f122: u256, f123: u256, f124: u256,
+        f125: u256, f126: u256, f127: u256, f128: u256, f129: u256,
+        f130: u256, f131: u256, f132: u256, f133: u256, f134: u256,
+        f135: u256, f136: u256, f137: u256, f138: u256, f139: u256,
+        f140: u256, f141: u256, f142: u256, f143: u256, f144: u256,
+        f145: u256, f146: u256, f147: u256, f148: u256, f149: u256,
+        f150: u256, f151: u256, f152: u256, f153: u256, f154: u256,
+        f155: u256, f156: u256, f157: u8, f158: u256, f159: u256,
+        f160: u256, f161: u256, f162: u256, f163: u256, f164: u256,
+        f165: u256, f166: u256, f167: u256, f168: u256, f169: u256,
+        f170: u256, f171: u256, f172: u256, f173: u256, f174: u256,
+        f175: u256, f176: u256, f177: u256, f178: u256, f179: u256,
+        f180: u256, f181: u256, f182: u256, f183: u256, f184: u256,
+        f185: u256, f186: u256, f187: u256, f188: u256, f189: u256,
+        f190: u256, f191: u256, f192: u256, f193: u256, f194: u256,
+        f195: u256, f196: u256, f197: u256, f198: u256, f199: Address,
+    } -> u256,
+}
+
+msg Mid {
+    #[selector = 0x06]
+    V {
+        g0: u256, g1: u256, g2: u256, g3: u256, g4: u256, g5: u256, g6: u256, g7: u256,
+        g8: u256, g9: u256, g10: u256, g11: u256, g12: u256, g13: u256, g14: u256, g15: u256,
+        g16: u256, g17: u256, g18: u256, g19: u256, g20: u256, g21: u256, g22: u256, g23: u256,
+        g24: u256, g25: u256, g26: u256, g27: u256, g28: u256, g29: u256, g30: u256, g31: u256,
+        g32: u256, g33: u256, g34: u256, g35: u256, g36: u256, g37: u256, g38: u256, g39: u256,
+        g40: u256, g41: u256, g42: u256, g43: u256, g44: u256, g45: u256, g46: u256, g47: u256,
+        g48: u256, g49: u256, g50: u256, g51: u256, g52: u256, g53: u256, g54: u256, g55: u256,
+        g56: u256, g57: u256, g58: u256, g59: u256, g60: u256, g61: u256, g62: u256, g63: u256,
+    } -> u256,
+}
+
+msg RawBase {
+    #[selector = 0x05]
+    Wide -> u256,
+    #[selector = 0x06]
+    Mid -> u256,
+}
+
+/// The constant arm: the reference that the arms are measured against.
+pub contract Base {
+    recv RawBase {
+        Wide {} -> u256 {
+            1001
+        }
+        Mid {} -> u256 {
+            1001
+        }
+    }
+}
+
+/// One field of 200, read in place.
+pub contract One {
+    recv Wide {
+        V { ref f199, .. } -> u256 {
+            f199.word()
+        }
+    }
+}
+
+/// Three fields of 200: two read in place and one decoded.
+pub contract Three {
+    recv Wide {
+        V { ref f0, f100, ref f199, .. } -> u256 {
+            f0 + f100 + f199.word()
+        }
+    }
+}
+
+/// Every field is named: `f0` is read in place, and the others are decoded.
+pub contract AllInPlace {
+    recv Wide {
+        V {
+            ref f0, f1, f2, f3, f4, f5, f6, f7, f8, f9,
+            f10, f11, f12, f13, f14, f15, f16, f17, f18, f19,
+            f20, f21, f22, f23, f24, f25, f26, f27, f28, f29,
+            f30, f31, f32, f33, f34, f35, f36, f37, f38, f39,
+            f40, f41, f42, f43, f44, f45, f46, f47, f48, f49,
+            f50, f51, f52, f53, f54, f55, f56, f57, f58, f59,
+            f60, f61, f62, f63, f64, f65, f66, f67, f68, f69,
+            f70, f71, f72, f73, f74, f75, f76, f77, f78, f79,
+            f80, f81, f82, f83, f84, f85, f86, f87, f88, f89,
+            f90, f91, f92, f93, f94, f95, f96, f97, f98, f99,
+            f100, f101, f102, f103, f104, f105, f106, f107, f108, f109,
+            f110, f111, f112, f113, f114, f115, f116, f117, f118, f119,
+            f120, f121, f122, f123, f124, f125, f126, f127, f128, f129,
+            f130, f131, f132, f133, f134, f135, f136, f137, f138, f139,
+            f140, f141, f142, f143, f144, f145, f146, f147, f148, f149,
+            f150, f151, f152, f153, f154, f155, f156, f157, f158, f159,
+            f160, f161, f162, f163, f164, f165, f166, f167, f168, f169,
+            f170, f171, f172, f173, f174, f175, f176, f177, f178, f179,
+            f180, f181, f182, f183, f184, f185, f186, f187, f188, f189,
+            f190, f191, f192, f193, f194, f195, f196, f197, f198, f199,
+        } -> u256 {
+            let s0 = f0 + f1 + f2 + f3 + f4 + f5 + f6 + f8 + f9
+            let s1 = f10 + f11 + f12 + f13 + f14 + f15 + f16 + f17 + f18 + f19
+            let s2 = f20 + f21 + f22 + f23 + f24 + f25 + f26 + f27 + f28 + f29
+            let s3 = f30 + f31 + f32 + f33 + f34 + f35 + f36 + f37 + f38 + f39
+            let s4 = f40 + f41 + f42 + f43 + f44 + f45 + f46 + f47 + f48 + f49
+            let s5 = f50 + f51 + f52 + f53 + f54 + f55 + f56 + f58 + f59
+            let s6 = f60 + f61 + f62 + f63 + f64 + f65 + f66 + f67 + f68 + f69
+            let s7 = f70 + f71 + f72 + f73 + f74 + f75 + f76 + f77 + f78 + f79
+            let s8 = f80 + f81 + f82 + f83 + f84 + f85 + f86 + f87 + f88 + f89
+            let s9 = f90 + f91 + f92 + f93 + f94 + f95 + f96 + f97 + f98 + f99
+            let s10 = f100 + f101 + f102 + f103 + f104 + f105 + f106 + f108 + f109
+            let s11 = f110 + f111 + f112 + f113 + f114 + f115 + f116 + f117 + f118 + f119
+            let s12 = f120 + f121 + f122 + f123 + f124 + f125 + f126 + f127 + f128 + f129
+            let s13 = f130 + f131 + f132 + f133 + f134 + f135 + f136 + f137 + f138 + f139
+            let s14 = f140 + f141 + f142 + f143 + f144 + f145 + f146 + f147 + f148 + f149
+            let s15 = f150 + f151 + f152 + f153 + f154 + f155 + f156 + f158 + f159
+            let s16 = f160 + f161 + f162 + f163 + f164 + f165 + f166 + f167 + f168 + f169
+            let s17 = f170 + f171 + f172 + f173 + f174 + f175 + f176 + f177 + f178 + f179
+            let s18 = f180 + f181 + f182 + f183 + f184 + f185 + f186 + f187 + f188 + f189
+            let s19 = f190 + f191 + f192 + f193 + f194 + f195 + f196 + f197 + f198
+            s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 + s18 + s19
+        }
+    }
+}
+
+/// The whole arm of a message of 64 fields: every field is decoded.
+pub contract MidAll {
+    recv Mid {
+        V {
+            g0, g1, g2, g3, g4, g5, g6, g7,
+            g8, g9, g10, g11, g12, g13, g14, g15,
+            g16, g17, g18, g19, g20, g21, g22, g23,
+            g24, g25, g26, g27, g28, g29, g30, g31,
+            g32, g33, g34, g35, g36, g37, g38, g39,
+            g40, g41, g42, g43, g44, g45, g46, g47,
+            g48, g49, g50, g51, g52, g53, g54, g55,
+            g56, g57, g58, g59, g60, g61, g62, g63,
+        } -> u256 {
+            let s0 = g0 + g1 + g2 + g3 + g4 + g5 + g6 + g7
+            let s1 = g8 + g9 + g10 + g11 + g12 + g13 + g14 + g15
+            let s2 = g16 + g17 + g18 + g19 + g20 + g21 + g22 + g23
+            let s3 = g24 + g25 + g26 + g27 + g28 + g29 + g30 + g31
+            let s4 = g32 + g33 + g34 + g35 + g36 + g37 + g38 + g39
+            let s5 = g40 + g41 + g42 + g43 + g44 + g45 + g46 + g47
+            let s6 = g48 + g49 + g50 + g51 + g52 + g53 + g54 + g55
+            let s7 = g56 + g57 + g58 + g59 + g60 + g61 + g62 + g63
+            s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7
+        }
+    }
+}
+
+/// The same arm with the first field read in place: the arm is in place, and
+/// the other fields are decoded.
+pub contract MidAllInPlace {
+    recv Mid {
+        V {
+            ref g0, g1, g2, g3, g4, g5, g6, g7,
+            g8, g9, g10, g11, g12, g13, g14, g15,
+            g16, g17, g18, g19, g20, g21, g22, g23,
+            g24, g25, g26, g27, g28, g29, g30, g31,
+            g32, g33, g34, g35, g36, g37, g38, g39,
+            g40, g41, g42, g43, g44, g45, g46, g47,
+            g48, g49, g50, g51, g52, g53, g54, g55,
+            g56, g57, g58, g59, g60, g61, g62, g63,
+        } -> u256 {
+            let s0 = g0 + g1 + g2 + g3 + g4 + g5 + g6 + g7
+            let s1 = g8 + g9 + g10 + g11 + g12 + g13 + g14 + g15
+            let s2 = g16 + g17 + g18 + g19 + g20 + g21 + g22 + g23
+            let s3 = g24 + g25 + g26 + g27 + g28 + g29 + g30 + g31
+            let s4 = g32 + g33 + g34 + g35 + g36 + g37 + g38 + g39
+            let s5 = g40 + g41 + g42 + g43 + g44 + g45 + g46 + g47
+            let s6 = g48 + g49 + g50 + g51 + g52 + g53 + g54 + g55
+            let s7 = g56 + g57 + g58 + g59 + g60 + g61 + g62 + g63
+            s0 + s1 + s2 + s3 + s4 + s5 + s6 + s7
+        }
+    }
+}
+
+/// A buffer that no drop frees.
+struct MemInput { ptr: *u8, len: u256 }
+
+/// The head of `Wide`: field `k` holds `k + 1`, and `f199` holds `0xaa`.
+/// `m` selects a malformed copy: 2 the `u8` field `f57` is `0x100`, 3 the input
+/// is one byte shorter than the head.
+fn wide(_ m: u256) -> MemInput {
+    let data = ptr::alloc_bytes(200 * 32)
+    var i: usize = 0
+    while i < 200 {
+        unsafe { store_word(ptr: ptr::offset_bytes(data, i * 32), value: (i + 1) as u256) }
+        i += 1
+    }
+    unsafe { store_word(ptr: ptr::offset_bytes(data, 199 * 32), value: 0xaa) }
+    if m == 2 {
+        unsafe { store_word(ptr: ptr::offset_bytes(data, 57 * 32), value: 0x100) }
+    }
+    MemInput { ptr: data, len: if m == 3 { 200 * 32 - 1 } else { 200 * 32 } }
+}
+
+/// The head of `Mid`: field `k` holds `k + 1`. `m` 3 makes the input one byte
+/// shorter than the head.
+fn mid(_ m: u256) -> MemInput {
+    let data = ptr::alloc_bytes(64 * 32)
+    var i: usize = 0
+    while i < 64 {
+        unsafe { store_word(ptr: ptr::offset_bytes(data, i * 32), value: (i + 1) as u256) }
+        i += 1
+    }
+    MemInput { ptr: data, len: if m == 3 { 64 * 32 - 1 } else { 64 * 32 } }
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+/// Call `addr` with `selector` followed by `payload`.
+fn call_raw(_ addr: Address, selector: u256, payload: MemInput) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + payload.len
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data.ptr(), value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data.ptr(), 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    var ret = MemBuffer::new(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: Wei::zero(),
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+/// The call succeeded and returned `value`.
+fn returns(_ o: Outcome, _ value: u256) -> bool {
+    o.success && o.ret_len == 32 && o.word0 == value
+}
+
+/// The call reverted.
+fn reverts(_ o: Outcome) -> bool {
+    !o.success
+}
+
+/// The calldata of one call, made once, so that every measured call runs with
+/// the same memory.
+struct Bench { data: *u8, len: u256 }
+impl Copy for Bench {}
+
+fn bench(_ selector: u256, _ payload: MemInput) -> Bench {
+    let len = 4 + payload.len
+    let data = ptr::alloc_bytes((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data, value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data, 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    Bench { data, len }
+}
+
+/// The gas of one call that returns the word `expected`.
+fn gas_returning(_ market: Address, _ b: Bench, _ expected: u256, _ ret: mut MemBuffer) -> u256
+uses (evm: mut Evm)
+{
+    let args = unsafe { MemSpan::from_raw_parts(ptr: b.data, len: b.len.downcast_unchecked()) }
+    let before = evm.gas()
+    let outcome = evm.raw_call(addr: market, gas: 1000000, value: Wei::zero(), args: args, ret: mut ret)
+    let after = evm.gas()
+    assert!(outcome.success() && ret.span().word_at(0) == expected)
+    before - after
+}
+
+/// The contracts that read `Wide`.
+struct Wides { one: Address, three: Address, all: Address }
+
+fn deploy_wide() -> Wides uses (evm: mut Evm) {
+    // Two arms may compile to the same code, so each contract has its own salt.
+    Wides {
+        one: evm.create2<One>(value: Wei::zero(), args: (), salt: 1),
+        three: evm.create2<Three>(value: Wei::zero(), args: (), salt: 2),
+        all: evm.create2<AllInPlace>(value: Wei::zero(), args: (), salt: 3),
+    }
+}
+
+#[test]
+fn the_arms_read_the_fields_they_name() uses (evm: mut Evm) {
+    let s = deploy_wide()
+    // The sum of the `u256` fields of `Wide`: field `k` holds `k + 1`, and
+    // `f7`, `f57`, `f107`, `f157` and `f199` are not summed.
+    assert!(returns(call_raw(s.one, selector: 5, payload: wide(0)), 0xaa))
+    assert!(returns(call_raw(s.three, selector: 5, payload: wide(0)), 272))
+    assert!(returns(call_raw(s.all, selector: 5, payload: wide(0)), 19568))
+}
+
+#[test]
+fn a_field_the_arm_does_not_name_may_be_malformed() uses (evm: mut Evm) {
+    let s = deploy_wide()
+    // `f57` is a `u8` field with the word `0x100`: `One` and `Three` do not
+    // read it, and `AllInPlace` decodes it.
+    assert!(returns(call_raw(s.one, selector: 5, payload: wide(2)), 0xaa))
+    assert!(returns(call_raw(s.three, selector: 5, payload: wide(2)), 272))
+    assert!(reverts(call_raw(s.all, selector: 5, payload: wide(2))))
+}
+
+#[test]
+fn an_input_shorter_than_the_head_is_refused_by_every_arm() uses (evm: mut Evm) {
+    let s = deploy_wide()
+    assert!(reverts(call_raw(s.one, selector: 5, payload: wide(3))))
+    assert!(reverts(call_raw(s.three, selector: 5, payload: wide(3))))
+    assert!(reverts(call_raw(s.all, selector: 5, payload: wide(3))))
+}
+
+/// The arm that names all 64 fields of `Mid` by plain name against the same
+/// arm with the first field in place: the same result, and at most 15 gas more.
+/// The gas of the five arms above the constant arm is reported as the
+/// selectors of failing calls in the call trace: `0xa1` `One`, `0xa2` `Three`,
+/// `0xa3` `AllInPlace`, `0xa4` `MidAll`, `0xa5` `MidAllInPlace`.
+#[test]
+fn an_arm_that_names_every_field_costs_the_same_in_place() uses (evm: mut Evm) {
+    let s = deploy_wide()
+    let base = evm.create2<Base>(value: Wei::zero(), args: (), salt: 4)
+    let mid_all = evm.create2<MidAll>(value: Wei::zero(), args: (), salt: 5)
+    let mid_in_place = evm.create2<MidAllInPlace>(value: Wei::zero(), args: (), salt: 6)
+    // The sum of the 64 fields: field `k` holds `k + 1`.
+    assert!(returns(call_raw(mid_all, selector: 6, payload: mid(0)), 2080))
+    assert!(returns(call_raw(mid_in_place, selector: 6, payload: mid(0)), 2080))
+    assert!(reverts(call_raw(mid_all, selector: 6, payload: mid(3))))
+    assert!(reverts(call_raw(mid_in_place, selector: 6, payload: mid(3))))
+    var ret = MemBuffer::new(64)
+    let bw = bench(5, wide(0))
+    let bm = bench(6, mid(0))
+    // A first call of each warms the account; the second is measured.
+    let _ = gas_returning(base, bw, 1001, mut ret)
+    let _ = gas_returning(s.one, bw, 0xaa, mut ret)
+    let _ = gas_returning(s.three, bw, 272, mut ret)
+    let _ = gas_returning(s.all, bw, 19568, mut ret)
+    let _ = gas_returning(base, bm, 1001, mut ret)
+    let _ = gas_returning(mid_all, bm, 2080, mut ret)
+    let _ = gas_returning(mid_in_place, bm, 2080, mut ret)
+    let base_wide = gas_returning(base, bw, 1001, mut ret)
+    let one = gas_returning(s.one, bw, 0xaa, mut ret) - base_wide
+    let three = gas_returning(s.three, bw, 272, mut ret) - base_wide
+    let all = gas_returning(s.all, bw, 19568, mut ret) - base_wide
+    let base_mid = gas_returning(base, bm, 1001, mut ret)
+    let mid_all_gas = gas_returning(mid_all, bm, 2080, mut ret) - base_mid
+    let mid_in_place_gas = gas_returning(mid_in_place, bm, 2080, mut ret) - base_mid
+    // Report: the numbers appear as the selectors of failing calls in the call trace.
+    let empty = MemInput { ptr: bw.data, len: 0 }
+    let _ = call_raw(base, selector: 0xa1000000 + one, payload: empty)
+    let _ = call_raw(base, selector: 0xa2000000 + three, payload: empty)
+    let _ = call_raw(base, selector: 0xa3000000 + all, payload: empty)
+    let _ = call_raw(base, selector: 0xa4000000 + mid_all_gas, payload: empty)
+    let _ = call_raw(base, selector: 0xa5000000 + mid_in_place_gas, payload: empty)
+    assert!(mid_in_place_gas <= mid_all_gas + 15)
+}

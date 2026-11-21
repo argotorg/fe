@@ -54,6 +54,8 @@ fn with_top_mod_for_source<T>(
         .workspace()
         .get(&db, &file_url)
         .expect("file should be loaded");
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     f(&db, db.top_mod(file))
 }
 
@@ -73,6 +75,8 @@ macro_rules! with_runtime_package {
             .workspace()
             .get(&$db, &file_url)
             .expect("file should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut $db, file)
+            .expect("fixture generation should succeed");
         let top_mod = $db.top_mod(file);
         let $package = build_runtime_package(&$db, top_mod).expect("runtime package");
         $body
@@ -89,6 +93,8 @@ macro_rules! with_test_runtime_package {
             .workspace()
             .get(&$db, &file_url)
             .expect("file should be loaded");
+        let file = driver::generation::prepare_file_in_place(&mut $db, file)
+            .expect("fixture generation should succeed");
         let top_mod = $db.top_mod(file);
         let $package =
             build_test_runtime_package(&$db, &[top_mod], None).expect("runtime test package");
@@ -1312,6 +1318,8 @@ fn linear_probe_big_struct_keeps_array_projection_reads_place_based() {
         .workspace()
         .get(&db, &file_url)
         .expect("file should be loaded");
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     let ir = emit_module_sonatina_ir(&db, top_mod)
         .expect("linear_probe_big_struct should lower through Sonatina");

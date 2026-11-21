@@ -1,6 +1,4 @@
-// Events are encoded through the `EventAbiEncode` tuple impls, which stop at
-// arity 16. An event with 17 non-indexed fields must produce a trait-bound
-// diagnostic pointing at the event definition instead of an ICE.
+// The event encoder accepts records beyond the largest ABI tuple.
 use std::evm::Log
 
 #[event]

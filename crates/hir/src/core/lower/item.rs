@@ -1032,6 +1032,7 @@ impl<'db> Impl<'db> {
             .find(|plan| {
                 Some(&plan.target_file) == file_url.as_ref()
                     && plan.request_impl == Some(header_range)
+                    && plan.request_slot.is_none()
             })
             .cloned();
         if let Some(plan) = plan {
@@ -1400,46 +1401,17 @@ impl<'db> ImplTrait<'db> {
             .find(|plan| {
                 Some(&plan.target_file) == file_url.as_ref()
                     && plan.request_impl == Some(ast.syntax().text_range())
+                    && plan.request_slot.is_none()
             })
             .cloned();
         if let Some(plan) = plan {
-            let mut lower_member =
-                |ctxt: &mut FileLowerCtxt<'db>, member: super::generated::QuotedMember| {
-                    let item = match member {
-                        super::generated::QuotedMember::Item(item) => item,
-                        super::generated::QuotedMember::Shape(shape) => {
-                            types.push(AssocTyDef::lower_quoted_shape(ctxt, shape));
-                            return;
-                        }
-                    };
-                    match item.kind() {
-                        Some(ast::ItemKind::Func(func)) => {
-                            validate_func_attrs(
-                                ctxt,
-                                func.attr_list(),
-                                FuncKind::Associated,
-                                func.sig().name().map(|name| name.text().to_string()),
-                            );
-                            let generated = Func::lower_ast(ctxt, func);
-                            ctxt.defer_generated_member_origin(generated.into());
-                        }
-                        Some(ast::ItemKind::Const(c)) => {
-                            consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
-                        }
-                        Some(ast::ItemKind::TypeAlias(alias)) => {
-                            if let Some(defined) = AssocTyDef::lower_quoted_alias(ctxt, alias) {
-                                types.push(defined);
-                            }
-                        }
-                        _ => ctxt.record_generation_error(
-                            item.syntax().text_range(),
-                            "a derived member must be a function, constant, type or shape",
-                        ),
-                    }
-                };
-            let enclosing = ctxt.derive_header.replace(ast.syntax().text_range());
-            super::generated::lower_derive_members(ctxt, &plan.code, &mut lower_member);
-            ctxt.derive_header = enclosing;
+            lower_trait_derive_members(
+                ctxt,
+                &plan.code,
+                ast.syntax().text_range(),
+                &mut types,
+                &mut consts,
+            );
         }
 
         out_types.retain(|out_type: &AssocTyDef| {
@@ -1472,6 +1444,7 @@ impl<'db> ImplTrait<'db> {
                 vis: super::lower_visibility(&ast),
                 derive_provider,
                 derive_trait_ref: derive_provider.and(written_trait_ref.to_opt()),
+                short_form_derive_site: None,
                 quote_chain,
             },
             ctxt.top_mod(),
@@ -1479,6 +1452,52 @@ impl<'db> ImplTrait<'db> {
         );
         ctxt.leave_item_scope(impl_trait)
     }
+}
+
+/// Lower prepared trait members in the header's scope, keeping the quote
+/// origin on each member. Written and desugared headers share this path.
+pub(super) fn lower_trait_derive_members<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    code: &common::generation::FrozenCode,
+    header: parser::TextRange,
+    types: &mut Vec<AssocTyDef<'db>>,
+    consts: &mut Vec<AssocConstDef<'db>>,
+) {
+    let enclosing = ctxt.derive_header.replace(header);
+    super::generated::lower_derive_members(ctxt, code, &mut |ctxt, member| {
+        let item = match member {
+            super::generated::QuotedMember::Item(item) => item,
+            super::generated::QuotedMember::Shape(shape) => {
+                types.push(AssocTyDef::lower_quoted_shape(ctxt, shape));
+                return;
+            }
+        };
+        match item.kind() {
+            Some(ast::ItemKind::Func(func)) => {
+                validate_func_attrs(
+                    ctxt,
+                    func.attr_list(),
+                    FuncKind::Associated,
+                    func.sig().name().map(|name| name.text().to_string()),
+                );
+                let generated = Func::lower_ast(ctxt, func);
+                ctxt.defer_generated_member_origin(generated.into());
+            }
+            Some(ast::ItemKind::Const(c)) => {
+                consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
+            }
+            Some(ast::ItemKind::TypeAlias(alias)) => {
+                if let Some(defined) = AssocTyDef::lower_quoted_alias(ctxt, alias) {
+                    types.push(defined);
+                }
+            }
+            _ => ctxt.record_generation_error(
+                item.syntax().text_range(),
+                "a derived member must be a function, constant, type or shape",
+            ),
+        }
+    });
+    ctxt.derive_header = enclosing;
 }
 
 impl<'db> AssocTyDef<'db> {

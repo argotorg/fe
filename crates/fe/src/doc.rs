@@ -457,14 +457,13 @@ fn extract_single_file(
     db.workspace().touch(db, file_url.clone(), Some(content));
 
     let file = db.workspace().get(db, &file_url)?;
-    match driver::generation::prepare_file(db, file) {
-        Ok(Some(prepared)) => *db = prepared,
-        Ok(None) => {}
+    let file = match driver::generation::prepare_file_in_place(db, file) {
+        Ok(file) => file,
         Err(error) => {
             eprintln!("Warning: File generation failed, documentation may be incomplete\n{error}");
+            file
         }
-    }
-    let file = db.workspace().get(db, &file_url)?;
+    };
     let top_mod = db.top_mod(file);
 
     let diags = db.run_on_top_mod(top_mod);

@@ -172,15 +172,33 @@ fn presence_traits_of<'db>(
         .collect()
 }
 
-/// Field queries are evaluated without a lexical named opening. Their canonical
-/// protocol therefore has only ordinary implementations; unrelated user traits
-/// with the same spelling retain the usual named-implementation behavior.
-pub(crate) fn is_ordinary_field_query_trait<'db>(
+/// The traits of core whose methods a reflection primitive calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ReflectionCallback {
+    /// `core::meta::FieldQuery`, called by `query_field`.
+    FieldQuery,
+    /// `core::meta::FieldInit`, called by `construct`.
+    FieldInit,
+}
+
+/// Reflection callbacks are evaluated without a lexical named opening. Their
+/// canonical protocols therefore have only ordinary implementations; unrelated
+/// user traits with the same spelling retain the usual named-implementation
+/// behavior.
+pub(crate) fn reflection_callback_trait<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
-) -> bool {
-    trait_.scope().top_mod(db).ingot(db).kind(db) == IngotKind::Core
-        && resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldQuery") == Some(trait_)
+) -> Option<ReflectionCallback> {
+    if trait_.scope().top_mod(db).ingot(db).kind(db) != IngotKind::Core {
+        return None;
+    }
+    if resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldQuery") == Some(trait_) {
+        Some(ReflectionCallback::FieldQuery)
+    } else if resolve_lib_trait_path(db, trait_.scope(), "core::meta::FieldInit") == Some(trait_) {
+        Some(ReflectionCallback::FieldInit)
+    } else {
+        None
+    }
 }
 
 /// Returns `true` if `func` is the library function at the fully-qualified
@@ -374,9 +392,13 @@ pub(crate) enum CtfeExternIntrinsic {
     MetaFieldCount,
     MetaField,
     MetaFieldType,
+    MetaFieldTypes,
     MetaTypeRef,
+    MetaFieldIsIndexed,
     MetaBinders,
     MetaBinderAt,
+    MetaConstruct,
+    MetaForEachField,
     MetaVariantCount,
     MetaVariant,
     MetaTypeIs,
@@ -420,12 +442,20 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(CtfeExternIntrinsic::MetaField)
     } else if lib_func_matches(db, func, "core::meta::field_type") {
         Some(CtfeExternIntrinsic::MetaFieldType)
+    } else if lib_func_matches(db, func, "core::meta::field_types") {
+        Some(CtfeExternIntrinsic::MetaFieldTypes)
     } else if lib_func_matches(db, func, "core::meta::type_ref") {
         Some(CtfeExternIntrinsic::MetaTypeRef)
+    } else if lib_func_matches(db, func, "core::meta::field_is_indexed") {
+        Some(CtfeExternIntrinsic::MetaFieldIsIndexed)
     } else if lib_func_matches(db, func, "core::meta::binders") {
         Some(CtfeExternIntrinsic::MetaBinders)
     } else if lib_func_matches(db, func, "core::meta::binder_at") {
         Some(CtfeExternIntrinsic::MetaBinderAt)
+    } else if lib_func_matches(db, func, "core::meta::construct") {
+        Some(CtfeExternIntrinsic::MetaConstruct)
+    } else if lib_func_matches(db, func, "core::meta::for_each_field") {
+        Some(CtfeExternIntrinsic::MetaForEachField)
     } else if lib_func_matches(db, func, "core::meta::variant_count") {
         Some(CtfeExternIntrinsic::MetaVariantCount)
     } else if lib_func_matches(db, func, "core::meta::variant") {

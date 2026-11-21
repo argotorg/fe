@@ -1,0 +1,592 @@
+use core::abi::{
+    Abi,
+    AbiSize,
+    ByteInput,
+    BytesView,
+    Decode,
+    DynString,
+    InputExtent,
+    StringView,
+    abi_field_head_size,
+    decode_field_from_prechecked_head,
+}
+use core::contracts::ContractHost
+use core::iter::Collection
+use core::ops::{Field, Index, Len, Project, ProjectField}
+use core::panics::PANIC_INDEX_OUT_OF_BOUNDS
+use ingot::abi::{Bytes, DynArray, FieldKey, Sol, StaticAbiElement}
+use ingot::abi::array_view::checked_array_len
+
+/// A value of type `T` encoded under the encoding `A` in the bytes of the
+/// source `I`, decoded part by part when it is read.
+///
+/// The handle denotes the value it would decode to, with each part decoded
+/// only when asked for. `at(key)` reads a field of a record, `h[i]` and
+/// `for x in h` read the elements of an array (`Index`, `Collection`, `Len`),
+/// and `get()` decodes the whole value with the eager decoder (`Decode<A>`).
+/// A part of one word is read as its value; a record, an array, `Bytes` or
+/// a string is read as a handle or a view (see `Part`).
+///
+/// Laws, for an input that the eager decoder `Decode<A>` accepts:
+/// - `h.at(key)` is the field `key` of `h.get()` (or a handle whose `get()` is);
+/// - `h[i]` is element `i` of `h.get()`, and `h.len()` is its length;
+/// - `for x in h` visits `h[0]`, `h[1]`, .. in order.
+///
+/// A read checks only what it reads, so it may accept an input whose other
+/// parts are malformed: the eager decoder is the strict reading of the same
+/// handle. Making a handle checks its frame: a record is refused when its
+/// head does not lie within the input, an array when its length word or its
+/// element heads do not. A failed check calls `A::decode_error()`; an index
+/// at or past the length panics with the index-out-of-bounds code.
+///
+/// The source is any random-access `ByteInput`; a forward-only stream is not
+/// one. Lazy reads reuse the length captured when the outermost handle is
+/// made. The backing bytes must remain valid while a handle or view is used.
+/// The handle is `Copy` when the source is.
+///
+/// A handle is made with `decode_record_at` or `decode_record_from` for a
+/// record, or with `decode_part_at` for any part, such as an array argument;
+/// `CallData::record_view` makes one for an argument in calldata.
+/// `RecordView<I, T>` names `Encoded<I, T, Sol>`.
+///
+/// ```fe
+/// let order = CallData::with_base(4).record_view<Order>(0)
+/// let amount = order.offer[1].start_amount
+/// for item in order.offer { .. }
+/// ```
+pub struct Encoded<I, T, A = Sol> {
+    extent: InputExtent<I>,
+    /// Where the encoding of `T` starts: a record's head, an array's length
+    /// word, or the first element head of a fixed-size array.
+    pos: u256,
+    /// The number of elements of an array; 0 for a record.
+    len: usize,
+}
+
+impl<I, T, A> Copy for Encoded<I, T, A>
+    where I: Copy
+{}
+
+/// The checked head slot for a part of type `T` in a byte input.
+/// Dynamic offsets are relative to `base()`. The slot and base lie within
+/// the captured input extent. The dynamic tail is checked when reached.
+pub struct PartHead<I, T> {
+    extent: InputExtent<I>,
+    base: u256,
+    head: u256,
+}
+
+impl<I: Copy, T> Copy for PartHead<I, T> {}
+
+impl<I: ByteInput + Copy, T> PartHead<I, T> {
+    pub fn extent(self) -> InputExtent<I> {
+        self.extent
+    }
+
+    pub fn base(self) -> u256 {
+        self.base
+    }
+
+    pub fn head(self) -> u256 {
+        self.head
+    }
+}
+
+/// How a part of type `Self` is read from an encoding under `A` in `I`.
+///
+/// - A value of one static word (`StaticAbiElement`) is decoded and returned,
+///   with the eager decoder's check of its word.
+/// - `DynArray<U>` and `[U; N]` give an `Encoded` handle, `Bytes` a
+///   `BytesView` and `DynString` a `StringView`.
+/// - A record read as a part implements this trait with
+///   `type Of = Encoded<I, Self, A>` and `read` calling `record_part`; the
+///   `#[abi]` short form generates it.
+pub trait Part<I, A> {
+    type Of
+
+    /// Read a part from its checked head slot.
+    fn read(_ part: PartHead<I, Self>) -> Self::Of
+}
+
+impl<I, A, T> Part<I, A> for T
+    where I: ByteInput + Copy, A: Abi, T: StaticAbiElement + Decode<A>
+{
+    type Of = T
+
+    fn read(_ part: PartHead<I, T>) -> T {
+        T::decode_from(part.extent.input(), part.head)
+    }
+}
+
+/// Read a record from a checked head slot. A static record lies in place.
+/// For a dynamic record, check the head of the record reached by the offset.
+pub fn record_part<I, T, A>(_ part: PartHead<I, T>) -> Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi, T: AbiSize
+{
+    let pos = if T::IS_DYNAMIC {
+        dynamic_frame<I, A>(
+            part.extent.input(),
+            base: part.base,
+            head: part.head,
+            width: T::HEAD_SIZE,
+            end: part.extent.end(),
+        )
+    } else {
+        // The caller's frame already contains a static part's whole head.
+        part.head
+    }
+    Encoded { extent: part.extent, pos, len: 0 }
+}
+
+impl<I, A, U> Part<I, A> for DynArray<U>
+    where I: ByteInput + Copy, A: Abi, U: AbiSize
+{
+    type Of = Encoded<I, DynArray<U>, A>
+
+    #[arithmetic(unchecked)]
+    fn read(_ part: PartHead<I, DynArray<U>>) -> Encoded<I, DynArray<U>, A> {
+        let input = part.extent.input()
+        let end = part.extent.end()
+        let rel = input.word_at(part.head)
+        let (at, len) = array_frame_from_checked_base<A, I>(input, base: part.base, rel: rel, stride: abi_field_head_size<U>(), end: end)
+        Encoded { extent: part.extent, pos: at, len }
+    }
+}
+
+impl<I, A, U, const N: usize> Part<I, A> for [U; N]
+    where I: ByteInput + Copy, A: Abi, U: AbiSize
+{
+    type Of = Encoded<I, [U; N], A>
+
+    fn read(_ part: PartHead<I, [U; N]>) -> Encoded<I, [U; N], A> {
+        let h: Encoded<I, [U; N], A> = record_part(part)
+        Encoded { extent: h.extent, pos: h.pos, len: N }
+    }
+}
+
+impl<I, A> Part<I, A> for Bytes
+    where I: ByteInput + Copy, A: Abi
+{
+    type Of = BytesView<I>
+
+    fn read(_ part: PartHead<I, Bytes>) -> BytesView<I> {
+        payload_view<I, Bytes, A>(part)
+    }
+}
+
+impl<I, A> Part<I, A> for DynString
+    where I: ByteInput + Copy, A: Abi
+{
+    type Of = StringView<I>
+
+    fn read(_ part: PartHead<I, DynString>) -> StringView<I> {
+        StringView { bytes: payload_view<I, DynString, A>(part) }
+    }
+}
+
+/// A record whose encoding under every `Abi` is the tuple of its fields in
+/// declaration order, as the Solidity ABI encodes a struct: `h.f` on an
+/// `Encoded<I, Self, A>` reads the field `f` at the position the types of
+/// the fields before it give. The `#[abi]` short form implements it; a record
+/// with a hand-written codec states it with `impl AbiFields for R {}`.
+pub trait AbiFields {}
+
+/// The total head size of the field types in a projection's `Before` (see
+/// `core::ops::Field`): where the next field's head starts in its record's
+/// head. A dynamic field takes the one word of its tail offset.
+pub trait HeadsBefore {
+    const SIZE: u256
+}
+
+impl HeadsBefore for () {
+    const SIZE: u256 = 0
+}
+
+impl<F> HeadsBefore for (F,)
+    where F: AbiSize
+{
+    const SIZE: u256 = abi_field_head_size<F>()
+}
+
+impl<L, R> HeadsBefore for (L, R)
+    where L: HeadsBefore, R: HeadsBefore
+{
+    const SIZE: u256 = L::SIZE + R::SIZE
+}
+
+/// `h.f` names a field of the encoded value `T`.
+impl<I, T, A> Project for Encoded<I, T, A> {
+    type Target = T
+}
+
+/// `h.f` reads the field as `h.at(keys<T>().f)` does: a one-word value is
+/// decoded, other types give a handle or a view (see `Part`).
+impl<I, T, A, F, B> ProjectField<Field<T, F, B>> for Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize, F: Part<I, A> + AbiSize, B: HeadsBefore
+{
+    type Output = F::Of
+
+    fn project(self) -> ref F::Of {
+        let key: FieldKey<T, F> = FieldKey::new(B::SIZE)
+        self.at(key)
+    }
+}
+
+// All three summands must fit within the source's u64 length. Check their
+// widths and the combined range before requesting any reads from the source.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub(ingot) fn frame_at<A: Abi>(_ base: u256, _ offset: u256, _ width: u256, _ end: u256) -> u256 {
+    let pos = base + offset
+    if (((base | offset | width) >> 64) | ((pos + width > end) as u256)) != 0 {
+        A::decode_error()
+    }
+    pos
+}
+
+// A head already checked by its parent gives a base within the same source.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn frame_from_checked_base<A: Abi>(_ base: u256, _ offset: u256, _ width: u256, _ end: u256) -> u256 {
+    let pos = base + offset
+    if (((offset | width) >> 64) | ((pos + width > end) as u256)) != 0 {
+        A::decode_error()
+    }
+    pos
+}
+
+#[inline(always)]
+// The caller has checked the whole head word and the tuple's base.
+pub(ingot) fn dynamic_frame<I, A>(_ input: I, base: u256, head: u256, width: u256, end: u256) -> u256
+    where I: ByteInput, A: Abi
+{
+    frame_from_checked_base<A>(base, input.word_at(head), width, end)
+}
+
+// The parent head proves base <= end, and the extent fits in u64.
+#[arithmetic(unchecked)]
+#[inline(always)]
+fn array_frame_from_checked_base<A: Abi, I: ByteInput>(_ input: I, base: u256, rel: u256, stride: u256, end: u256) -> (u256, usize) {
+    if I::PADDED_WORD_AT {
+        let at = base + rel
+        let count = input.word_at(at)
+        let len: usize = count.downcast_truncate()
+        let heads = at + 32
+        // Once rel fits in u64, heads cannot wrap, so a difference wider
+        // than u64 means the length word extends past the input.
+        let remaining = end - heads
+        let max_count = if stride == 0 { u64::max() as u256 } else { remaining / stride }
+        if (((rel | remaining) >> 64) | ((len as u256 != count) as u256) | ((count > max_count) as u256)) != 0 {
+            A::decode_error()
+        }
+        return (at, len)
+    }
+    let at = frame_from_checked_base<A>(base, rel, 32, end)
+    (at, checked_array_len<A>(input.word_at(at), stride, end - (at + 32)))
+}
+
+/// Check the length word and unpadded payload of a `bytes` or `string`.
+#[inline(always)]
+#[arithmetic(unchecked)]
+fn payload_view<I, T, A>(_ part: PartHead<I, T>) -> BytesView<I>
+    where I: ByteInput + Copy, A: Abi
+{
+    let input = part.extent.input()
+    let at = dynamic_frame<I, A>(
+        input,
+        base: part.base,
+        head: part.head,
+        width: 32,
+        end: part.extent.end(),
+    )
+    let start = at + 32
+    let n = input.word_at(at)
+    let len: usize = n.downcast_saturate()
+    if ((start | n) >> 64) != 0 || len as u256 != n {
+        A::decode_error()
+    }
+    match part.extent.try_view(start: start, len: len) {
+        Option::Some(view) => view
+        Option::None => A::decode_error()
+    }
+}
+
+/// The part of type `T` whose head word lies at `head_pos` of the tuple
+/// that starts at `base` of `input`. For calldata after a selector, use
+/// `CallData::with_base(4)` and `base: 0`. Add the encoded head sizes of the
+/// preceding arguments to find `head_pos`. The head must lie within the
+/// input before the read described by `Part::read`.
+pub fn decode_part_at<A, T, I>(_ input: I, base: u256, head_pos: u256) -> T::Of
+    where I: ByteInput + Copy, A: Abi, T: Part<I, A> + AbiSize
+{
+    let extent = InputExtent::new(input)
+    let head = frame_at<A>(base, head_pos, abi_field_head_size<T>(), extent.end())
+    T::read(PartHead { extent, base, head })
+}
+
+/// The handle of the record `T` whose encoding starts at `pos` of `input`,
+/// as `Decode::decode_from(input, pos)` decodes it. Checks that the
+/// record's head lies within the input.
+pub fn decode_record_from<A, T, I>(_ input: I, _ pos: u256) -> Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi, T: AbiSize
+{
+    let extent = InputExtent::new(input)
+    frame_at<A>(0, pos, T::HEAD_SIZE, extent.end())
+    Encoded { extent, pos, len: 0 }
+}
+
+/// The handle of the record `T` whose head word lies at `head_pos` of the
+/// tuple that starts at `base` of `input`: a static `T` lies in place, and
+/// the head word of a dynamic `T` holds the offset of its encoding from
+/// `base`. Checks that the head word and the record's head lie within the
+/// input, as `decode_part_at` does for a record part.
+///
+/// Use the original input with an explicit tuple base when the caller
+/// already knows its position. For a single record after an EVM selector,
+/// pass `CallData::new()`, `base: 4` and `head_pos: 0`.
+#[arithmetic(unchecked)]
+#[inline(always)]
+pub fn decode_record_at<A, T, I>(_ input: I, base: u256, head_pos: u256) -> Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi, T: AbiSize
+{
+    let extent = InputExtent::new(input)
+    // A tail at or after base covers an earlier slot if the record's head
+    // is wide enough. This is observable only as a change of read order on
+    // inputs that permit every word load.
+    if T::IS_DYNAMIC && I::PADDED_WORD_AT && T::HEAD_SIZE >= 32 && head_pos <= T::HEAD_SIZE - 32 {
+        let rel = input.word_at(base + head_pos)
+        let pos = frame_at<A>(base, rel, T::HEAD_SIZE, extent.end())
+        return Encoded { extent, pos, len: 0 }
+    }
+    let head = frame_at<A>(base, head_pos, abi_field_head_size<T>(), extent.end())
+    record_part(PartHead { extent, base, head })
+}
+
+impl<I, T, A> Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi
+{
+    /// The underlying input.
+    pub fn input(self) -> I {
+        self.extent.input()
+    }
+
+    /// Byte position in `input` where the encoding starts (see the field).
+    pub fn pos(self) -> u256 {
+        self.pos
+    }
+
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    fn field_head<F: AbiSize>(self, _ key: FieldKey<T, F>) -> PartHead<I, F>
+        where T: AbiSize
+    {
+        let width = abi_field_head_size<F>()
+        // The handle's frame covers the complete T head. A field range
+        // contained in it needs no second input check. A manual offset can
+        // point elsewhere in the source and is checked against that source.
+        let head = if width <= T::HEAD_SIZE && key.offset() <= T::HEAD_SIZE - width {
+            self.pos + key.offset()
+        } else {
+            frame_from_checked_base<A>(self.pos, key.offset(), width, self.extent.end())
+        }
+        PartHead { extent: self.extent, base: self.pos, head }
+    }
+
+    /// Read the field `key` of the record: a one-word value is decoded, and
+    /// other types give a handle or a view (see `Part`).
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    pub fn at<F>(self, _ key: FieldKey<T, F>) -> F::Of
+        where T: AbiSize, F: Part<I, A> + AbiSize
+    {
+        F::read(self.field_head(key))
+    }
+
+    /// The field `key`, decoded in full with the eager decoder's function
+    /// for one field: `self.get()` would hold the same value in that field.
+    /// Dynamic values are copied into memory.
+    #[arithmetic(unchecked)]
+    #[inline(always)]
+    pub fn get_at<F>(self, _ key: FieldKey<T, F>) -> F
+        where T: AbiSize, F: Decode<A> + AbiSize
+    {
+        decode_field_from_prechecked_head<A, F, I>(
+            self.input(),
+            base: self.pos,
+            head_pos: self.field_head(key).head,
+            input_len: self.extent.end(),
+        )
+    }
+
+    /// The handle of the record field `key`, for a record type that does
+    /// not implement `Part`; the same as `at` for one that does.
+    #[arithmetic(unchecked)]
+    pub fn sub<F>(self, _ key: FieldKey<T, F>) -> Encoded<I, F, A>
+        where T: AbiSize, F: AbiSize
+    {
+        record_part(self.field_head(key))
+    }
+
+    /// The raw first word of the field's head, without any validation: the
+    /// tail offset of a dynamic field, or the first word of a static one.
+    #[arithmetic(unchecked)]
+    pub fn word<F>(self, _ key: FieldKey<T, F>) -> u256 {
+        self.input().word_at(self.pos + key.offset())
+    }
+
+    /// Byte position in `input` of the field's head.
+    #[arithmetic(unchecked)]
+    pub fn head_pos<F>(self, _ key: FieldKey<T, F>) -> u256 {
+        self.pos + key.offset()
+    }
+
+    /// The whole value, decoded by the eager decoder `Decode<A>` from where
+    /// the encoding starts. Dynamic parts are copied into memory.
+    pub fn get(self) -> T
+        where T: Decode<A>
+    {
+        T::decode_from_prechecked_head(self.input(), self.pos, self.extent.end())
+    }
+}
+
+/// Check a message's head and keep its fields in the original input.
+#[inline(always)]
+pub fn message_args<H, A, T>(_ host: mut H) -> Encoded<H::Input, T, A>
+    where H: ContractHost, H::Input: Copy, A: Abi, T: AbiFields + AbiSize
+{
+    let extent = InputExtent::new(input: host.input())
+    let pos = A::SELECTOR_SIZE
+    A::validate_runtime_head_policy(input_len: extent.end(), base: pos, head_size: T::HEAD_SIZE)
+    frame_at<A>(0, pos, T::HEAD_SIZE, extent.end())
+    Encoded { extent, pos, len: 0 }
+}
+
+/// Decode one field of a message using the same codec as an eager read.
+#[inline(always)]
+pub fn message_field<I, T, A, F, B>(_ args: Encoded<I, T, A>) -> F
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize, F: Decode<A> + AbiSize, B: HeadsBefore
+{
+    let key: FieldKey<T, F> = FieldKey::new(B::SIZE)
+    args.get_at(key)
+}
+
+/// Read one field where it lies, using the same operation as field access on
+/// any other encoded record.
+#[inline(always)]
+pub fn message_part<I, T, A, F, B>(_ args: Encoded<I, T, A>) -> F::Of
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize, F: Part<I, A> + AbiSize, B: HeadsBefore
+{
+    let key: FieldKey<T, F> = FieldKey::new(B::SIZE)
+    args.at(key)
+}
+
+/// An array type read through a handle: its element type and where the
+/// element heads start, relative to the start of its encoding.
+pub trait Sequence {
+    type Elem
+    const HEADS: u256
+}
+
+impl<U> Sequence for DynArray<U> {
+    type Elem = U
+    const HEADS: u256 = 32
+}
+
+impl<U, const N: usize> Sequence for [U; N] {
+    type Elem = U
+    const HEADS: u256 = 0
+}
+
+impl<I, S, A> Encoded<I, S, A>
+    where I: ByteInput + Copy, A: Abi, S: Sequence
+{
+    /// Number of elements.
+    pub fn len(self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    /// Byte position in `input` of the head of element 0. The offsets of
+    /// dynamic elements are relative to it.
+    #[arithmetic(unchecked)]
+    pub fn heads_pos(self) -> u256 {
+        self.pos + S::HEADS
+    }
+
+    #[arithmetic(unchecked)]
+    fn element_head(self, _ index: usize) -> PartHead<I, S::Elem>
+        where S::Elem: AbiSize
+    {
+        if index >= self.len {
+            core::panic_code(PANIC_INDEX_OUT_OF_BOUNDS)
+        }
+        // The frame check bounds every element head within the input.
+        let base = self.heads_pos()
+        let head = base + index as u256 * abi_field_head_size<S::Elem>()
+        PartHead { extent: self.extent, base, head }
+    }
+
+    /// Element `index`, read as `Part::read` reads a part (the same as
+    /// `self[index]`). Panics with the index-out-of-bounds code if
+    /// `index >= len()`.
+    #[inline(always)]
+    pub fn element(self, _ index: usize) -> <S::Elem as Part<I, A>>::Of
+        where S::Elem: Part<I, A> + AbiSize
+    {
+        S::Elem::read(self.element_head(index))
+    }
+
+    /// The handle of the record element `index`, for a record type that
+    /// does not implement `Part`.
+    #[arithmetic(unchecked)]
+    pub fn record_at(self, _ index: usize) -> Encoded<I, S::Elem, A>
+        where S::Elem: AbiSize
+    {
+        record_part(self.element_head(index))
+    }
+}
+
+impl<I, S, A> Len for Encoded<I, S, A>
+    where I: ByteInput + Copy, A: Abi, S: Sequence
+{
+    fn len(self) -> usize {
+        self.len
+    }
+}
+
+impl<I, S, A> Index<usize> for Encoded<I, S, A>
+    where I: ByteInput + Copy, A: Abi, S: Sequence, S::Elem: Part<I, A> + AbiSize
+{
+    type Output = <S::Elem as Part<I, A>>::Of
+
+    fn index(self, _ index: usize) -> ref <S::Elem as Part<I, A>>::Of {
+        self.element(index)
+    }
+}
+
+impl<I, S, A> Collection for Encoded<I, S, A>
+    where I: ByteInput + Copy, A: Abi, S: Sequence, S::Elem: Part<I, A> + AbiSize
+{
+    type Cursor = usize
+    type Item = <S::Elem as Part<I, A>>::Of
+
+    fn start(self) -> usize {
+        0
+    }
+
+    fn has(self, _ c: usize) -> bool {
+        c < self.len
+    }
+
+    #[arithmetic(unchecked)]
+    fn next(self, _ c: usize) -> usize {
+        c + 1
+    }
+
+    fn at(self, _ c: usize) -> ref <S::Elem as Part<I, A>>::Of {
+        self.element(c)
+    }
+}

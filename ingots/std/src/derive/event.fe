@@ -1,0 +1,88 @@
+use core::abi::{AbiFrame, abi_field_head_size, dynamic_payload_size}
+use core::derive::Derive
+use core::meta::{Code, Expr, Item, Record, field, field_count, field_type, field_is_indexed}
+use core::ptr::{MemBuffer, allocation_len}
+use ingot::abi::Sol
+use ingot::evm::{Event, Log, TopicValue}
+use super::abi::{RecordWriter, write_field_from_provider}
+
+/// Provides the log encoding of an authored event.
+pub struct StructEvent {}
+impl Derive<trait Event> for StructEvent {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = field_count(record)
+        var head: Code<Expr> = quote { 0 as u256 }
+        var payload: Code<Expr> = quote { 0 as u256 }
+        var data_fields: usize = 0
+        var steps: Code<Expr> = quote { () }
+        var topic_a: Code<Expr> = quote { 0 as u256 }
+        var topic_b: Code<Expr> = quote { 0 as u256 }
+        var topic_c: Code<Expr> = quote { 0 as u256 }
+        var topics: usize = 0
+        var i: usize = 0
+        while i < n {
+            let f = field(record, i)
+            let ty = field_type(f)
+            if field_is_indexed(f) {
+                let topic = quote { self.${f}.as_topic() }
+                if topics == 0 {
+                    topic_a = topic
+                } else if topics == 1 {
+                    topic_b = topic
+                } else {
+                    topic_c = topic
+                }
+                topics += 1
+            } else {
+                data_fields += 1
+                head = quote { ${head} + abi_field_head_size<${ty}>() }
+                payload = quote { ${payload} + dynamic_payload_size<${ty}>(self.${f}) }
+                let step = write_field_from_provider(f)
+                steps = quote(writer) {
+                    {
+                        ${steps}
+                        ${step}
+                    }
+                }
+            }
+            i += 1
+        }
+
+        let emit = if topics == 0 {
+            quote(log, data) { log.log1(data: data, topic0: Self::TOPIC0) }
+        } else if topics == 1 {
+            quote(log, data) { log.log2(data: data, topic0: Self::TOPIC0, topic1: ${topic_a}) }
+        } else if topics == 2 {
+            quote(log, data) {
+                log.log3(data: data, topic0: Self::TOPIC0, topic1: ${topic_a}, topic2: ${topic_b})
+            }
+        } else {
+            quote(log, data) {
+                log.log4(data: data, topic0: Self::TOPIC0, topic1: ${topic_a}, topic2: ${topic_b}, topic3: ${topic_c})
+            }
+        }
+        if data_fields == 0 {
+            return quote(log, data) {
+                #[inline(always)]
+                fn emit<L: Log>(own self, _ log: mut L) {
+                    let buffer = MemBuffer::empty()
+                    let data = buffer.span()
+                    ${emit}
+                }
+            }
+        }
+        quote(log, data, writer) {
+            #[inline(always)]
+            fn emit<L: Log>(own self, _ log: mut L) {
+                let head = ${head}
+                let total = head + ${payload}
+                let buffer = MemBuffer::new(allocation_len(total))
+                let out = unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) }
+                var writer = RecordWriter<Sol>::new(out, head_size: head, fields: ${data_fields})
+                ${steps}
+                let data = buffer.span()
+                ${emit}
+            }
+        }
+    }
+}

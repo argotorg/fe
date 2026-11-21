@@ -61,7 +61,8 @@ impl<'db> SemConstId<'db> {
                 crate::core::meta::MetaValue::FieldType(field) => {
                     format!("<field_type {}>", field.ty(db).pretty_print(db))
                 }
-                crate::core::meta::MetaValue::TypeRef { ty, .. } => {
+                crate::core::meta::MetaValue::TypeRef { ty, .. }
+                | crate::core::meta::MetaValue::FieldTypes { ty, .. } => {
                     format!("<type_ref {}>", ty.pretty_print(db))
                 }
             },
@@ -311,7 +312,10 @@ fn verify_sem_const_shape_impl<'db>(
             }
             use crate::core::meta::MetaValue;
             match value {
-                MetaValue::TypeRef { ty, .. } => {
+                MetaValue::TypeRef { ty, .. } | MetaValue::FieldTypes { ty, .. } => {
+                    if let MetaValue::FieldTypes { record, .. } = value {
+                        record.validate(db)?;
+                    }
                     if ty.has_invalid(db) {
                         return Err("type reference contains an invalid type");
                     }

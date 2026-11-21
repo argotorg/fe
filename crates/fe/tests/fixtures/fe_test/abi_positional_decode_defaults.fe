@@ -1,0 +1,83 @@
+use core::abi::{AbiDecoder, AbiSize, ByteInput, Decode, decode_field_from_prechecked_head, decode_frame_from, encode_alloc}
+use core::ptr::MemBuffer
+use std::abi::Sol
+
+struct RawOverride<const CHECK: bool> { value: u256 }
+
+impl<const CHECK: bool> AbiSize for RawOverride<CHECK> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = true
+}
+
+impl<const CHECK: bool> Decode<Sol> for RawOverride<CHECK> {
+    const CHECKS_HEAD_FRAME: bool = CHECK
+
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ decoder: mut D, _ input: I) -> Self {
+        RawOverride { value: decoder.read_word(input) + 200 }
+    }
+
+    fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        RawOverride { value: input.word_at(pos) + 100 }
+    }
+}
+
+struct PayloadOnly { value: u256 }
+
+impl AbiSize for PayloadOnly {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Decode<Sol> for PayloadOnly {
+    const CHECKS_HEAD_FRAME: bool = true
+
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ decoder: mut D, _ input: I) -> Self {
+        PayloadOnly { value: decoder.read_word(input) + 3 }
+    }
+}
+
+#[test]
+fn default_prechecked_entries_preserve_the_raw_override() {
+    let buffer = encode_alloc<Sol, u256>(7)
+    let input = buffer.span()
+    assert!(<RawOverride<false> as Decode<Sol>>::decode_from_bounded(input, 0, 32).value == 107)
+    assert!(decode_frame_from<Sol, RawOverride<false>, _>(input, 0, 32).value == 107)
+
+    var field = MemBuffer::new(64)
+    field.write_word(offset: 0, value: 32)
+    field.write_word(offset: 32, value: 7)
+    let decoded = decode_field_from_prechecked_head<Sol, RawOverride<false>, _>(
+        field.span(), base: 0, head_pos: 0, input_len: 64,
+    )
+    assert!(decoded.value == 107)
+}
+
+#[test]
+fn checked_defaults_can_use_just_the_payload_decoder() {
+    let buffer = encode_alloc<Sol, u256>(7)
+    let input = buffer.span()
+    assert!(<PayloadOnly as Decode<Sol>>::decode_from(input, 0).value == 10)
+    assert!(<PayloadOnly as Decode<Sol>>::decode_from_bounded(input, 0, 32).value == 10)
+    assert!(<PayloadOnly as Decode<Sol>>::decode_from_prechecked_head(input, 0, 32).value == 10)
+}
+
+#[test]
+fn opted_in_bounded_default_uses_the_prechecked_reader() {
+    let buffer = encode_alloc<Sol, u256>(7)
+    let input = buffer.span()
+    assert!(<RawOverride<true> as Decode<Sol>>::decode_from(input, 0).value == 107)
+    assert!(<RawOverride<true> as Decode<Sol>>::decode_from_bounded(input, 0, 32).value == 207)
+    assert!(<RawOverride<true> as Decode<Sol>>::decode_from_prechecked_head(input, 0, 32).value == 207)
+}
+
+#[test(should_revert)]
+fn checked_raw_default_rejects_a_short_head() {
+    let buffer = MemBuffer::new(31)
+    let _ = <PayloadOnly as Decode<Sol>>::decode_from(buffer.span(), 0)
+}
+
+#[test(should_revert)]
+fn checked_bounded_default_rejects_a_short_head() {
+    let buffer = MemBuffer::new(31)
+    let _ = <PayloadOnly as Decode<Sol>>::decode_from_bounded(buffer.span(), 0, 31)
+}

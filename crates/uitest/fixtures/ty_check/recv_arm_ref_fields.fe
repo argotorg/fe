@@ -1,0 +1,108 @@
+// A `recv` arm that names a field of its message with `ref` reads the message
+// where it lies, which needs the message to be read field by field
+// (`AbiFields`) and the field's type to be readable in place (`Part`). Each
+// arm below lacks one of them, or binds a field in a way that has no reading,
+// and reports it where the arm names the field.
+use std::abi::sol
+
+// A message type written by hand has no `AbiFields` unless it states it.
+pub struct Hand { pub v: u256 }
+
+impl core::abi::AbiSize for Hand {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl core::abi::Encode<std::abi::Sol> for Hand {
+    fn encode(self, _ out: core::abi::AbiFrame) {
+        let Self { v } = self
+        v.encode(out)
+    }
+}
+
+impl core::abi::Decode<std::abi::Sol> for Hand {
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let v = u256::decode_payload(mut d, input)
+        Self { v }
+    }
+}
+
+impl core::message::MsgVariant<std::abi::Sol> for Hand {
+    const SELECTOR: u32 = sol("hand(uint256)")
+    type Return = u256
+}
+
+// A field type that can be encoded and decoded but has no `Part`.
+pub struct Plain { pub x: u256 }
+
+impl core::abi::AbiSize for Plain {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl core::abi::Encode<std::abi::Sol> for Plain {
+    fn encode(self, _ out: core::abi::AbiFrame) {
+        let Self { x } = self
+        x.encode(out)
+    }
+}
+
+impl core::abi::Decode<std::abi::Sol> for Plain {
+    fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+        let x = u256::decode_payload(mut d, input)
+        Self { x }
+    }
+}
+
+msg N {
+    #[selector = 0x01]
+    V { p: Plain } -> u256,
+}
+
+#[abi]
+pub struct Inner { pub x: u256 }
+
+msg W {
+    #[selector = 0x02]
+    W1 { o: Inner } -> u256,
+}
+
+fn take(_ o: Inner) -> u256 {
+    o.x
+}
+
+// 8-0160: the message is not read field by field.
+pub contract NotFieldwise {
+    recv {
+        Hand { ref v } -> u256 {
+            v
+        }
+    }
+}
+
+// 8-0161: the field has no `Part`.
+pub contract NotPart {
+    recv N {
+        V { ref p } -> u256 {
+            0
+        }
+    }
+}
+
+// `mut` has no meaning for a field that is read: as in any recv arm.
+pub contract MutField {
+    recv N {
+        V { mut p } -> u256 {
+            0
+        }
+    }
+}
+
+// The name binds the part that is read in place, not the decoded record.
+pub contract WrongType {
+    recv W {
+        W1 { ref o } -> u256 {
+            take(o)
+        }
+    }
+}

@@ -83,6 +83,33 @@ const EVM_TARGET_TY_PATH: &[&str] = &["std", "evm", "EvmTarget"];
 const NATIVE_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "native", "Host"];
 const WASM_ROOT_EFFECT_TY_PATH: &[&str] = &["std", "wasm", "Host"];
 
+/// The types of the fields before a projected field, in declaration order,
+/// as the tree that `core::ops::Field` documents: `()` for none, `(A,)` for
+/// one, and `(L, R)` for the fields of `L` followed by those of `R`. Two or
+/// more fields split where the tree of the first fields is also the tree
+/// that a later field of the same record has before it, so that the trees
+/// of a record's fields share their subtrees: after `n - p` fields, where
+/// `p` is the largest power of two dividing `n`, or in halves when `n` is a
+/// power of two. The depth grows with the logarithm of the field count.
+pub fn fields_before_ty<'db>(db: &'db dyn HirAnalysisDb, tys: &[TyId<'db>]) -> TyId<'db> {
+    match tys {
+        [] => TyId::unit(db),
+        [ty] => TyId::tuple_with_elems(db, &[*ty]),
+        _ => {
+            let split = field_tree_split(tys.len());
+            let left = fields_before_ty(db, &tys[..split]);
+            let right = fields_before_ty(db, &tys[split..]);
+            TyId::tuple_with_elems(db, &[left, right])
+        }
+    }
+}
+
+pub(crate) fn field_tree_split(n: usize) -> usize {
+    debug_assert!(n >= 2);
+    let low = 1 << n.trailing_zeros();
+    if low == n { n / 2 } else { n - low }
+}
+
 pub fn ty_is_borrow<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
@@ -177,6 +204,30 @@ pub fn state_index_tys<'db>(
         Some(normalize::normalize_ty(db, projected, scope, assumptions))
     };
     Some((assoc("Key")?, assoc("Entry")?))
+}
+
+/// The type whose fields `h.f` names for an `h: ty` that has no visible
+/// field `f`: `<ty as core::ops::Project>::Target`, when `ty` implements it.
+pub fn project_target_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    let ty = normalize::normalize_ty(db, ty, scope, assumptions);
+    let project = corelib::resolve_core_trait(db, scope, &["ops", "Project"])?;
+    let inst = trait_def::TraitInstId::new_simple(db, project, vec![ty]);
+    if !goal_holds(
+        db,
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
+        inst,
+    ) {
+        return None;
+    }
+    let target = inst
+        .trait_ref(db)
+        .project_assoc_ty(db, IdentId::new(db, "Target".to_string()))?;
+    Some(normalize::normalize_ty(db, target, scope, assumptions))
 }
 
 #[salsa::tracked(returns(copy))]
@@ -434,7 +485,8 @@ fn local_implementation_name_conflicts<'db>(
 
 pub struct BodyAnalysisPass {}
 
-fn events_with_indexed_dynamic_fields<'db>(
+#[salsa::tracked(returns(ref))]
+fn events_with_unsupported_indexed_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> FxHashSet<EventDesugared> {
@@ -604,22 +656,54 @@ pub(crate) fn abi_struct_field_checks<'db>(
     checks
 }
 
+/// The ordinary checker reports these failures at the declaration or field.
+/// The driver can leave its codec requests unprepared until the source is valid.
+pub fn abi_short_form_has_authored_errors<'db>(
+    db: &'db dyn HirAnalysisDb,
+    request: crate::hir_def::ImplTrait<'db>,
+) -> bool {
+    let HirOrigin::Desugared(
+        origin @ (DesugaredOrigin::AbiStruct(_)
+        | DesugaredOrigin::Msg(_)
+        | DesugaredOrigin::Event(_)),
+    ) = request.origin(db)
+    else {
+        return false;
+    };
+    generated_abi_reported_at_source(db, request.top_mod(db), AbiFieldCheck::CodecAdmission)
+        .contains(origin)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+enum AbiFieldCheck {
+    CodecAdmission,
+    Diagnostics,
+}
+
 /// Origins of generated ABI code whose failures are reported at the source
 /// struct or msg variant instead: at its fields, or at its recursive type.
+#[salsa::tracked(returns(ref))]
 fn generated_abi_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
-) -> FxHashSet<&'db DesugaredOrigin> {
+    check: AbiFieldCheck,
+) -> FxHashSet<DesugaredOrigin> {
     let msg_variants = top_mod.all_structs(db).iter().filter_map(|&struct_| {
         let HirOrigin::Desugared(origin @ DesugaredOrigin::Msg(_)) = struct_.origin(db) else {
             return None;
         };
-        msg_selector::msg_variant_reported_at_source(db, struct_).then_some(origin)
+        msg_selector::msg_variant_reported_at_source(db, struct_, check).then_some(origin)
     });
+    let invalid_events = events_with_unsupported_indexed_fields(db, top_mod)
+        .iter()
+        .cloned()
+        .map(DesugaredOrigin::Event);
     abi_struct_field_checks(db, top_mod)
         .reported_at_source
         .iter()
         .chain(msg_variants)
+        .cloned()
+        .chain(invalid_events)
         .collect()
 }
 
@@ -648,17 +732,14 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         // Check function and const bodies; contract-specific analysis is handled separately.
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
-        let indexed_dynamic_events = events_with_indexed_dynamic_fields(db, top_mod);
-        let reported_at_source = generated_abi_reported_at_source(db, top_mod);
+        let reported_at_source =
+            generated_abi_reported_at_source(db, top_mod, AbiFieldCheck::Diagnostics);
         let keep = |origin: &DesugaredOrigin| !reported_at_source.contains(origin);
         for func in top_mod
             .all_funcs(db)
             .iter()
             // Generated ABI body failures are diagnosed once at their source declarations.
             .filter(|func| match func.origin(db) {
-                HirOrigin::Desugared(origin @ DesugaredOrigin::Event(event)) => {
-                    !indexed_dynamic_events.contains(event) && keep(origin)
-                }
                 HirOrigin::Desugared(origin) => keep(origin),
                 _ => true,
             })
@@ -1144,7 +1225,8 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let reported_at_source = generated_abi_reported_at_source(db, top_mod);
+        let reported_at_source =
+            generated_abi_reported_at_source(db, top_mod, AbiFieldCheck::Diagnostics);
         top_mod
             .all_impl_traits(db)
             .iter()

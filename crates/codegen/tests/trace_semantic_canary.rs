@@ -13,6 +13,8 @@ fn snapshot(source: &str, file_url: &Url, opt_level: OptLevel) -> TraceSnapshot 
     db.workspace()
         .touch(&mut db, file_url.clone(), Some(source.to_string()));
     let file = db.workspace().get(&db, file_url).unwrap();
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     let facts = trace::emit_observable_module_trace_facts(
         &db,

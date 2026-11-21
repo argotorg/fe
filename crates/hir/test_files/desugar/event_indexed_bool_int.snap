@@ -1,5 +1,5 @@
 ---
-source: crates/hir/tests/desugar.rs
+source: crates/hir/tests/frontend/desugar.rs
 expression: output
 input_file: test_files/desugar/event_indexed_bool_int.fe
 ---
@@ -16,7 +16,19 @@ impl std::evm::Event for Flags {
     const TOPIC0: u256 = core::keccak(("Flags", "(", <bool as std::abi::SolCompat>::SOL_TYPE, ",", <i8 as std::abi::SolCompat>::SOL_TYPE, ",", <u256 as std::abi::SolCompat>::SOL_TYPE, ")"))
 
     #[inline(always)]
-    fn emit<__fe_L: std::evm::Log>(own self, _ log: mut __fe_L) {
-        log.log3(data: std::evm::encode_abi_payload((self.value)).span(), topic0: Self::TOPIC0, topic1: self.ok.as_topic(), topic2: self.delta.as_topic())
+    fn emit<L: Log>(own self, _ log: mut L) {
+        let head = 0 as u256 + abi_field_head_size<u256>()
+        let total = head + 0 as u256 + dynamic_payload_size<u256>(self.value)
+        let buffer = MemBuffer::new(allocation_len(total))
+        let out = unsafe {
+            AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
+        }
+        var writer = RecordWriter<Sol>::new(out, head_size: head, fields: 1 as usize)
+        {
+            ()
+            push_record_field(mut writer, self.value)
+        }
+        let data = buffer.span()
+        log.log3(data: data, topic0: Self::TOPIC0, topic1: self.ok.as_topic(), topic2: self.delta.as_topic())
     }
 }

@@ -1,5 +1,5 @@
 //! Test harness utilities for compiling Fe contracts and exercising their runtimes with `revm`.
-use codegen::{OptLevel, emit_module_sonatina_bytecode};
+use codegen::{OptLevel, SonatinaContractBytecode, emit_module_sonatina_bytecode};
 use common::InputDb;
 use driver::DriverDataBase;
 use ethers_core::abi::{AbiParser, ParamType, ParseError as AbiParseError, Token, decode};
@@ -20,7 +20,7 @@ use revm::{
 };
 use std::{
     cmp::Reverse,
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     fmt,
     io::Write,
     path::{Path, PathBuf},
@@ -1252,22 +1252,7 @@ impl FeContractHarness {
         source: &str,
         options: CompileOptions,
     ) -> Result<Self, HarnessError> {
-        let mut db = DriverDataBase::default();
-        let url = Url::parse(MEMORY_SOURCE_URL).expect("static URL is valid");
-        db.workspace()
-            .touch(&mut db, url.clone(), Some(source.to_string()));
-        let file = db
-            .workspace()
-            .get(&db, &url)
-            .expect("file should exist in workspace");
-        let top_mod = db.top_mod(file);
-        let diags = db.run_on_top_mod(top_mod);
-        if !diags.is_empty() {
-            return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
-        }
-        let bytecode =
-            emit_module_sonatina_bytecode(&db, top_mod, options.opt_level, Some(contract_name))
-                .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
+        let bytecode = compile_inline_sonatina(source, options.opt_level, Some(contract_name))?;
         let bytecode = bytecode.get(contract_name).ok_or_else(|| {
             HarnessError::EmitSonatina(format!("missing bytecode for `{contract_name}`"))
         })?;
@@ -1341,27 +1326,32 @@ impl FeContractHarness {
 
 /// Compiles the provided Fe source to Sonatina-generated runtime bytecode (hex-encoded).
 pub fn compile_runtime_sonatina_from_source(source: &str) -> Result<String, HarnessError> {
+    let bytecode = compile_inline_sonatina(source, OptLevel::default(), None)?;
+    let contract = bytecode
+        .values()
+        .next()
+        .ok_or_else(|| HarnessError::EmitSonatina("no runtime bytecode emitted".into()))?;
+    Ok(hex::encode(&contract.runtime))
+}
+
+fn compile_inline_sonatina(
+    source: &str,
+    opt_level: OptLevel,
+    contract: Option<&str>,
+) -> Result<BTreeMap<String, SonatinaContractBytecode>, HarnessError> {
     let mut db = DriverDataBase::default();
     let url = Url::parse(MEMORY_SOURCE_URL).expect("static URL is valid");
-    db.workspace()
-        .touch(&mut db, url.clone(), Some(source.to_string()));
-    let file = db
-        .workspace()
-        .get(&db, &url)
-        .expect("file should exist in workspace");
+    let file = db.workspace().touch(&mut db, url, Some(source.to_string()));
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .map_err(|err| HarnessError::CompilerDiagnostics(err.to_string()))?;
     let top_mod = db.top_mod(file);
     let diags = db.run_on_top_mod(top_mod);
     if !diags.is_empty() {
         return Err(HarnessError::CompilerDiagnostics(diags.format_diags(&db)));
     }
 
-    let bytecode = emit_module_sonatina_bytecode(&db, top_mod, OptLevel::default(), None)
-        .map_err(|err| HarnessError::EmitSonatina(err.to_string()))?;
-    let contract = bytecode
-        .values()
-        .next()
-        .ok_or_else(|| HarnessError::EmitSonatina("no runtime bytecode emitted".into()))?;
-    Ok(hex::encode(&contract.runtime))
+    emit_module_sonatina_bytecode(&db, top_mod, opt_level, contract)
+        .map_err(|err| HarnessError::EmitSonatina(err.to_string()))
 }
 
 /// ABI-encodes a function call according to the provided signature.
@@ -4013,6 +4003,8 @@ pub contract FixedDynamicArrayBoundary {{
             !had_init_diagnostics,
             "ingot resolution should succeed for `{ingot_url}`"
         );
+        driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
+            .expect("fixture generation should succeed");
 
         let ingot = db
             .workspace()

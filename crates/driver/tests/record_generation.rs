@@ -2356,6 +2356,30 @@ impl<T> FieldQuery<u256> for Query<T> as Alternate {
 }
 
 #[test]
+fn reflected_field_init_rejects_named_implementations() {
+    let (db, file) = input(
+        r#"
+use core::meta::{Code, Expr, Field, FieldInit}
+struct Step {}
+impl FieldInit for Step as Alternate {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        quote { 0 }
+    }
+}
+"#,
+    );
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(
+        diagnostics.contains("error[5-0005]: `FieldInit` cannot have a named implementation"),
+        "{diagnostics}"
+    );
+    assert!(
+        diagnostics.contains("`construct` evaluates it outside every `with`, so no choice made with `with` reaches it"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
 fn output_warnings_remain_diagnostics_without_refusing_generation() {
     // This warning is emitted by the same HIR pass used for output admission.
     let source = format!(
@@ -3180,6 +3204,7 @@ impl X with (MakeConst)
                 scoped_impl: None,
                 target_file: url.clone(),
                 request_impl: Some(header_range),
+                request_slot: None,
                 code: common::generation::FrozenCode::Template {
                     kind: common::generation::FrozenCodeKind::Item,
                     quote_file: url,
@@ -4236,4 +4261,482 @@ impl S with (P)
 "#;
     let (db, file) = input(RECURSIVE_PROVIDER);
     assert!(prepare_file(&db, file).is_err());
+}
+
+/// The record constructor primitive: providers for a struct, a tuple struct,
+/// an empty struct and each kind of variant, over a `FieldInit` that numbers
+/// the fields.
+const CONSTRUCT_SOURCE: &str = r#"use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, variant, variant_count}
+
+struct Numbered {}
+impl FieldInit for Numbered {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let value: u256 = (index as u256) + 1
+        quote { ${value} }
+    }
+}
+
+pub struct Build {}
+impl DeriveInherent for Build {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let value = construct<Numbered>(record)
+        quote {
+            pub const fn built() -> Self {
+                ${value}
+            }
+        }
+    }
+}
+
+pub struct BuildVariants {}
+impl DeriveInherent for BuildVariants {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = variant_count(record)
+        var out: Code<Expr> = construct<Numbered>(variant(record, n - 1))
+        var i: usize = n - 1
+        while i > 0 {
+            i -= 1
+            let value = construct<Numbered>(variant(record, i))
+            out = quote(which) {
+                if which == ${i} {
+                    ${value}
+                } else {
+                    ${out}
+                }
+            }
+        }
+        quote(which) {
+            pub const fn sample(_ which: usize) -> Self {
+                ${out}
+            }
+        }
+    }
+}
+
+pub struct Named {
+    pub a: u256,
+    pub b: u256,
+    pub c: u256,
+}
+impl Named with (Build)
+
+pub struct Tupled(pub u256, pub u256)
+impl Tupled with (Build)
+
+pub struct Nothing {}
+impl Nothing with (Build)
+
+pub enum Shape {
+    Unit,
+    Point(u256, u256),
+    Rect { w: u256, h: u256, d: u256 },
+}
+impl Shape with (BuildVariants)
+
+const fn check_construct() -> u256 {
+    let n = Named::built()
+    let t = Tupled::built()
+    let _e = Nothing::built()
+    var score: u256 = 0
+    if n.a == 1 && n.b == 2 && n.c == 3 {
+        score += 1
+    }
+    if t.0 == 1 && t.1 == 2 {
+        score += 10
+    }
+    match Shape::sample(0) {
+        Shape::Unit => {
+            score += 100
+        }
+        _ => {}
+    }
+    match Shape::sample(1) {
+        Shape::Point(x, y) => {
+            if x == 1 && y == 2 {
+                score += 1000
+            }
+        }
+        _ => {}
+    }
+    match Shape::sample(2) {
+        Shape::Rect { w, h, d } => {
+            if w == 1 && h == 2 && d == 3 {
+                score += 10000
+            }
+        }
+        _ => {}
+    }
+    score
+}
+"#;
+
+#[test]
+fn construct_builds_struct_tuple_struct_variant_and_empty_records() {
+    let (db, file) = input(CONSTRUCT_SOURCE);
+    let output = prepare_file(&db, file)
+        .expect("construct must build every record shape")
+        .expect("output view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    assert!(!output.run_on_top_mod(module).has_errors(&output));
+    assert_generated_integer(&output, output_file, "check_construct", "11111");
+}
+
+#[test]
+fn construct_evaluates_initializers_once_in_declaration_order() {
+    let source = r#"use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, variant}
+
+struct Counted {}
+impl FieldInit for Counted {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let digit: u256 = (index as u256) + 1
+        quote(count) {
+            {
+                count = count * 10 + ${digit}
+                count
+            }
+        }
+    }
+}
+
+pub struct BuildCounted {}
+impl DeriveInherent for BuildCounted {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let value = construct<Counted>(record)
+        quote(count) {
+            pub const fn counted() -> Self {
+                var count: u256 = 0
+                ${value}
+            }
+        }
+    }
+}
+
+pub struct BuildCountedVariants {}
+impl DeriveInherent for BuildCountedVariants {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let first = construct<Counted>(variant(record, 0))
+        let second = construct<Counted>(variant(record, 1))
+        quote(count, which) {
+            pub const fn counted(_ which: usize) -> Self {
+                var count: u256 = 0
+                if which == 0 {
+                    ${first}
+                } else {
+                    ${second}
+                }
+            }
+        }
+    }
+}
+
+pub struct Three {
+    pub count: u256,
+    pub b: u256,
+    pub c: u256,
+}
+impl Three with (BuildCounted)
+
+pub struct ThreeT(pub u256, pub u256, pub u256)
+impl ThreeT with (BuildCounted)
+
+pub enum E3 {
+    R { x: u256, y: u256, z: u256 },
+    T(u256, u256, u256),
+}
+impl E3 with (BuildCountedVariants)
+
+const fn check_order() -> u256 {
+    var score: u256 = 0
+    let s = Three::counted()
+    if s.count == 1 && s.b == 12 && s.c == 123 {
+        score += 1
+    }
+    let t = ThreeT::counted()
+    if t.0 == 1 && t.1 == 12 && t.2 == 123 {
+        score += 10
+    }
+    match E3::counted(0) {
+        E3::R { x, y, z } => {
+            if x == 1 && y == 12 && z == 123 {
+                score += 100
+            }
+        }
+        _ => {}
+    }
+    match E3::counted(1) {
+        E3::T(x, y, z) => {
+            if x == 1 && y == 12 && z == 123 {
+                score += 1000
+            }
+        }
+        _ => {}
+    }
+    score
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .expect("construct must order its initializers")
+        .expect("output view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    assert!(!output.run_on_top_mod(module).has_errors(&output));
+    assert_generated_integer(&output, output_file, "check_order", "1111");
+}
+
+#[test]
+fn construct_with_a_generic_field_type_in_a_header_with_binders() {
+    let source = r#"use core::default::Default
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, field_type}
+
+struct Defaulted {}
+impl FieldInit for Defaulted {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let ty = field_type(field)
+        quote { <${ty} as Default>::default() }
+    }
+}
+
+pub struct BuildDefault {}
+impl DeriveInherent for BuildDefault {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let value = construct<Defaulted>(record)
+        quote {
+            pub fn defaulted() -> Self {
+                ${value}
+            }
+        }
+    }
+}
+
+pub struct Wrap<T> {
+    pub a: T,
+    pub b: u256,
+}
+impl<T: Default> Wrap<T> with (BuildDefault)
+
+fn use_it() -> u256 {
+    let w: Wrap<u8> = Wrap<u8>::defaulted()
+    w.b + (w.a as u256)
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .expect("construct must write a generic record over its header parameters")
+        .expect("output view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    let diagnostics = output.run_on_top_mod(module);
+    assert!(
+        !diagnostics.has_errors(&output),
+        "{}",
+        diagnostics.format_diags(&output)
+    );
+
+    // Without the bound in the header, the generated `<T as Default>::default()`
+    // is refused: it is checked against the header's own premises.
+    let header = "impl<T: Default> Wrap<T> with (BuildDefault)";
+    assert_eq!(source.matches(header).count(), 1);
+    let unbounded = source.replace(header, "impl<T> Wrap<T> with (BuildDefault)");
+    let (db, file) = input(&unbounded);
+    let message = match prepare_file(&db, file) {
+        Err(error) => error.cause,
+        Ok(output) => {
+            let output = output.expect("output view");
+            let output_file = output
+                .workspace()
+                .get(&output, &file.url(&db).unwrap())
+                .unwrap();
+            let diagnostics = output.run_on_top_mod(output.top_mod(output_file));
+            assert!(
+                diagnostics.has_errors(&output),
+                "the generated default of an unbounded parameter must be refused"
+            );
+            diagnostics.format_diags(&output)
+        }
+    };
+    assert!(message.contains("Default"), "{message}");
+}
+
+#[test]
+fn construct_refusals_name_their_cause() {
+    fn replaced(source: &str, from: &str, to: &str) -> String {
+        assert_eq!(source.matches(from).count(), 1, "{from}");
+        source.replace(from, to)
+    }
+    fn refusal(source: &str) -> String {
+        let (db, file) = input(source);
+        prepare_file(&db, file)
+            .err()
+            .expect("construct must be refused")
+            .cause
+    }
+
+    let whole_enum = format!(
+        "{CONSTRUCT_SOURCE}pub enum Whole {{\n    A,\n    B(u256),\n}}\nimpl Whole with (Build)\n"
+    );
+    let cause = refusal(&whole_enum);
+    assert!(
+        cause.contains(
+            "construct requires a struct or a selected variant; a whole enum has no fields"
+        ),
+        "{cause}"
+    );
+
+    let failing_step = replaced(
+        CONSTRUCT_SOURCE,
+        "let value: u256 = (index as u256) + 1",
+        "let zero: u256 = 0\n        let value: u256 = (index as u256) / zero",
+    );
+    let cause = refusal(&failing_step);
+    assert!(cause.contains("division by zero"), "{cause}");
+
+    let empty_initializer = replaced(
+        &replaced(
+            CONSTRUCT_SOURCE,
+            "construct, variant, variant_count}",
+            "construct, empty, variant, variant_count}",
+        ),
+        "quote { ${value} }",
+        "let _ = value\n        empty<Expr>()",
+    );
+    let cause = refusal(&empty_initializer);
+    assert!(
+        cause.contains("construct requires an expression for every field"),
+        "{cause}"
+    );
+
+    let unbound_name = replaced(
+        CONSTRUCT_SOURCE,
+        "quote { ${value} }",
+        "quote(count) { count + ${value} }",
+    );
+    let cause = refusal(&unbound_name);
+    assert!(
+        cause.contains("quoted open name `count` has no enclosing binder"),
+        "{cause}"
+    );
+}
+
+#[test]
+fn construct_names_the_target_record_not_a_producer_namesake() {
+    let source = r#"mod author {
+    use core::derive::DeriveInherent
+    use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct}
+
+    pub struct Named {
+        pub z: bool,
+    }
+
+    struct Numbered {}
+    impl FieldInit for Numbered {
+        const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+            let value: u256 = (index as u256) + 1
+            quote { ${value} }
+        }
+    }
+
+    pub struct Build {}
+    impl DeriveInherent for Build {
+        const fn derive(_ record: Record) -> Code<Item> {
+            let value = construct<Numbered>(record)
+            quote {
+                pub const fn built() -> Self {
+                    ${value}
+                }
+            }
+        }
+    }
+}
+
+pub struct Named {
+    pub a: u256,
+    pub b: u256,
+}
+impl Named with (author::Build)
+
+const fn check_target() -> u256 {
+    let n = Named::built()
+    n.a * 10 + n.b
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .expect("construct must name the target record by its declaration")
+        .expect("output view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    assert!(!output.run_on_top_mod(module).has_errors(&output));
+    assert_generated_integer(&output, output_file, "check_target", "12");
+}
+
+#[test]
+fn construct_writes_the_record_arguments_where_nothing_else_fixes_them() {
+    let source = r#"use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, variant}
+
+struct Unused {}
+impl FieldInit for Unused {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        quote { 0 }
+    }
+}
+
+pub struct BuildNothing {}
+impl DeriveInherent for BuildNothing {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let nothing = construct<Unused>(variant(record, 0))
+        quote {
+            pub const fn nothing_is_first() -> bool {
+                let value = ${nothing}
+                match value {
+                    Maybe::Nothing => true
+                    _ => false
+                }
+            }
+        }
+    }
+}
+
+pub enum Maybe<T> {
+    Nothing,
+    Just(T),
+}
+impl<T> Maybe<T> with (BuildNothing)
+
+const fn check_maybe() -> u256 {
+    if Maybe<u8>::nothing_is_first() {
+        1
+    } else {
+        0
+    }
+}
+"#;
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .expect("construct must write the record arguments")
+        .expect("output view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let module = output.top_mod(output_file);
+    assert!(!output.run_on_top_mod(module).has_errors(&output));
+    assert_generated_integer(&output, output_file, "check_maybe", "1");
 }

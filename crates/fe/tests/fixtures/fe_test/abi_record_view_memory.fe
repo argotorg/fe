@@ -1,0 +1,63 @@
+use core::abi::{ByteSource, encode_alloc}
+use core::ptr::MemSpan
+use std::abi::{DynArray, Sol, decode_record_view_from, dyn_array_from}
+
+struct MemInput {
+    ptr: *u8,
+    len: usize,
+}
+
+impl Copy for MemInput {}
+
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len) }
+    }
+}
+
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_saturate() }
+
+    fn word_at(self, _ offset: u256) -> u256 {
+        self.span().word_at(offset)
+    }
+
+    fn byte_at(self, _ offset: u256) -> u8 {
+        if offset >= self.len as u256 { return 0 }
+        self.span().byte_at(offset.downcast_unchecked())
+    }
+
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+#[abi]
+struct Line {
+    tag: u8,
+    quantity: u256,
+}
+
+#[abi]
+struct Batch {
+    urgent: bool,
+    lines: DynArray<Line>,
+}
+
+#[test]
+fn record_view_reads_nested_fields_from_memory() {
+    let buffer = encode_alloc<Sol, Batch>(Batch {
+        urgent: true,
+        lines: dyn_array_from([
+            Line { tag: 3, quantity: 10 },
+            Line { tag: 7, quantity: 25 },
+        ]),
+    })
+    let input = MemInput { ptr: buffer.ptr(), len: buffer.len() }
+    let batch = decode_record_view_from<Batch, MemInput>(input, 0)
+
+    assert!(batch.urgent)
+    assert!(batch.lines[1].tag == 7)
+    assert!(batch.lines[1].quantity == 25)
+    assert!(buffer.len() > 0)
+}

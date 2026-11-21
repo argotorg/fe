@@ -828,7 +828,16 @@ mod tests {
         let file_path = temp.path().join("test.fe");
         let url = url::Url::from_file_path(&file_path).expect("file path to url");
         let mut db = DriverDataBase::default();
-        let file = db.workspace().touch(&mut db, url, Some(code.to_string()));
+        let file = db
+            .workspace()
+            .touch(&mut db, url.clone(), Some(code.to_string()));
+        let db = driver::generation::prepare_file(&db, file)
+            .map_err(|error| error.to_string())?
+            .unwrap_or(db);
+        let file = db
+            .workspace()
+            .get(&db, &url)
+            .expect("the prepared view keeps the source file");
         let top_mod = db.top_mod(file);
         let contract = top_mod
             .all_contracts(&db)
@@ -1037,7 +1046,7 @@ pub contract Foo {
 use std::abi::sol
 
 const PING: u32 = {
-    let x = sol("ping()");
+    let x = sol("ping()")
     x
 }
 
@@ -1068,8 +1077,8 @@ pub contract Foo {
 use std::abi::sol
 
 const PING: u32 = {
-    let x = sol("ping()");
-    let y = x;
+    let x = sol("ping()")
+    let y = x
     y
 }
 
@@ -2120,5 +2129,52 @@ pub contract EncodeMsgAbiProbe {
             "EncodeMsgAbiProbe",
         );
         assert!(entries.iter().any(|e| e["name"] == "probe"));
+    }
+
+    #[test]
+    fn in_place_and_whole_arms_have_equal_entries() {
+        // How an arm reads its message does not show in the interface: the
+        // entries come from the variant and its selector.
+        let code = |name: &str, pattern: &str| {
+            format!(
+                r#"use std::abi::sol
+use std::evm::Address
+
+#[abi]
+pub struct Inner {{ pub x: u256, pub y: bool }}
+
+msg Shop {{
+    #[selector = sol("buy(bool,(uint256,bool)[],address,bytes)")]
+    Buy {{ flag: bool, items: std::abi::DynArray<Inner>, who: Address, note: std::abi::Bytes }} -> u256,
+}}
+
+pub contract {name} {{
+    recv Shop {{
+        Buy {pattern} -> u256 {{
+            items[1].x
+        }}
+    }}
+}}
+"#
+            )
+        };
+        let whole = generate_test_abi(
+            &code("Whole", "{ flag: _, items, who: _, note: _ }"),
+            "Whole",
+        )
+        .expect("generate abi of the whole arm");
+        let in_place = generate_test_abi(
+            &code("InPlace", "{ flag: _, ref items, who: _, note: _ }"),
+            "InPlace",
+        )
+        .expect("generate abi of the in-place arm");
+        assert_eq!(whole, in_place);
+        let entries: Vec<Value> = serde_json::from_str(&in_place).expect("parse abi json");
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry["type"] == "function" && entry["name"] == "buy"),
+            "the arm's entry is listed: {in_place}"
+        );
     }
 }

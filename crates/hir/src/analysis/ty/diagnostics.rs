@@ -1096,6 +1096,22 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
     },
 
+    /// A recv arm names a field with `ref`, so it reads its message where it
+    /// lies, but the message is not read field by field (no `AbiFields`).
+    RecvArmMessageNotFieldwise {
+        primary: DynLazySpan<'db>,
+        variant_ty: TyId<'db>,
+    },
+
+    /// A recv arm names a field with `ref`, but the field's type cannot be
+    /// read where it lies (no `Part` for the input and the encoding).
+    RecvArmRefFieldNotReadable {
+        primary: DynLazySpan<'db>,
+        field_ty: TyId<'db>,
+        input_ty: TyId<'db>,
+        abi_ty: TyId<'db>,
+    },
+
     /// A pattern naming a constant of type `ty`, which is not an integer or
     /// `bool`.
     ConstPatternType {
@@ -1706,6 +1722,8 @@ impl<'db> BodyDiag<'db> {
             Self::RefutableParamPattern { .. } => 133,
             Self::RefutableLoopPattern { .. } => 148,
             Self::RefutableRecvArmPattern { .. } => 153,
+            Self::RecvArmMessageNotFieldwise { .. } => 160,
+            Self::RecvArmRefFieldNotReadable { .. } => 161,
             Self::ConstPatternType { .. } => 154,
             Self::GenericConstPattern { .. } => 155,
             Self::InvalidConstPattern { .. } => 156,

@@ -1,0 +1,29 @@
+// A failure inside `FieldInit::init` is reported where it happens.
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct}
+
+struct Numbered {}
+impl FieldInit for Numbered {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        let zero: u256 = 0
+        let value: u256 = (index as u256) / zero
+        quote { ${value} }
+    }
+}
+
+pub struct Build {}
+impl DeriveInherent for Build {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let value = construct<Numbered>(record)
+        quote {
+            pub const fn built() -> Self {
+                ${value}
+            }
+        }
+    }
+}
+
+pub struct Named {
+    pub a: u256,
+}
+impl Named with (Build)

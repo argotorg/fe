@@ -1,0 +1,26 @@
+// A `recv` arm that names a field with `ref` reads it in the dispatcher, with
+// the `Part` implementation of the field's type, and no call in this ingot
+// names that implementation. `u`, which wrote the unsafe code in it, is not
+// trusted, so the arm is refused.
+use std::evm::{Call, Evm}
+use u::R
+
+msg Messages {
+    #[selector = 0x11111111]
+    Get { r: R } -> u256,
+}
+
+pub contract Reading {
+    recv Messages {
+        Get { ref r } -> u256 {
+            r
+        }
+    }
+}
+
+#[test]
+fn dispatcher_reads_with_untrusted_code() uses (evm: mut Evm) {
+    let c = evm.create2<Reading>(value: Wei::zero(), args: (), salt: 0)
+    let v: u256 = evm.call(addr: c, gas: 1000000, value: Wei::zero(), message: Messages::Get { r: R { v: 1 } })
+    assert(v == 1)
+}

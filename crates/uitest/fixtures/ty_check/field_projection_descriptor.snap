@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/field_projection_descriptor.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:41:5
+   │
+41 │     v.a0
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, u8, ()>>`
+   │     trait bound `(): Shown` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:45:5
+   │
+45 │     v.a1
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, u16, (u8)>>`
+   │     trait bound `(u8): Shown` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:49:5
+   │
+49 │     v.a2
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, u32, ((u8), (u16))>>`
+   │     trait bound `((u8), (u16)): Shown` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:53:5
+   │
+53 │     v.a3
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, u64, (((u8), (u16)), (u32))>>`
+   │     trait bound `(((u8), (u16)), (u32)): Shown` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:57:5
+   │
+57 │     v.a5
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, u256, ((((u8), (u16)), ((u32), (u64))), (u128))>>`
+   │     trait bound `((((u8), (u16)), ((u32), (u64))), (u128)): Shown` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ field_projection_descriptor.fe:61:5
+   │
+61 │     v.a7
+   │     ^^^^
+   │     │
+   │     `View<Rec>` doesn't implement `ProjectField<Field<Rec, i8, (((((u8), (u16)), ((u32), (u64))), ((u128), (u256))), (bool))>>`
+   │     trait bound `(((((u8), (u16)), ((u32), (u64))), ((u128), (u256))), (bool)): Shown` is not satisfied

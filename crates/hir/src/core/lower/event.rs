@@ -10,10 +10,9 @@ use super::{
 };
 use crate::{
     hir_def::{
-        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId, FieldIndex,
-        FuncModifiers, FuncParam, FuncParamMode, FuncParamName, GenericParamListId, IdentId,
-        LitKind, Partial, PathId, PathKind, Struct, TrackedItemVariant, TraitRefId, TypeId,
-        TypeKind, TypeMode, Visibility,
+        AssocConstDef, AttrListId, Body, BodyKind, Expr, FieldDef, FieldDefListId,
+        GenericParamListId, IdentId, LitKind, Partial, PathId, PathKind, Struct,
+        TrackedItemVariant, TraitRefId, TypeId, TypeKind,
     },
     span::{EventDesugared, HirOrigin},
 };
@@ -120,35 +119,29 @@ pub(super) fn lower_event_struct<'db>(
         ),
     );
 
-    let indexed_fields = parsed_fields.indexed_fields.clone();
-    let data_fields = parsed_fields.data_fields.clone();
-    let ordered_field_types = parsed_fields.ordered_field_types.clone();
-
-    let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
-    let trait_ref = Partial::Present(trait_ref);
-    let self_ty = Partial::Present(self_ty);
-    builder.with_item_scope(
-        TrackedItemVariant::ImplTrait(impl_trait_idx),
-        move |builder, id| {
-            let topic0_const = create_topic0_const(
-                builder.ctxt(),
-                event_desugared.clone(),
+    let attrs = named_attr_specs(ast.attr_list(), "event");
+    let [attr] = attrs.as_slice() else {
+        return struct_;
+    };
+    if !attr.is_bare() {
+        return struct_;
+    }
+    let ordered_field_types = parsed_fields.ordered_field_types;
+    super::short_form::lower_derive_slot(
+        &mut builder,
+        self_ty,
+        trait_ref,
+        "StructEvent",
+        (attr.range, 0),
+        |ctxt| {
+            vec![create_topic0_const(
+                ctxt,
+                event_desugared,
                 &struct_name_str,
                 &ordered_field_types,
-            );
-            let impl_trait = builder.new_impl_trait(
-                id,
-                trait_ref,
-                self_ty,
-                vec![],
-                vec![topic0_const],
-                builder.origin(),
-            );
-            lower_emit_method(builder, &indexed_fields, &data_fields);
-            impl_trait
+            )]
         },
     );
-
     struct_
 }
 
@@ -156,9 +149,6 @@ struct ParsedEventFields<'db> {
     hir_fields: Vec<FieldDef<'db>>,
     /// Each field's source type, used to generate Solidity signature fragments.
     ordered_field_types: Vec<TypeId<'db>>,
-    /// Indexed fields with their TypeId (for topic encoding).
-    indexed_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
-    data_fields: Vec<(IdentId<'db>, TypeId<'db>)>,
     is_valid: bool,
 }
 
@@ -172,8 +162,6 @@ fn parse_event_fields<'db>(
 
     let mut hir_fields = Vec::new();
     let mut ordered_field_types = Vec::new();
-    let mut indexed_fields = Vec::new();
-    let mut data_fields = Vec::new();
     let mut indexed_ranges = Vec::new();
     let mut indexed_count = 0usize;
 
@@ -183,8 +171,6 @@ fn parse_event_fields<'db>(
         return ParsedEventFields {
             hir_fields,
             ordered_field_types,
-            indexed_fields,
-            data_fields,
             is_valid,
         };
     };
@@ -229,7 +215,7 @@ fn parse_event_fields<'db>(
             attrs, name_ident, ty_ref, vis, is_indexed, false,
         ));
 
-        let (Some(name_ident), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
+        let (Some(_), Some(ty)) = (name_ident.to_opt(), ty_ref.to_opt()) else {
             is_valid = false;
             continue;
         };
@@ -258,12 +244,6 @@ fn parse_event_fields<'db>(
         };
 
         ordered_field_types.push(ty);
-
-        if is_indexed {
-            indexed_fields.push((name_ident, ty));
-        } else {
-            data_fields.push((name_ident, ty));
-        }
     }
 
     if indexed_count > 3 {
@@ -284,8 +264,6 @@ fn parse_event_fields<'db>(
     ParsedEventFields {
         hir_fields,
         ordered_field_types,
-        indexed_fields,
-        data_fields,
         is_valid,
     }
 }
@@ -454,131 +432,4 @@ fn push_sol_type_fragments<'db>(
     );
     let sol_type_path = qualified.push_str(db, "SOL_TYPE");
     out.push(body.push_expr(Expr::Path(Partial::Present(sol_type_path)), origin.clone()));
-}
-
-fn lower_emit_method<'db>(
-    builder: &mut HirBuilder<'_, 'db, EventDesugared>,
-    indexed_fields: &[(IdentId<'db>, TypeId<'db>)],
-    data_fields: &[(IdentId<'db>, TypeId<'db>)],
-) {
-    let db = builder.db();
-    let roots = builder.roots();
-
-    let emit_ident = builder.ident("emit");
-    let log_provider_ident = builder.ident("log");
-    let data_ident = builder.ident("data");
-    let as_topic_ident = builder.ident("as_topic");
-    let span_ident = builder.ident("span");
-    let log_method_ident = builder.ident(&format!("log{}", indexed_fields.len() + 1));
-
-    let log_trait_ref = TraitRefId::new(
-        db,
-        Partial::Present(
-            PathId::from_ident(db, roots.std)
-                .push_str(db, "evm")
-                .push_str(db, "Log"),
-        ),
-    );
-    let (generic_params, [log_ty]) = builder.type_params_with_trait_bounds([("L", log_trait_ref)]);
-    let log_param_ty = TypeId::new(db, TypeKind::Mode(TypeMode::Mut, Partial::Present(log_ty)));
-
-    let self_param = FuncParam {
-        mode: FuncParamMode::Own,
-        is_mut: false,
-        has_ref_prefix: false,
-        has_own_prefix: false,
-        has_mut_prefix: false,
-        is_label_suppressed: false,
-        name: Partial::Present(FuncParamName::Ident(IdentId::make_self(db))),
-        ty: Partial::Present(builder.self_ty()),
-        self_ty_fallback: true,
-    };
-
-    let log_param = FuncParam {
-        mode: FuncParamMode::Mut,
-        is_mut: false,
-        has_ref_prefix: false,
-        has_own_prefix: false,
-        has_mut_prefix: false,
-        is_label_suppressed: true,
-        name: Partial::Present(FuncParamName::Ident(log_provider_ident)),
-        ty: Partial::Present(log_param_ty),
-        self_ty_fallback: false,
-    };
-
-    let params = builder.params([self_param, log_param]);
-    let modifiers = FuncModifiers::new(Visibility::Private, false, false, false);
-
-    builder.func_with_body_inline_always(
-        emit_ident,
-        generic_params,
-        params,
-        None,
-        modifiers,
-        move |body| {
-            // Only materialize `self` when a field reads it: an unreferenced expr
-            // in the body arena is never typed and blocks MIR lowering.
-            let self_expr = (!data_fields.is_empty() || !indexed_fields.is_empty())
-                .then(|| body.path_expr(PathId::from_ident(db, IdentId::make_self(db))));
-
-            let data_buffer = if data_fields.is_empty() {
-                let empty_buffer = PathId::from_ident(db, roots.core)
-                    .push_str(db, "ptr")
-                    .push_str(db, "MemBuffer")
-                    .push_str(db, "empty");
-                let empty_expr = body.path_expr(empty_buffer);
-                body.call_expr(empty_expr, vec![])
-            } else {
-                let mut elems = Vec::with_capacity(data_fields.len());
-                for (name, _) in data_fields.iter().copied() {
-                    elems.push(self_field_expr(body, self_expr.unwrap(), name));
-                }
-                let payload_expr = body.push_expr(Expr::Tuple(elems));
-                let encode_path = PathId::from_ident(db, roots.std)
-                    .push_str(db, "evm")
-                    .push_str(db, "encode_abi_payload");
-                let encode_expr = body.path_expr(encode_path);
-                body.call_expr(encode_expr, vec![payload_expr])
-            };
-            let data = body.method_call_expr(data_buffer, span_ident, vec![]);
-
-            let topic0 = {
-                let path = PathId::from_ident(db, IdentId::make_self_ty(db)).push_str(db, "TOPIC0");
-                body.path_expr(path)
-            };
-            let mut args = Vec::with_capacity(2 + indexed_fields.len());
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(data_ident),
-                expr: data,
-            });
-            args.push(crate::hir_def::expr::CallArg {
-                label: Some(IdentId::new(db, "topic0".to_string())),
-                expr: topic0,
-            });
-
-            for (name, _ty) in indexed_fields.iter().copied() {
-                let value = self_field_expr(body, self_expr.unwrap(), name);
-                let topic = body.method_call_expr(value, as_topic_ident, vec![]);
-                args.push(crate::hir_def::expr::CallArg {
-                    label: Some(IdentId::new(db, format!("topic{}", args.len() - 1))),
-                    expr: topic,
-                });
-            }
-
-            let log_expr = body.ident_expr(log_provider_ident);
-            let log_call = body.method_call_expr_with_args(log_expr, log_method_ident, args);
-            body.emit_expr_stmt(log_call);
-        },
-    );
-}
-
-fn self_field_expr<'db>(
-    body: &mut super::hir_builder::BodyBuilder<'_, 'db, EventDesugared>,
-    receiver: crate::hir_def::ExprId,
-    field: IdentId<'db>,
-) -> crate::hir_def::ExprId {
-    body.push_expr(Expr::Field(
-        receiver,
-        Partial::Present(FieldIndex::Ident(field)),
-    ))
 }

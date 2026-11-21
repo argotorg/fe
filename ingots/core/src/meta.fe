@@ -42,6 +42,14 @@ pub trait FieldQuery<R> {
     const fn evaluate() -> R
 }
 
+/// One field's initializer for `construct`. `construct` calls `init` once
+/// for each field of the record, in declaration order, with the field and
+/// its position; the code it returns is that field's initializer. Only
+/// ordinary implementations are used, as for `FieldQuery`.
+pub trait FieldInit {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr>
+}
+
 extern {
     /// Make a variant pattern that binds its complete payload. The group index
     /// distinguishes binder sets for the same variant (for example left and
@@ -49,6 +57,18 @@ extern {
     /// enclosing group scope and rejects field references outside its arm.
     pub const fn binders(_ payload: Record, _ group: usize) -> Code<Pat>
     const fn binder_at(_ pattern: Code<Pat>, _ field: Field) -> Code<Expr>
+    /// Build a value of `record`, a struct or a payload selected with
+    /// `variant`, from one initializer per field given by `S::init`: the
+    /// record's own constructor, `R { a: .., b: .. }`, `R(.., ..)`,
+    /// `E::V { .. }`, `E::V(..)` or `E::V`, with every field present once.
+    /// At run time the initializers are evaluated once each, in declaration
+    /// order, before the value is built. The code names the record by its
+    /// declaration and writes no other names. A whole enum rejects.
+    pub const fn construct<S: FieldInit>(_ record: Record) -> Code<Expr>
+    /// Issue a unit-valued block that evaluates one expression from
+    /// `S::init` per field in declaration order. Uses the same checked field
+    /// inputs and ordinary implementation lookup as `construct`.
+    pub const fn for_each_field<S: FieldInit>(_ record: Record) -> Code<Expr>
     /// Count variants of a whole compiler-issued enum input. Structs and
     /// already selected payloads reject.
     pub const fn variant_count(_ record: Record) -> usize
@@ -60,8 +80,17 @@ extern {
     pub const fn field_count(_ record: Record) -> usize
     pub const fn field(_ record: Record, _ index: usize) -> Field
     pub const fn field_type(_ field: Field) -> FieldType
+    /// The types of a record's fields in declaration order, as the same
+    /// tuple tree used by `core::ops::Field`. Select a payload first for an enum.
+    /// A type splice carries the instantiated types for an applied record.
+    /// For a record over its own parameters, it retains the written types in
+    /// their declaring scope.
+    pub const fn field_types(_ record: Record) -> TypeRef
     /// Preserve this type's identity when splicing it into generated code.
     pub const fn type_ref<T>() -> TypeRef
+    /// Whether this field carries an authored event `#[indexed]` marker.
+    /// Fields of ordinary records and enum payloads return false.
+    pub const fn field_is_indexed(_ field: Field) -> bool
     /// Test for bool, u64 or u256 (including aliases). Other candidate types
     /// are unsupported, not false. This is not general reflected equality.
     pub const fn type_is<T>(_ ty: FieldType) -> bool

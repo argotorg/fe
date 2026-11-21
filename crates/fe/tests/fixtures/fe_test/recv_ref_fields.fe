@@ -1,0 +1,285 @@
+// A `recv` arm that names a field of its message with `ref` reads the message
+// where it lies in the calldata: a plain name decodes its field, a `ref` name
+// binds the field read in place, and a field bound by `_` is not read. An arm
+// without such a `ref` decodes the whole message before its body runs. The
+// arms below read the same message in each way and are given inputs that are
+// malformed in a field that the arm does not read: the in-place arm and its
+// hand-written twin accept them, the whole arm refuses them.
+use core::abi::store_word
+use core::message::MsgVariant
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{Bytes, DynArray, Sol, decode_record_from}
+use std::evm::{Address, Call, CallData, Evm}
+
+#[abi]
+pub struct Inner { pub x: u256, pub y: bool }
+
+msg Shop {
+    #[selector = 0x01]
+    Buy { flag: bool, items: DynArray<Inner>, who: Address, note: Bytes } -> u256,
+    #[selector = 0x02]
+    Swap { a: u64, b: u64 } -> u64,
+    #[selector = 0x03]
+    Tag { t: u8 } -> u8,
+}
+
+msg Pairs {
+    #[selector = 0x04]
+    P { p: Inner, q: bool } -> u256,
+}
+
+msg RawShop {
+    #[selector = 0x01]
+    Buy -> u256,
+}
+
+/// The arguments of `Buy`, for the hand-written twin.
+#[abi]
+pub struct BuyArgs { pub flag: bool, pub items: DynArray<Inner>, pub who: Address, pub note: Bytes }
+
+/// Every field of `Buy` that the body does not need is bound by `_`; the
+/// whole message is decoded and checked before the body runs.
+pub contract Whole {
+    recv Shop {
+        Buy { flag: _, items, who: _, note: _ } -> u256 {
+            items[1].x
+        }
+        Swap { a, b } -> u64 {
+            a
+        }
+        Tag { t } -> u8 {
+            t
+        }
+    }
+}
+
+/// `items` is read in place; the other fields are not read.
+pub contract InPlace {
+    recv Shop {
+        Buy { flag: _, ref items, who: _, note: _ } -> u256 {
+            items[1].x
+        }
+        Swap { ref b, a } -> u64 {
+            a * 1000 + b
+        }
+        Tag { ref t } -> u8 {
+            t
+        }
+    }
+}
+
+/// `items` is read in place and every other field is decoded: it names all
+/// four fields.
+pub contract InPlaceAll {
+    recv Shop {
+        Buy { flag, ref items, who, note } -> u256 {
+            if flag && who == Address::new(0xaa) {
+                items[1].x + note.len() as u256
+            } else {
+                0
+            }
+        }
+        Swap { a, b } -> u64 {
+            a
+        }
+        Tag { t } -> u8 {
+            t
+        }
+    }
+}
+
+/// A `ref` inside the pattern of a field keeps its ordinary meaning, so the
+/// arm still decodes its whole message.
+pub contract NestedRef {
+    recv Pairs {
+        P { p: Inner { ref x, .. }, q: _ } -> u256 {
+            x
+        }
+    }
+}
+
+/// The hand-written form of `InPlace`'s `Buy`: the handle of the arguments at
+/// byte 4, and `items` read through it.
+pub contract Twin {
+    recv RawShop {
+        Buy {} -> u256 {
+            let p = decode_record_from<Sol, BuyArgs, CallData>(CallData::new(), 4)
+            p.items[1].x
+        }
+    }
+}
+
+/// A buffer that no drop frees.
+struct MemInput { ptr: *u8, len: u256 }
+
+/// The words as one input of `len` bytes.
+fn payload<const N: usize>(_ words: [u256; N], len: u256) -> MemInput {
+    let data = ptr::alloc_bytes(N * 32)
+    var i: usize = 0
+    while i < N {
+        unsafe { store_word(ptr: ptr::offset_bytes(data, i * 32), value: words[i]) }
+        i += 1
+    }
+    MemInput { ptr: data, len }
+}
+
+// cast abi-encode "f(bool,(uint256,bool)[],address,bytes)" true "[(5,false),(9,true)]" 0x00000000000000000000000000000000000000aa 0xbeef
+// The head is words 0 to 3, `items` is words 4 to 8 (length, then two records of two words), `note` is words 9 and 10.
+// `m` selects a malformed copy: 1 `flag` is 2, 2 `who` has bit 200 set, 3 the offset of `note` is `2**64`,
+// 4 the `y` of `items[0]` is 2, 5 the input is one byte shorter than the head.
+fn buy(_ m: u256) -> MemInput {
+    var w: [u256; 11] = [
+        0x0000000000000000000000000000000000000000000000000000000000000001,
+        0x0000000000000000000000000000000000000000000000000000000000000080,
+        0x00000000000000000000000000000000000000000000000000000000000000aa,
+        0x0000000000000000000000000000000000000000000000000000000000000120,
+        0x0000000000000000000000000000000000000000000000000000000000000002,
+        0x0000000000000000000000000000000000000000000000000000000000000005,
+        0x0000000000000000000000000000000000000000000000000000000000000000,
+        0x0000000000000000000000000000000000000000000000000000000000000009,
+        0x0000000000000000000000000000000000000000000000000000000000000001,
+        0x0000000000000000000000000000000000000000000000000000000000000002,
+        0xbeef000000000000000000000000000000000000000000000000000000000000,
+    ]
+    if m == 1 { w[0] = 2 }
+    if m == 2 { w[2] = 0xaa | (1 << 200) }
+    if m == 3 { w[3] = 1 << 64 }
+    if m == 4 { w[6] = 2 }
+    payload(w, len: if m == 5 { 4 * 32 - 1 } else { 11 * 32 })
+}
+
+// cast abi-encode "f((uint256,bool),bool)" "(5,false)" true; `q` is word 2, and `m` 6 sets it to 2.
+fn pair(_ m: u256) -> MemInput {
+    let q: u256 = if m == 6 { 2 } else { 1 }
+    payload([5, 0, q], len: 3 * 32)
+}
+
+// cast abi-encode "f(uint64,uint64)" 3 4
+fn swap() -> MemInput {
+    payload([3, 4], len: 2 * 32)
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+/// Call `addr` with `selector` followed by `payload`.
+fn call_raw(_ addr: Address, selector: u256, payload: MemInput) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + payload.len
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data.ptr(), value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data.ptr(), 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    var ret = MemBuffer::new(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: Wei::zero(),
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+/// The call succeeded and returned `value`.
+fn returns(_ o: Outcome, _ value: u256) -> bool {
+    o.success && o.ret_len == 32 && o.word0 == value
+}
+
+/// The call reverted.
+fn reverts(_ o: Outcome) -> bool {
+    !o.success
+}
+
+/// The four contracts that read `Buy`.
+struct Shops { whole: Address, in_place: Address, all: Address, twin: Address }
+
+fn deploy() -> Shops uses (evm: mut Evm) {
+    // Two arms may compile to the same code, so each contract has its own salt.
+    Shops {
+        whole: evm.create2<Whole>(value: Wei::zero(), args: (), salt: 1),
+        in_place: evm.create2<InPlace>(value: Wei::zero(), args: (), salt: 2),
+        all: evm.create2<InPlaceAll>(value: Wei::zero(), args: (), salt: 3),
+        twin: evm.create2<Twin>(value: Wei::zero(), args: (), salt: 4),
+    }
+}
+
+#[test]
+fn valid_input_is_read_alike_by_every_arm() uses (evm: mut Evm) {
+    let s = deploy()
+    assert!(returns(call_raw(s.whole, selector: 1, payload: buy(0)), 9))
+    assert!(returns(call_raw(s.in_place, selector: 1, payload: buy(0)), 9))
+    assert!(returns(call_raw(s.twin, selector: 1, payload: buy(0)), 9))
+    assert!(returns(call_raw(s.all, selector: 1, payload: buy(0)), 11))
+}
+
+#[test]
+fn a_field_the_arm_does_not_read_may_be_malformed() uses (evm: mut Evm) {
+    let s = deploy()
+    // `flag`, `who` and the offset of `note`: the whole arm refuses each, the
+    // in-place arm and its twin do not read them, and the arm that names them
+    // by plain name decodes them.
+    var m: u256 = 1
+    while m <= 3 {
+        assert!(reverts(call_raw(s.whole, selector: 1, payload: buy(m))))
+        assert!(returns(call_raw(s.in_place, selector: 1, payload: buy(m)), 9))
+        assert!(returns(call_raw(s.twin, selector: 1, payload: buy(m)), 9))
+        assert!(reverts(call_raw(s.all, selector: 1, payload: buy(m))))
+        m += 1
+    }
+}
+
+#[test]
+fn a_ref_field_checks_only_what_the_body_reads() uses (evm: mut Evm) {
+    let s = deploy()
+    // `items[0].y` is 2; `items[1].x` does not read it. The eager decoder of
+    // `DynArray` checks the extent of the array and copies its tail, and
+    // decodes an element when it is read, so the whole arm accepts this input
+    // as well; the in-place arms read only what their bodies read.
+    assert!(returns(call_raw(s.whole, selector: 1, payload: buy(4)), 9))
+    assert!(returns(call_raw(s.in_place, selector: 1, payload: buy(4)), 9))
+    assert!(returns(call_raw(s.twin, selector: 1, payload: buy(4)), 9))
+    assert!(returns(call_raw(s.all, selector: 1, payload: buy(4)), 11))
+}
+
+#[test]
+fn an_input_shorter_than_the_head_is_refused_by_every_arm() uses (evm: mut Evm) {
+    let s = deploy()
+    assert!(reverts(call_raw(s.whole, selector: 1, payload: buy(5))))
+    assert!(reverts(call_raw(s.in_place, selector: 1, payload: buy(5))))
+    assert!(reverts(call_raw(s.twin, selector: 1, payload: buy(5))))
+    assert!(reverts(call_raw(s.all, selector: 1, payload: buy(5))))
+}
+
+#[test]
+fn each_name_keeps_its_field_whatever_the_order_of_the_pattern() uses (evm: mut Evm) {
+    let s = deploy()
+    // `Swap { ref b, a }` lists `b` first.
+    assert!(returns(call_raw(s.whole, selector: 2, payload: swap()), 3))
+    assert!(returns(call_raw(s.in_place, selector: 2, payload: swap()), 3004))
+}
+
+#[test]
+fn a_ref_inside_a_field_pattern_does_not_read_in_place() uses (evm: mut Evm) {
+    let nested = evm.create2<NestedRef>(value: Wei::zero(), args: (), salt: 5)
+    // The arm decodes its whole message, so `q` is checked.
+    assert!(reverts(call_raw(nested, selector: 4, payload: pair(6))))
+    assert!(returns(call_raw(nested, selector: 4, payload: pair(0)), 5))
+}
+
+#[test]
+fn the_selectors_do_not_depend_on_the_arms() {
+    assert!(<Shop::Buy as MsgVariant<Sol>>::SELECTOR == 1)
+    assert!(<Shop::Swap as MsgVariant<Sol>>::SELECTOR == 2)
+}

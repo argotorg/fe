@@ -1,0 +1,196 @@
+use core::abi::{Abi, AbiFrame, AbiSize, AbiSpan, ByteInput, Encode, abi_field_head_size, abi_record_field_end, checked_frame_end, dynamic_payload_size, encode_field}
+use core::derive::Derive
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, field_count, field_types, for_each_field, type_ref}
+use ingot::abi::HeadsBefore
+
+struct PayloadSize { bytes: u256 }
+
+impl PayloadSize {
+    #[inline(always)]
+    fn add<F: AbiSize>(mut self, _ field: F) {
+        self.bytes = self.bytes + dynamic_payload_size(field)
+    }
+}
+
+struct AddPayloadSize {}
+impl FieldInit for AddPayloadSize {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        quote(size) { size.add(self.${field}) }
+    }
+}
+
+trait HasDynamicFields {
+    const IS_DYNAMIC: bool
+}
+
+impl HasDynamicFields for () {
+    const IS_DYNAMIC: bool = false
+}
+
+impl<F: AbiSize> HasDynamicFields for (F,) {
+    const IS_DYNAMIC: bool = F::IS_DYNAMIC
+}
+
+impl<L: HasDynamicFields, R: HasDynamicFields> HasDynamicFields for (L, R) {
+    const IS_DYNAMIC: bool = L::IS_DYNAMIC || R::IS_DYNAMIC
+}
+
+/// Provides `AbiSize` for a record: `HEAD_SIZE` is the sum of the fields'
+/// head sizes (one word for a dynamic field), `IS_DYNAMIC` is whether any
+/// field is dynamic, and `payload_size` adds the payload of each dynamic
+/// field to the head.
+pub struct StructAbiSize {}
+impl Derive<trait AbiSize> for StructAbiSize {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let fields = field_types(record)
+        let payload = for_each_field<AddPayloadSize>(record)
+        quote(size) {
+            const HEAD_SIZE: u256 = <${fields} as HeadsBefore>::SIZE
+            const IS_DYNAMIC: bool = <${fields} as HasDynamicFields>::IS_DYNAMIC
+
+            #[inline(always)]
+            fn payload_size(self) -> u256 {
+                var size = PayloadSize { bytes: <Self as AbiSize>::HEAD_SIZE }
+                ${payload}
+                size.bytes
+            }
+        }
+    }
+}
+
+pub(ingot) struct RecordWriter<A> {
+    out: AbiFrame,
+    tails: AbiFrame,
+    head: u256,
+    remaining: usize,
+}
+
+impl<A: Abi> RecordWriter<A> {
+    /// Start at the first head in `out`. `fields` counts the fields that will
+    /// be written, and `head_size` is the sum of their ABI head sizes.
+    #[inline(always)]
+    pub(ingot) fn new(_ out: AbiFrame, head_size: u256, fields: usize) -> Self {
+        RecordWriter {
+            out: out.tail(0),
+            tails: out.tail(head_size),
+            head: 0,
+            remaining: fields,
+        }
+    }
+
+    #[inline(always)]
+    fn push<F: Encode<A> + AbiSize>(mut self, _ field: F) {
+        self.tails = encode_field<A, F>(field, self.out, head_pos: self.head, tails: self.tails)
+        self.remaining = self.remaining - 1
+        if self.remaining != 0 {
+            self.head = self.head + abi_field_head_size<F>()
+        }
+    }
+}
+
+#[inline(always)]
+fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
+    writer.push(field)
+}
+
+struct WriteField {}
+impl FieldInit for WriteField {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        quote(writer) { writer.push(self.${field}) }
+    }
+}
+
+/// Write one field of `self` through the splice site's mutable `writer` when
+/// the splice is in a different provider module.
+/// Splice once per field counted by `RecordWriter::new`, in encoding order.
+pub(ingot) const fn write_field_from_provider(_ field: Field) -> Code<Expr> {
+    quote(writer) { push_record_field(mut writer, self.${field}) }
+}
+
+struct SpanCursor {
+    base: u256,
+    head: u256,
+    input_len: u256,
+    end: u256,
+}
+
+trait SpanFields<A: Abi> {
+    fn extend<I: ByteInput>(_ cursor: mut SpanCursor, _ input: I, advance: bool)
+}
+
+impl<A: Abi> SpanFields<A> for () {
+    fn extend<I: ByteInput>(_ cursor: mut SpanCursor, _ input: I, advance: bool) {}
+}
+
+impl<A: Abi, F: AbiSpan<A>> SpanFields<A> for (F,) {
+    #[inline(always)]
+    fn extend<I: ByteInput>(_ cursor: mut SpanCursor, _ input: I, advance: bool) {
+        cursor.end = abi_record_field_end<A, F, I>(
+            input, cursor.base, cursor.head, cursor.input_len, cursor.end,
+        )
+        if advance {
+            cursor.head = cursor.head + abi_field_head_size<F>()
+        }
+    }
+}
+
+impl<A: Abi, L: SpanFields<A>, R: SpanFields<A>> SpanFields<A> for (L, R) {
+    #[inline(always)]
+    fn extend<I: ByteInput>(_ cursor: mut SpanCursor, _ input: I, advance: bool) {
+        <L as SpanFields<A>>::extend(mut cursor, input, advance: true)
+        <R as SpanFields<A>>::extend(mut cursor, input, advance: advance)
+    }
+}
+
+/// Provides `Encode<A>` for a record: each field is written at its head
+/// position, and a dynamic field's payload after the head, in field order.
+pub struct StructAbiEncode {}
+impl<A: Abi> Derive<trait Encode<A>> for StructAbiEncode {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let abi = type_ref<A>()
+        let count = field_count(record)
+        let steps = for_each_field<WriteField>(record)
+        quote(writer) {
+            #[inline(always)]
+            fn encode(self, _ out: AbiFrame) {
+                var writer: RecordWriter<${abi}> = RecordWriter {
+                    out: out.tail(0),
+                    tails: out.tail(<Self as AbiSize>::HEAD_SIZE),
+                    head: 0,
+                    remaining: ${count},
+                }
+                ${steps}
+            }
+        }
+    }
+}
+
+/// Provides `AbiSpan<A>` for a record: `payload_end_with_input_len` checks
+/// the record's head against the input and folds every field's end into the
+/// end of the head, like the tuple implementations in `core::abi`;
+/// `payload_end` bounds it by the whole input.
+pub struct StructAbiSpan {}
+impl<A: Abi> Derive<trait AbiSpan<A>> for StructAbiSpan {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let abi = type_ref<A>()
+        let fields = field_types(record)
+        quote {
+            #[inline(always)]
+            fn payload_end<I: ByteInput>(_ input: I, base: u256, pos: u256) -> u256 {
+                <Self as AbiSpan<${abi}>>::payload_end_with_input_len(input, base: base, pos: pos, input_len: input.len())
+            }
+
+            #[inline(always)]
+            fn payload_end_with_input_len<I: ByteInput>(_ input: I, base: u256, pos: u256, input_len: u256) -> u256 {
+                var cursor = SpanCursor {
+                    base: pos,
+                    head: pos,
+                    input_len,
+                    end: checked_frame_end<${abi}>(pos, <Self as AbiSize>::HEAD_SIZE, input_len),
+                }
+                <${fields} as SpanFields<${abi}>>::extend(mut cursor, input, advance: false)
+                cursor.end
+            }
+        }
+    }
+}

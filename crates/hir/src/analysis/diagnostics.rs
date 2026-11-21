@@ -4467,6 +4467,54 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::RecvArmMessageNotFieldwise {
+                primary,
+                variant_ty,
+            } => {
+                let variant = variant_ty.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!(
+                        "this arm reads its message where it lies, but `{variant}` is not read field by field"
+                    ),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{variant}` does not implement `std::abi::AbiFields`"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "a `ref` field reads the message in place, which needs its encoding to be the tuple of its fields; `msg` variants and `#[abi]` structs have it, and a hand-written message states `impl AbiFields for {variant} {{}}`"
+                    )],
+                    error_code,
+                }
+            }
+
+            Self::RecvArmRefFieldNotReadable {
+                primary,
+                field_ty,
+                input_ty,
+                abi_ty,
+            } => {
+                let field = field_ty.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "a `ref` field cannot be read where it lies".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
+                            "`{field}` does not implement `std::abi::Part<{}, {}>`",
+                            input_ty.pretty_print(db),
+                            abi_ty.pretty_print(db)
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "declare `{field}` with `#[abi]`, or bind the field by its plain name to decode it"
+                    )],
+                    error_code,
+                }
+            }
+
             Self::VarOfAccess { primary } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "`var` binds a value, not an access".to_string(),
@@ -6280,6 +6328,9 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 Severity::Error,
                 format!("`{}` cannot have a named implementation", name.data(db)),
                 match reason {
+                    crate::analysis::ty::trait_def::UnchoosableReason::FieldInit => {
+                        "`construct` evaluates it outside every `with`, so no choice made with `with` reaches it"
+                    }
                     crate::analysis::ty::trait_def::UnchoosableReason::FieldQuery => {
                         "`query_field` evaluates it outside every `with`, so no choice made with `with` reaches it"
                     }

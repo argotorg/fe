@@ -1,5 +1,9 @@
+#[path = "../common/prepared_fixture.rs"]
+mod prepared_fixture;
+
 mod corelib;
 mod drops;
+mod field_projection;
 mod operators;
 mod repeated_updates;
 mod runtime_builtin_func_kind;
