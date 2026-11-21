@@ -128,9 +128,8 @@ func private %raw_emit() {
         jump block5;
 
     block3:
-        v9.@layout_0 = insert_value undef.@layout_0 0.i256 v2;
-        v12.@layout_0 = insert_value v9 1.i256 32.i256;
-        obj.store v0 v12;
+        v8.@layout_0 = agg.make @layout_0 v2 32.i256;
+        obj.store v0 v8;
         jump block2;
 
     block4:

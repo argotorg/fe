@@ -16,16 +16,14 @@ func private %long_string() -> @layout_0 {
     block1:
         v2.*i8 = evm_malloc 160.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
-        v8.@layout_0 = insert_value v6 1.i256 104.i256;
-        v10.@layout_0 = insert_value v8 2.i256 160.i256;
+        v4.@layout_0 = agg.make @layout_0 v3 104.i256 160.i256;
         mstore v3 104.i256 i256;
-        v13.i256 = add v3 32.i256;
-        v15.i256 = add v13 96.i256;
-        mstore v15 0.i256 i256;
-        v16.i256 = sym_addr $const_bytes_0;
-        evm_code_copy v13 v16 104.i256;
-        return v10;
+        v7.i256 = add v3 32.i256;
+        v9.i256 = add v7 96.i256;
+        mstore v9 0.i256 i256;
+        v11.i256 = sym_addr $const_bytes_0;
+        evm_code_copy v7 v11 104.i256;
+        return v4;
 }
 
 func private %main() {
@@ -54,15 +52,13 @@ func private %two_word_string() -> @layout_0 {
     block1:
         v2.*i8 = evm_malloc 96.i256;
         v3.i256 = ptr_to_int v2 i256;
-        v6.@layout_0 = insert_value undef.@layout_0 0.i256 v3;
-        v8.@layout_0 = insert_value v6 1.i256 49.i256;
-        v10.@layout_0 = insert_value v8 2.i256 96.i256;
+        v4.@layout_0 = agg.make @layout_0 v3 49.i256 96.i256;
         mstore v3 49.i256 i256;
-        v13.i256 = add v3 32.i256;
-        mstore v13 38205301050843800741474601539563000341654913573499389919640238930270514078062.i256 i256;
-        v16.i256 = add v13 32.i256;
-        mstore v16 52525653854147948378556237155255274215818387959128288392797704323672875991040.i256 i256;
-        return v10;
+        v7.i256 = add v3 32.i256;
+        mstore v7 38205301050843800741474601539563000341654913573499389919640238930270514078062.i256 i256;
+        v10.i256 = add v7 32.i256;
+        mstore v10 52525653854147948378556237155255274215818387959128288392797704323672875991040.i256 i256;
+        return v4;
 }
 
 

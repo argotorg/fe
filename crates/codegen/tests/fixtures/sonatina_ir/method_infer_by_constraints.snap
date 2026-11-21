@@ -14,9 +14,8 @@ func private %foo(v0.@layout_0) -> @layout_1 {
 
     block1:
         v3.i64 = extract_value v0 0.i256;
-        v6.@layout_1 = insert_value undef.@layout_1 0.i256 v3;
-        v8.@layout_1 = insert_value v6 1.i256 1.i64;
-        return v8;
+        v5.@layout_1 = agg.make @layout_1 v3 1.i64;
+        return v5;
 }
 
 func private %main() -> @layout_1 {
@@ -24,10 +23,10 @@ func private %main() -> @layout_1 {
         jump block1;
 
     block1:
-        v3.@layout_0 = insert_value undef.@layout_0 0.i256 10.i64;
-        v5.@layout_0 = insert_value undef.@layout_0 0.i256 10.i64;
-        v6.@layout_1 = call %foo v5;
-        return v6;
+        v1.@layout_0 = agg.make @layout_0 10.i64;
+        v2.@layout_0 = agg.make @layout_0 10.i64;
+        v3.@layout_1 = call %foo v2;
+        return v3;
 }
 
 func private %main_root() {

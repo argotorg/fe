@@ -56,9 +56,9 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, PhiArgs, Return, Unreachable},
         data::{
-            Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
-            EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
+            AggMake, Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef,
+            EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant,
+            EnumMake, EnumProj, EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, Memcopy,
             Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
             ObjProj, ObjStore, Sha256Compress, SymAddr, SymSize, SymbolRef,
         },
@@ -137,6 +137,7 @@ define_lowering_inst_set!(
     Phi,
     Return,
     Unreachable,
+    AggMake,
     Alloca,
     ConstIndex,
     ConstLoad,
@@ -154,7 +155,6 @@ define_lowering_inst_set!(
     EnumWriteVariant,
     ExtractValue,
     Gep,
-    InsertValue,
     Memcopy,
     Memzero,
     Mload,
@@ -517,12 +517,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     // A `HostText` is a struct of the address and the length, held
                     // in an object when the function takes it by reference.
                     let value_ty = pointee.unwrap_or(ty);
-                    let mut text = fb.make_undef_value(value_ty);
-                    for field in 0..2u64 {
-                        let part = next()?;
-                        let index = fb.make_imm_value(I256::from(field));
-                        text = fb.insert_inst(InsertValue::new(is, text, index, part), value_ty);
-                    }
+                    let parts = smallvec![next()?, next()?];
+                    let text = fb.insert_inst(AggMake::new(is, value_ty, parts), value_ty);
                     if pointee.is_some() {
                         let object = fb.insert_inst(ObjAlloc::new(is, value_ty), ty);
                         fb.insert_inst_no_result(ObjStore::new(is, object, text));
@@ -5350,10 +5346,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 };
                 let field = self.lane_value(&fields[0], scalar)?;
                 let ty = self.module.ty_for_layout(*layout)?;
-                let undef = self.fb.make_undef_value(ty);
-                let idx = self.index_value(0);
                 Ok(self.fb.insert_inst(
-                    InsertValue::new(self.module.inst_set(), undef, idx, field),
+                    AggMake::new(self.module.inst_set(), ty, smallvec![field]),
                     ty,
                 ))
             }
@@ -5633,7 +5627,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 // Packed fields of one word share a single load.
                 let mut packed: Option<(u64, ValueId)> = None;
                 for (idx, field) in data.fields.iter().enumerate() {
@@ -5675,17 +5669,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             "aggregate ptr load field type mismatch: layout={layout:?} idx={idx} class={field:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?}"
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
-                        ty,
-                    );
+                    values.push(field_value);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 for idx in 0..data.len as usize {
                     let elem_addr = self.referent_field_address(addr, memory, &class, idx)?;
                     let elem = self.load_memory_value(elem_addr, memory, &data.elem)?;
@@ -5697,13 +5689,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             data.elem
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, elem),
-                        ty,
-                    );
+                    values.push(elem);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(data) => {
                 self.load_enum_from_ptr(addr, memory, layout, &data, EnumLoad::Value)
@@ -6048,12 +6038,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, (field, class)) in fields.iter().zip(data.fields.iter()).enumerate() {
-                    let field_value = self.aggregate_make_field_value(*field, class)?;
-                    value = self.insert_aggregate_field(value, ty, idx, field_value);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .zip(data.fields.iter())
+                    .map(|(field, class)| self.aggregate_make_field_value(*field, class))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 if data.len as usize != fields.len() {
@@ -6064,12 +6056,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, field) in fields.iter().enumerate() {
-                    let elem = self.aggregate_make_field_value(*field, &data.elem)?;
-                    value = self.insert_aggregate_field(value, ty, idx, elem);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .map(|field| self.aggregate_make_field_value(*field, &data.elem))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(_) => Err(LowerError::Internal(
                 "aggregate make should not build enum layouts".to_string(),
@@ -6088,20 +6081,6 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         }
         let value = self.local_value(field)?;
         self.coerce_value_to_ty(value, ty)
-    }
-
-    fn insert_aggregate_field(
-        &mut self,
-        value: ValueId,
-        ty: Type,
-        idx: usize,
-        field: ValueId,
-    ) -> ValueId {
-        let idx = self.index_value(idx as u64);
-        self.fb.insert_inst(
-            InsertValue::new(self.module.inst_set(), value, idx, field),
-            ty,
-        )
     }
 
     fn retype_value_for_class(
@@ -6170,19 +6149,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for (idx, (source_field, target_field)) in
-                    source.fields.iter().zip(target.fields.iter()).enumerate()
-                {
-                    let field = self.extract_aggregate_field(value, idx, source_field)?;
-                    let field = self.retype_value_for_class(field, source_field, target_field)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let fields = source
+                    .fields
+                    .iter()
+                    .zip(target.fields.iter())
+                    .enumerate()
+                    .map(|(idx, (source_field, target_field))| {
+                        let field = self.extract_aggregate_field(value, idx, source_field)?;
+                        self.retype_value_for_class(field, source_field, target_field)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, fields),
+                    target_ty,
+                ))
             }
             (Layout::Array(source), Layout::Array(target)) => {
                 if source.len != target.len {
@@ -6190,17 +6170,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for idx in 0..source.len as usize {
-                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
-                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let elems = (0..source.len as usize)
+                    .map(|idx| {
+                        let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                        self.retype_value_for_class(elem, &source.elem, &target.elem)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, elems),
+                    target_ty,
+                ))
             }
             (Layout::Enum(source), Layout::Enum(target)) => {
                 self.retype_enum_value(value, source_layout, &source, target_layout, &target)
