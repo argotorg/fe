@@ -1,5 +1,6 @@
 use common::{
     file::File,
+    generation::ScopedDeriveDemand,
     ingot::{Ingot, IngotKind},
 };
 use num_bigint::BigUint;
@@ -13,9 +14,11 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, IntegerId,
-        ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod, TrackedItemId,
-        TrackedItemVariant, Use, Visibility, module_tree_impl,
+        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, ImplTrait,
+        IntegerId, ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod,
+        TrackedItemId, TrackedItemVariant, Use, Visibility,
+        authored::ScopedDeriveDemandId,
+        module_tree_impl,
         scope_graph::{ScopeGraph, ScopeId},
         use_tree::{UsePathId, UsePathSegment},
     },
@@ -274,6 +277,30 @@ pub fn generation_lowering_errors<'db>(
             _ => None,
         })
         .collect()
+}
+
+/// Finds the one prepared item installed for this frozen demand.
+pub fn prepared_scoped_item<'db>(
+    db: &'db dyn HirDb,
+    demand: &ScopedDeriveDemand,
+) -> Option<ImplTrait<'db>> {
+    let demand = ScopedDeriveDemandId::new(db, demand.clone());
+    prepared_scoped_item_impl(db, demand)
+}
+
+#[salsa::tracked(returns(copy))]
+fn prepared_scoped_item_impl<'db>(
+    db: &'db dyn HirDb,
+    demand: ScopedDeriveDemandId<'db>,
+) -> Option<ImplTrait<'db>> {
+    let file = db.workspace().get(db, &demand.demand(db).opening.file)?;
+    let module = map_file_to_mod_impl(db, file);
+    let mut items = scope_graph_impl(db, module)
+        .scoped_implementations
+        .iter()
+        .filter_map(|(key, item)| (*key == demand).then_some(*item));
+    let item = items.next()?;
+    items.next().is_none().then_some(item)
 }
 
 /// Returns the ingot module tree of the given ingot.
@@ -887,6 +914,32 @@ impl<'db> FileLowerCtxt<'db> {
         (map_file_to_mod_impl(db, file) == self.top_mod())
             .then(|| self.builder.find_item_by_range(record_ref.target_range))
             .flatten()
+    }
+
+    /// The authored trait a frozen reference names, and its name.
+    pub(super) fn authored_trait(
+        &self,
+        reference: &common::generation::FrozenTraitRef,
+    ) -> (AuthoredScope<'db>, Partial<IdentId<'db>>) {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, &reference.file)
+            .expect("validated frozen trait file exists in workspace");
+        let top_mod = map_file_to_mod_impl(db, file);
+        let trait_ = top_mod_ast(db, top_mod)
+            .syntax()
+            .descendants()
+            .filter_map(ast::Trait::cast)
+            .find(|trait_| trait_.syntax().text_range() == reference.range)
+            .expect("validated trait exists in unchanged source");
+        (
+            AuthoredScope::item(db, top_mod, reference.range),
+            trait_
+                .name()
+                .map(|name| IdentId::new(db, name.text().to_string()))
+                .into(),
+        )
     }
 
     pub(super) fn lower_field_hole_ident(

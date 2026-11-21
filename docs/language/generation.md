@@ -19,15 +19,23 @@ impl Derive<trait Arity> for CountFields {
 struct Pair { a: u256, b: u256 }
 impl Arity for Pair with (CountFields)
 
+struct Line { a: u256, b: u256, c: u256 }
+impl Arity for Line { const fn arity() -> usize { 100 } }
+
+fn scoped() -> usize { with (CountFields) { Line::arity() } }
+fn plain() -> usize { Line::arity() }
+
 #[test]
-fn the_header_provides_arity() {
+fn the_header_and_the_block() {
     assert!(Pair::arity() == 2)
+    assert!(scoped() == 3)
+    assert!(plain() == 100)
 }
 ```
 
-`fe test` on this file reports `1 passed`. `Pair::arity()` returns 2. The compiler runs `CountFields::derive` for `Pair` and uses the returned function in `impl Arity for Pair`.
+`fe test` on this file reports `1 passed`. `Pair::arity()` returns 2: the compiler runs `CountFields::derive` for `Pair` and uses the returned function as the body of `impl Arity for Pair`. The block `with (CountFields) { .. }` uses the provider for the `Arity` goals that are proved inside it. `scoped()` returns 3, the number of fields of `Line`, while `plain()` still returns 100.
 
-Each derive header requests code from its provider. During preparation, the compiler runs those providers and adds their output to a copy of the program. It checks the generated code alongside the written code.
+Every written derive header requests code during preparation. A provider opened in a block runs when checking a goal needs the implementation from that provider. The compiler checks the returned code and then retries the goal.
 
 ## Providers
 
@@ -207,6 +215,7 @@ fn variants_and_payloads_are_compared() {
 
 - `impl Type with (Provider)` adds inherent members. The provider implements `DeriveInherent`.
 - `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<trait Trait>`.
+- `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<trait Trait>`. The trait and the concrete target record must both be declared in the package that contains the block. Lookup matches the complete trait application, including its arguments and defaults. Two providers in the same opening list that match one goal cause an ambiguity before either provider runs. If all scoped openings are inapplicable, ordinary lookup proceeds. A selected provider whose prerequisites fail reports an error.
 
 A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
@@ -219,7 +228,7 @@ A header under a `#[cfg(..)]` attribute that does not hold is not a request: its
 ## What the checks see
 
 - Generated code is checked as ordinary code. An error in it is reported at the quoted text that wrote it.
-- A provider does not read code generated in its own package. Calling `First::one()` in a provider, where `one` comes from another header, reports that rule. Two providers can share an ordinary function.
+- A provider does not read what another provider generated. Calling `First::one()` in a provider, where `one` comes from another header, is refused with the note `a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it`. A provider that opens another provider in a `with` block is refused before any provider runs. A function that two providers need is an ordinary function that both call.
 - A written header counts as a fact when another request is admitted. With the header `impl Size for Leaf with (CountP)` and a struct `Wrap<A: Size>`, a second header whose target contains `Wrap<Leaf>` is admitted, because the first header states that `Leaf: Size`. Without the first header the second is refused: ``trait bound is not satisfied; `Leaf` doesn't implement `Size` ``.
 
 ## Packages and dependencies
@@ -288,7 +297,12 @@ fn what_a_dependency_generates_is_an_ordinary_item_for_its_dependents() {
 
 ## Generated code only fills gaps
 
-Written code in the requesting package keeps its meaning. A generated item is used only where no existing item answers. Written code includes the package's own text, its dependencies, its imports and prelude, and its derive headers.
+In the package that asks for generated code, written code keeps its meaning: a generated item is used only where nothing written answers. A block `with (Provider) { .. }` is the exception, because it asks for the change in the text: inside the block its provider answers the goals of its trait in place of a written implementation, as `scoped()` in the first example shows. Written code is the package's own text, its dependencies, its imports and the prelude, and the headers that the package wrote.
+
+A scoped request can supply the selected implementation for a call in the
+block or a prerequisite of another implementation chosen there. The provider
+and the generated implementation use their own scopes. Choices in the block
+travel through a call as evidence for that call's declared bounds.
 
 Generated code may contain further items, such as an implementation inside a generated function. The provider `Gen` below writes one for `Tr2`. The call `X { a: 0 }.m()` is already answered by the written implementation of `Tr1`, so it keeps calling that:
 
@@ -413,7 +427,11 @@ The check also follows code that runs without a written call. A `Drop` implement
 
 ## What is refused
 
-- A provider whose trait family does not match the requested trait and its arguments.
+- A scoped provider must return one function template. Use a written implementation header when a provider supplies multiple functions together.
+- A block for a trait of another package: ``a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)` ``.
+- A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
+- Scoped derive also requires trait arguments that it can carry into the generated implementation. Use a written implementation header when a trait argument is itself a trait family, such as `Read<trait Mark>`.
+- A written header whose provider has no matching trait family.
 - A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that a bound of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
 - A header inside a function body: `a derive header inside a function body is not supported; declare the header in a module`.
 - A glob import, such as `use m::*`, in a block of a quotation: ``a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}` ``. An import that lists its names declares them in the quotation's block, as in a function body. Quotation content is checked when a request runs the provider. A quotation that no request reaches is never lowered.
@@ -425,3 +443,4 @@ The check also follows code that runs without a written call. A `Drop` implement
 - Only `core` and `std` declare deciding traits.
 - The bound rule follows bounds by trait identity and does not ask whether the program would otherwise work, so it can refuse more than needed. The message names the written implementation whose bound applies; a header is the way to ask for such an implementation.
 - An `unsafe impl` without functions is judged where it is declared, so an untrusted package cannot generate one even where nothing uses it.
+- A block accepts only a trait of its own package.

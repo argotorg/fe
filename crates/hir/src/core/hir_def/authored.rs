@@ -1,19 +1,27 @@
 //! References from generated code to authored declarations.
 //!
 //! Generated code is lowered into the module that receives it, but it names
-//! declarations written elsewhere, including a reflected record and the
-//! producer scope where a quotation was written.
+//! declarations written elsewhere: the record a provider reflected, the trait
+//! of a scoped goal, and the producer scope its quotation was written in.
 //! Lowering a module never reads another module's lowered HIR, because that
 //! module may itself receive code naming this one. An [`AuthoredScope`] names a
 //! declaration by its module and the authored syntax it was written as, and
 //! ordinary resolution binds it in that module's lowered scope graph when a
 //! path or type containing it is resolved.
 
+use common::generation::ScopedDeriveDemand;
 use common::ingot::Ingot;
 use parser::TextRange;
 
 use super::{TopLevelMod, scope_graph::ScopeId};
 use crate::HirDb;
+
+#[salsa::interned]
+#[derive(Debug)]
+pub(crate) struct ScopedDeriveDemandId<'db> {
+    #[returns(ref)]
+    pub demand: ScopedDeriveDemand,
+}
 
 #[salsa::interned]
 #[derive(Debug)]

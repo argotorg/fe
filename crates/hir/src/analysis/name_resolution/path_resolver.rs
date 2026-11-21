@@ -1765,6 +1765,7 @@ fn resolve_segment<'db>(
                         lowering_cx.method_choices(),
                         method_tier,
                     );
+                    lowering_cx.record_generation_requests(selection.pending);
                     // In the authored tier a candidate with a proven unmet bound
                     // is no method that applies: the lookup goes on, and the
                     // full tier selects it again if nothing else applies.
@@ -2531,6 +2532,42 @@ fn select_assoc_const_candidate<'db>(
             }
         }
     });
+    use crate::analysis::ty::trait_resolution::ChoiceEntry;
+    if let Some(choices) = choices {
+        let visible = choices
+            .items(db)
+            .iter()
+            .any(|entry| matches!(entry, ChoiceEntry::Provider(opening) if opening.hints(db).open))
+            .then(|| {
+                traits_available_for_selection(
+                    db,
+                    scope,
+                    assumptions.list(db).iter().map(|pred| pred.def(db)),
+                )
+            });
+        for entry in choices.items(db) {
+            let ChoiceEntry::Provider(opening) = entry else {
+                continue;
+            };
+            for trait_ in opening
+                .traits_for_lookup(db, visible.iter().flat_map(|traits| traits.iter().copied()))
+            {
+                if trait_.const_(db, name).is_none() {
+                    continue;
+                }
+                let mut args = vec![receiver_ty];
+                let params =
+                    crate::analysis::ty::ty_lower::collect_generic_params(db, trait_.into());
+                args.extend_from_slice(&params.params(db)[1..]);
+                let inst = TraitInstId::new_simple(db, trait_, args);
+                if params.params(db).len() > 1 {
+                    unresolved.insert(identity(inst));
+                }
+                matches.entry(identity(inst)).or_insert(inst);
+            }
+        }
+    }
+
     // Like method selection: a sole applicable candidate is used, but among
     // several only traits in scope and the impl `scope` is in count, so an
     // unrelated trait elsewhere (even in another ingot) can't make the path
@@ -2539,7 +2576,16 @@ fn select_assoc_const_candidate<'db>(
         let available = traits_available_for_selection(
             db,
             scope,
-            assumptions.list(db).iter().map(|pred| pred.def(db)),
+            assumptions.list(db).iter().map(|pred| pred.def(db)).chain(
+                choices
+                    .into_iter()
+                    .flat_map(|choices| choices.items(db).iter())
+                    .flat_map(|entry| match entry {
+                        ChoiceEntry::Provider(opening) => opening.hints(db).traits.as_slice(),
+                        ChoiceEntry::Impl(_) => &[],
+                    })
+                    .copied(),
+            ),
         );
         let visible: IndexMap<TraitRefId<'db>, TraitInstId<'db>> = matches
             .iter()

@@ -42,6 +42,9 @@ pub struct ScopeGraph<'db> {
     /// module. Lowering records them; the module's linked graph adds each as
     /// the item's lexical edge, so lowering never reads the other module.
     pub foreign_origins: Vec<(ScopeId<'db>, super::AuthoredScope<'db>)>,
+    /// Scoped demands and the implementation items lowered for them.
+    pub(crate) scoped_implementations:
+        Vec<(super::authored::ScopedDeriveDemandId<'db>, ImplTrait<'db>)>,
 }
 
 impl<'db> ScopeGraph<'db> {

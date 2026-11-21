@@ -32,7 +32,7 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            evidence::{EvidenceList, instance_evidence},
+            evidence::{EvidenceCompletionError, EvidenceList, instance_evidence},
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -47,7 +47,8 @@ use crate::{
             subst::substitute_complete,
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+                GoalSatisfiability, PredicateListId, TraitSolveCx, generation::GenerationRequest,
+                is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
@@ -266,12 +267,20 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum EntryCodecFailure<'db> {
     Diagnostic(SemanticDiagnosticId<'db>),
+    NeedsGeneration {
+        request: GenerationRequest<'db>,
+        provisional: SemanticDiagnosticId<'db>,
+    },
 }
 
 impl<'db> EntryCodecFailure<'db> {
     fn diagnostic(self) -> SemanticDiagnosticId<'db> {
         match self {
-            Self::Diagnostic(diagnostic) => diagnostic,
+            Self::Diagnostic(diagnostic)
+            | Self::NeedsGeneration {
+                provisional: diagnostic,
+                ..
+            } => diagnostic,
         }
     }
 }
@@ -1840,6 +1849,10 @@ impl<'db> SemanticInstance<'db> {
                 ),
             )
         };
+        let pending = |request| EntryCodecFailure::NeedsGeneration {
+            request,
+            provisional: failed_choice(),
+        };
         if calls.codec_choice_failed {
             return Err(EntryCodecFailure::Diagnostic(failed_choice()));
         }
@@ -1862,6 +1875,9 @@ impl<'db> SemanticInstance<'db> {
                         .with_assumptions(self.assumptions(db))
                         .with_choices(calls.codec_choices),
                 );
+                if let Some(request) = outcome.request() {
+                    return Err(pending(request));
+                }
                 if outcome.evidence().is_none() && calls.codec_choices.is_some() {
                     return Err(EntryCodecFailure::Diagnostic(failed_choice()));
                 }
@@ -1869,7 +1885,12 @@ impl<'db> SemanticInstance<'db> {
             if calls.codec_choices.is_some() && callable.has_deferred_evidence(db) {
                 callable
                     .complete_deferred_evidence(db)
-                    .map_err(|_| EntryCodecFailure::Diagnostic(failed_choice()))?;
+                    .map_err(|error| match error {
+                        EvidenceCompletionError::Unavailable => {
+                            EntryCodecFailure::Diagnostic(failed_choice())
+                        }
+                        EvidenceCompletionError::NeedsGeneration(request) => pending(request),
+                    })?;
             }
             let callee =
                 semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
@@ -1881,6 +1902,33 @@ impl<'db> SemanticInstance<'db> {
             Ok(callee.key)
         };
         Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+    }
+
+    pub(crate) fn codec_generation_requests(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<GenerationRequest<'db>> {
+        let key = self.key(db);
+        let typed = key.typed_body(db);
+        let Some(body) = typed.body() else {
+            return Vec::new();
+        };
+        let regions = closure_regions(db, body);
+        let region = key.owner(db).closure_region();
+        body.exprs(db)
+            .keys()
+            .filter_map(|expr| {
+                if regions.expr(expr) != region
+                    || !self.requires_concrete_entry_codec(db, typed.place_entry_calls(expr)?)
+                {
+                    return None;
+                }
+                match self.resolve_entry_codec_callees(db, expr) {
+                    Err(EntryCodecFailure::NeedsGeneration { request, .. }) => Some(request),
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     fn requires_concrete_entry_codec(

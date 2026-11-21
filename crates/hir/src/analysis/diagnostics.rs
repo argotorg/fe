@@ -4195,6 +4195,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 trait_path,
                 wraps,
                 needs_bound,
+                scoped_provider,
             } => {
                 let trait_path_str = trait_path.pretty_print(db);
                 let sub_diagnostics = vec![
@@ -4215,7 +4216,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     },
                 ];
 
-                let notes = if *wraps {
+                let mut notes = if *wraps {
                     vec![format!(
                         "arithmetic is unchecked here, so `{}` wraps on overflow, which calls `{trait_path_str}`",
                         op.data(db),
@@ -4223,6 +4224,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 } else {
                     vec![]
                 };
+                if *scoped_provider {
+                    notes.push("a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)`".to_string());
+                }
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: format!("`{}` trait is not implemented", trait_path.pretty_print(db)),

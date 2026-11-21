@@ -256,11 +256,17 @@ impl<'db> TyChecker<'db> {
             evidence.record_dispatch(use_.inst(), outcome.evidence());
             // As for a constant read in an expression: a proof that waits for
             // a generated implementation is a demand for preparation.
+            if let Some(request) = outcome.request() {
+                self.env.generation_demands.request(self.db, request);
+                self.push_diag(BodyDiag::unprepared_provider(primary));
+                return PatternAnalysisStatus::Invalid;
+            }
             if choices.is_some() && evidence.dispatch_proof().is_none() {
                 failed_goals.push(use_.inst());
             }
         }
-        let missing = cref.record_bound_evidence(self.db, choices);
+        let (missing, requests) = cref.record_bound_evidence(self.db, choices);
+        self.env.generation_demands.requests(self.db, requests);
         failed_goals.extend(missing);
         cref.qualify_evidence(self.db, self.env.owner());
         // The reference stays with the body, as for a constant read in an

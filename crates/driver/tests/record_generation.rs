@@ -3177,6 +3177,7 @@ impl X with (MakeConst)
             .text_range();
         db.generation_inputs().set_requests(&mut db).to(vec![
             common::generation::FrozenGenerationRequest {
+                scoped_impl: None,
                 target_file: url.clone(),
                 request_impl: Some(header_range),
                 code: common::generation::FrozenCode::Template {

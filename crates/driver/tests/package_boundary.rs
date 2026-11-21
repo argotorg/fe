@@ -150,6 +150,49 @@ const HIDDEN: &str = "would be hidden";
 
 // ---- A provider reads authored text only, in an ingot ------------------------
 
+const SCOPED_READS_INHERENT: &str = "use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+struct SeedP {}
+impl DeriveInherent for SeedP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub const fn seed() -> u256 { 42 } }
+    }
+}
+struct Token {}
+impl Token with (SeedP)
+struct Pair {}
+struct A {}
+impl Derive<trait Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = Token::seed()
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+const fn run() -> u256 { with (A) { Pair::score() } }
+";
+
+const INHERENT_READS_SCOPED: &str = "use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+trait Seed { const fn seed() -> u256 }
+struct Token {}
+struct B {}
+impl Derive<trait Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+struct Make {}
+impl DeriveInherent for Make {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = with (B) { Token::seed() }
+        quote { pub const fn run() -> u256 { ${n} } }
+    }
+}
+struct Pair {}
+impl Pair with (Make)
+";
+
 const INHERENT_READS_INHERENT: &str = "use core::derive::{Derive, DeriveInherent}
 use core::meta::{Record, Code, Item}
 struct SeedP {}
@@ -171,12 +214,22 @@ struct Pair {}
 impl Pair with (Make)
 ";
 
-/// Two written providers cannot read each other's generated output.
+/// The three ways one provider can read another's output give the same answer
+/// in an ingot as in a standalone file: refused, with the rule.
 #[test]
 fn a_provider_cannot_read_another_providers_output_in_an_ingot() {
-    let layout = Layout::new().ingot("app", &[], INHERENT_READS_INHERENT);
-    let cause = refused(&layout, "app");
-    assert!(cause.contains(PROVIDER_VIEW), "{cause}");
+    for (name, source) in [
+        ("scoped reads inherent header", SCOPED_READS_INHERENT),
+        ("inherent header reads scoped", INHERENT_READS_SCOPED),
+        (
+            "inherent header reads inherent header",
+            INHERENT_READS_INHERENT,
+        ),
+    ] {
+        let layout = Layout::new().ingot("app", &[], source);
+        let cause = refused(&layout, "app");
+        assert!(cause.contains(PROVIDER_VIEW), "{name}: {cause}");
+    }
 }
 
 /// A private helper of the dependency that wrote the provider stays available
@@ -315,6 +368,31 @@ impl DeriveInherent for Make {
 }
 pub struct Pair {}
 impl Pair with (Make)
+";
+    let layout = Layout::new()
+        .ingot("lib", &[], SEED_LIB)
+        .ingot("app", &[("lib", "lib")], app);
+    let prepared = accepted(&layout, "app");
+    assert_eq!(value(&prepared, "app", "run"), "42");
+    assert_eq!(errors(&prepared, "app"), "");
+}
+
+/// The same for a scoped provider.
+#[test]
+fn a_scoped_provider_reads_a_dependencys_generated_implementation() {
+    let app = "use core::derive::Derive
+use core::meta::{Record, Code, Item}
+use lib::{Seed, Token}
+pub trait Score { const fn score() -> u256 }
+pub struct Pair {}
+pub struct A {}
+impl Derive<trait Score> for A {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = Token::seed()
+        quote { const fn score() -> u256 { ${n} } }
+    }
+}
+pub const fn run() -> u256 { with (A) { Pair::score() } }
 ";
     let layout = Layout::new()
         .ingot("lib", &[], SEED_LIB)
@@ -800,6 +878,108 @@ fn a_written_implementation_has_its_associated_type_for_a_provider() {
     let prepared = accepted(&layout, "app");
     assert_eq!(value(&prepared, "app", "seen_width"), "256");
     assert_eq!(errors(&prepared, "app"), "");
+}
+
+// ---- Whether an ingot is prepared does not depend on an unrelated item --------
+
+const GENERIC_ID_LIB: &str = "use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+pub struct EmitId {}
+impl DeriveInherent for EmitId {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub const fn id<T>(_ t: own T) -> T { t } }
+    }
+}
+pub struct Marker {}
+impl Marker with (EmitId)
+";
+
+const WITH_ID_APP: &str = "use core::derive::Derive
+use core::meta::{Record, Code, Item}
+pub struct X {}
+pub trait Tr { const fn f(self) -> u256 }
+pub struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn f(self) -> u256 { 3 } }
+    }
+}
+pub const fn run() -> u256 { with (P) { lib::Marker::id(X {}).f() } }
+CONTROL
+";
+
+/// A `with` block in the dependent opens a provider on a value that passes
+/// through a function the dependency generated. The block's demand exists only
+/// where the dependency's output is visible, so the dependent is prepared in a
+/// view that holds it.
+#[test]
+fn a_with_block_using_a_dependencys_generated_function_is_prepared() {
+    let app = WITH_ID_APP.replace("CONTROL", "");
+    let layout =
+        Layout::new()
+            .ingot("lib", &[], GENERIC_ID_LIB)
+            .ingot("app", &[("lib", "lib")], &app);
+    let prepared = accepted(&layout, "app");
+    assert_eq!(errors(&prepared, "app"), "");
+    assert_eq!(value(&prepared, "app", "run"), "3");
+}
+
+/// The same program with an unrelated `with` block beside it gives the same
+/// answer. Before, the unrelated block alone made the ingot be prepared.
+#[test]
+fn an_unrelated_with_block_does_not_change_whether_the_dependent_is_prepared() {
+    let control = "pub const fn control() -> u256 { with (P) { X {}.f() } }";
+    let app = WITH_ID_APP.replace("CONTROL", control);
+    let layout =
+        Layout::new()
+            .ingot("lib", &[], GENERIC_ID_LIB)
+            .ingot("app", &[("lib", "lib")], &app);
+    let prepared = accepted(&layout, "app");
+    assert_eq!(errors(&prepared, "app"), "");
+    assert_eq!(value(&prepared, "app", "run"), "3");
+    assert_eq!(value(&prepared, "app", "control"), "3");
+}
+
+/// Checking a body that opens a provider without preparing it says what is
+/// missing: a generated implementation. The label no longer claims a
+/// compile-time-only value is used at runtime.
+#[test]
+fn an_unprepared_scoped_provider_is_not_reported_as_a_runtime_context_error() {
+    use hir::analysis::diagnostics::DiagnosticVoucher;
+    let source = "use core::derive::Derive
+use core::meta::{Record, Code, Item}
+pub trait Tr { const fn f() -> u256 }
+pub struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn f() -> u256 { 3 } }
+    }
+}
+pub struct X {}
+pub fn run() -> u256 { with (P) { X::f() } }
+";
+    let db = Layout::new().ingot("app", &[], source).db();
+    let file = db.workspace().get(&db, &url("app/src/lib.fe")).unwrap();
+    let run = db
+        .top_mod(file)
+        .all_funcs(&db)
+        .iter()
+        .copied()
+        .find(|f| f.name(&db).to_opt().is_some_and(|n| n.data(&db) == "run"))
+        .expect("run");
+    let (diagnostics, _) = hir::analysis::ty::ty_check::check_func_body(&db, run);
+    let pending = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.to_complete(&db))
+        .find(|diagnostic| {
+            diagnostic
+                .message
+                .contains("prepared generated implementation")
+        })
+        .expect("the unprepared provider is reported");
+    let label = pending.sub_diagnostics[0].message.clone();
+    assert!(!label.contains("runtime context"), "{label}");
+    assert!(label.contains("generated"), "{label}");
 }
 
 // ---- Each ingot is sealed once, however many dependents read it ---------------

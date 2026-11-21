@@ -125,7 +125,8 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
 }
 
 /// Lower the outputs that join the file's root module after its authored
-/// items, from frozen item code that names no derive header.
+/// items: the named implementations of scoped derives, and the frozen item
+/// code of requests that name no header.
 pub(super) fn append_module_output<'db>(ctxt: &mut FileLowerCtxt<'db>) {
     let db = ctxt.db();
     let Some(url) = ctxt.top_mod().file(db).url(db) else {
@@ -139,7 +140,11 @@ pub(super) fn append_module_output<'db>(ctxt: &mut FileLowerCtxt<'db>) {
         .cloned()
         .collect::<Vec<_>>();
     for request in requests {
-        lower_generated_item_code(ctxt, &request.code);
+        if let Some(scoped) = &request.scoped_impl {
+            lower_scoped_derive(ctxt, scoped, &request.code);
+        } else {
+            lower_generated_item_code(ctxt, &request.code);
+        }
     }
 }
 
@@ -285,6 +290,196 @@ pub(super) fn lower_generated_item_code<'db>(ctxt: &mut FileLowerCtxt<'db>, code
             ctxt.record_generation_error(range, "item-level quotation splice requires Code<Item>");
         }
     }
+}
+
+/// Lower the bounded function supplied by a scoped provider.
+pub(super) fn lower_derive_method<'db>(ctxt: &mut FileLowerCtxt<'db>, code: &FrozenCode) {
+    let FrozenCode::Template {
+        kind: FrozenCodeKind::Item,
+        quote_file,
+        quote_range,
+        producer_module,
+        producer_block,
+        holes,
+    } = code
+    else {
+        ctxt.record_generation_error(
+            parser::TextRange::empty(0.into()),
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    let (quote, mut frame) = ctxt.resolve_quote_template(
+        quote_file,
+        *quote_range,
+        *producer_module,
+        *producer_block,
+        false,
+        holes.clone(),
+    );
+    frame.is_member_quote = true;
+    let producer = frame.producer;
+    // Admission covers the complete output, not just the children that happen
+    // to cast to items. In particular, a sibling item hole must not disappear
+    // before the bounded single-function check.
+    let children = quote
+        .item_list()
+        .map(|list| list.syntax().children().collect::<Vec<_>>())
+        .or_else(|| {
+            quote
+                .body()
+                .map(|block| block.syntax().children().collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    let [child] = children.as_slice() else {
+        ctxt.record_generation_error(
+            *quote_range,
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    let single_hole_range = ast::QuoteHole::cast(child.clone())
+        .map(|hole| hole.syntax().text_range())
+        .or_else(|| {
+            let stmt = ast::Stmt::cast(child.clone())?;
+            let ast::StmtKind::Expr(expr_stmt) = stmt.kind() else {
+                return None;
+            };
+            let expr = expr_stmt.expr()?;
+            let ast::ExprKind::QuoteHole(hole) = expr.kind() else {
+                return None;
+            };
+            Some(hole.syntax().text_range())
+        });
+    if let Some(hole_range) = single_hole_range {
+        ctxt.quote_frames.push(frame);
+        let nested = ctxt.current_hole(hole_range);
+        if let Some(FrozenHoleValue::Code(nested)) = nested {
+            lower_derive_method(ctxt, &nested);
+        } else {
+            ctxt.record_generation_error(
+                *quote_range,
+                "bounded derive requires one function template",
+            );
+        }
+        ctxt.pop_quote_frame();
+        return;
+    }
+    let Some(function) = ast::Item::cast(child.clone()).and_then(|item| match item.kind()? {
+        ast::ItemKind::Func(function) => Some(function),
+        _ => None,
+    }) else {
+        ctxt.record_generation_error(
+            *quote_range,
+            "bounded derive requires one function template",
+        );
+        return;
+    };
+    ctxt.quote_frames.push(frame);
+    super::item::validate_func_attrs(
+        ctxt,
+        function.attr_list(),
+        super::item::FuncKind::Associated,
+        function.sig().name().map(|name| name.text().to_string()),
+    );
+    let generated = Func::lower_ast(ctxt, function);
+    ctxt.pop_quote_frame();
+    ctxt.builder
+        .defer_quoted_item_origin(generated.into(), producer);
+}
+
+/// Install a scoped output as a private named candidate, never an ordinary impl.
+fn lower_scoped_derive<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    scoped: &common::generation::FrozenScopedImpl,
+    code: &FrozenCode,
+) {
+    use crate::hir_def::{
+        AttrListId, GenericArgListId, GenericParamListId, IdentId, ImplTraitModifiers, Partial,
+        PathId, PathKind, TrackedItemVariant, TraitRefId, TypeId, TypeKind, Visibility,
+        WhereClauseId,
+    };
+    let db = ctxt.db();
+    let (trait_, trait_name) = ctxt.authored_trait(&scoped.demand.trait_ref);
+    let index = ctxt.next_impl_trait_idx();
+    let id = ctxt.joined_id(TrackedItemVariant::ImplTrait(index));
+    ctxt.enter_item_scope(id, false);
+    let trait_args = if scoped.demand.trait_args.is_empty() {
+        GenericArgListId::none(db)
+    } else {
+        GenericArgListId::thaw(ctxt, &scoped.demand.trait_args)
+    };
+    let trait_path = PathId::new(
+        db,
+        PathKind::BoundItem {
+            item: trait_,
+            display: PathId::from_ident(db, trait_name.to_opt().expect("named source declaration"))
+                .with_generic_args(db, trait_args)
+                .expect("identifier path accepts arguments"),
+        },
+        None,
+    );
+    let trait_ref = TraitRefId::new(db, Partial::Present(trait_path));
+    // Inside the implementation, so constant arguments are its bodies.
+    let target_args = match &scoped.demand.target.args {
+        Some(args) => GenericArgListId::thaw(ctxt, args),
+        None => GenericArgListId::none(db),
+    };
+    let target = ctxt
+        .authored_record(&scoped.demand.target)
+        .path(db, target_args);
+    let ty = TypeId::new(db, TypeKind::Path(Partial::Present(target)));
+    lower_derive_method(ctxt, code);
+    let implementation = ImplTrait::new(
+        db,
+        id,
+        Partial::Present(trait_ref),
+        Partial::Present(ty),
+        AttrListId::new(db, vec![]),
+        GenericParamListId::new(db, vec![]),
+        WhereClauseId::new(db, vec![]),
+        vec![],
+        vec![],
+        vec![],
+        ImplTraitModifiers {
+            is_unsafe: false,
+            selection_name: Some(IdentId::new(db, scoped.selection_name.clone())),
+            vis: Visibility::Private,
+            derive_provider: None,
+            derive_trait_ref: None,
+            quote_chain: None,
+        },
+        ctxt.top_mod(),
+        crate::span::HirOrigin::synthetic(),
+    );
+    ctxt.leave_item_scope(implementation);
+    // The header belongs to the authored opening; the method body independently
+    // retains its quote producer's lexical origin.
+    let root = super::top_mod_ast(db, ctxt.top_mod());
+    let opening_node = root
+        .syntax()
+        .descendants()
+        .find(|node| node.text_range() == scoped.demand.opening.binding_range)
+        .expect("validated scoped opening belongs to unchanged authored source");
+    let producer_module = opening_node
+        .ancestors()
+        .find_map(ast::Mod::cast)
+        .map(|module| module.syntax().text_range());
+    let producer_block = opening_node
+        .ancestors()
+        .find_map(ast::BlockExpr::cast)
+        .map(|block| block.syntax().text_range());
+    let producer = crate::hir_def::AuthoredScope::producer(
+        db,
+        ctxt.top_mod(),
+        producer_module,
+        producer_block,
+    );
+    ctxt.builder
+        .defer_quoted_item_origin(implementation.into(), producer);
+    let demand = crate::hir_def::authored::ScopedDeriveDemandId::new(db, scoped.demand.clone());
+    ctxt.builder
+        .record_scoped_implementation(demand, implementation);
 }
 
 /// A member written in a member quotation: an item, or an associated shape,

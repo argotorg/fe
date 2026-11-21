@@ -564,11 +564,12 @@ pub(crate) fn resolve_trait_impl_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-) -> Selection<ResolvedImplInstance<'db>> {
+) -> Selection<'db, ResolvedImplInstance<'db>> {
     match resolve_trait_impl_instance_query(db, solve_cx, inst) {
         ImplSelection::Unique(resolved) => Selection::Unique(resolved),
         ImplSelection::Ambiguous => Selection::Ambiguous(IndexSet::new()),
         ImplSelection::NotFound => Selection::NotFound,
+        ImplSelection::NeedsGeneration(request) => Selection::NeedsGeneration(request),
     }
 }
 
@@ -576,7 +577,7 @@ pub(crate) fn resolve_ordinary_trait_impl_instance<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
-) -> Selection<ResolvedImplInstance<'db>> {
+) -> Selection<'db, ResolvedImplInstance<'db>> {
     let matched = ordinary_trait_impl_candidates(db, solve_cx, inst);
     match matched.len() {
         1 => Selection::Unique(*matched.iter().next().unwrap()),
@@ -702,6 +703,7 @@ pub(crate) fn ordinary_trait_impl_candidates<'db>(
 /// An implementation selection, without candidates for an ambiguous one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 enum ImplSelection<'db> {
+    NeedsGeneration(super::trait_resolution::generation::GenerationRequest<'db>),
     Unique(ResolvedImplInstance<'db>),
     Ambiguous,
     NotFound,
@@ -738,6 +740,7 @@ fn resolve_trait_impl_instance_query<'db>(
         // owned by the caller through a fresh local table.
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
+        Selection::NeedsGeneration(request) => ImplSelection::NeedsGeneration(request),
     }
 }
 
@@ -1079,7 +1082,7 @@ pub fn assoc_const_body_template_for_trait_inst<'db>(
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
-        Selection::NotFound => return None,
+        Selection::NotFound | Selection::NeedsGeneration(_) => return None,
     };
     selected_assoc_const_body_template(db, resolved, const_name)
 }
@@ -1354,8 +1357,8 @@ fn same_overlap_const<'db>(
         let mut evidence = UseEvidence::default();
         evidence.record_dispatch(goal, Some(proof));
         let mut const_ref = ConstRef::TraitConst { use_, evidence };
-        let missing = const_ref.record_bound_evidence(db, Some(choices));
-        if !missing.is_empty() {
+        let (missing, requests) = const_ref.record_bound_evidence(db, Some(choices));
+        if !missing.is_empty() || !requests.is_empty() {
             return None;
         }
         resolve_semantic_const_ref_with_policy(

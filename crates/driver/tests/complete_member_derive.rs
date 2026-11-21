@@ -327,6 +327,35 @@ fn members_from_another_producer_splice_in_order_with_their_own_hygiene() {
     assert_eq!(eval(&output, "area"), "9");
 }
 
+/// A provider opening written inside a generated member has no authored
+/// identity to prepare against. Methods and constants under an explicit
+/// header are both generated owners, so either is refused with the
+/// generated-owner diagnostic instead of being keyed by quote syntax.
+#[test]
+fn provider_openings_inside_generated_members_are_refused() {
+    let with_counter = SHAPE.replace(
+        "struct StableShape {}\n",
+        "struct StableShape {}\n\ntrait Score { const fn score() -> usize }\n\nstruct Counter {}\n\nimpl Derive<trait Score> for Counter {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { const fn score() -> usize { 1 } }\n    }\n}\n",
+    );
+    for (from, to) in [
+        (
+            "            const SIDES: usize = ${n}\n",
+            "            const SIDES: usize = with (Counter) { Square::score() }\n",
+        ),
+        (
+            "            const fn area() -> usize { Self::SIDES * Self::SIDES }\n",
+            "            const fn area() -> usize { with (Counter) { Square::score() } }\n",
+        ),
+    ] {
+        assert!(with_counter.contains(from), "{from:?}");
+        let cause = prepare_err(&with_counter.replace(from, to));
+        assert!(
+            cause.contains("generated openings need a portable generated-owner identity"),
+            "{cause}"
+        );
+    }
+}
+
 /// Named implementations with associated outputs need an ordinary
 /// representative and must agree with it, generated or handwritten.
 #[test]
