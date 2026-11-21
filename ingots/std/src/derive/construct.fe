@@ -1,4 +1,4 @@
-use core::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, abi_field_head_size, decode_field_from_prechecked_head, decode_frame_from}
+use core::abi::{Abi, AbiDecoder, AbiSize, ByteInput, Decode, abi_field_head_size, decode_field_from_prechecked_head}
 use core::derive::Derive
 use core::meta::{Code, Expr, Field, FieldInit, Item, Record, construct, type_ref}
 
@@ -30,6 +30,8 @@ impl<A: Abi> Derive<trait Decode<A>> for StructAbiDecode {
         let abi = type_ref<A>()
         let payload = construct<DecodePayloadField>(record)
         quote(d, input) {
+            const CHECKS_HEAD_FRAME: bool = true
+
             #[inline(always)]
             fn decode_payload<D: AbiDecoder<${abi}>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
                 ${payload}
@@ -41,15 +43,6 @@ impl<A: Abi> Derive<trait Decode<A>> for StructAbiDecode {
                     base: pos, head: pos, input_len,
                 }
                 <Self as Decode<${abi}>>::decode_payload(mut reader, input)
-            }
-
-            fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
-                let input_len: u256 = input.len()
-                decode_frame_from<${abi}, Self, I>(input, pos, input_len)
-            }
-
-            fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
-                decode_frame_from<${abi}, Self, I>(input, pos, input_len)
             }
         }
     }

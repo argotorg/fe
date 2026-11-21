@@ -240,11 +240,20 @@ pub trait Decode<A: Abi>: AbiSize {
     /// Custom codecs keep the element-by-element path by default.
     const IS_CANONICAL_WORD: bool = false
 
+    /// The positional defaults validate the head frame and then call
+    /// `decode_from_prechecked_head` when this is true. Override the
+    /// prechecked method to customize both default entry points together.
+    /// A prechecked override must finish the read directly.
+    const CHECKS_HEAD_FRAME: bool = false
+
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self
 
     /// Decode from a raw ABI payload position. Callers that use this path are
     /// responsible for any bounds checks needed by the input source.
     fn decode_from<I: ByteInput>(_ input: I, _ pos: u256) -> Self {
+        if Self::CHECKS_HEAD_FRAME {
+            return decode_frame_from<A, Self, I>(input, pos, input.len())
+        }
         var d = A::decoder_with_base(pos)
         Self::decode_payload(mut d, input)
     }
@@ -256,6 +265,10 @@ pub trait Decode<A: Abi>: AbiSize {
     #[inline(always)]
     fn decode_from_prechecked_head<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
         let _ = input_len
+        if Self::CHECKS_HEAD_FRAME {
+            var d = A::decoder_with_base(pos)
+            return Self::decode_payload(mut d, input)
+        }
         Self::decode_from(input, pos)
     }
 
@@ -265,6 +278,9 @@ pub trait Decode<A: Abi>: AbiSize {
     /// entering the prechecked-head fast path.
     fn decode_from_bounded<I: ByteInput>(_ input: I, _ pos: u256, _ input_len: u256) -> Self {
         checked_frame_end<A>(pos, Self::HEAD_SIZE, input_len)
+        if Self::CHECKS_HEAD_FRAME {
+            return Self::decode_from_prechecked_head(input, pos, input_len)
+        }
         Self::decode_from(input, pos)
     }
 }
