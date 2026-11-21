@@ -663,6 +663,12 @@ ast_node! {
     SK::KindBoundMono,
 }
 
+impl KindBoundMono {
+    pub fn is_constraint(&self) -> bool {
+        support::token(self.syntax(), SK::Ident).is_some_and(|token| token.text() == "Constraint")
+    }
+}
+
 ast_node! {
     pub struct KindBoundAbs,
     SK::KindBoundAbs,
@@ -775,6 +781,18 @@ mod tests {
         let mut parser = Parser::new(lexer, RecoveryMode::Recover);
         parser.parse(WhereClauseScope::default()).unwrap();
         WhereClause::cast(parser.finish_to_node().0).unwrap()
+    }
+
+    #[test]
+    #[wasm_bindgen_test]
+    fn trait_family_tokens_distinguish_declarations_and_where_predicates() {
+        for source in [
+            "struct S<T> where T: Copy, { value: T }\ntrait Next: Parent {}",
+            "struct S<T> where { true }, trait Family: Bound { value: T }",
+        ] {
+            let (_, errors) = crate::parse_source_file(source, RecoveryMode::NoRecover);
+            assert!(errors.is_empty(), "{source}: {errors:?}");
+        }
     }
 
     #[test]

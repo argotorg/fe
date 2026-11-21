@@ -682,6 +682,30 @@ pub(crate) fn check_ty_wf<'db>(
                 return wf;
             }
         }
+        TyData::ConstraintTerm(goal) => {
+            for &arg in goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
+        TyData::TraitFamily(family) => {
+            for &arg in family
+                .arguments(db)
+                .iter()
+                .chain(family.associated(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
         TyData::ConstTy(const_ty) => {
             let wf = check_const_ty_wf(db, solve_cx, *const_ty);
             if !wf.is_wf() {

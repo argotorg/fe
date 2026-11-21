@@ -386,8 +386,12 @@ impl KindBound {
                 .into();
 
             Partial::Present(KindBound::Abs(lhs, rhs))
-        } else if ast.mono().is_some() {
-            Partial::Present(KindBound::Mono)
+        } else if let Some(mono) = ast.mono() {
+            Partial::Present(if mono.is_constraint() {
+                KindBound::Constraint
+            } else {
+                KindBound::Mono
+            })
         } else {
             Partial::Absent
         }

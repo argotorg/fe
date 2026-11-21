@@ -2060,6 +2060,14 @@ pub fn walk_type<'db, V>(
             },
         ),
 
+        TypeKind::TraitFamily(reference) => {
+            if let Some(reference) = reference.to_opt() {
+                ctxt.with_new_ctxt(
+                    |span| span.into_trait_family_type().trait_ref(),
+                    |ctxt| visitor.visit_trait_ref(ctxt, reference),
+                );
+            }
+        }
         TypeKind::Never => {}
     }
 }

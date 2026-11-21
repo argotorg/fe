@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use super::{
     Checkpoint, ErrProof, Parser, Recovery, define_scope,
     expr::parse_expr,
-    param::GenericArgListScope,
+    param::{GenericArgListScope, TraitRefScope},
     parse_list,
     path::{PathScope, is_path_segment},
     token_stream::TokenStream,
@@ -23,6 +23,7 @@ pub fn parse_type<S: TokenStream>(
         ) => parser.parse_cp(ModeTypeScope::new(false), checkpoint),
         Some(SyntaxKind::LParen) => parser.parse_cp(TupleTypeScope::default(), checkpoint),
         Some(SyntaxKind::LBracket) => parser.parse_cp(ArrayTypeScope::default(), checkpoint),
+        Some(SyntaxKind::TraitKw) => parser.parse_cp(TraitFamilyTypeScope::default(), checkpoint),
         Some(SyntaxKind::Not) => parser
             .parse_cp(NeverTypeScope::default(), checkpoint)
             .map_err(|e| e.into()),
@@ -51,10 +52,21 @@ pub(crate) fn is_type_start(kind: SyntaxKind) -> bool {
         | SyntaxKind::Star2
         | SyntaxKind::SelfTypeKw
         | SyntaxKind::LParen
-        | SyntaxKind::LBracket => true,
+        | SyntaxKind::LBracket
+        | SyntaxKind::TraitKw => true,
         SyntaxKind::MutKw | SyntaxKind::MaybeMutKw | SyntaxKind::RefKw | SyntaxKind::OwnKw => true,
         kind if is_path_segment(kind) => true,
         _ => false,
+    }
+}
+
+define_scope!(TraitFamilyTypeScope, TraitFamilyType);
+impl super::Parse for TraitFamilyTypeScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::TraitKw);
+        parser.parse_or_recover(TraitRefScope::default())
     }
 }
 
