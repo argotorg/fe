@@ -1974,7 +1974,14 @@ pub fn freeze_generation_request<'db>(
     }
     let trait_args = trait_args
         .iter()
-        .map(|&arg| freeze_generic_arg(db, arg))
+        .map(|&arg| {
+            freeze_generic_arg(db, arg).map_err(|_| {
+                format!(
+                    "scoped derive cannot preserve trait argument `{}`. Use a written implementation header.",
+                    arg.pretty_print(db),
+                )
+            })
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if goal.def(db).ingot(db) != opening.scope(db).top_mod(db).ingot(db) {
         return Err(

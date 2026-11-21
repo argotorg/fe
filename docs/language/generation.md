@@ -430,6 +430,7 @@ The check also follows code that runs without a written call. A `Drop` implement
 - A scoped provider must return one function template. Use a written implementation header when a provider supplies multiple functions together.
 - A block for a trait of another package: ``a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)` ``.
 - A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
+- Scoped derive also requires trait arguments that it can carry into the generated implementation. Use a written implementation header when a trait argument is itself a trait family, such as `Read<trait Mark>`.
 - A written header whose provider has no matching trait family.
 - A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that a bound of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
 - A header inside a function body: `a derive header inside a function body is not supported; declare the header in a module`.
