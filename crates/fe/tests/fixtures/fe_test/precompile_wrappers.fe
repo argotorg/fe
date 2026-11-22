@@ -297,3 +297,126 @@ fn test_variable_precompile_wrappers_reject_invalid_chunk_lengths() {
     expect_invalid_input(bls12_pairing(buffer(ptr, 383)))
     expect_invalid_input(bls12_pairing(buffer(ptr, 385)))
 }
+
+const G1_DOUBLE_X: u256 = 0x030644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd3
+const G1_DOUBLE_Y: u256 = 0x15ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4
+const MARKER: u256 = 0xdeadbeef
+
+fn ec_add_generator_args() -> ptr::FixedMemBuffer<128> {
+    let args = ptr::FixedMemBuffer<128>::alloc()
+    unsafe {
+        store_word(ptr: args.ptr(), value: 1)
+        store_word(ptr: ptr::offset_bytes(args.ptr(), 32), value: 2)
+        store_word(ptr: ptr::offset_bytes(args.ptr(), 64), value: 1)
+        store_word(ptr: ptr::offset_bytes(args.ptr(), 96), value: 2)
+    }
+    args
+}
+
+#[test]
+fn test_raw_staticcall_fixed_ec_add_writes_output()
+uses (evm: Evm)
+{
+    let args = ec_add_generator_args()
+    var ret = ptr::FixedMemBuffer<64>::alloc()
+    let outcome = evm.raw_staticcall_fixed(
+        addr: Address::new(6),
+        gas: 1000000,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(outcome.success())
+    assert(outcome.returndata_len() == 64)
+    unsafe {
+        assert(load_word(ret.ptr()) == G1_DOUBLE_X)
+        assert(load_word(ptr::offset_bytes(ret.ptr(), 32)) == G1_DOUBLE_Y)
+    }
+}
+
+#[test]
+fn test_raw_staticcall_fixed_identity_copies_input()
+uses (evm: Evm)
+{
+    let args = ec_add_generator_args()
+    var ret = ptr::FixedMemBuffer<128>::alloc()
+    let outcome = evm.raw_staticcall_fixed(
+        addr: Address::new(4),
+        gas: 1000000,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(outcome.success())
+    assert(outcome.returndata_len() == 128)
+    unsafe {
+        assert(load_word(ret.ptr()) == 1)
+        assert(load_word(ptr::offset_bytes(ret.ptr(), 96)) == 2)
+    }
+}
+
+#[test]
+fn test_raw_staticcall_fixed_short_returndata_keeps_tail()
+uses (evm: Evm)
+{
+    let args = ec_add_generator_args()
+    var ret = ptr::FixedMemBuffer<96>::alloc()
+    unsafe { store_word(ptr: ptr::offset_bytes(ret.ptr(), 64), value: MARKER) }
+    let outcome = evm.raw_staticcall_fixed(
+        addr: Address::new(6),
+        gas: 1000000,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(outcome.success())
+    assert(outcome.returndata_len() == 64)
+    unsafe {
+        assert(load_word(ret.ptr()) == G1_DOUBLE_X)
+        assert(load_word(ptr::offset_bytes(ret.ptr(), 64)) == MARKER)
+    }
+}
+
+#[test]
+fn test_raw_staticcall_fixed_long_returndata_is_truncated()
+uses (evm: Evm)
+{
+    let args = ec_add_generator_args()
+    var ret = ptr::FixedMemBuffer<32>::alloc()
+    let outcome = evm.raw_staticcall_fixed(
+        addr: Address::new(4),
+        gas: 1000000,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(outcome.success())
+    assert(outcome.returndata_len() == 128)
+    assert(ret.len() == 32)
+    unsafe { assert(load_word(ret.ptr()) == 1) }
+}
+
+#[test]
+fn test_raw_staticcall_fixed_reports_failure()
+uses (evm: Evm)
+{
+    let args = ec_add_generator_args()
+    // (1, 3) is not on the curve, so ecAdd fails.
+    unsafe { store_word(ptr: ptr::offset_bytes(args.ptr(), 32), value: 3) }
+    var ret = ptr::FixedMemBuffer<64>::alloc()
+    unsafe { store_word(ptr: ret.ptr(), value: MARKER) }
+    let outcome = evm.raw_staticcall_fixed(
+        addr: Address::new(6),
+        gas: 1000000,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(!outcome.success())
+    assert(outcome.returndata_len() == 0)
+    unsafe { assert(load_word(ret.ptr()) == MARKER) }
+
+    // Too little gas for the identity precompile.
+    let out_of_gas = evm.raw_staticcall_fixed(
+        addr: Address::new(4),
+        gas: 0,
+        args: args.span(),
+        ret: mut ret,
+    )
+    assert(!out_of_gas.success())
+}
