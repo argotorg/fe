@@ -390,7 +390,10 @@ impl super::Parse for PathExprScope {
             })
         })?;
 
-        if parser.current_kind() == Some(SyntaxKind::LBrace) && self.allow_record_init {
+        // The `{` of a record initializer must follow the path on the same line.
+        // Otherwise `let s = a` followed by a block statement on the next line
+        // would be read as the record initializer `a { .. }`.
+        if self.allow_record_init && parser.current_kind_same_line() == Some(SyntaxKind::LBrace) {
             parser.set_scope_kind(SyntaxKind::RecordInitExpr);
             parser.parse(RecordFieldListScope::default())?;
         }

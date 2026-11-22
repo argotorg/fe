@@ -1,0 +1,5 @@
+let s = a
+{
+    s = 1
+}
+let t = Foo { x: 1 }
