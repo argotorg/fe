@@ -4,8 +4,7 @@ expression: output
 input_file: tests/fixtures/comments_in_lists.fe
 ---
 use foo::{
-    bar,
-    // use tree comment
+    bar, // use tree comment
     baz,
 }
 
@@ -29,24 +28,20 @@ msg M {
 
 fn takes_array(
     arr: Array<
-        i32,
-        // generic arg comment
+        i32, // generic arg comment
         10,
     >,
 ) {}
 
 fn gen<
-    T,
-    // generic param comment
+    T, // generic param comment
     U,
 >(
-    a: T,
-    // param comment
+    a: T, // param comment
     b: U,
 )
 uses (
-    ctx: Ctx,
-    // uses comment
+    ctx: Ctx, // uses comment
     store: Store,
 )
 {
