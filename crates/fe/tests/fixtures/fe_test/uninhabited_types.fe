@@ -1,6 +1,7 @@
 use core::intrinsic::{clear, storage_slots}
 use core::ops::Drop
 use core::option::Option
+use core::ptr::null
 use core::result::Result
 use core::{assert, size_of}
 
@@ -120,6 +121,20 @@ fn drop_enum(_ e: own EnumWithDrop) -> u256 {
     }
 }
 
+fn read_never_field(_ p: *Mixed) -> u256 {
+    unsafe { (*p).b }
+}
+
+fn try_never_payload(_ r: own Result<u256, !>) -> Result<u256, u256> {
+    let v: u256 = r?
+    Result::Ok(v)
+}
+
+fn try_never_error(_ r: own Result<!, u256>) -> Result<u256, u256> {
+    let v = r?
+    Result::Ok(v + 1)
+}
+
 #[test]
 fn test_uninhabited_sizes_and_slots() {
     assert(size_of<!>() == 0)
@@ -171,4 +186,27 @@ fn test_inhabited_containers_of_uninhabited_types() {
 
     let dropped = drop_enum(EnumWithDrop::Live(Owned { value: 33 }))
     assert(dropped == 33)
+}
+
+#[test]
+fn test_never_coercions() {
+    let payload: Result<u256, !> = Result::Err(7)
+    let failed = match try_never_payload(payload) {
+        Result::Ok(_) => 0
+        Result::Err(e) => e
+    }
+    assert(failed == 7)
+
+    let error: Result<!, u256> = Result::Ok(41)
+    let passed = match try_never_error(error) {
+        Result::Ok(v) => v
+        Result::Err(e) => e
+    }
+    assert(passed == 42)
+
+    // Only compiled: reading the `!` field traps.
+    if passed == 0 {
+        let p: *Mixed = null()
+        let _ = read_never_field(p)
+    }
 }

@@ -832,13 +832,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// carry their grants. A leaf yielding an access to a value is lowered
     /// as that value, of its own type: the grant of the frame temporary
     /// holding it is typed by the shape (`lower_yield_leaf`). A call that
-    /// never returns yields nothing, and joins the other leaves' grants.
+    /// never returns yields nothing, and joins the other leaves' grants. A
+    /// `!` expression typed as its context's type is lowered as the `!` it
+    /// is (`lower_expr`).
     pub(super) fn expr_ty(&self, expr: ExprId) -> TyId<'db> {
         match self.typed_body.yield_shape(expr) {
             Some(Shape::Access(..)) if self.is_yield_leaf(expr) && !self.never_returns(expr) => {
                 self.typed_body.expr_ty(self.db, expr)
             }
             Some(shape) => shape.carrier_ty(self.db),
+            None if self.typed_body.is_never_coerced(expr) => TyId::never(self.db),
             None => self.typed_body.expr_ty(self.db, expr),
         }
     }
@@ -1094,15 +1097,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // every scope.
         self.push_drop_scope(false);
         let error = (kind == SumKind::Result).then(|| {
-            SOperand::synthetic(self.emit_expr_with_origin(
+            let error_ty = sum_ty.generic_args(self.db)[0];
+            let error = self.emit_expr_with_origin(
                 origin,
-                sum_ty.generic_args(self.db)[0],
+                error_ty,
                 SExpr::ExtractEnumField {
                     value: SOperand::synthetic(value),
                     variant: VariantIndex(failure),
                     field: FieldIndex(0),
                 },
-            ))
+            );
+            // An error of type `!` ends the path that would carry it out.
+            if normalize_ty(self.db, error_ty, self.body.scope(), self.assumptions)
+                .is_never(self.db)
+            {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            }
+            SOperand::synthetic(error)
         });
         let exit_ty = self.instance.normalized_result_ty(self.db);
         let exit = self.emit_expr_with_origin(
@@ -1199,6 +1210,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .typed_body
             .yield_shape(expr)
             .filter(|_| self.is_yield_leaf(expr));
+        // A `!` expression typed as its context's type ends its block where it
+        // would produce its value, which no path defines. A place of type `!`
+        // is not read: lowering it evaluates what locates it.
+        if yield_leaf.is_none() && self.typed_body.is_never_coerced(expr) {
+            if self.try_lower_place(expr).is_none() {
+                self.lower_expr_inner(expr);
+            }
+            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            return self.alloc_temp(self.typed_body.expr_ty(self.db, expr));
+        }
         let value = match yield_leaf {
             Some(shape) => {
                 self.yield_depth += 1;
@@ -1787,31 +1808,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         semantics: Option<PathReadSemantics>,
     ) -> SValueId {
         let origin = SemOrigin::Expr(expr);
-        let scope = self.body.scope();
-        let target_ty = normalize_ty(self.db, ty, scope, self.assumptions);
-        if let Some((place, capture_ty)) = self.capture_places.get(&binding).cloned() {
-            let capture_ty = normalize_ty(self.db, capture_ty, scope, self.assumptions);
-            let capture_inner = capture_ty
-                .as_capability(self.db)
-                .map_or(capture_ty, |(_, inner)| inner);
-            if capture_inner.is_never(self.db) && target_ty != capture_ty {
-                self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
-                return self.alloc_temp(ty);
-            }
+        if let Some((place, _)) = self.capture_places.get(&binding).cloned() {
             return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
         }
         let local = *self
             .binding_locals
             .get(&binding)
             .expect("binding local should be allocated");
-        let local_ty = self.locals[local.index()].ty;
-        let local_inner = local_ty
-            .as_capability(self.db)
-            .map_or(local_ty, |(_, inner)| inner);
-        if local_inner.is_never(self.db) && target_ty != local_ty {
-            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
-            return self.alloc_temp(ty);
-        }
         match self.binding_path_read_semantics(
             binding,
             semantics.unwrap_or(PathReadSemantics::ReuseLocal),
