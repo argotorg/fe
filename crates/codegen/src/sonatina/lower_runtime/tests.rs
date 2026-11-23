@@ -1138,3 +1138,131 @@ pub contract UninhabitedContract {
         );
     }
 }
+
+#[test]
+fn evm_handover_ir_uses_return_code_and_mload_bytes() {
+    use contract_harness::{ExecutionOptions, RuntimeInstance as EvmRuntime};
+    use sonatina_ir::inst::evm::{EvmCodeCopy, EvmMloadBytes, EvmReturn, EvmReturnCode};
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    const SOURCE: &str = r#"
+use core::ptr::MemBuffer
+
+msg Q {
+    #[selector = 1]
+    ReadNarrow -> u256,
+}
+
+pub contract Contract {
+    recv Q {
+        ReadNarrow -> u256 {
+            var buf = MemBuffer::new(16)
+            buf.write_be<u8>(offset: 0, value: 0x12)
+            buf.write_be<u16>(offset: 1, value: 0x3456)
+            let a: u256 = buf.read_be<u8>(0) as u256
+            let b: u256 = buf.read_be<u16>(1) as u256
+            (a << 16) | b
+        }
+    }
+}
+"#;
+
+    let mut db = DriverDataBase::default();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///evm_part_a_ops.fe").unwrap(),
+        Some(SOURCE.into()),
+    );
+    let top_mod = db.top_mod(file);
+    let diagnostics = db.run_on_top_mod(top_mod);
+    assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    mir::verify_runtime_package(&db, package).expect("MIR verification");
+
+    let isa = create_evm_isa();
+    let mut lowerer = ModuleLowerer::new(
+        &db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        &[],
+        &[],
+        NativePanics::Trap,
+    )
+    .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_bodies().unwrap();
+    lowerer.declare_objects().unwrap();
+    let (module, _) = lowerer.finish();
+
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(report.is_ok(), "Sonatina verification failed:\n{report:?}");
+
+    let mut saw_return_code = false;
+    let mut saw_mload_bytes = false;
+    for func_ref in module.funcs() {
+        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_owned());
+        module.func_store.view(func_ref, |func| {
+            let is_init_root = name.contains("init_root") || name.ends_with("__init");
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if func.dfg.downcast::<&EvmReturnCode>(inst).is_some() {
+                        saw_return_code = true;
+                    }
+                    if func.dfg.downcast::<&EvmMloadBytes>(inst).is_some() {
+                        saw_mload_bytes = true;
+                    }
+                    if is_init_root {
+                        assert!(
+                            func.dfg.downcast::<&EvmCodeCopy>(inst).is_none()
+                                && func.dfg.downcast::<&EvmReturn>(inst).is_none(),
+                            "immut_slots == 0 init root `{name}` should use evm_return_code"
+                        );
+                    }
+                }
+            }
+        });
+    }
+    assert!(
+        saw_return_code,
+        "expected evm_return_code in contract init root"
+    );
+    assert!(
+        saw_mload_bytes,
+        "expected evm_mload_bytes for narrow memory loads"
+    );
+
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        let mut lowerer = ModuleLowerer::new(
+            &db,
+            ModuleBuilder::new(ModuleCtx::new(&isa)),
+            isa.inst_set(),
+            &package,
+            &[],
+            &[],
+            NativePanics::Trap,
+        )
+        .unwrap();
+        lowerer.declare_functions().unwrap();
+        lowerer.lower_bodies().unwrap();
+        lowerer.declare_objects().unwrap();
+        let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
+            &db,
+            &package,
+            lowerer.finish().0,
+            opt,
+            false,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("compile at {opt:?}: {e}"));
+        let artifact = artifacts.remove("Contract").unwrap();
+        let mut rt = EvmRuntime::deploy(&hex::encode(artifact.deploy)).unwrap();
+        let out = rt
+            .call_raw(&[0, 0, 0, 1], ExecutionOptions::default())
+            .expect("call should succeed")
+            .return_data;
+        let mut expected = [0u8; 32];
+        expected[29..].copy_from_slice(&[0x12, 0x34, 0x56]);
+        assert_eq!(out, expected, "{opt:?} narrow read");
+    }
+}

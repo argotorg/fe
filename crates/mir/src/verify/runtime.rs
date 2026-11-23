@@ -415,6 +415,11 @@ fn verify_terminator<'db>(
             verify_word_value(body, *len)?;
             Ok(())
         }
+        RTerminator::ReturnCode { offset, len } => {
+            verify_word_value(body, *offset)?;
+            verify_word_value(body, *len)?;
+            Ok(())
+        }
         RTerminator::RevertEmpty => Ok(()),
         RTerminator::Panic { code: value } | RTerminator::SelfDestruct { beneficiary: value } => {
             verify_word_value(body, *value)

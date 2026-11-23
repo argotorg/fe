@@ -682,16 +682,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
         let immut_slots = self.contract_code_address_space_slots(contract);
         if immut_slots == 0 {
-            self.push_side_effect_builtin(
-                entry,
-                RuntimeBuiltin::CodeCopy {
-                    dst: zero,
-                    offset: runtime_offset,
-                    len: runtime_len,
-                },
-            );
-            self.blocks[entry.index()].terminator = RTerminator::ReturnData {
-                offset: zero,
+            self.blocks[entry.index()].terminator = RTerminator::ReturnCode {
+                offset: runtime_offset,
                 len: runtime_len,
             };
             return;

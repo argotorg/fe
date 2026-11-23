@@ -70,10 +70,11 @@ use sonatina_ir::{
             EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy,
             EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid,
             EvmKeccak256, EvmKeccak256Words, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
-            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
-            EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
-            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
+            EvmMalloc, EvmMcopy, EvmMloadBytes, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber,
+            EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnCode, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
+            EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
@@ -111,13 +112,9 @@ define_lowering_inst_set!(
     Add,
     Mul,
     Sar,
-    Sdiv,
     Shl,
     Shr,
-    Smod,
     Sub,
-    Udiv,
-    Umod,
     Bitcast,
     IntToPtr,
     PtrToInt,
@@ -2740,6 +2737,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let ptr = self.local_value(*ptr)?;
                 let len = self.local_value(*len)?;
                 let inst_set = self.module.inst_set();
+                // On EVM a constant length picks its read here, so no
+                // `evm_mload_bytes` of more than 32 bytes is emitted even on a
+                // path the length rules out.
+                if !self.module.is_native_target()
+                    && let Some(imm) = self.fb.func.dfg.value_imm(len)
+                {
+                    return if imm.as_i256() < I256::from(32u64) {
+                        self.read_short_word(ptr, len)
+                    } else {
+                        Ok(self
+                            .fb
+                            .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256))
+                    };
+                }
                 let word_len = self.fb.make_imm_value(Immediate::from_i256(
                     I256::from(32u64),
                     self.fb.type_of(len),
@@ -2790,32 +2801,24 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.fb.insert_inst_no_result(Jump::new(inst_set, done));
                     smallvec![(word, full), (zero, partial), (copied, copy)]
                 } else {
-                    // EVM reads past an allocation are defined: read the whole
-                    // word and clear the bytes from `len` on.
-                    let word = self
-                        .fb
-                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    // On EVM, read only `len` bytes when `len < 32` via
+                    // `evm_mload_bytes` so short/empty reads never touch bytes
+                    // past `ptr + len`, then left-align into the high bytes.
+                    let full = self.fb.append_block();
                     let short = self
                         .fb
                         .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
-                    let entry = self.fb.current_block().expect("read requires a block");
                     self.fb
-                        .insert_inst_no_result(Br::new(inst_set, short, partial, done));
-                    self.fb.switch_to_block(partial);
-                    let three = self.fb.make_imm_value(I256::from(3u64));
-                    let bits = self
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, full));
+                    self.fb.switch_to_block(full);
+                    let word = self
                         .fb
-                        .insert_inst(Shl::new(inst_set, three, len), Type::I256);
-                    let ones = self.fb.make_imm_value(Immediate::all_one(Type::I256));
-                    let tail = self
-                        .fb
-                        .insert_inst(Shr::new(inst_set, bits, ones), Type::I256);
-                    let mask = self.fb.insert_inst(Not::new(inst_set, tail), Type::I256);
-                    let masked = self
-                        .fb
-                        .insert_inst(And::new(inst_set, word, mask), Type::I256);
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
                     self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-                    smallvec![(word, entry), (masked, partial)]
+                    self.fb.switch_to_block(partial);
+                    let aligned = self.read_short_word(ptr, len)?;
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, full), (aligned, partial)]
                 };
                 self.fb.switch_to_block(done);
                 self.fb
@@ -3645,6 +3648,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmReturn::new(
                     self.module.required_inst::<EvmReturn>()?,
+                    offset,
+                    len,
+                ));
+            }
+            RTerminator::ReturnCode { offset, len } => {
+                let offset = self.local_value(*offset)?;
+                let len = self.local_value(*len)?;
+                self.fb.insert_inst_no_result(EvmReturnCode::new(
+                    self.module.required_inst::<EvmReturnCode>()?,
                     offset,
                     len,
                 ));
@@ -5858,11 +5870,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         space: AddressSpace,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        if self.module.is_native_target() && matches!(space, AddressSpace::Memory) {
-            let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
-            return Ok(self
-                .fb
-                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        if matches!(space, AddressSpace::Memory) {
+            if self.module.is_native_target() {
+                let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
+                return Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+            }
+            let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
+            if width < 32 {
+                let len = self.index_value(width);
+                let value = self.fb.insert_inst(
+                    EvmMloadBytes::new(self.module.required_inst::<EvmMloadBytes>()?, addr, len),
+                    Type::I256,
+                );
+                return self.cast_scalar_with_signedness(
+                    value,
+                    scalar_ty(scalar),
+                    scalar.is_signed_int(),
+                );
+            }
         }
         let word = self.load_word(addr, space)?;
         let value = if space.is_byte_addressed() {
@@ -6108,16 +6135,10 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// A value of `class` where nothing reads it, as for a MIR placeholder:
-    /// the one value of a zero-sized class, and otherwise `undef`, which
-    /// passes may refine to whatever is cheapest and memory legalization does
-    /// not store.
+    /// the zero value of `class`'s lowered Sonatina type.
     fn unread_value(&mut self, class: &RuntimeClass<'db>) -> Result<ValueId, LowerError> {
         let ty = self.module.ty_for_class(class)?;
-        Ok(if class.is_runtime_zst(self.module.db) {
-            zero_for_type(&mut self.fb, ty)
-        } else {
-            self.fb.make_undef_value(ty)
-        })
+        Ok(zero_for_type(&mut self.fb, ty))
     }
 
     fn retype_value_for_class(
@@ -7030,11 +7051,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
         Ok(if self.module.is_native_target() && signed {
-            self.fb
-                .insert_inst(Sdiv::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Sdiv::new(self.module.required_inst::<Sdiv>()?, lhs, rhs),
+                ty,
+            )
         } else if self.module.is_native_target() {
-            self.fb
-                .insert_inst(Udiv::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Udiv::new(self.module.required_inst::<Udiv>()?, lhs, rhs),
+                ty,
+            )
         } else if signed {
             self.fb.insert_inst(
                 EvmSdiv::new(self.module.required_inst::<EvmSdiv>()?, lhs, rhs),
@@ -7056,11 +7081,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
         Ok(if self.module.is_native_target() && signed {
-            self.fb
-                .insert_inst(Smod::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Smod::new(self.module.required_inst::<Smod>()?, lhs, rhs),
+                ty,
+            )
         } else if self.module.is_native_target() {
-            self.fb
-                .insert_inst(Umod::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Umod::new(self.module.required_inst::<Umod>()?, lhs, rhs),
+                ty,
+            )
         } else if signed {
             self.fb.insert_inst(
                 EvmSmod::new(self.module.required_inst::<EvmSmod>()?, lhs, rhs),
@@ -7193,6 +7222,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .ctx
             .with_ty_store(|_store| EnumVariantRef::new(compound, variant.index as u32))
             .pipe(Ok)
+    }
+
+    /// The `len < 32` bytes at `ptr` in the high bytes of a word, the rest
+    /// zero, read with `evm_mload_bytes` so no byte past `ptr + len` is read.
+    fn read_short_word(&mut self, ptr: ValueId, len: ValueId) -> Result<ValueId, LowerError> {
+        let inst_set = self.module.inst_set();
+        let raw = self.fb.insert_inst(
+            EvmMloadBytes::new(self.module.required_inst::<EvmMloadBytes>()?, ptr, len),
+            Type::I256,
+        );
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, len), Type::I256);
+        let word_bits = self.fb.make_imm_value(I256::from(256u64));
+        let shift = self
+            .fb
+            .insert_inst(Sub::new(inst_set, word_bits, bits), Type::I256);
+        Ok(self
+            .fb
+            .insert_inst(Shl::new(inst_set, shift, raw), Type::I256))
     }
 
     fn index_value(&mut self, value: u64) -> ValueId {
