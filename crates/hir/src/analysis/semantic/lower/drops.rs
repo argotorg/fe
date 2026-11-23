@@ -190,6 +190,8 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
         let current = self.current;
         let exit = self.new_block();
+        // The caller's branch from `current`, which is live, leads here.
+        self.mark_reached(exit);
         self.switch_to(exit);
         self.destroy(&owners);
         self.set_synthetic_terminator(exit, STerminatorKind::Goto(else_bb));

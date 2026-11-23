@@ -244,6 +244,18 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
 pub(super) struct BlockState<'db> {
     pub(super) stmts: Vec<SStmt<'db>>,
     pub(super) terminator: Option<STerminator<'db>>,
+    reach: BlockReach,
+}
+
+/// Whether lowering has reached a block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockReach {
+    /// No edge lowered so far leads here.
+    Unreached,
+    /// The entry, or a terminator lowered so far, leads here.
+    Reached,
+    /// Entered unreached, and closed as dead code.
+    Dead,
 }
 
 struct SmirLowerInputs<'a, 'db> {
@@ -570,12 +582,41 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.blocks.push(BlockState {
             stmts: Vec::new(),
             terminator: None,
+            reach: if self.blocks.is_empty() {
+                BlockReach::Reached
+            } else {
+                BlockReach::Unreached
+            },
         });
         id
     }
 
+    /// Continues lowering in `block`. A block no edge leads to, such as the
+    /// arms of an `if` whose condition ended its block, is dead: it is closed
+    /// as unreachable, so nothing is lowered into it, as nothing is after a
+    /// statement that ends its block.
+    ///
+    /// The caller installs the terminator that leads to a live block before
+    /// entering it, or calls [`Self::mark_reached`] when that edge comes
+    /// after. An edge to a block already closed as dead panics: it would
+    /// have dropped live code.
     pub(super) fn switch_to(&mut self, block: SBlockId) {
         self.current = block;
+        if self.blocks[block.index()].reach == BlockReach::Unreached {
+            self.blocks[block.index()].reach = BlockReach::Dead;
+            self.set_synthetic_terminator(block, STerminatorKind::Unreachable);
+        }
+    }
+
+    /// Records that an edge leads to `block`, for an edge lowered after the
+    /// block is entered.
+    pub(super) fn mark_reached(&mut self, block: SBlockId) {
+        let reach = &mut self.blocks[block.index()].reach;
+        assert!(
+            *reach != BlockReach::Dead,
+            "an edge leads to {block:?}, which lowering entered unreached and closed as dead"
+        );
+        *reach = BlockReach::Reached;
     }
 
     pub(super) fn is_terminated(&self, block: SBlockId) -> bool {
@@ -604,6 +645,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         kind: STerminatorKind<'db>,
     ) {
         if self.blocks[block.index()].terminator.is_none() {
+            for successor in kind.successors() {
+                self.mark_reached(successor);
+            }
             self.blocks[block.index()].terminator = Some(STerminator { origin, kind });
         }
     }
@@ -770,7 +814,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             origin,
             STerminatorKind::Yield { value, resume },
         );
-        self.current = resume;
+        self.switch_to(resume);
         match self.slide {
             Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
             None => {
@@ -2743,7 +2787,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let outer = self.slide.replace(slide);
                 let _ = self.lower_expr(*expr);
                 self.slide = outer;
-                self.current = slide;
+                self.switch_to(slide);
             }
             Stmt::Expr(expr) => {
                 let _ = self.lower_expr(*expr);
