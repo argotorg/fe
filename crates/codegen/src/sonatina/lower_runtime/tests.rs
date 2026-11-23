@@ -1195,7 +1195,10 @@ pub contract Contract {
     lowerer.declare_objects().unwrap();
     let (module, _) = lowerer.finish();
 
-    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    let report = verify_module(
+        &module,
+        &VerifierConfig::for_level(VerificationLevel::Full).with_evm_fixed_memory_limit(0x40),
+    );
     assert!(report.is_ok(), "Sonatina verification failed:\n{report:?}");
 
     let mut saw_return_code = false;
