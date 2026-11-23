@@ -159,5 +159,7 @@ pub enum RuntimeVerifySite {
 
 pub use crate::runtime::place::{resolve_runtime_place, resolve_runtime_place_address_class};
 pub use consts::verify_const_region;
+#[cfg(test)]
+pub use layout::verify_class_layouts_for_test as verify_runtime_class_for_test;
 pub use package::verify_runtime_package;
 pub use runtime::{verify_runtime_body, verify_runtime_body_detailed};

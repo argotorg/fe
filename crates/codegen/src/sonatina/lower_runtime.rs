@@ -1042,6 +1042,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 self.builder.declare_array_type(elem, data.len as usize)
             }
             Layout::Enum(data) => {
+                if data.variants.is_empty() {
+                    return Err(LowerError::Internal(
+                        "cannot lower empty enum layout to Sonatina".to_string(),
+                    ));
+                }
                 let variants = data
                     .variants
                     .iter()
@@ -3606,6 +3611,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ))
                     })
                     .collect::<Result<Vec<_>, LowerError>>()?;
+                if table.is_empty() && default.is_none() {
+                    return Err(LowerError::Internal(
+                        "cannot lower MatchEnumTag with no cases and no default".to_string(),
+                    ));
+                }
                 self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
                     tag,
@@ -4678,6 +4688,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 "enum copy source layout must be an enum".to_string(),
             ));
         };
+        if dst_variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot copy empty enum layout into object".to_string(),
+            ));
+        }
         if src_enum.variants.len() != dst_variants.len() {
             return Err(LowerError::Internal(format!(
                 "enum copy source/destination variant count mismatch: src={} dst={}",
@@ -5172,6 +5187,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         data: &mir::runtime::EnumLayout<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
+        if data.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot copy empty enum layout to pointer".to_string(),
+            ));
+        }
         let tag = self.fb.insert_inst(
             EnumTag::new(self.module.inst_set(), src),
             self.module.enum_tag_ty(layout)?,
@@ -5707,6 +5727,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         data: &mir::runtime::EnumLayout<'db>,
         load: EnumLoad,
     ) -> Result<ValueId, LowerError> {
+        if data.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot load empty enum layout from pointer".to_string(),
+            ));
+        }
         let ty = match load {
             EnumLoad::Value => self.module.ty_for_layout(layout)?,
             EnumLoad::Tag => self.module.enum_tag_ty(layout)?,
@@ -6210,6 +6235,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         target_layout: LayoutId<'db>,
         target: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
+        if source.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot retype empty enum layout".to_string(),
+            ));
+        }
         if source.variants.len() != target.variants.len() {
             return Err(LowerError::Internal(format!(
                 "enum retype variant count mismatch: source={source_layout:?} target={target_layout:?}"

@@ -4806,6 +4806,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        let mut exhaustive = false;
         if !scrutinee_pat_ty.has_invalid(self.db)
             && arm_statuses.iter().all(|status| status.is_ready())
         {
@@ -4835,7 +4836,9 @@ impl<'db> TyChecker<'db> {
             }
 
             match analysis.exhaustiveness {
-                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {}
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {
+                    exhaustive = true;
+                }
                 crate::analysis::ty::pattern_analysis::MatchExhaustiveness::NonExhaustive(
                     missing_patterns,
                 ) => {
@@ -4858,7 +4861,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        if !arms.is_empty() && diverging_arms == arms.len() {
+        if (!arms.is_empty() || exhaustive) && diverging_arms == arms.len() {
             match_ty = TyId::never(self.db);
         }
 

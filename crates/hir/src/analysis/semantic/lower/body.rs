@@ -845,9 +845,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     /// Whether `expr` calls something that never returns.
     fn never_returns(&self, expr: ExprId) -> bool {
-        self.typed_body
-            .callable_expr(expr)
-            .is_some_and(|callable| callable.ret_ty(self.db).is_never(self.db))
+        self.typed_body.callable_expr(expr).is_some_and(|callable| {
+            normalize_ty(
+                self.db,
+                callable.ret_ty(self.db),
+                self.body.scope(),
+                self.assumptions,
+            )
+            .is_never(self.db)
+        })
     }
 
     /// Whether the yield site `expr` yields itself, rather than through the
@@ -1202,7 +1208,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             None => self.lower_expr_inner(expr),
         };
-        if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
+        let expr_ty = normalize_ty(
+            self.db,
+            self.expr_ty(expr),
+            self.body.scope(),
+            self.assumptions,
+        );
+        if expr_ty.is_never(self.db) && !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         }
         if let Some(shape) = yield_leaf
@@ -1775,13 +1787,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         semantics: Option<PathReadSemantics>,
     ) -> SValueId {
         let origin = SemOrigin::Expr(expr);
-        if let Some((place, _)) = self.capture_places.get(&binding).cloned() {
+        let scope = self.body.scope();
+        let target_ty = normalize_ty(self.db, ty, scope, self.assumptions);
+        if let Some((place, capture_ty)) = self.capture_places.get(&binding).cloned() {
+            let capture_ty = normalize_ty(self.db, capture_ty, scope, self.assumptions);
+            let capture_inner = capture_ty
+                .as_capability(self.db)
+                .map_or(capture_ty, |(_, inner)| inner);
+            if capture_inner.is_never(self.db) && target_ty != capture_ty {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+                return self.alloc_temp(ty);
+            }
             return self.emit_expr_with_origin(origin, ty, SExpr::ReadPlace { place });
         }
         let local = *self
             .binding_locals
             .get(&binding)
             .expect("binding local should be allocated");
+        let local_ty = self.locals[local.index()].ty;
+        let local_inner = local_ty
+            .as_capability(self.db)
+            .map_or(local_ty, |(_, inner)| inner);
+        if local_inner.is_never(self.db) && target_ty != local_ty {
+            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            return self.alloc_temp(ty);
+        }
         match self.binding_path_read_semantics(
             binding,
             semantics.unwrap_or(PathReadSemantics::ReuseLocal),

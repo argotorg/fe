@@ -1,0 +1,44 @@
+// Contract state starts zeroed, so it holds no uninhabited type, and no enum
+// whose first variant, the one tag 0 selects, is uninhabited.
+use core::option::Option
+use core::result::Result
+use std::evm::{StorageMap, TSlot}
+
+enum Empty {}
+
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+
+struct Guarded {
+    unsafe len: u256,
+}
+
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+
+pub contract C {
+    mut a: Empty,
+    mut b: Mixed,
+    mut c: [Empty; 2],
+    mut d: Flipped,
+    mut e: StorageMap<u256, Empty>,
+    mut f: TSlot<Flipped>,
+    mut g: (u256, Flipped),
+    mut h: Guarded,
+    mut ok_option: Option<Empty>,
+    mut ok_result: Result<Empty, u256>,
+    mut ok_array: [Empty; 0],
+
+    recv M {
+        Go -> u256 { 0 }
+    }
+}

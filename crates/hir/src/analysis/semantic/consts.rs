@@ -969,27 +969,45 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             .transpose()
     }
 
-    /// `fields` placed like a struct's, if every field has a layout.
+    /// `fields` placed like a struct's, if every field has a layout, together
+    /// with whether any field is uninhabited.
     fn place_fields<'db>(
         db: &'db dyn HirAnalysisDb,
         fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<PlacedFields>, RuntimeSizeError<'db>> {
-        fields
+    ) -> Result<Option<(PlacedFields, bool)>, RuntimeSizeError<'db>> {
+        let Some(entries) = fields
             .into_iter()
             .map(|field| inner(db, field.canonical, field.source, visiting))
             .collect::<Result<Option<Vec<_>>, _>>()?
-            .map(|layouts| PlacedFields::new(layouts).ok_or(RuntimeSizeError::Overflow))
-            .transpose()
+        else {
+            return Ok(None);
+        };
+        let uninhabited = entries.iter().any(|&(_, uninhabited)| uninhabited);
+        let layouts = entries
+            .into_iter()
+            .map(|(layout, _)| layout)
+            .collect::<Vec<_>>();
+        let placed = PlacedFields::new(layouts).ok_or(RuntimeSizeError::Overflow)?;
+        Ok(Some((placed, uninhabited)))
     }
 
     fn struct_layout<'db>(
         db: &'db dyn HirAnalysisDb,
         fields: impl IntoIterator<Item = ConcreteTypeView<'db>>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<MemoryLayout>, RuntimeSizeError<'db>> {
+    ) -> Result<Option<(MemoryLayout, bool)>, RuntimeSizeError<'db>> {
         place_fields(db, fields, visiting)?
-            .map(|fields| fields.struct_layout().ok_or(RuntimeSizeError::Overflow))
+            .map(|(fields, uninhabited)| {
+                if uninhabited {
+                    Ok((EMPTY, true))
+                } else {
+                    fields
+                        .struct_layout()
+                        .map(|layout| (layout, false))
+                        .ok_or(RuntimeSizeError::Overflow)
+                }
+            })
             .transpose()
     }
 
@@ -1000,7 +1018,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         ty: TyId<'db>,
         source: TyId<'db>,
         visiting: &mut FxHashSet<TyId<'db>>,
-    ) -> Result<Option<MemoryLayout>, RuntimeSizeError<'db>> {
+    ) -> Result<Option<(MemoryLayout, bool)>, RuntimeSizeError<'db>> {
         if !visiting.insert(ty) {
             return Ok(None);
         }
@@ -1014,10 +1032,12 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             ));
         } else if ty.has_var(db) {
             None
+        } else if ty.is_never(db) {
+            Some((EMPTY, true))
         } else if let TyData::TyParam(param) = ty.data(db)
             && (param.is_effect_provider() || param.is_trait_self())
         {
-            Some(EMPTY)
+            Some((EMPTY, false))
         } else if ty.has_param(db) {
             None
         } else if ty.is_tuple(db) || ty.as_closure(db).is_some() {
@@ -1038,7 +1058,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             ty.base_ty(db).data(db),
             TyData::TyBase(TyBase::Func(_) | TyBase::Contract(_))
         ) {
-            Some(EMPTY)
+            Some((EMPTY, false))
         } else if ty.is_array(db) {
             if !source.is_array(db) {
                 return Err(RuntimeSizeError::UnavailableConcrete);
@@ -1049,13 +1069,23 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                 (Some(elem), Some(len)) => {
                     let source_elem = source_args.first().copied().unwrap_or(elem);
                     inner(db, elem, source_elem, visiting)?
-                        .map(|elem| {
-                            len.checked_mul(elem.size)
-                                .map(|size| MemoryLayout {
-                                    size,
-                                    align: elem.align,
-                                })
-                                .ok_or(RuntimeSizeError::Overflow)
+                        .map(|(elem, elem_uninhabited)| {
+                            let uninhabited = len > 0 && elem_uninhabited;
+                            if uninhabited {
+                                Ok((EMPTY, true))
+                            } else {
+                                len.checked_mul(elem.size)
+                                    .map(|size| {
+                                        (
+                                            MemoryLayout {
+                                                size,
+                                                align: elem.align,
+                                            },
+                                            false,
+                                        )
+                                    })
+                                    .ok_or(RuntimeSizeError::Overflow)
+                            }
                         })
                         .transpose()?
                 }
@@ -1063,17 +1093,32 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             }
         } else if let TyData::TyBase(TyBase::Prim(prim)) = ty.base_ty(db).data(db) {
             match prim {
-                PrimTy::Bool => Some(target.scalar_memory_layout(1)),
-                // A memory address or a reference is a `usize`; a state
-                // pointer is its slot word.
-                PrimTy::Ptr(AddressSpace::Memory)
-                | PrimTy::View
-                | PrimTy::BorrowMut
-                | PrimTy::BorrowRef => Some(target.pointer_memory_layout()),
-                PrimTy::String | PrimTy::Ptr(_) => Some(target.scalar_memory_layout(256)),
+                PrimTy::Bool => Some((target.scalar_memory_layout(1), false)),
+                PrimTy::View | PrimTy::BorrowMut | PrimTy::BorrowRef => {
+                    let (_, args) = ty.decompose_ty_app(db);
+                    let (_, source_args) = source.decompose_ty_app(db);
+                    match args.first().copied() {
+                        Some(inner_ty) => {
+                            let source_inner_ty = source_args.first().copied().unwrap_or(inner_ty);
+                            inner(db, inner_ty, source_inner_ty, visiting)?.map(
+                                |(_, uninhabited)| {
+                                    if uninhabited {
+                                        (EMPTY, true)
+                                    } else {
+                                        (target.pointer_memory_layout(), false)
+                                    }
+                                },
+                            )
+                        }
+                        None => Some((target.pointer_memory_layout(), false)),
+                    }
+                }
+                // A memory address is a `usize`; a state pointer is its slot word.
+                PrimTy::Ptr(AddressSpace::Memory) => Some((target.pointer_memory_layout(), false)),
+                PrimTy::String | PrimTy::Ptr(_) => Some((target.scalar_memory_layout(256), false)),
                 PrimTy::Array | PrimTy::Tuple(_) => None,
                 _ => prim_int_bits(*prim, target)
-                    .map(|bits| target.scalar_memory_layout(bits as u16)),
+                    .map(|bits| (target.scalar_memory_layout(bits as u16), false)),
             }
         } else if ty.is_struct(db) {
             let adt = ty.adt_def(db).expect("struct has an ADT definition");
@@ -1092,8 +1137,12 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
                 })
                 .collect::<Result<Option<Vec<_>>, _>>()?
                 .map(|variants| {
-                    EnumMemoryLayout::new(tag, &variants)
-                        .map(|layout| layout.layout)
+                    if variants.iter().all(|(_, uninhabited)| *uninhabited) {
+                        return Ok((EMPTY, true));
+                    }
+                    let placed: Vec<_> = variants.into_iter().map(|(placed, _)| placed).collect();
+                    EnumMemoryLayout::new(tag, &placed)
+                        .map(|layout| (layout.layout, false))
                         .ok_or(RuntimeSizeError::Overflow)
                 })
                 .transpose()?
@@ -1102,7 +1151,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
         };
 
         // A part is never larger than its whole, so this bounds every part.
-        if result.is_some_and(|layout| layout.size > target.max_memory_size()) {
+        if result.is_some_and(|(layout, _)| layout.size > target.max_memory_size()) {
             return Err(RuntimeSizeError::Overflow);
         }
         visiting.remove(&ty);
@@ -1113,7 +1162,7 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
     if layout.is_none() && ty_is_fully_ground(db, view.canonical) {
         return Err(RuntimeSizeError::UnavailableConcrete);
     }
-    Ok(layout.map(|layout| layout.size))
+    Ok(layout.map(|(layout, _)| layout.size))
 }
 
 /// The first evaluation fault in the layout of `ty`: in the type itself, in

@@ -153,6 +153,88 @@ fn eliminate(value: Empty) -> u8 {
     );
 }
 
+#[test]
+fn uninhabited_coercion_and_dead_projections_normalize_cleanly() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "uninhabited_lowering.fe".into(),
+        r#"
+use core::result::Result
+
+enum Empty {}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+fn coerce_never(x: !) -> u256 {
+    x
+}
+
+fn coerce_never_let(x: !) -> u256 {
+    let y: u256 = x
+    y
+}
+
+fn dead_proj(m: Mixed) -> u256 {
+    m.a
+}
+
+fn dead_variant_proj(r: Result<Mixed, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(m) => m.a
+    }
+}
+
+fn take_pair(_ a: mut u256, _ b: mut u256) {}
+
+fn bad_borrow_in_dead_code(mut m: Mixed) {
+    let r1 = mut m.a
+    let r2 = mut m.a
+    take_pair(r1, r2)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for (name, expected_may_return) in [
+        ("coerce_never", false),
+        ("coerce_never_let", false),
+        ("dead_proj", false),
+        ("dead_variant_proj", true),
+    ] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+
+        let instance = SemanticInstance::new(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
+        );
+        normalize_semantic_body(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed normalization: {err:?}"));
+        assert_eq!(
+            semantic_may_return(&db, instance),
+            expected_may_return,
+            "{name} may_return mismatch"
+        );
+    }
+
+    // Borrow checking must still catch aliasing bugs inside functions taking `Mixed`
+    // (`Mixed` is uninhabited, NOT zero-sized in HIR).
+    let bad = find_func(&db, top_mod, "bad_borrow_in_dead_code");
+    let bad_instance = SemanticInstance::new(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(bad, None)),
+    );
+    let access_result = check_semantic_accesses(&db, bad_instance);
+    assert!(
+        access_result.is_err(),
+        "expected borrow conflict in `bad_borrow_in_dead_code`, got Ok"
+    );
+}
+
 // A condition that ends its block leaves the branches after it dead; they
 // are not lowered, so nothing in them uses a value no path defines.
 #[test]
