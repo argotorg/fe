@@ -18,14 +18,14 @@ impl<T> ingot::marker::Copy for Option<T>
 {}
 
 impl<T> Option<T> {
-    pub fn is_some(self) -> bool {
+    pub const fn is_some(self) -> bool {
         match self {
             Self::Some(_) => true
             Self::None => false
         }
     }
 
-    pub fn is_none(self) -> bool {
+    pub const fn is_none(self) -> bool {
         !self.is_some()
     }
 
@@ -43,7 +43,7 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn ok_or<E>(own self, _ err: own E) -> Result<E, T> {
+    pub const fn ok_or<E>(own self, _ err: own E) -> Result<E, T> {
         match self {
             Self::Some(value) => Result::Ok(value)
             Self::None => Result::Err(err)
@@ -57,14 +57,14 @@ impl<T> Option<T> {
         }
     }
 
-    pub fn unwrap(own self) -> T {
+    pub const fn unwrap(own self) -> T {
         match self {
             Self::Some(t) => t
             Self::None => panic()
         }
     }
 
-    pub fn unwrap_or(own self, default: own T) -> T {
+    pub const fn unwrap_or(own self, default: own T) -> T {
         match self {
             Self::Some(x) => x
             Self::None => default

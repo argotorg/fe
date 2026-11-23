@@ -1,0 +1,21 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/const_fn_assert_param_fails.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/const_fn_assert_param_fails.fe
+
+error[3-0073]: assertion failed in const context
+     ┌─ const_fn_assert_param_fails.fe:6:19
+     │
+   6 │ const BAD: u256 = checked(30)
+     │                   ^^^^^^^^^^^ while evaluating this
+     │
+     ┌─ src/evm/effects.fe:1348:5
+     │
+1348 │     assert!(b)
+     │     ---------- `assert!` evaluated to `false`
+
+
+=== EXIT CODE: 1 ===

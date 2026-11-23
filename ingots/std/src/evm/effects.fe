@@ -1344,7 +1344,7 @@ pub fn staticcall_decode<R>(addr: Address, gas: u256, args: MemSpan) -> R
 impl Call for Evm {}
 
 #[inline(always)]
-pub fn assert(_ b: own bool) {
+pub const fn assert(_ b: own bool) {
     assert!(b)
 }
 
