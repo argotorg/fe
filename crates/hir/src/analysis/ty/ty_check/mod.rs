@@ -91,7 +91,7 @@ use super::{
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
-        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, UseEvidence,
+        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, RefusedGoal, UseEvidence,
         declared_bound_evidence, impl_const_bound_evidence, instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
@@ -1469,6 +1469,7 @@ fn typed_body_for_bodyless_func<'db>(
             BoundOwner::Body(BodyOwner::func_at(db, func, mode)),
             assumptions,
         ),
+        refused_bound: None,
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
@@ -4533,7 +4534,7 @@ impl<'db> ConstRef<'db> {
         &mut self,
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
-    ) -> Vec<TraitInstId<'db>> {
+    ) -> Vec<RefusedGoal<'db>> {
         if let ConstRef::InherentConst { use_, evidence } = self {
             return Self::record_inherent_bound_evidence(db, *use_, evidence, choices);
         }
@@ -4568,10 +4569,10 @@ impl<'db> ConstRef<'db> {
                 BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
                 signature,
             ),
-            entries: recorded,
+            entries: recorded.proofs,
         });
         if choices.is_some() {
-            recorded.missing_bound_goals(db, signature, &subst)
+            recorded.refused_goals(db, signature, &subst)
         } else {
             Vec::new()
         }
@@ -4588,7 +4589,7 @@ impl<'db> ConstRef<'db> {
         use_: InherentConstUse<'db>,
         evidence: &mut UseEvidence<'db>,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
-    ) -> Vec<TraitInstId<'db>> {
+    ) -> Vec<RefusedGoal<'db>> {
         let (Some((body, impl_args)), Some(expected)) = (
             inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name()),
             inherent_const_decl_ty(db, use_.impl_(), use_.name()),
@@ -4613,10 +4614,10 @@ impl<'db> ConstRef<'db> {
                 BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
                 signature,
             ),
-            entries: recorded,
+            entries: recorded.proofs,
         });
         if choices.is_some() {
-            recorded.missing_bound_goals(db, signature, &subst)
+            recorded.refused_goals(db, signature, &subst)
         } else {
             Vec::new()
         }
@@ -4783,6 +4784,9 @@ mod typed_body_tables {
         /// `TypedBody::signature`.
         pub(super) signature: PredicateListId<'db>,
         pub(super) bound_schema: BoundSchemaId<'db>,
+        /// A closed goal the dictionaries an instance of the body received
+        /// refuse; see `instance_evidence`.
+        pub(super) refused_bound: Option<RefusedGoal<'db>>,
         pub(super) assumptions: PredicateListId<'db>,
         pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
@@ -5735,6 +5739,17 @@ impl<'db> TypedBody<'db> {
 
     pub fn signature(&self) -> PredicateListId<'db> {
         self.tables.signature
+    }
+
+    /// A closed goal the dictionaries an instance of this body received refuse,
+    /// which rejects the instance.
+    pub(crate) fn refused_bound(&self) -> Option<RefusedGoal<'db>> {
+        self.tables.refused_bound
+    }
+
+    pub(crate) fn with_refused_bound(mut self, refused: RefusedGoal<'db>) -> Self {
+        self.tables_mut().refused_bound = Some(refused);
+        self
     }
 
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
@@ -7418,6 +7433,7 @@ impl<'db> TypedBody<'db> {
                 BoundOwner::Context,
                 PredicateListId::empty_list(db),
             ),
+            refused_bound: None,
             signature: PredicateListId::empty_list(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),

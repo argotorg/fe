@@ -1823,6 +1823,14 @@ pub enum TraitConstraintDiag<'db> {
         actual: TyId<'db>,
     },
 
+    /// The goal is implemented, but the implementation chosen at this use is not
+    /// the one the dictionary of `root` holds for it.
+    ImplementationDiffers {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        root: TraitInstId<'db>,
+    },
+
     TraitBoundNotSat {
         span: DynLazySpan<'db>,
         primary_goal: TraitInstId<'db>,
@@ -1843,7 +1851,7 @@ impl TraitConstraintDiag<'_> {
             Self::KindMismatch { .. } => 0,
             Self::TraitArgNumMismatch { .. } => 1,
             Self::TraitArgKindMismatch { .. } => 2,
-            Self::TraitBoundNotSat { .. } => 3,
+            Self::TraitBoundNotSat { .. } | Self::ImplementationDiffers { .. } => 3,
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,

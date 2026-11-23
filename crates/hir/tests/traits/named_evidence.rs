@@ -2,13 +2,15 @@
 //! not claimed reproductions of the original p01-p22 packet.
 use fe_hir::{
     analysis::{
+        analysis_pass::AnalysisPassManager,
         semantic::{
-            GenericSubst, SemConstScalar, SemConstValue, SemanticInstance, eval_body_owner_const,
-            root_semantic_instance_key,
+            GenericSubst, SemConstScalar, SemConstValue, SemanticAccessAnalysisPass,
+            SemanticInstance, eval_body_owner_const, root_semantic_instance_key,
         },
         ty::ty_check::BodyOwner,
     },
-    test_db::{HirAnalysisTestDb, find_func},
+    hir_def::ItemKind,
+    test_db::{HirAnalysisTestDb, find_func, format_diagnostics},
 };
 use num_traits::ToPrimitive;
 
@@ -34,6 +36,45 @@ fn values(source: &str, expected: &[(&str, usize)]) {
         };
         assert_eq!(value.to_usize(), Some(expected), "{name}");
     }
+}
+
+// A program the compiler accepts at check time but rejects where the instance
+// is built: `name` does not evaluate, because an instance it reaches is not
+// admitted, and the semantic access analysis reports `16-0019` on `goal`.
+// Compile-time evaluation drops the diagnostic, so it is read from the
+// analysis of the module, with a runtime function that demands `name` when the
+// constant roots alone report nothing.
+fn refused(source: &str, name: &str, goal: &str) {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("named_refused.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, name), None);
+    let evaluated =
+        eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+    let detail = format!("{evaluated:?}");
+    assert!(
+        evaluated.into_ready().is_none(),
+        "{name} was accepted: {detail}"
+    );
+    assert!(
+        detail.contains("InvalidBody"),
+        "{name} failed for another reason: {detail}"
+    );
+    let access = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("named_refused_access.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = AnalysisPassManager::new();
+        passes.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+        format_diagnostics(&db, &passes.run_on_module(&db, module))
+    };
+    let mut report = access(source);
+    if !report.contains("error[16-0019]") {
+        report = access(&format!("{source}\nfn demand() -> u256 {{ {name}() }}\n"));
+    }
+    assert!(report.contains("error[16-0019]"), "{name}: {report}");
+    assert!(report.contains(&format!("`{goal}`")), "{name}: {report}");
 }
 
 const PICKS: &str = r#"
@@ -438,6 +479,268 @@ const fn chosen() -> u256 {{ with (Discount) {{ h<Wrap<u8>, u8>() }} }}
 "#
         ),
         &[("ordinary", 1), ("chosen", 1)],
+    );
+}
+
+// A bound that an equality makes concrete (`u8: Copy` from `B: Tr<A = u8>`,
+// `Item: Pick` from `B: Tr<A = Item>`) has no slot among the assumptions of
+// the body that declares the equality. It is answered by the component of the
+// dictionary the body received for `B`, never by a fresh selection.
+const CONCRETE_IMPLIED: &str = r#"
+struct Other {}
+trait Mark { const fn mark() -> u256 }
+impl Mark for Other { const fn mark() -> u256 { 1 } }
+impl Mark for Other as Aside { const fn mark() -> u256 { 2 } }
+struct Slot {}
+trait Tr { type A: Copy
+    const fn get() -> u256 }
+impl Tr for Slot { type A = u8
+    const fn get() -> u256 { 7 } }
+"#;
+
+#[test]
+fn a_choice_that_does_not_name_a_concrete_implied_bound_leaves_it_to_the_dictionary() {
+    values(
+        &format!(
+            r#"{PICKS}{CONCRETE_IMPLIED}
+const fn plain<B: Tr<A = u8>>() -> u256 {{ B::get() }}
+const fn chosen<B: Tr<A = u8>>() -> u256 {{ with (Aside) {{ B::get() }} }}
+const fn named<B: Tr<A = u8>>() -> u256 {{ with (Discount) {{ B::get() }} }}
+const fn nested<B: Tr<A = u8>>() -> u256 {{ with (Discount) {{ with (Aside) {{ B::get() }} }} }}
+const fn run_plain() -> u256 {{ plain<Slot>() }}
+const fn run_chosen() -> u256 {{ chosen<Slot>() }}
+const fn run_named() -> u256 {{ named<Slot>() }}
+const fn run_nested() -> u256 {{ nested<Slot>() }}
+"#
+        ),
+        &[
+            ("run_plain", 7),
+            ("run_chosen", 7),
+            ("run_named", 7),
+            ("run_nested", 7),
+        ],
+    );
+}
+
+// `caller` is bounded by `B: Tr<A = Item>` where `Tr::A: Pick`: `Item: Pick`
+// follows from the equality. `read` uses it as `<B::A as Pick>` and, through
+// `B::via()`, as the implementation's own condition. Both read one dictionary.
+const WRAPPED_PICK: &str = r#"
+struct Wrap<T> { t: T }
+trait Tr { type A: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Tr for Wrap<T> { type A = T
+    const fn via() -> u256 { T::value() } }
+const fn read<B: Tr>() -> u256 { <B::A as Pick>::value() * 1000 + B::via() }
+struct Other {}
+trait Mark { const fn mark() -> u256 }
+impl Mark for Other { const fn mark() -> u256 { 1 } }
+impl Mark for Other as Aside { const fn mark() -> u256 { 2 } }
+"#;
+
+#[test]
+fn an_implied_bound_answers_from_the_received_dictionary_without_a_local_choice() {
+    values(
+        &format!(
+            r#"{PICKS}{WRAPPED_PICK}
+const fn caller<B: Tr<A = Item>>() -> u256 {{ read<B>() }}
+const fn top_plain() -> u256 {{ caller<Wrap<Item>>() }}
+const fn top() -> u256 {{ with (Discount) {{ caller<Wrap<Item>>() }} }}
+"#
+        ),
+        &[("top_plain", 100100), ("top", 70070)],
+    );
+}
+
+#[test]
+fn an_implied_bound_answers_from_the_received_dictionary_under_a_choice_naming_it() {
+    values(
+        &format!(
+            r#"{PICKS}{WRAPPED_PICK}
+const fn caller<B: Tr<A = Item>>() -> u256 {{ with (Discount) {{ read<B>() }} }}
+const fn caller_explicit<B: Tr<A = Item>>() -> u256 {{ with (<Item as Pick>) {{ read<B>() }} }}
+const fn top_plain() -> u256 {{ caller<Wrap<Item>>() }}
+const fn top() -> u256 {{ with (Discount) {{ caller<Wrap<Item>>() }} }}
+const fn top_explicit() -> u256 {{ with (Discount) {{ caller_explicit<Wrap<Item>>() }} }}
+"#
+        ),
+        &[
+            ("top_plain", 100100),
+            ("top", 70070),
+            ("top_explicit", 70070),
+        ],
+    );
+}
+
+#[test]
+fn an_implied_bound_answers_from_the_received_dictionary_under_an_unrelated_choice() {
+    values(
+        &format!(
+            r#"{PICKS}{WRAPPED_PICK}
+const fn caller<B: Tr<A = Item>>() -> u256 {{ with (Aside) {{ read<B>() }} }}
+const fn top() -> u256 {{ with (Discount) {{ caller<Wrap<Item>>() }} }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}
+
+// Two traits that each declare `A: Pick`. `target` takes `A` of both as one
+// type `U`, so `U: Pick` is implied by two dictionaries. `L` holds the
+// ordinary `Item: Pick`; `Wrap<Item>` holds the one chosen where it is
+// proved.
+const TWO_DICTIONARIES: &str = r#"
+struct Wrap<T> { t: T }
+struct L {}
+trait Lt { type A: Pick }
+trait Rt { type A: Pick }
+impl Lt for L { type A = Item }
+impl<T: Pick> Lt for Wrap<T> { type A = T }
+impl<T: Pick> Rt for Wrap<T> { type A = T }
+"#;
+
+#[test]
+fn dictionaries_that_project_different_implementations_are_refused() {
+    refused(
+        &format!(
+            r#"{PICKS}{TWO_DICTIONARIES}
+const fn target<B: Lt<A = U>, C: Rt<A = U>, U>() -> u256 {{ U::value() }}
+const fn relay<B: Lt<A = Item>, C: Rt<A = Item>>() -> u256 {{
+    with (Discount) {{ target<B, C, Item>() }}
+}}
+const fn top() -> u256 {{ with (Discount) {{ relay<L, Wrap<Item>>() }} }}
+"#
+        ),
+        "top",
+        "Item: Pick",
+    );
+}
+
+#[test]
+fn disagreeing_dictionaries_are_refused_when_the_goal_is_unused() {
+    refused(
+        &format!(
+            r#"{PICKS}{TWO_DICTIONARIES}
+const fn target<B: Lt<A = U>, C: Rt<A = U>, U>() -> u256 {{ 1 }}
+const fn relay<B: Lt<A = Item>, C: Rt<A = Item>>() -> u256 {{
+    with (Discount) {{ target<B, C, Item>() }}
+}}
+const fn top() -> u256 {{ with (Discount) {{ relay<L, Wrap<Item>>() }} }}
+"#
+        ),
+        "top",
+        "Item: Pick",
+    );
+}
+
+#[test]
+fn dictionaries_that_project_one_implementation_are_accepted() {
+    values(
+        &format!(
+            r#"{PICKS}{TWO_DICTIONARIES}
+const fn target<B: Lt<A = U>, C: Rt<A = U>, U>() -> u256 {{ U::value() }}
+const fn relay<B: Lt<A = Item>, C: Rt<A = Item>>() -> u256 {{
+    with (Discount) {{ target<B, C, Item>() }}
+}}
+const fn top() -> u256 {{ with (Discount) {{ relay<Wrap<Item>, Wrap<Item>>() }} }}
+"#
+        ),
+        &[("top", 70)],
+    );
+}
+
+// `read` bounds `X: Pick` explicitly and `B: Tr<A = X>` implies it. Called as
+// `read<B, Item>` from a body whose `B: Tr<A = Item>`, the explicit bound
+// selects the choice in scope, and the dictionary received for `B` holds the
+// implementation chosen where `B` was proved. Both must be the same one.
+const EXPLICIT_AND_IMPLIED: &str = r#"
+const fn read_explicit<B: Tr<A = X>, X: Pick>() -> u256 { X::value() * 1000 + B::via() }
+const fn caller<B: Tr<A = Item>>() -> u256 { with (Discount) { read_explicit<B, Item>() } }
+"#;
+
+#[test]
+fn an_explicit_bound_that_differs_from_the_received_dictionary_is_refused() {
+    refused(
+        &format!(
+            r#"{PICKS}{WRAPPED_PICK}{EXPLICIT_AND_IMPLIED}
+const fn top() -> u256 {{ caller<Wrap<Item>>() }}
+"#
+        ),
+        "top",
+        "Item: Pick",
+    );
+}
+
+#[test]
+fn an_explicit_bound_that_matches_the_received_dictionary_is_accepted() {
+    values(
+        &format!(
+            r#"{PICKS}{WRAPPED_PICK}{EXPLICIT_AND_IMPLIED}
+const fn top() -> u256 {{ with (Discount) {{ caller<Wrap<Item>>() }} }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}
+
+// A closure in the body adds its own bounds after the body's signature. The
+// implied bound the body reads directly is still the dictionary's component:
+// the ordinary `value` is never reached, only the chosen one. Closures are
+// not evaluated at compile time, so the callees of the instances are read.
+#[test]
+fn a_body_with_a_closure_still_reads_implied_bounds_from_the_dictionary() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "named_closure.fe".into(),
+        r#"
+struct Item {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item { fn value() -> u256 { 100 } }
+impl Pick for Item as Discount { fn value() -> u256 { 70 } }
+struct Wrap<T> { t: T }
+trait Tr { type A: Pick
+    fn via() -> u256 }
+impl<T: Pick> Tr for Wrap<T> { type A = T
+    fn via() -> u256 { T::value() } }
+trait Price { fn amount(self) -> u256 }
+struct Tag {}
+impl Price for Tag { fn amount(self) -> u256 { 0 } }
+fn read_closure<B: Tr>() -> u256 uses (p: Price) {
+    let f = || p.amount()
+    <B::A as Pick>::value() * 1000 + B::via() + f()
+}
+fn caller<B: Tr<A = Item>>() -> u256 uses (p: Price) { read_closure<B>() }
+fn top() -> u256 { with (Discount, Price = Tag {}) { caller<Wrap<Item>>() } }
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::Func(find_func(&db, module, "top"), None);
+    let mut pending = vec![root_semantic_instance_key(&db, owner).expect("root key")];
+    let mut seen = Vec::new();
+    let mut values = Vec::new();
+    while let Some(key) = pending.pop() {
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        if let BodyOwner::Func(func, _) = key.owner(&db)
+            && func
+                .name(&db)
+                .to_opt()
+                .is_some_and(|name| name.data(&db) == "value")
+            && let Some(ItemKind::ImplTrait(implementation)) = func.scope().parent_item(&db)
+        {
+            values.push(implementation.selection_name(&db).is_some());
+        }
+        for callee in SemanticInstance::new(&db, key).callees(&db) {
+            pending.push(callee.key);
+        }
+    }
+    assert!(!values.is_empty(), "no `value` implementation was reached");
+    assert!(
+        values.iter().all(|&named| named),
+        "the ordinary `value` was reached beside the chosen one"
     );
 }
 
@@ -2734,4 +3037,872 @@ fn chosen() {{ with (Discount) {{ let x: Array<{{ Item::value() }}> = Array {{}}
     assert_eq!(codes, twin, "{codes:?}");
     let ordinary = program("Wrapper<Item>::X").replace("with (Discount) ", "");
     assert!(diagnostics(&ordinary).is_empty());
+}
+// An implied bound is one component of the dictionary that implies it. A proof
+// written for the same goal, a second dictionary, or the implementation's own
+// condition must name the same implementation, or the instance is refused.
+// Each program below reads `Item: Pick` (or `Item: Price`) through two paths.
+const PROJECTION_PRELUDE: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl<T> Pick for T as Named { const fn val() -> u256 { 70 } }
+struct Wrap<T> { t: T }
+trait Tr { type A: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Tr for Wrap<T> { type A = T
+    const fn via() -> u256 { T::val() } }
+const fn target<B: Tr<A = X>, X: Pick>() -> u256 { X::val() * 1000 + B::via() }
+const fn relay<B: Tr<A = X>, X: Pick>() -> u256 { with (Named<X>) { target<B, X>() } }
+"#;
+
+#[test]
+fn a_written_choice_that_differs_from_the_received_dictionary_is_refused() {
+    refused(
+        &format!(
+            r#"{PROJECTION_PRELUDE}
+const fn top() -> u256 {{ relay<Wrap<Item>, Item>() }}
+"#
+        ),
+        "top",
+        "Item: Pick",
+    );
+}
+
+#[test]
+fn a_written_choice_that_matches_the_received_dictionary_is_accepted() {
+    values(
+        &format!(
+            r#"{PROJECTION_PRELUDE}
+const fn top() -> u256 {{ with (Named<Item>) {{ relay<Wrap<Item>, Item>() }} }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}
+
+const SUPER_PRELUDE: &str = r#"
+struct Item {}
+trait Price { const fn price() -> u256 }
+impl Price for Item { const fn price() -> u256 { 100 } }
+impl<T> Price for T as Wholesale { const fn price() -> u256 { 70 } }
+trait Sub: Price {}
+impl Sub for Item {}
+const fn target<T: Sub + Price>() -> u256 { T::price() }
+const fn relay<T: Sub>() -> u256 { with (Wholesale<T>) { target<T>() } }
+"#;
+
+#[test]
+fn a_written_choice_that_differs_from_a_supertrait_component_is_refused() {
+    refused(
+        &format!(
+            r#"{SUPER_PRELUDE}
+const fn top() -> u256 {{ relay<Item>() }}
+"#
+        ),
+        "top",
+        "Item: Price",
+    );
+}
+
+#[test]
+fn a_written_choice_that_differs_from_a_supertrait_component_is_refused_under_a_caller_choice() {
+    refused(
+        &format!(
+            r#"{SUPER_PRELUDE}
+const fn top() -> u256 {{ with (Wholesale<Item>) {{ relay<Item>() }} }}
+"#
+        ),
+        "top",
+        "Item: Price",
+    );
+}
+
+const TRANSITIVE_PRELUDE: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+struct Wrap<T> { t: T }
+trait Middle { type V: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Middle for Wrap<T> { type V = T
+    const fn via() -> u256 { T::val() } }
+struct Slot<T> { t: T }
+trait Outer { type M: Middle }
+impl<T: Middle<V = Item>> Outer for Slot<T> { type M = T }
+const fn read<B: Outer>() -> u256 {
+    <<B::M as Middle>::V as Pick>::val() * 1000 + <B::M as Middle>::via()
+}
+const fn relay<B: Outer<M = Wrap<Item>>>() -> u256 { read<B>() }
+"#;
+
+// `Outer`'s implementation fixes `Middle::V = Item`, so `Item: Pick` follows
+// from the `Outer` dictionary, and also from the `Middle` dictionary inside it.
+// Both read the choice that proved `Slot<Wrap<Item>>: Outer`.
+#[test]
+fn transitive_implied_bounds_read_one_dictionary_through_a_relay() {
+    values(
+        &format!(
+            r#"{TRANSITIVE_PRELUDE}
+const fn chosen() -> u256 {{ with (Named) {{ relay<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("chosen", 70070)],
+    );
+}
+
+#[test]
+fn transitive_implied_bounds_read_the_ordinary_dictionary_through_a_relay() {
+    values(
+        &format!(
+            r#"{TRANSITIVE_PRELUDE}
+const fn plain() -> u256 {{ relay<Slot<Wrap<Item>>>() }}
+"#
+        ),
+        &[("plain", 100100)],
+    );
+}
+
+#[test]
+fn transitive_implied_bounds_read_one_dictionary_without_a_relay() {
+    values(
+        &format!(
+            r#"{TRANSITIVE_PRELUDE}
+const fn direct() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("direct", 70070)],
+    );
+}
+
+// The implementation's condition `T: Holder<V = Item>` carries the dictionary
+// from which `Item: Pick` follows. It is not proved again beside the condition.
+const CONDITION_PRELUDE: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+struct H<T> { t: T }
+trait Holder { type V: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Holder for H<T> { type V = T
+    const fn via() -> u256 { T::val() } }
+struct Slot<T> { t: T }
+trait Outer { type M: Pick
+    const fn hv() -> u256 }
+impl<T: Holder<V = Item>> Outer for Slot<T> { type M = <T as Holder>::V
+    const fn hv() -> u256 { T::via() } }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000 + B::hv() }
+"#;
+
+#[test]
+fn an_implementation_projects_its_concrete_implied_goal_from_its_condition() {
+    values(
+        &format!(
+            r#"{CONDITION_PRELUDE}
+const fn chosen() -> u256 {{ with (Named) {{ read<Slot<H<Item>>>() }} }}
+"#
+        ),
+        &[("chosen", 70070)],
+    );
+}
+
+#[test]
+fn an_implementation_projects_its_concrete_implied_goal_from_an_ordinary_condition() {
+    values(
+        &format!(
+            r#"{CONDITION_PRELUDE}
+const fn plain() -> u256 {{ read<Slot<H<Item>>>() }}
+"#
+        ),
+        &[("plain", 100100)],
+    );
+}
+
+// A named implementation that is the root of the dictionary answers its own
+// associated bound.
+#[test]
+fn a_named_root_implementation_answers_its_implied_bound() {
+    values(
+        r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+struct Slot<T> { t: T }
+trait Outer { type M: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Outer for Slot<T> { type M = T
+    const fn via() -> u256 { T::val() } }
+impl<T: Pick> Outer for Slot<T> as OuterNamed { type M = T
+    const fn via() -> u256 { T::val() } }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000 + B::via() }
+const fn relay<B: Outer<M = Item>>() -> u256 { read<B>() }
+const fn top() -> u256 { with (Named, OuterNamed) { relay<Slot<Item>>() } }
+"#,
+        &[("top", 70070)],
+    );
+}
+
+#[test]
+fn a_supertrait_chain_through_an_associated_bound_reads_one_dictionary() {
+    values(
+        r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+trait Middle: Pick { const fn via() -> u256 }
+impl<T: Pick> Middle for T { const fn via() -> u256 { T::val() } }
+struct Slot<T> { t: T }
+trait Outer { type M: Middle }
+impl<T: Middle> Outer for Slot<T> { type M = T }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000 + <B::M as Middle>::via() }
+const fn relay<B: Outer<M = Item>>() -> u256 { read<B>() }
+const fn top() -> u256 { with (Named) { relay<Slot<Item>>() } }
+"#,
+        &[("top", 70070)],
+    );
+}
+
+// `Outer`'s implementation fixes `M = Item` by itself. Its condition `T: Holder`
+// does not constrain `Holder::V`, so the named `Holder` dictionary says nothing
+// about `Item: Pick`. The component is the ordinary implementation even when
+// `Holder::V` happens to be `Item`, and it follows the implementation's own
+// header, not the types a caller substitutes.
+const COINCIDENT_PRELUDE: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+struct Wrap<T> { t: T }
+trait Holder { type V: Pick }
+impl<T: Pick> Holder for Wrap<T> { type V = T }
+struct Slot<T> { t: T }
+trait Outer { type M: Pick }
+"#;
+
+#[test]
+fn an_unconstrained_condition_does_not_supply_an_independent_component() {
+    values(
+        &format!(
+            r#"{COINCIDENT_PRELUDE}
+impl<T: Holder> Outer for Slot<T> {{ type M = Item }}
+const fn read<B: Outer>() -> u256 {{ <B::M as Pick>::val() }}
+const fn independent() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("independent", 100)],
+    );
+}
+
+#[test]
+fn a_condition_that_fixes_the_associated_type_supplies_the_component() {
+    values(
+        &format!(
+            r#"{COINCIDENT_PRELUDE}
+impl<T: Holder<V = Item>> Outer for Slot<T> {{ type M = Item }}
+const fn read<B: Outer>() -> u256 {{ <B::M as Pick>::val() }}
+const fn dependent() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("dependent", 70)],
+    );
+}
+
+// A generic caller proves `Slot<T>: Outer` from `T: Holder<V = Item>`. The
+// projection of `Item: Pick` reaches the caller's own assumption, which has no
+// slot for the concrete bound yet. An unrelated block choice around the call
+// leaves the slot to the instance, which holds the dictionary.
+const RELAY_CONSTRUCTED: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+struct H<T> { t: T }
+trait Holder { type V: Pick
+    const fn via() -> u256 }
+impl<T: Pick> Holder for H<T> { type V = T
+    const fn via() -> u256 { T::val() } }
+struct Slot<T> { t: T }
+trait Outer { type M: Pick
+    const fn hv() -> u256 }
+impl<T: Holder<V = Item>> Outer for Slot<T> { type M = <T as Holder>::V
+    const fn hv() -> u256 { T::via() } }
+struct Other {}
+trait Mark { const fn mark() -> u256 }
+impl Mark for Other { const fn mark() -> u256 { 0 } }
+impl Mark for Other as Aside { const fn mark() -> u256 { 1 } }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000 + B::hv() }
+"#;
+
+#[test]
+fn an_unrelated_choice_around_a_constructed_dictionary_leaves_the_projection_pending() {
+    values(
+        &format!(
+            r#"{RELAY_CONSTRUCTED}
+const fn relay<T: Holder<V = Item>>() -> u256 {{ with (Aside) {{ read<Slot<T>>() }} }}
+const fn chosen() -> u256 {{ with (Named) {{ relay<H<Item>>() }} }}
+"#
+        ),
+        &[("chosen", 70070)],
+    );
+}
+
+#[test]
+fn a_constructed_dictionary_without_a_choice_reads_one_dictionary() {
+    values(
+        &format!(
+            r#"{RELAY_CONSTRUCTED}
+const fn relay<T: Holder<V = Item>>() -> u256 {{ read<Slot<T>>() }}
+const fn chosen() -> u256 {{ with (Named) {{ relay<H<Item>>() }} }}
+"#
+        ),
+        &[("chosen", 70070)],
+    );
+}
+
+// `Left::Out` requires `Right<Back = Self>` and `Right::Back` requires
+// `Left<Out = Self>`: the two slots of `call` imply each other.
+const MUTUAL_PRELUDE: &str = r#"
+struct L {}
+struct R {}
+trait Left { type Out: Right<Back = Self> }
+trait Right { type Back: Left<Out = Self> }
+impl Left for L { type Out = R }
+impl Right for R { type Back = L }
+const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 { 1 }
+"#;
+
+#[test]
+fn mutually_implied_slots_agree_and_are_accepted() {
+    values(
+        &format!(
+            r#"{MUTUAL_PRELUDE}
+const fn top() -> u256 {{ call<L, R>() }}
+"#
+        ),
+        &[("top", 1)],
+    );
+}
+
+// `R`'s `Right` implementation is fixed where `impl Left for L` is declared,
+// so a block choice cannot replace it for `call`'s second slot.
+#[test]
+fn mutually_implied_slots_refuse_a_choice_that_differs_from_the_fixed_component() {
+    let codes = diagnostics(&format!(
+        r#"{MUTUAL_PRELUDE}
+impl Right for R as Alt {{ type Back = L }}
+const fn top() -> u256 {{ with (Alt) {{ call<L, R>() }} }}
+"#
+    ));
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+// The condition `T: Grow<Next = Wrap<Item>>` makes the bound `Next: Grow`
+// concrete. The search for the conditions that imply a goal keeps concrete
+// bounds, and must still end for a trait whose associated type is bounded by
+// the trait itself.
+#[test]
+fn a_self_bounded_associated_type_does_not_loop_the_concrete_bound_walk() {
+    values(
+        r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+struct Wrap<T> { t: T }
+trait Grow { type Next: Grow }
+impl Grow for Item { type Next = Item }
+impl<T: Grow> Grow for Wrap<T> { type Next = Wrap<Item> }
+struct Slot<T> { t: T }
+trait Outer { type M: Pick }
+impl<T: Grow<Next = Wrap<Item>>> Outer for Slot<T> { type M = Item }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() }
+const fn top() -> u256 { read<Slot<Wrap<Item>>>() }
+"#,
+        &[("top", 100)],
+    );
+}
+
+// The explicit-bound conflict through a trait method call: `Reader::repeated`
+// bounds `X: Pick` explicitly beside `B: Tr<A = X>`, as the free function does.
+#[test]
+fn an_explicit_bound_of_a_trait_method_is_checked_against_the_received_dictionary() {
+    let signature = "const fn repeated<B: Tr<A = X>, X: Pick>() -> u256";
+    let body = "{ X::value() * 1000 + B::via() }";
+    let source = format!(
+        r#"{PICKS}{WRAPPED_PICK}
+struct Reader {{}}
+trait Read {{ {signature} }}
+impl Read for Reader {{ {signature} {body} }}
+const fn relay<B: Tr<A = Item>>() -> u256 {{ with (Discount) {{ Reader::repeated<B, Item>() }} }}
+const fn top() -> u256 {{ relay<Wrap<Item>>() }}
+"#
+    );
+    refused(&source, "top", "Item: Pick");
+    values(
+        &source.replace(
+            "{ relay<Wrap<Item>>() }",
+            "{ with (Discount) { relay<Wrap<Item>>() } }",
+        ),
+        &[("top", 70070)],
+    );
+}
+
+// `Holder::V: Middle` and `Middle: Pick`. The condition `T: Holder<V = Item>`
+// makes `Item: Middle` concrete, and the dictionary of that bound holds the
+// `Pick` implementation chosen where `Slot<Wrap<Item>>: Outer` is proved. The
+// goal `Item: Pick` is implied past the concrete intermediate bound, so the
+// walk over the condition follows the supertrait edge of `Item: Middle`.
+const CONCRETE_SUPER_PRELUDE: &str = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+trait Middle: Pick {}
+impl<T: Pick> Middle for T {}
+trait Holder { type V: Middle }
+struct Wrap<T> { t: T }
+impl<T: Middle> Holder for Wrap<T> { type V = T }
+trait Outer { type M: Middle }
+struct Slot<T> { t: T }
+impl<T: Holder<V = Item>> Outer for Slot<T> { type M = Item }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() }
+"#;
+
+#[test]
+fn a_supertrait_of_a_concrete_intermediate_bound_is_read_from_the_received_dictionary() {
+    values(
+        &format!(
+            r#"{CONCRETE_SUPER_PRELUDE}
+const fn plain() -> u256 {{ read<Slot<Wrap<Item>>>() }}
+const fn chosen() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("plain", 100), ("chosen", 70)],
+    );
+}
+
+// Programs without a block choice. A bound that an equality or a supertrait
+// implies is read from the dictionary of the bound that implies it, so each
+// of these compiles as it does without the projection.
+#[test]
+fn a_binding_that_names_a_sibling_associated_type_is_accepted() {
+    values(
+        r#"
+struct X {}
+struct Y {}
+trait Show { type K }
+trait Tr {
+    type K
+    type A: Show<K = Self::K>
+}
+impl Show for Y { type K = u8 }
+impl Tr for X {
+    type K = u8
+    type A = Y
+}
+const fn f<T: Tr<K = u8>>() -> u256 { 5 }
+const fn g<T: Tr<K = u8>>() -> u256 { f<T>() }
+const fn top() -> u256 { f<X>() }
+const fn relay() -> u256 { g<X>() }
+"#,
+        &[("top", 5), ("relay", 5)],
+    );
+}
+
+#[test]
+fn a_binding_that_names_a_sibling_associated_type_is_accepted_under_a_choice() {
+    values(
+        r#"
+struct X {}
+struct Y {}
+struct Z {}
+trait Show { type K }
+trait Tr {
+    type K
+    type A: Show<K = Self::K>
+}
+impl Show for Y { type K = u8 }
+impl Tr for X {
+    type K = u8
+    type A = Y
+}
+trait Q {}
+impl Q for Z as Aside {}
+const fn f<T: Tr<K = u8>>() -> u256 { 5 }
+const fn top() -> u256 { with (Aside) { f<X>() } }
+"#,
+        &[("top", 5)],
+    );
+}
+
+#[test]
+fn a_binding_that_names_a_sibling_associated_type_is_accepted_for_a_generic_implementation() {
+    values(
+        r#"
+struct G<P> {}
+struct Y {}
+trait Show { type K }
+trait Tr {
+    type K
+    type A: Show<K = Self::K>
+}
+impl Show for Y { type K = u8 }
+impl<P> Tr for G<P> {
+    type K = u8
+    type A = Y
+}
+const fn f<T: Tr<K = u8>>() -> u256 { 6 }
+const fn top() -> u256 { f<G<u16>>() }
+"#,
+        &[("top", 6)],
+    );
+}
+
+#[test]
+fn a_binding_that_names_a_different_associated_type_stays_accepted() {
+    values(
+        r#"
+struct X {}
+struct Y {}
+trait Show { type K }
+trait Tr {
+    type K
+    type J
+    type A: Show<K = Self::J>
+}
+impl Show for Y { type K = u8 }
+impl Tr for X {
+    type K = u8
+    type J = u8
+    type A = Y
+}
+const fn f<T: Tr<K = u8>>() -> u256 { 7 }
+const fn top() -> u256 { f<X>() }
+"#,
+        &[("top", 7)],
+    );
+}
+
+#[test]
+fn a_three_level_chain_of_pinned_bindings_is_accepted() {
+    values(
+        r#"
+struct X {}
+struct Y {}
+struct Z {}
+trait Leaf { type K }
+trait Mid { type K
+    type L: Leaf<K = Self::K> }
+trait Top { type K
+    type M: Mid<K = Self::K> }
+impl Leaf for Z { type K = u8 }
+impl Mid for Y { type K = u8
+    type L = Z }
+impl Top for X { type K = u8
+    type M = Y }
+const fn f<T: Top>() -> u256 { 1 }
+const fn g<T: Top<K = u8>>() -> u256 { 2 }
+const fn top() -> u256 { f<X>() }
+const fn top2() -> u256 { g<X>() }
+"#,
+        &[("top", 1), ("top2", 2)],
+    );
+}
+
+const INTO_ITER: &str = r#"
+trait Iter { type Item
+    const fn next(self) -> Self::Item }
+trait IntoIt { type Item
+    type It: Iter<Item = Self::Item>
+    const fn into_it(self) -> Self::It }
+struct MyIter { v: u256 }
+impl Iter for MyIter { type Item = u256
+    const fn next(self) -> u256 { self.v } }
+struct Src { v: u256 }
+impl IntoIt for Src { type Item = u256
+    type It = MyIter
+    const fn into_it(self) -> MyIter { MyIter { v: self.v + 1 } } }
+"#;
+
+#[test]
+fn an_iterator_item_pinned_by_the_caller_is_accepted() {
+    values(
+        &format!(
+            r#"{INTO_ITER}
+const fn first<C: IntoIt>(c: C) -> C::Item {{ c.into_it().next() }}
+const fn relay<C: IntoIt<Item = u256>>(c: C) -> u256 {{ first(c) * 2 }}
+const fn v() -> u256 {{ first(c: Src {{ v: 4 }}) * 100 + relay(c: Src {{ v: 9 }}) }}
+"#
+        ),
+        &[("v", 520)],
+    );
+}
+
+#[test]
+fn a_blanket_implementation_that_pins_an_item_is_accepted() {
+    values(
+        &format!(
+            r#"{INTO_ITER}
+trait Summer {{ const fn sum(self) -> u256 }}
+impl<C: IntoIt<Item = u256>> Summer for C {{ const fn sum(self) -> u256 {{ self.into_it().next() }} }}
+const fn total<S: Summer>(s: S) -> u256 {{ s.sum() }}
+const fn v() -> u256 {{ total(s: Src {{ v: 41 }}) }}
+"#
+        ),
+        &[("v", 42)],
+    );
+}
+
+const NODE: &str = r#"
+struct A {}
+struct B {}
+trait Node { type Next: Node<Next = Self>
+    const fn id() -> u256 }
+impl Node for A { type Next = B
+    const fn id() -> u256 { 1 } }
+impl Node for B { type Next = A
+    const fn id() -> u256 { 2 } }
+struct Z {}
+trait Q {}
+impl Q for Z as Aside {}
+"#;
+#[test]
+fn an_associated_type_that_names_its_owner_back_is_accepted() {
+    values(
+        &format!(
+            r#"{NODE}
+const fn f<T: Node>() -> u256 {{ T::id() * 10 + <T::Next as Node>::id() }}
+const fn v() -> u256 {{ f<A>() * 100 + f<B>() }}
+"#
+        ),
+        &[("v", 1221)],
+    );
+}
+
+#[test]
+fn an_associated_type_that_names_its_owner_back_is_accepted_when_unused() {
+    values(
+        &format!(
+            r#"{NODE}
+const fn g<T: Node>() -> u256 {{ 3 }}
+const fn plain() -> u256 {{ g<A>() }}
+"#
+        ),
+        &[("plain", 3)],
+    );
+}
+
+#[test]
+fn an_associated_type_that_names_its_owner_back_is_accepted_under_a_choice() {
+    values(
+        &format!(
+            r#"{NODE}
+const fn g<T: Node>() -> u256 {{ 3 }}
+const fn aside() -> u256 {{ with (Aside) {{ g<A>() + g<B>() }} }}
+"#
+        ),
+        &[("aside", 6)],
+    );
+}
+
+#[test]
+fn a_node_pair_written_in_both_directions_stays_accepted() {
+    values(
+        &format!(
+            r#"{NODE}
+const fn f<T: Node<Next = U>, U: Node<Next = T>>() -> u256 {{ 4 }}
+const fn top() -> u256 {{ f<A, B>() }}
+"#
+        ),
+        &[("top", 4)],
+    );
+}
+
+#[test]
+fn a_node_cycle_without_a_back_reference_stays_accepted() {
+    values(
+        r#"
+struct A {}
+struct B {}
+struct C {}
+trait Node { type Next: Node }
+impl Node for A { type Next = B }
+impl Node for B { type Next = C }
+impl Node for C { type Next = A }
+const fn f<T: Node>() -> u256 { 5 }
+const fn top() -> u256 { f<A>() }
+"#,
+        &[("top", 5)],
+    );
+}
+
+const LEFT_RIGHT: &str = r#"
+struct L {}
+struct R {}
+trait Left { type Out: Right<Back = Self>
+    const fn l() -> u256 }
+trait Right { type Back: Left<Out = Self>
+    const fn r() -> u256 }
+impl Left for L { type Out = R
+    const fn l() -> u256 { 1 } }
+impl Right for R { type Back = L
+    const fn r() -> u256 { 20 } }
+"#;
+
+#[test]
+fn a_left_bound_alone_is_accepted_when_unused() {
+    values(
+        &format!(
+            r#"{LEFT_RIGHT}
+const fn only_left<T: Left>() -> u256 {{ 7 }}
+const fn n14() -> u256 {{ only_left<L>() }}
+"#
+        ),
+        &[("n14", 7)],
+    );
+}
+
+#[test]
+fn a_left_bound_alone_reads_the_right_component() {
+    values(
+        &format!(
+            r#"{LEFT_RIGHT}
+const fn left_out<T: Left>() -> u256 {{ <T::Out as Right>::r() }}
+const fn n15() -> u256 {{ left_out<L>() }}
+"#
+        ),
+        &[("n15", 20)],
+    );
+}
+
+#[test]
+fn a_right_bound_alone_reads_the_left_component() {
+    values(
+        &format!(
+            r#"{LEFT_RIGHT}
+const fn only_right<U: Right>() -> u256 {{ <U::Back as Left>::l() }}
+const fn n16() -> u256 {{ only_right<R>() }}
+"#
+        ),
+        &[("n16", 1)],
+    );
+}
+
+#[test]
+fn a_left_bound_alone_is_accepted_when_only_checked() {
+    values(
+        &format!(
+            r#"{LEFT_RIGHT}
+const fn only_left<T: Left>() -> u256 {{ 7 }}
+const fn n17() -> u256 {{ only_left<L>() }}
+"#
+        ),
+        &[("n17", 7)],
+    );
+}
+
+#[test]
+fn a_left_bound_alone_is_accepted_through_a_relay() {
+    values(
+        &format!(
+            r#"{LEFT_RIGHT}
+const fn only_left<T: Left>() -> u256 {{ 7 }}
+const fn relay<T: Left>() -> u256 {{ only_left<T>() }}
+const fn n19() -> u256 {{ relay<L>() }}
+"#
+        ),
+        &[("n19", 7)],
+    );
+}
+
+// A bound a trait states on its associated type is answered by the bound the
+// implementation's condition states, when that bound says at least as much.
+fn strength(holder: &str, outer: &str) -> String {
+    format!(
+        r#"
+struct I {{}}
+trait P {{ type Out
+    const fn n() -> u256 }}
+impl P for I {{ type Out = u8
+    const fn n() -> u256 {{ 31 }} }}
+impl P for I as Tiny {{ type Out = u8
+    const fn n() -> u256 {{ 7 }} }}
+struct W<T> {{}}
+struct Box<T> {{}}
+trait H {{ type A: {holder}
+    const fn via() -> u256 }}
+impl<T: {holder}> H for W<T> {{ type A = T
+    const fn via() -> u256 {{ T::n() }} }}
+trait K {{ type A: {outer}
+    const fn via() -> u256 }}
+impl<T: H<A = I>> K for Box<T> {{ type A = I
+    const fn via() -> u256 {{ T::via() }} }}
+const fn get<B: K>() -> u256 {{ <B::A as P>::n() * 100 + B::via() }}
+const fn chosen() -> u256 {{ with (Tiny) {{ get<Box<W<I>>>() }} }}
+const fn plain() -> u256 {{ get<Box<W<I>>>() }}
+"#
+    )
+}
+
+#[test]
+fn a_stronger_condition_bound_answers_a_weaker_associated_bound() {
+    // The condition says `Out = u8`; the implied bound only needs `P`.
+    values(
+        &strength("P<Out = u8>", "P"),
+        &[("chosen", 707), ("plain", 3131)],
+    );
+}
+
+#[test]
+fn a_condition_bound_equal_to_the_associated_bound_answers_it() {
+    values(
+        &strength("P<Out = u8>", "P<Out = u8>"),
+        &[("chosen", 707), ("plain", 3131)],
+    );
+}
+
+// The condition says only `P`, so it does not answer `P<Out = u8>`: the
+// implementation's own `I: P<Out = u8>` component is the ordinary one.
+#[test]
+fn a_weaker_condition_bound_does_not_answer_a_stronger_associated_bound() {
+    values(
+        &strength("P", "P<Out = u8>"),
+        &[("chosen", 3107), ("plain", 3131)],
+    );
+}
+
+// Two conditions that hold the same implied goal in different dictionaries are
+// refused, at the call or where the instance is admitted.
+#[test]
+fn conditions_that_hold_an_implied_goal_in_different_dictionaries_are_refused() {
+    let source = r#"
+struct Item {}
+trait Pick { const fn val() -> u256 }
+impl Pick for Item { const fn val() -> u256 { 100 } }
+impl Pick for Item as Named { const fn val() -> u256 { 70 } }
+trait Holder { type V: Pick
+    const fn hv() -> u256 }
+struct Wrap<T> {}
+impl<T: Pick> Holder for Wrap<T> { type V = T
+    const fn hv() -> u256 { T::val() } }
+struct Fixed {}
+impl Holder for Fixed { type V = Item
+    const fn hv() -> u256 { Item::val() } }
+trait Outer { type M: Pick
+    const fn ov() -> u256 }
+struct Pair<T, U> {}
+impl<T: Holder<V = Item>, U: Holder<V = Item>> Outer for Pair<T, U> { type M = Item
+    const fn ov() -> u256 { T::hv() * 1000 + U::hv() } }
+const fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000000 + B::ov() }
+const fn chosen() -> u256 { with (Named) { read<Pair<Wrap<Item>, Fixed>>() } }
+"#;
+    let codes = diagnostics(source);
+    if codes.is_empty() {
+        refused(source, "chosen", "Item: Pick");
+    } else {
+        assert_eq!(codes, vec!["6-0003".to_string()], "{codes:?}");
+    }
 }

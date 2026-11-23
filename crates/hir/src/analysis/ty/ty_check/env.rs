@@ -42,7 +42,7 @@ use crate::analysis::{
             model::EffectRequirementDecl,
             rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
-        evidence::{BoundOwner, BoundSchemaId, prove_outcome},
+        evidence::{BoundOwner, BoundSchemaId, Refusal, RefusedGoal, prove_outcome},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
@@ -1746,6 +1746,19 @@ impl<'db> TyCheckEnv<'db> {
                 ),
             )
         };
+        let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
+        {
+            Refusal::Differs { a, .. } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
+                        span,
+                        primary_goal: refused.goal,
+                        root: a,
+                    },
+                ),
+            ),
+            Refusal::NoComponent { .. } => failed_proof(refused.goal, span),
+        };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
@@ -1813,12 +1826,12 @@ impl<'db> TyCheckEnv<'db> {
             };
             for callable in lowering.callables_mut() {
                 callable.record_evidence(self.db, solve_cx);
-                callable.record_bound_evidence(self.db, solve_cx, &effect_args);
+                let refused = callable.record_bound_evidence(self.db, solve_cx, &effect_args);
                 callable.qualify_evidence(self.db, self.owner);
 
                 if solve_cx.choices().is_some() {
-                    for goal in callable.missing_bound_evidence(self.db) {
-                        diags.push(failed_proof(goal, expr.span(self.body).into()));
+                    for refused in refused {
+                        diags.push(refused_proof(refused, expr.span(self.body).into()));
                     }
                 }
                 if solve_cx.choices().is_some()
@@ -1845,13 +1858,14 @@ impl<'db> TyCheckEnv<'db> {
                     .iter()
                     .map(|arg| arg.clone().fold_with(self.db, &mut prober))
                     .collect();
-                call.callable
+                let refused = call
+                    .callable
                     .record_bound_evidence(self.db, solve_cx, &effect_args);
                 call.callable.qualify_evidence(self.db, self.owner);
 
                 if solve_cx.choices().is_some() {
-                    for goal in call.callable.missing_bound_evidence(self.db) {
-                        diags.push(failed_proof(goal, stmt.span(self.body).into()));
+                    for refused in refused {
+                        diags.push(refused_proof(refused, stmt.span(self.body).into()));
                     }
                 }
                 if solve_cx.choices().is_some()
@@ -1878,8 +1892,8 @@ impl<'db> TyCheckEnv<'db> {
                     diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
                 }
             }
-            for goal in const_ref.record_bound_evidence(self.db, choices) {
-                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            for refused in const_ref.record_bound_evidence(self.db, choices) {
+                diags.push(refused_proof(refused, expr.span(self.body).into()));
             }
             const_ref.qualify_evidence(self.db, self.owner);
         }
@@ -1920,6 +1934,7 @@ impl<'db> TyCheckEnv<'db> {
             result_ty,
             signature,
             bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
+            refused_bound: None,
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,

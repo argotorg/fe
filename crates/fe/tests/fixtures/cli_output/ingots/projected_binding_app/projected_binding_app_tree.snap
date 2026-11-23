@@ -1,0 +1,9 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDOUT ===
+projected_binding_app v0.1.0
+└── projected_binding_dep v0.1.0
+
+=== EXIT CODE: 0 ===

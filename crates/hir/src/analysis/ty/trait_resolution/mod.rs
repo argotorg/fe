@@ -22,7 +22,7 @@ use crate::analysis::{
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, ModeMarker, scope_graph::ScopeId},
+    hir_def::{HirIngot, IdentId, ModeMarker, scope_graph::ScopeId},
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
@@ -1226,56 +1226,97 @@ impl<'db> PredicateListId<'db> {
     /// - Super trait bounds
     /// - Associated type bounds from trait definitions
     pub fn extend_all_bounds(self, db: &'db dyn HirAnalysisDb) -> Self {
-        extend_all_bounds_query(db, self)
+        self.bound_walk(db).list
     }
 
-    fn extend_all_bounds_uncached(self, db: &'db dyn HirAnalysisDb) -> Self {
+    /// As `extend_all_bounds`, with the derivations the walk followed.
+    pub(crate) fn bound_walk(self, db: &'db dyn HirAnalysisDb) -> &'db BoundWalk<'db> {
+        bound_walk_query(db, self)
+    }
+
+    /// As `extend_all_bounds`, but a bound an equality makes concrete is kept,
+    /// with the derivations the walk followed. It is evidence an implementation
+    /// proves, never an assumption, so only the projection of an implementation's
+    /// own components reads it.
+    pub(crate) fn bound_walk_keeping_concrete(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> &'db BoundWalk<'db> {
+        bound_walk_keeping_concrete_query(db, self)
+    }
+
+    /// The derivations among the members of this list, as positions in it:
+    /// the walk of the list records each bound's derivation from the bound
+    /// whose trait declares it. A list that is not its own extension (a slot
+    /// layout that is a prefix, or a concatenation) keeps the edges whose two
+    /// ends it holds; an edge names the first position of an equal member.
+    pub(crate) fn implied_edges(self, db: &'db dyn HirAnalysisDb) -> &'db [BoundEdge<'db>] {
+        implied_edges_query(db, self)
+    }
+
+    fn walk_bounds(self, db: &'db dyn HirAnalysisDb, keep_concrete: bool) -> BoundWalk<'db> {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
+        let mut edges: Vec<BoundEdge<'db>> = Vec::new();
 
-        let mut worklist: Vec<TraitInstId<'db>> = self.list(db).to_vec();
+        // Each entry says whether the associated type bounds of the predicate are
+        // expanded too. A kept concrete bound and its supertraits are not.
+        let mut worklist: Vec<(TraitInstId<'db>, bool)> =
+            self.list(db).iter().map(|&pred| (pred, true)).collect();
 
-        while let Some(pred) = worklist.pop() {
+        while let Some((pred, expand_assoc)) = worklist.pop() {
             let hir_trait = pred.def(db);
-            let evidence = PredicateListId::new(db, vec![pred]);
+            let parent = all_predicates
+                .get_index_of(&pred)
+                .and_then(|index| u32::try_from(index).ok())
+                .expect("a predicate on the worklist is in the list");
+            let mut record = |child: usize, step: BoundStep<'db>| {
+                let edge = BoundEdge {
+                    parent,
+                    child: u32::try_from(child).expect("predicate position"),
+                    step,
+                };
+                if !edges.contains(&edge) {
+                    edges.push(edge);
+                }
+            };
             // 1. Collect super traits
-            for super_trait in hir_trait.super_traits(db) {
-                let inst = normalize_from_assumptions(
-                    db,
-                    super_trait.instantiate(db, pred.args(db)),
-                    hir_trait.scope(),
-                    evidence,
-                );
+            for index in 0..hir_trait.super_traits(db).len() {
+                let step = BoundStep::Super(index as u32);
+                let Some(inst) = step_bound(db, pred, step) else {
+                    continue;
+                };
                 if predicate_has_recursive_assoc_projection(db, inst) {
                     continue;
                 }
-
-                if all_predicates.insert(inst) {
+                let (child, inserted) = all_predicates.insert_full(inst);
+                record(child, step);
+                if inserted {
                     // New predicate added, add to worklist for further processing
-                    worklist.push(inst);
+                    worklist.push((inst, expand_assoc));
                 }
             }
 
             // 2. Collect associated type bounds
+            if !expand_assoc {
+                continue;
+            }
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
             for trait_type in hir_trait.assoc_types(db) {
                 // Get the associated type name
-                let Some(assoc_ty_name) = trait_type.name(db) else {
+                let Some(assoc) = trait_type.name(db) else {
                     continue;
                 };
-
-                // Keep the entire bound in declaration coordinates until every
-                // formal, including non-Self trait parameters, is instantiated.
-                let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc_ty_name);
-
-                for bound in assoc_ty.assoc_type_bounds(db, trait_type) {
-                    let trait_inst = normalize_from_assumptions(
-                        db,
-                        Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
-                        hir_trait.scope(),
-                        evidence,
-                    );
+                let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+                for index in 0..assoc_ty.assoc_type_bounds(db, trait_type).count() {
+                    let step = BoundStep::AssocBound {
+                        assoc,
+                        index: index as u32,
+                    };
+                    let Some(trait_inst) = step_bound(db, pred, step) else {
+                        continue;
+                    };
                     // An equality can make the bound a concrete one,
                     // `[u256; 3]: Collection` from `H: Holds<Base = [u256; 3]>`.
                     // An implementation proves that, so it is not assumed: as
@@ -1288,36 +1329,202 @@ impl<'db> PredicateListId<'db> {
                     };
                     let concrete = trait_inst.args(db).iter().all(concrete)
                         && trait_inst.assoc_type_bindings(db).values().all(concrete);
-                    if concrete || predicate_has_recursive_assoc_projection(db, trait_inst) {
+                    if (concrete && !keep_concrete)
+                        || predicate_has_recursive_assoc_projection(db, trait_inst)
+                    {
                         continue;
                     }
-                    if all_predicates.insert(trait_inst) {
-                        worklist.push(trait_inst);
+                    // A kept concrete bound is extended through its supertraits
+                    // only, `Item: Pick` from `Item: Middle`. Its associated type
+                    // bounds are not expanded, which ends the walk where a
+                    // concrete bound names a type that grows with each step.
+                    let (child, inserted) = all_predicates.insert_full(trait_inst);
+                    record(child, step);
+                    if inserted {
+                        worklist.push((trait_inst, !concrete));
                     }
                 }
             }
         }
 
-        Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
+        BoundWalk {
+            list: Self::new(db, all_predicates.into_iter().collect::<Vec<_>>()),
+            edges,
+        }
+    }
+}
+
+/// One derivation step of the bound walk: how a bound is read from the
+/// dictionary of the bound that implies it. The coordinates are those of the
+/// parent predicate's trait, so a step names the same component of every
+/// dictionary of that trait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) enum BoundStep<'db> {
+    /// The supertrait at this position among the parent trait's supertraits.
+    Super(u32),
+    /// The bound at `index` among those declared on the associated type
+    /// `assoc` of the parent trait.
+    AssocBound { assoc: IdentId<'db>, index: u32 },
+}
+
+/// A derivation recorded by the walk, in positions of the extended list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct BoundEdge<'db> {
+    pub(crate) parent: u32,
+    pub(crate) child: u32,
+    pub(crate) step: BoundStep<'db>,
+}
+
+/// An extended predicate list with the derivations that produced it. Every
+/// derivation is recorded, including one whose child already existed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct BoundWalk<'db> {
+    pub(crate) list: PredicateListId<'db>,
+    pub(crate) edges: Vec<BoundEdge<'db>>,
+}
+
+impl<'db> BoundWalk<'db> {
+    /// The steps from the first predicate to the member at `target`, along
+    /// the shortest chain of recorded derivations.
+    pub(crate) fn path_to(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        target: usize,
+    ) -> Option<Vec<BoundStep<'db>>> {
+        let len = self.list.list(db).len();
+        let mut via: Vec<Option<(usize, BoundStep<'db>)>> = vec![None; len];
+        let mut seen = vec![false; len];
+        let mut queue = std::collections::VecDeque::new();
+        *seen.first_mut()? = true;
+        queue.push_back(0usize);
+        while let Some(at) = queue.pop_front() {
+            if at == target {
+                break;
+            }
+            for edge in self.edges.iter().filter(|edge| edge.parent as usize == at) {
+                let child = edge.child as usize;
+                if child < len && !seen[child] {
+                    seen[child] = true;
+                    via[child] = Some((at, edge.step));
+                    queue.push_back(child);
+                }
+            }
+        }
+        if !*seen.get(target)? {
+            return None;
+        }
+        let mut steps = Vec::new();
+        let mut at = target;
+        while let Some((parent, step)) = via[at] {
+            steps.push(step);
+            at = parent;
+        }
+        steps.reverse();
+        Some(steps)
+    }
+}
+
+/// The bound that `step` derives from `pred`, in the coordinates of `pred`'s
+/// arguments, normalized by `pred`'s own equalities. The walk and every
+/// projection read a derivation through this one computation. A bound that an
+/// equality makes concrete is returned as it is: dropping it is the walk's
+/// decision.
+pub(crate) fn step_bound<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: TraitInstId<'db>,
+    step: BoundStep<'db>,
+) -> Option<TraitInstId<'db>> {
+    let hir_trait = pred.def(db);
+    let evidence = PredicateListId::new(db, vec![pred]);
+    match step {
+        BoundStep::Super(index) => {
+            let super_trait = hir_trait
+                .super_traits(db)
+                .get_index(index as usize)
+                .copied()?;
+            Some(normalize_from_assumptions(
+                db,
+                super_trait.instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
+            ))
+        }
+        BoundStep::AssocBound { assoc, index } => {
+            let trait_type = hir_trait
+                .assoc_types(db)
+                .find(|trait_type| trait_type.name(db) == Some(assoc))?;
+            // Keep the entire bound in declaration coordinates until every
+            // formal, including non-Self trait parameters, is instantiated.
+            let formal_trait =
+                TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
+            let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+            let bound = assoc_ty
+                .assoc_type_bounds(db, trait_type)
+                .nth(index as usize)?;
+            Some(normalize_from_assumptions(
+                db,
+                Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
+            ))
+        }
     }
 }
 
 // Normalizing implied bounds can resolve traits under assumptions that lead
 // back here. Iterate from the unextended list; extension only adds bounds.
-#[salsa::tracked(returns(copy), cycle_initial = extend_all_bounds_cycle_initial)]
-fn extend_all_bounds_query<'db>(
+#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
+fn bound_walk_query<'db>(
     db: &'db dyn HirAnalysisDb,
     predicates: PredicateListId<'db>,
-) -> PredicateListId<'db> {
-    predicates.extend_all_bounds_uncached(db)
+) -> BoundWalk<'db> {
+    predicates.walk_bounds(db, false)
 }
 
-fn extend_all_bounds_cycle_initial<'db>(
+#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
+fn bound_walk_keeping_concrete_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicates: PredicateListId<'db>,
+) -> BoundWalk<'db> {
+    predicates.walk_bounds(db, true)
+}
+
+fn bound_walk_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     predicates: PredicateListId<'db>,
-) -> PredicateListId<'db> {
-    predicates
+) -> BoundWalk<'db> {
+    BoundWalk {
+        list: predicates,
+        edges: Vec::new(),
+    }
+}
+
+#[salsa::tracked(returns(ref))]
+fn implied_edges_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    layout: PredicateListId<'db>,
+) -> Vec<BoundEdge<'db>> {
+    let walk = layout.bound_walk(db);
+    if walk.list == layout {
+        return walk.edges.clone();
+    }
+    let members = walk.list.list(db);
+    let position = |at: u32| {
+        let member = members.get(at as usize)?;
+        let at = layout.list(db).iter().position(|slot| slot == member)?;
+        u32::try_from(at).ok()
+    };
+    walk.edges
+        .iter()
+        .filter_map(|edge| {
+            Some(BoundEdge {
+                parent: position(edge.parent)?,
+                child: position(edge.child)?,
+                step: edge.step,
+            })
+        })
+        .collect()
 }
 
 fn predicate_has_recursive_assoc_projection<'db>(

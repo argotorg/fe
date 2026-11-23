@@ -30,7 +30,9 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            evidence::{EvidenceId, EvidenceList, instance_evidence, proof_output_mismatch},
+            evidence::{
+                EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
+            },
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -523,9 +525,12 @@ pub fn instantiated_typed_body<'db>(
                 crate::analysis::ty::evidence::implied_bound_evidence(
                     db,
                     proof,
+                    row.goal,
                     goal,
+                    key.impl_env(db).normalization_scope(db),
                     body.assumptions(),
                 )
+                .proof()
             }
         });
     }
@@ -533,14 +538,18 @@ pub fn instantiated_typed_body<'db>(
     let evidence = instance_evidence(
         db,
         goals,
+        body.bound_schema().basis_slots(db),
         supplied,
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
     let bound = crate::analysis::ty::evidence::BoundEvidence {
         schema: body.bound_schema(),
-        entries: evidence,
+        entries: evidence.proofs,
     };
     body.bind_evidence(db, bound);
+    if let Some(goal) = evidence.refused {
+        body = body.with_refused_bound(goal);
+    }
     if let Some(defining_body) = body.body() {
         body = body.fold_with(
             db,
@@ -2273,6 +2282,36 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Result<(), SemanticBodyAdmissionError<'db>> {
         let typed_body = self.key(db).typed_body(db);
+        if let Some(refused) = typed_body.refused_bound() {
+            let goal = refused.goal.pretty_print(db, true);
+            let message = match refused.reason {
+                Refusal::Differs { a, b } => format!(
+                    "`{goal}`: `{}` and `{}` supply different implementations",
+                    a.pretty_print(db, true),
+                    b.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: Some(root) } => format!(
+                    "`{goal}`: the dictionary of `{}` has no such component",
+                    root.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: None } => {
+                    format!("`{goal}`: no dictionary supplies it")
+                }
+            };
+            return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                SemanticDiagnosticId::new(
+                    db,
+                    SemanticDiagnostic::new(
+                        self,
+                        SemanticDiagnosticKind::ConflictingDictionaries,
+                        message,
+                        SemanticDiagnosticSpan::ItemName {
+                            owner: self.key(db).owner(db),
+                        },
+                    ),
+                ),
+            ));
+        }
         let causes = typed_body.smir_lowering_issues(db).into_boxed_slice();
         if causes.iter().copied().any(SmirLoweringIssue::is_incomplete) {
             return Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes));

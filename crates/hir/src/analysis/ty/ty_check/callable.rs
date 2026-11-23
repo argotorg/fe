@@ -26,8 +26,8 @@ use crate::analysis::{
         effects::{place_effect_provider_param_index_map, rows::RowPath},
         evidence::{
             BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
-            RowEvidence, UseEvidence, declared_bound_evidence, declared_bound_evidence_from,
-            instantiated_selection, prove_outcome,
+            Refusal, RefusedGoal, RowEvidence, UseEvidence, declared_bound_evidence,
+            declared_bound_evidence_from, instantiated_selection, prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
         generic_defaults::{DefaultApplication, GenericArgError},
@@ -557,19 +557,22 @@ impl<'db> Callable<'db> {
     /// callee's body declares, instantiated for this call, as
     /// `declared_bound_evidence` records them, and the trait key of each
     /// component of the callee's rows for the provider that the call's
-    /// `effect_args` give that component.
+    /// `effect_args` give that component. The goals of the slots and rows that
+    /// are refused are returned: under a lexical choice, a use that cannot
+    /// supply them is an error, and is never completed from the checker's
+    /// own context.
     pub(crate) fn record_bound_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
         solve_cx: TraitSolveCx<'db>,
         effect_args: &[super::ResolvedEffectArg<'db>],
-    ) {
+    ) -> Vec<RefusedGoal<'db>> {
         let CallableDef::Func(func) = self.callable_def else {
-            return;
+            return Vec::new();
         };
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
         let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
-            return;
+            return Vec::new();
         };
         let evidence = declared_bound_evidence(
             db,
@@ -615,7 +618,19 @@ impl<'db> Callable<'db> {
                 })
             })
             .collect();
-        self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
+        let mut refused = evidence.refused_goals(db, func_signature(db, func, mode), &subst);
+        let evidence = evidence.proofs.with_rows(db, rows);
+        refused.extend(
+            evidence
+                .unproved_rows(db)
+                .into_iter()
+                .map(|goal| RefusedGoal {
+                    goal,
+                    reason: Refusal::NoComponent { root: None },
+                }),
+        );
+        self.set_bound_evidence(db, func, mode, evidence);
+        refused
     }
 
     /// The callable trait wraps a function item's effects in one row. After
@@ -673,7 +688,7 @@ impl<'db> Callable<'db> {
                 _ => None,
             },
         );
-        self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
+        self.set_bound_evidence(db, func, mode, evidence.proofs.with_rows(db, rows));
     }
 
     fn set_bound_evidence(
@@ -691,25 +706,6 @@ impl<'db> Callable<'db> {
             ),
             entries,
         });
-    }
-
-    /// Missing dictionaries cannot be reconstructed ordinarily after a lexical
-    /// choice has committed the call, including conflicting supertrait projections.
-    pub(crate) fn missing_bound_evidence(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Vec<TraitInstId<'db>> {
-        let CallableDef::Func(func) = self.callable_def else {
-            return Vec::new();
-        };
-        let Some(evidence) = self.use_evidence.bound_proofs() else {
-            return Vec::new();
-        };
-        let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
-            return Vec::new();
-        };
-        let mode = BodyOwner::func_at(db, func, self.mode).mode();
-        evidence.missing_bound_goals(db, func_signature(db, func, mode), &subst)
     }
 
     /// Proofs of the assumptions the callee's body is checked under, as the

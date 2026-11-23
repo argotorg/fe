@@ -256,7 +256,11 @@ impl<'db> TyChecker<'db> {
                 failed_goals.push(use_.inst());
             }
         }
-        failed_goals.extend(cref.record_bound_evidence(self.db, choices));
+        failed_goals.extend(
+            cref.record_bound_evidence(self.db, choices)
+                .into_iter()
+                .map(|refused| refused.goal),
+        );
         cref.qualify_evidence(self.db, self.env.owner());
         if !failed_goals.is_empty() {
             for goal in failed_goals {

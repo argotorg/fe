@@ -193,6 +193,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
             SemanticDiagnosticKind::UnencodablePanic => 18,
+            SemanticDiagnosticKind::ConflictingDictionaries => 19,
             SemanticDiagnosticKind::ChoiceOutputDisagreement => 20,
         };
         let severity = match self.kind {
@@ -249,6 +250,9 @@ impl SemanticDiagnosticKind {
             Self::ChoiceOutputDisagreement => {
                 format!("implementation outputs disagree in `{item}`")
             }
+            Self::ConflictingDictionaries => {
+                format!("conflicting implementations of a bound in `{item}`")
+            }
         }
     }
 }
@@ -271,6 +275,10 @@ impl<'db> SemanticDiagnosticSpan<'db> {
             }
             Self::HirExpr { body, expr } => expr.span(body).resolve(db),
             Self::ImplTrait(implementation) => implementation.span().resolve(db),
+            Self::ItemName { owner } => match owner {
+                BodyOwner::Func(func, _) => func.span().name().resolve(db),
+                _ => owner.body(db).and_then(|body| body.span().resolve(db)),
+            },
         }
     }
 }
@@ -374,6 +382,10 @@ pub enum SemanticDiagnosticSpan<'db> {
         instance: SemanticInstance<'db>,
         local: SLocalId,
     },
+    /// The name of the item that owns the body, or its body when it has none.
+    ItemName {
+        owner: BodyOwner<'db>,
+    },
     HirExpr {
         body: Body<'db>,
         expr: ExprId,
@@ -444,4 +456,7 @@ pub enum SemanticDiagnosticKind {
     /// or through one whose conditions a choice answers, whose associated
     /// outputs are not those ordinary normalization gives the goal.
     ChoiceOutputDisagreement,
+    /// An instance whose dictionaries, or a proof written for one of its bounds,
+    /// name different implementations of an implied bound, or cannot supply it.
+    ConflictingDictionaries,
 }

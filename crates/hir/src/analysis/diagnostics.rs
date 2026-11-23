@@ -6587,6 +6587,22 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }
             }
 
+            Self::ImplementationDiffers {
+                span,
+                primary_goal,
+                root,
+            } => primary_diag(
+                severity,
+                "trait bound is not satisfied",
+                format!(
+                    "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
+                    primary_goal.pretty_print(db, true),
+                    root.pretty_print(db, true)
+                ),
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::InfiniteBoundRecursion(span, msg) => primary_diag(
                 severity,
                 "infinite trait bound recursion",
