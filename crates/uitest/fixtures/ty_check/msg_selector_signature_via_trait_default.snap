@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/msg_selector_signature_via_trait_default.fe
+---
+error[9-0006]: selector declares `uint256` but field `amount` has ABI type `uint64`
+   ┌─ msg_selector_signature_via_trait_default.fe:42:12
+   │
+42 │     Wide { amount: u64 } -> u64,
+   │            ^^^^^^^^^^^ expected a `uint256`-typed value
+   │
+   = `u256` decodes and encodes Solidity `uint256`
+
+error[9-0007]: selector signature declares 2 argument(s) but msg variant `TooFew` has 1 field(s)
+   ┌─ msg_selector_signature_via_trait_default.fe:37:5
+   │
+37 │     #[selector = <Arity as Wire>::VIA_DEFAULT]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature arity does not match the variant's fields
+
+error[9-0009]: malformed selector signature `alpha(uint64, bool)` for msg variant `Spaced`
+   ┌─ msg_selector_signature_via_trait_default.fe:33:5
+   │
+33 │     #[selector = <Malformed as Wire>::VIA_DEFAULT]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature must not contain whitespace
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`

@@ -1,0 +1,21 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/msg_selector_signature_via_generic_fn.fe
+---
+error[9-0006]: selector declares `uint256` but field `amount` has ABI type `uint64`
+   ┌─ msg_selector_signature_via_generic_fn.fe:36:12
+   │
+36 │     Wide { amount: u64 } -> u64,
+   │            ^^^^^^^^^^^ expected a `uint256`-typed value
+   │
+   = `u256` decodes and encodes Solidity `uint256`
+
+error[9-0009]: malformed selector signature `alpha(uint64, bool)` for msg variant `Spaced`
+   ┌─ msg_selector_signature_via_generic_fn.fe:31:5
+   │
+31 │     #[selector = pick<Malformed>()]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature must not contain whitespace
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`

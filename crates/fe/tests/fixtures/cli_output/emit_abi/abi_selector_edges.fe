@@ -1,0 +1,205 @@
+// Where a selector keeps or loses the signature of the `std::abi::sol` call
+// that produced it.
+
+// A cast that unwraps and rewraps a one-field newtype lowers without a scalar
+// conversion. It still builds a new value, so the selector is raw: no ABI entry
+// and no arity error for the zero-field variant.
+struct Wrapped {
+    v: u32,
+}
+
+msg NewtypeCast {
+    #[selector = (std::abi::sol("alpha(uint64)") as Wrapped) as u32]
+    Raw {} -> u64,
+}
+
+// A const item, and a const that reads it, keep the signature.
+const X: u32 = std::abi::sol("alpha(uint64)")
+const Y: u32 = X
+
+msg ConstRead {
+    #[selector = Y]
+    Alpha { amount: u64 } -> u64,
+}
+
+// A cast of the call result is a new value: the arm is skipped with a warning.
+msg ScalarCast {
+    #[selector = std::abi::sol("alpha(uint64)") as u32]
+    Alpha { amount: u64 } -> u64,
+}
+
+// A `[u8; N]` argument gives the same text whether it is a literal or written
+// as elements.
+const LITERAL: [u8; 7] = "bytes()"
+const ELEMENTS: [u8; 7] = [0x62, 0x79, 0x74, 0x65, 0x73, 0x28, 0x29]
+
+msg ByteArrayLiteral {
+    #[selector = std::abi::sol(LITERAL)]
+    Bytes {} -> u64,
+}
+
+msg ByteArrayElements {
+    #[selector = std::abi::sol(ELEMENTS)]
+    Bytes {} -> u64,
+}
+
+// A selector that passes through a constant aggregate has no ABI entry, but
+// the numeric selector is unchanged.
+const SAVED: (u32, u32) = (std::abi::sol("saved(uint64)"), 1)
+
+msg ThroughTuple {
+    #[selector = SAVED.0]
+    Saved { amount: u64 } -> u64,
+}
+
+pub contract NewtypeCastContract {
+    recv NewtypeCast {
+        Raw {} -> u64 { 1 }
+    }
+}
+
+pub contract ConstReadContract {
+    recv ConstRead {
+        Alpha { amount } -> u64 { amount }
+    }
+}
+
+pub contract ScalarCastContract {
+    recv ScalarCast {
+        Alpha { amount } -> u64 { amount }
+    }
+}
+
+pub contract ByteArrayLiteralContract {
+    recv ByteArrayLiteral {
+        Bytes {} -> u64 { 1 }
+    }
+}
+
+pub contract ByteArrayElementsContract {
+    recv ByteArrayElements {
+        Bytes {} -> u64 { 1 }
+    }
+}
+
+pub contract ThroughTupleContract {
+    recv ThroughTuple {
+        Saved { amount } -> u64 { amount }
+    }
+}
+
+// A cast clears the signature inside an enum payload as well. The payload is
+// read back after the cast, so the selector is a raw number.
+enum Choice {
+    Hash(u32),
+    Other,
+}
+
+struct Boxed {
+    c: Choice,
+}
+
+const fn payload_after_cast() -> u32 {
+    let boxed = Choice::Hash(std::abi::sol("alpha(uint64)")) as Boxed
+    match boxed.c {
+        Choice::Hash(h) => h,
+        Choice::Other => 0,
+    }
+}
+
+msg EnumPayloadCast {
+    #[selector = payload_after_cast()]
+    Raw {} -> u64,
+}
+
+pub contract EnumPayloadCastContract {
+    recv EnumPayloadCast {
+        Raw {} -> u64 { 1 }
+    }
+}
+
+// Four nested array repeats share their inner arrays, and a cast of the
+// outer one visits each distinct array once. The signature inside is cleared.
+struct Cube {
+    v: [[[[u32; 32]; 32]; 32]; 32],
+}
+
+const fn nested_after_cast() -> u32 {
+    let a: [u32; 32] = [std::abi::sol("alpha(uint64)"); 32]
+    let b: [[u32; 32]; 32] = [a; 32]
+    let c: [[[u32; 32]; 32]; 32] = [b; 32]
+    let d: [[[[u32; 32]; 32]; 32]; 32] = [c; 32]
+    let cube = d as Cube
+    cube.v[0][0][0][0]
+}
+
+msg NestedCast {
+    #[selector = nested_after_cast()]
+    Raw {} -> u64,
+}
+
+pub contract NestedCastContract {
+    recv NestedCast {
+        Raw {} -> u64 { 1 }
+    }
+}
+
+// The signature follows a struct field and a branch: each call selects the
+// field that its result names.
+struct Pair {
+    a: u32,
+    b: u32,
+}
+
+const fn pick(_ second: bool) -> u32 {
+    let p = Pair { a: std::abi::sol("first(uint64)"), b: std::abi::sol("second(uint64)") }
+    var s = p.a
+    if second {
+        s = p.b
+    }
+    s
+}
+
+msg FieldFlow {
+    #[selector = pick(false)]
+    First { amount: u64 } -> u64,
+    #[selector = pick(true)]
+    Second { amount: u64 } -> u64,
+}
+
+pub contract FieldFlowContract {
+    recv FieldFlow {
+        First { amount } -> u64 { amount }
+        Second { amount } -> u64 { amount }
+    }
+}
+
+// An assignment replaces the value: the selector is the literal.
+const fn reassigned() -> u32 {
+    var x = std::abi::sol("alpha(uint64)")
+    x = 0x79513fd4
+    x
+}
+
+msg Reassigned {
+    #[selector = reassigned()]
+    Raw {} -> u64,
+}
+
+pub contract ReassignedContract {
+    recv Reassigned {
+        Raw {} -> u64 { 1 }
+    }
+}
+
+// Arithmetic builds a new value even when it does not change the number.
+msg OrZero {
+    #[selector = std::abi::sol("alpha(uint64)") | 0]
+    Raw {} -> u64,
+}
+
+pub contract OrZeroContract {
+    recv OrZero {
+        Raw {} -> u64 { 1 }
+    }
+}

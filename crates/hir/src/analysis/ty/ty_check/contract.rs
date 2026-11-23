@@ -19,7 +19,7 @@ use crate::{
         },
         semantic::{
             ConstUsePolicy, EvalOutcome, GenericSubst, SemConstScalar, SemConstValue,
-            contract_init_assigned_fields, eval_body_owner_const,
+            contract_init_assigned_fields, eval_body_owner_const, eval_selector_with_signature,
         },
         ty::{
             adt_def::AdtRef,
@@ -827,14 +827,18 @@ pub(crate) fn eval_msg_variant_selector<'db>(
         return None;
     }
 
-    match eval_body_owner_const(
+    // The same query as the selector's signature (`get_variant_selector_info`),
+    // so the body is evaluated once for both.
+    match eval_selector_with_signature(
         db,
         BodyOwner::AnonConstBody {
             body,
             expected: expected_ty,
         },
         GenericSubst::none(db),
-    ) {
+    )
+    .outcome
+    {
         EvalOutcome::Ready(value) => {
             if let SemConstValue::Scalar {
                 value: SemConstScalar::Int { value },

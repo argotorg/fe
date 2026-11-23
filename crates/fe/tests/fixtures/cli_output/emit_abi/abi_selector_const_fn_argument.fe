@@ -1,0 +1,23 @@
+// Only a selector fixed by a `std::abi::sol` call has a signature. The call
+// may be an argument of a const fn. A hex literal, or arithmetic on a hash,
+// still gives a numeric selector with no signature, so the ABI omits that arm
+// and the build warns.
+
+const fn id(_ x: u32) -> u32 { x }
+
+msg M {
+    #[selector = id(std::abi::sol("delta(uint64)"))]
+    Delta { amount: u64 } -> u64,
+    #[selector = 0x12345678]
+    Raw { amount: u64 } -> u64,
+    #[selector = std::abi::sol("eps(uint64)") + 1]
+    Shifted { amount: u64 } -> u64,
+}
+
+pub contract C {
+    recv M {
+        Delta { amount } -> u64 { amount }
+        Raw { amount } -> u64 { amount }
+        Shifted { amount } -> u64 { amount }
+    }
+}

@@ -23,7 +23,8 @@ use crate::{
             FailReason, FieldIndex, Overflow, PrimitiveFault, RuntimeSizeError, SConst, SExpr,
             SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind, STerminatorKind, SemConstId,
             SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef, UnaryOp,
-            VariantIndex, array_const, bool_const, bytes_const, consts::instantiate_const_template,
+            VariantIndex, array_const, bool_const, bytes_const,
+            consts::{fixed_string_capacity_bytes, instantiate_const_template},
             enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
             int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
             sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
@@ -34,7 +35,7 @@ use crate::{
             const_ty::{ConstTyData, ConstTyId},
             corelib::{
                 CtfeExternIntrinsic, NumericExternIntrinsic, SaturatingArithmetic, concrete_usize,
-                ctfe_extern_intrinsic_kind,
+                ctfe_extern_intrinsic_kind, lib_func_matches,
             },
             evidence::EvidenceList,
             normalize::normalize_ty,
@@ -47,7 +48,7 @@ use crate::{
         },
     },
     core::semantic::storage_slot_span,
-    hir_def::{ArithBinOp, CompBinOp},
+    hir_def::{ArithBinOp, CompBinOp, Expr, Partial},
     projection::{IndexSource, Projection},
 };
 
@@ -221,6 +222,16 @@ pub fn eval_body_owner_const<'db>(
     owner: BodyOwner<'db>,
     subst: GenericSubst<'db>,
 ) -> EvalOutcome<'db, SemConstId<'db>> {
+    eval_const_instance(db, const_body_instance(db, owner, subst))
+}
+
+/// The instance that `eval_body_owner_const` evaluates for `owner` with
+/// `subst`.
+fn const_body_instance<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> SemanticInstance<'db> {
     let key = SemanticInstanceKey::of(
         db,
         owner,
@@ -229,7 +240,7 @@ pub fn eval_body_owner_const<'db>(
         ImplEnv::empty(db, owner.scope()),
         EvidenceList::none(db),
     );
-    eval_const_instance(db, SemanticInstance::new(db, key))
+    SemanticInstance::new(db, key)
 }
 
 fn eval_body_owner_const_cycle_initial<'db>(
@@ -241,6 +252,56 @@ fn eval_body_owner_const_cycle_initial<'db>(
     EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
         origin: SemOrigin::Body(owner),
     }))
+}
+
+/// The value of a selector constant together with the signature text of the
+/// `std::abi::sol` call whose result the value is. The evaluation that fixes
+/// the selector is the one source of both, so a consumer that needs the name
+/// reads the same selection the number came from.
+///
+/// The signature follows the value itself: it is carried through let bindings,
+/// blocks, const fn arguments and returns, and const item references. A value
+/// computed from a hash (arithmetic, a cast) is a new value and has no
+/// signature, and neither has a literal that merely equals a hash. A `sol`
+/// call that is evaluated and discarded does not attribute its text to
+/// anything.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, SalsaValue)]
+pub struct SelectorEvaluation<'db> {
+    pub outcome: EvalOutcome<'db, SemConstId<'db>>,
+    pub signature: Option<String>,
+}
+
+#[salsa::tracked(returns(clone), cycle_initial=eval_selector_with_signature_cycle_initial)]
+pub fn eval_selector_with_signature<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    subst: GenericSubst<'db>,
+) -> SelectorEvaluation<'db> {
+    let instance = const_body_instance(db, owner, subst);
+    let mut machine = CtfeMachine::new(db, CtfeConfig::default());
+    machine.track_sol = true;
+    let outcome = machine
+        .eval_root(instance, Vec::new(), SemOrigin::Body(owner))
+        .into();
+    let signature = machine
+        .root_sol
+        .take()
+        .and_then(|text| String::from_utf8(text.to_vec()).ok());
+    SelectorEvaluation { outcome, signature }
+}
+
+fn eval_selector_with_signature_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    owner: BodyOwner<'db>,
+    _subst: GenericSubst<'db>,
+) -> SelectorEvaluation<'db> {
+    SelectorEvaluation {
+        outcome: EvalOutcome::Failed(EvalFailure::Ctfe(CtfeError::RecursiveConst {
+            origin: SemOrigin::Body(owner),
+        })),
+        signature: None,
+    }
 }
 
 #[salsa::tracked(returns(clone), cycle_initial=eval_body_owner_const_with_args_cycle_initial)]
@@ -356,6 +417,14 @@ struct CtfeMachine<'db, 'body> {
     /// The projection frame the last call suspended, for its caller to
     /// register as a session.
     opened_session: Option<usize>,
+    /// Whether the result of each `std::abi::sol` call is tagged with the text
+    /// it hashed (see `CtfeConstKind::Int::sol`).
+    track_sol: bool,
+    /// The tag of the root value, read before it is interned.
+    root_sol: Option<Rc<[u8]>>,
+    /// The tag of each const item evaluated in this machine, kept beside the
+    /// interned result in `const_results` because interning drops it.
+    const_sol: FxHashMap<SemanticInstanceKey<'db>, Rc<[u8]>>,
 }
 
 struct CtfeFrame<'db, 'body> {
@@ -397,6 +466,11 @@ enum CtfeValue<'db> {
     Ref(CtfeRef),
 }
 
+/// The element lists `CtfeConstValue::cleared_sol_tags` has visited, by the
+/// address of the shared list, with the cleared list or `None` when it holds
+/// no tag. Valid for one call, while the original lists are alive.
+type ClearedLists<'db> = FxHashMap<usize, Option<Rc<[CtfeConstValue<'db>]>>>;
+
 #[derive(Clone)]
 struct CtfeConstValue<'db> {
     kind: CtfeConstKind<'db>,
@@ -410,6 +484,12 @@ enum CtfeConstKind<'db> {
     Int {
         ty: TyId<'db>,
         value: CtfeInt,
+        /// Set only on the value a `std::abi::sol` call returned, while a
+        /// selector evaluation tracks signatures: the text that call hashed.
+        /// A move or read of the value copies it. Anything that computes a new
+        /// value (arithmetic, a cast, a constant read back from the interner)
+        /// builds it without a tag.
+        sol: Option<Rc<[u8]>>,
     },
     Bytes {
         ty: TyId<'db>,
@@ -458,6 +538,7 @@ impl<'db> CtfeConstValue<'db> {
             kind: CtfeConstKind::Int {
                 ty,
                 value: CtfeInt::from_bigint(db, ty, value),
+                sol: None,
             },
         }
     }
@@ -468,7 +549,11 @@ impl<'db> CtfeConstValue<'db> {
             None => CtfeInt::Big(bigint_from_u256(word)),
         };
         Self {
-            kind: CtfeConstKind::Int { ty, value },
+            kind: CtfeConstKind::Int {
+                ty,
+                value,
+                sol: None,
+            },
         }
     }
 
@@ -522,6 +607,7 @@ impl<'db> CtfeConstValue<'db> {
             } => CtfeConstKind::Int {
                 ty: *ty,
                 value: CtfeInt::from_bigint(db, *ty, value.clone()),
+                sol: None,
             },
             SemConstValue::Scalar {
                 ty,
@@ -555,6 +641,7 @@ impl<'db> CtfeConstValue<'db> {
             } => CtfeConstKind::Int {
                 ty: *ty,
                 value: CtfeInt::from_bigint(db, *ty, value.clone()),
+                sol: None,
             },
             SemConstValue::Scalar {
                 ty,
@@ -605,12 +692,102 @@ impl<'db> CtfeConstValue<'db> {
         Self { kind }
     }
 
+    /// The text of the `std::abi::sol` call that produced this value, if it is
+    /// that call's result (see `CtfeConstKind::Int::sol`).
+    fn sol_tag(&self) -> Option<&Rc<[u8]>> {
+        match &self.kind {
+            CtfeConstKind::Int { sol, .. } => sol.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The value with its tag removed, and the tags inside an aggregate:
+    /// a cast builds a new value. A value with no tag is returned as it is.
+    fn without_sol_tags(self) -> Self {
+        self.cleared_sol_tags(&mut FxHashMap::default())
+            .unwrap_or(self)
+    }
+
+    /// The cleared value, or `None` when it holds no tag. Aggregates are
+    /// rebuilt only along the paths that reach a tag, and an element list that
+    /// several parents share (an array repeat) is visited once, so the cost is
+    /// bounded by the distinct nodes and not by the logical element count.
+    fn cleared_sol_tags(&self, memo: &mut ClearedLists<'db>) -> Option<Self> {
+        let kind = match &self.kind {
+            CtfeConstKind::Int {
+                ty,
+                value,
+                sol: Some(_),
+            } => CtfeConstKind::Int {
+                ty: *ty,
+                value: value.clone(),
+                sol: None,
+            },
+            CtfeConstKind::Tuple { ty, elems } => CtfeConstKind::Tuple {
+                ty: *ty,
+                elems: Self::cleared_list(elems, memo)?,
+            },
+            CtfeConstKind::Struct { ty, fields } => CtfeConstKind::Struct {
+                ty: *ty,
+                fields: Self::cleared_list(fields, memo)?,
+            },
+            CtfeConstKind::Array { ty, elems } => CtfeConstKind::Array {
+                ty: *ty,
+                elems: Self::cleared_list(elems, memo)?,
+            },
+            CtfeConstKind::Enum {
+                ty,
+                variant,
+                fields,
+            } => CtfeConstKind::Enum {
+                ty: *ty,
+                variant: *variant,
+                fields: Self::cleared_list(fields, memo)?,
+            },
+            _ => return None,
+        };
+        Some(Self { kind })
+    }
+
+    fn cleared_list(list: &Rc<[Self]>, memo: &mut ClearedLists<'db>) -> Option<Rc<[Self]>> {
+        if list.is_empty() {
+            return None;
+        }
+        let key = list.as_ptr() as usize;
+        if let Some(cleared) = memo.get(&key) {
+            return cleared.clone();
+        }
+        let mut out: Option<Vec<Self>> = None;
+        for (index, elem) in list.iter().enumerate() {
+            match elem.cleared_sol_tags(memo) {
+                Some(cleared) => out
+                    .get_or_insert_with(|| list[..index].to_vec())
+                    .push(cleared),
+                None => {
+                    if let Some(out) = &mut out {
+                        out.push(elem.clone());
+                    }
+                }
+            }
+        }
+        let cleared = out.map(Rc::from);
+        memo.insert(key, cleared.clone());
+        cleared
+    }
+
+    fn with_sol_tag(mut self, tag: Rc<[u8]>) -> Self {
+        if let CtfeConstKind::Int { sol, .. } = &mut self.kind {
+            *sol = Some(tag);
+        }
+        self
+    }
+
     fn materialize(&self, db: &'db dyn HirAnalysisDb) -> SemConstId<'db> {
         match &self.kind {
             CtfeConstKind::Interned(value) => value.value(),
             CtfeConstKind::Unit => unit_const(db),
             CtfeConstKind::Bool(value) => bool_const(db, *value),
-            CtfeConstKind::Int { ty, value } => int_const(db, *ty, value.to_bigint()),
+            CtfeConstKind::Int { ty, value, .. } => int_const(db, *ty, value.to_bigint()),
             CtfeConstKind::Bytes { ty, bytes } => bytes_const(db, *ty, bytes.to_vec()),
             CtfeConstKind::Tuple { ty, elems } => tuple_const(
                 db,
@@ -973,6 +1150,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             opened_session: None,
             const_results: FxHashMap::default(),
             const_stack: Vec::new(),
+            track_sol: false,
+            root_sol: None,
+            const_sol: FxHashMap::default(),
         }
     }
 
@@ -1040,6 +1220,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         let CtfeValue::Value(value) = value else {
             return Err(CtfeError::InvalidBorrow { origin }.into());
         };
+        self.root_sol = value.sol_tag().cloned();
         let value = value.materialize(self.db);
         if sem_const_dependency(self.db, value).is_some() {
             return Err(EvalStop::Failed(EvalFailure::Invariant {
@@ -1150,6 +1331,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             )
             .and_then(|value| match value {
                 CtfeValue::Value(value) => {
+                    if let Some(tag) = value.sol_tag() {
+                        self.const_sol.insert(key, tag.clone());
+                    }
                     let value = value.materialize(self.db);
                     if sem_const_dependency(self.db, value).is_some() {
                         Err(EvalStop::Failed(EvalFailure::Invariant {
@@ -1547,7 +1731,12 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 {
                     return Err(CtfeError::NonConstCall { origin }.into());
                 }
+                let sol_text = self.sol_call_text(instance, &args, origin);
                 match self.eval_instance(instance, args, effects, origin) {
+                    Ok(CtfeValue::Value(value)) => Ok(CtfeValue::Value(match sol_text {
+                        Some(text) => value.with_sol_tag(text),
+                        None => value,
+                    })),
                     Ok(value) => Ok(value),
                     Err(EvalStop::Blocked(mut info)) => {
                         info.trace.push(instance.key(self.db));
@@ -1587,10 +1776,46 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     }
                     failure => failure,
                 })?;
-                self.load_sem_const(value, origin)
+                let loaded = self.load_sem_const(value, origin)?;
+                let tag = self.const_sol.get(&cref.instance(self.db));
+                Ok(match (loaded, tag) {
+                    (CtfeValue::Value(value), Some(tag)) => {
+                        CtfeValue::Value(value.with_sol_tag(tag.clone()))
+                    }
+                    (loaded, _) => loaded,
+                })
             }
-            expr => self.eval_value_expr(frame_idx, result_ty, expr, origin),
+            expr => {
+                let value = self.eval_value_expr(frame_idx, result_ty, expr, origin)?;
+                Ok(match value {
+                    CtfeValue::Value(value) if self.is_cast_origin(frame_idx, origin) => {
+                        CtfeValue::Value(value.without_sol_tags())
+                    }
+                    value => value,
+                })
+            }
         }
+    }
+
+    /// Whether `origin` is a source-level cast. A cast of a transparent newtype
+    /// lowers to aggregate construction and field reads with no scalar
+    /// conversion, so the cast boundary is recognised by the expression the
+    /// value comes from, not by the operation.
+    fn is_cast_origin(&self, frame_idx: usize, origin: SemOrigin<'db>) -> bool {
+        if !self.track_sol {
+            return false;
+        }
+        let SemOrigin::Expr(expr) = origin else {
+            return false;
+        };
+        let body = self.frames[frame_idx].body;
+        let Some(hir_body) = body.template_owner.body(self.db) else {
+            return false;
+        };
+        matches!(
+            expr.data(self.db, hir_body),
+            Partial::Present(Expr::Cast(..))
+        )
     }
 
     fn eval_value_expr(
@@ -1780,6 +2005,55 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 Err(CtfeError::NotConstEvaluable { origin }.into())
             }
         }
+    }
+
+    /// The text `std::abi::sol` hashes, when this call is a call of that
+    /// function and signatures are being tracked.
+    ///
+    /// The text is the declared `N` bytes of the `String<N>` argument, as the
+    /// hash reads them. An integer cast to `String<N>` is stored as a 32-byte
+    /// word, so the bytes beyond `N` are storage padding, not text. An argument
+    /// that is not a byte string (for example a tuple of `AsBytes` parts) gives
+    /// no text.
+    fn sol_call_text(
+        &self,
+        instance: SemanticInstance<'db>,
+        args: &[CtfeValue<'db>],
+        origin: SemOrigin<'db>,
+    ) -> Option<Rc<[u8]>> {
+        if !self.track_sol {
+            return None;
+        }
+        let BodyOwner::Func(func, _) = instance.key(self.db).owner(self.db) else {
+            return None;
+        };
+        if !lib_func_matches(self.db, func, "std::abi::sol") {
+            return None;
+        }
+        let arg = args.first()?.clone();
+        let arg = self.expand_interned(self.value_args(vec![arg], origin).ok()?.pop()?);
+        let (ty, bytes): (TyId<'db>, Rc<[u8]>) = match arg.kind {
+            CtfeConstKind::Bytes { ty, bytes } => (ty, bytes),
+            // A `[u8; N]` written as elements is the same bytes as the literal.
+            CtfeConstKind::Array { ty, elems } => {
+                let bytes = elems
+                    .iter()
+                    .map(|elem| match self.expand_interned(elem.clone()).kind {
+                        CtfeConstKind::Int { value, .. } => value.to_bigint().to_u8(),
+                        _ => None,
+                    })
+                    .collect::<Option<Vec<u8>>>()?;
+                (ty, bytes.into())
+            }
+            _ => return None,
+        };
+        // A literal is a byte array of exactly its text; only a `String<N>`
+        // value carries storage padding.
+        let width = fixed_string_capacity_bytes(self.db, ty).unwrap_or(bytes.len());
+        let mut text = vec![0u8; width];
+        let kept = &bytes[bytes.len().saturating_sub(width)..];
+        text[width - kept.len()..].copy_from_slice(kept);
+        Some(text.into())
     }
 
     fn value_args(
@@ -2340,7 +2614,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         let mut hasher = Keccak::v256();
         for (i, word) in elems.iter().enumerate() {
             let word = self.expand_interned(word.clone());
-            let CtfeConstKind::Int { ty, value } = &word.kind else {
+            let CtfeConstKind::Int { ty, value, .. } = &word.kind else {
                 return Err(invalid());
             };
             if *ty != TyId::u256(self.db) || !self.int_in_range(*ty, &value.to_bigint()) {

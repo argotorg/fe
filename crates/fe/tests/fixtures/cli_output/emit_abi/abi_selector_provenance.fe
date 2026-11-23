@@ -1,0 +1,92 @@
+// The signature of a variant is the text of the `std::abi::sol` call whose
+// result IS the selector. A call that is evaluated and discarded, or one that
+// only shares a number with the selector, gives it no name.
+
+const fn id(_ x: u32) -> u32 { x }
+
+// A helper that hashes a signature, drops the result, and returns the number
+// as a literal. The selector is a raw number: no ABI entry, no arity error
+// for the zero-field variant.
+const fn discards_then_literal() -> u32 {
+    let _ = std::abi::sol("alpha(uint64)")
+    0x79513fd4
+}
+
+msg Discarded {
+    #[selector = discards_then_literal()]
+    Raw {} -> u64,
+}
+
+// An earlier `sol` call that is never used does not name the variant.
+const fn dead_call() -> u32 {
+    let _p = std::abi::sol("x(uint8)")
+    std::abi::sol("y(uint64)")
+}
+
+msg DeadCall {
+    #[selector = dead_call()]
+    Live { amount: u64 } -> u64,
+}
+
+// `burn(uint256)` and `collate_propagate_storage(bytes16)` hash to the same
+// selector, 0x42966c68. Each variant is named by the call it returns, whichever
+// of the two was evaluated first.
+const fn collision_first() -> u32 {
+    let _ = std::abi::sol("collate_propagate_storage(bytes16)")
+    std::abi::sol("burn(uint256)")
+}
+
+msg Collision {
+    #[selector = collision_first()]
+    Burn { amount: u256 } -> u256,
+}
+
+// The signature follows the value through let bindings, a block and a const fn
+// argument and return.
+const fn forwarded() -> u32 {
+    let a = std::abi::sol("delta(uint64)")
+    let b = a
+    b
+}
+
+msg Forwarded {
+    #[selector = id(forwarded())]
+    Delta { amount: u64 } -> u64,
+}
+
+// An integer cast to `String<13>` is stored as a 32-byte word, but only the
+// 13 declared bytes are the text: `alpha(uint64)`.
+msg Cast {
+    #[selector = std::abi::sol(0x616c7068612875696e74363429 as String<13>)]
+    Alpha { amount: u64 } -> u64,
+}
+
+pub contract DiscardedContract {
+    recv Discarded {
+        Raw {} -> u64 { 1 }
+    }
+}
+
+pub contract DeadCallContract {
+    recv DeadCall {
+        Live { amount } -> u64 { amount }
+    }
+}
+
+pub contract CollisionContract {
+    recv Collision {
+        Burn { amount } -> u256 { amount }
+    }
+}
+
+pub contract ForwardedContract {
+    recv Forwarded {
+        Delta { amount } -> u64 { amount }
+    }
+}
+
+pub contract CastContract {
+    recv Cast {
+        Alpha { amount } -> u64 { amount }
+    }
+}

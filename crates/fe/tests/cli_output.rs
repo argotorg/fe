@@ -1574,6 +1574,170 @@ fn test_cli_build_emit_abi_follows_inherent_const_selector() {
     assert_eq!(function["inputs"][0]["type"], "uint256");
 }
 
+/// Builds the ABI of `contract` in an emit_abi fixture and returns the build
+/// output with the `name` of every function entry, in ABI order. The ABI
+/// artifact is absent, and the list empty, when no arm has a known signature.
+fn emit_abi_function_names(fixture: &str, contract: &str) -> (String, Vec<String>) {
+    let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/emit_abi")
+        .join(fixture);
+    let fixture_path_str = fixture_path.to_str().expect("fixture path utf8");
+
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let out_dir_str = out_dir.to_string_lossy().to_string();
+
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--emit",
+        "abi",
+        "--contract",
+        contract,
+        "--out-dir",
+        out_dir_str.as_str(),
+        fixture_path_str,
+    ]);
+    assert_eq!(exit_code, 0, "fe build of {contract} failed:\n{output}");
+
+    let abi_path = out_dir.join(format!("{contract}.abi.json"));
+    if !abi_path.exists() {
+        return (output, Vec::new());
+    }
+    let abi: Value = serde_json::from_str(&fs::read_to_string(&abi_path).expect("read ABI"))
+        .expect("parse ABI JSON");
+    let names = abi
+        .as_array()
+        .expect("abi array")
+        .iter()
+        .filter(|entry| entry["type"] == "function")
+        .map(|entry| entry["name"].as_str().expect("function name").to_string())
+        .collect();
+    (output, names)
+}
+
+#[test]
+fn test_cli_build_emit_abi_follows_selector_through_trait_default_and_generic_fn() {
+    // Each contract takes its selectors from the selected implementations
+    // through a different route. All three give the signature of the
+    // implementation that the evaluation selected.
+    for contract in ["DirectContract", "DefaultContract", "GenericContract"] {
+        let (output, names) = emit_abi_function_names("abi_selector_routes.fe", contract);
+        assert_eq!(
+            names,
+            ["alpha", "beta"],
+            "{contract} ABI function names:\n{output}"
+        );
+        assert!(
+            !output.contains("selector signature is unknown"),
+            "{contract} should have no unknown-signature warning:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_emit_abi_selector_from_const_fn_argument() {
+    let (output, names) = emit_abi_function_names("abi_selector_const_fn_argument.fe", "C");
+
+    // The `sol` call is an argument of a const fn: its text is the signature.
+    assert_eq!(names, ["delta"], "ABI function names:\n{output}");
+    // A hex literal and arithmetic on a hash have no signature: those arms are
+    // skipped with a warning and the build still succeeds.
+    for skipped in ["Raw", "Shifted"] {
+        assert!(
+            output.contains(&format!(
+                "skipping recv arm `{skipped}`: selector signature is unknown"
+            )),
+            "expected warning for `{skipped}`:\n{output}"
+        );
+    }
+    assert!(
+        !output.contains("skipping recv arm `Delta`"),
+        "`Delta` has a signature and must not be skipped:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_build_emit_abi_names_the_call_that_is_the_selector() {
+    let fixture = "abi_selector_provenance.fe";
+
+    // A `sol` call that is discarded, with the same number returned as a
+    // literal, leaves a raw selector: no ABI entry and a warning.
+    let (output, names) = emit_abi_function_names(fixture, "DiscardedContract");
+    assert!(names.is_empty(), "raw selector has no ABI entry:\n{output}");
+    assert!(
+        output.contains("skipping recv arm `Raw`: selector signature is unknown"),
+        "expected the unknown-signature warning:\n{output}"
+    );
+
+    // The name is the call whose result is the selector, not an earlier
+    // call that was evaluated and dropped, even when the two hash alike.
+    for (contract, expected) in [
+        ("DeadCallContract", "y"),
+        ("CollisionContract", "burn"),
+        ("ForwardedContract", "delta"),
+        ("CastContract", "alpha"),
+    ] {
+        let (output, names) = emit_abi_function_names(fixture, contract);
+        assert_eq!(
+            names,
+            [expected],
+            "{contract} ABI function names:\n{output}"
+        );
+        assert!(
+            !output.contains("skipping recv arm"),
+            "{contract} must not skip its arm:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_build_emit_abi_selector_edges() {
+    let fixture = "abi_selector_edges.fe";
+    let unknown = |arm: &str| format!("skipping recv arm `{arm}`: selector signature is unknown");
+
+    // Names are kept through a const item read from another const.
+    let (output, names) = emit_abi_function_names(fixture, "ConstReadContract");
+    assert_eq!(names, ["alpha"], "ConstRead ABI function names:\n{output}");
+    assert!(!output.contains("skipping recv arm"), "{output}");
+
+    // A `[u8; N]` argument gives the same name as a literal or as elements.
+    for contract in ["ByteArrayLiteralContract", "ByteArrayElementsContract"] {
+        let (output, names) = emit_abi_function_names(fixture, contract);
+        assert_eq!(names, ["bytes"], "{contract} ABI function names:\n{output}");
+        assert!(!output.contains("skipping recv arm"), "{output}");
+    }
+
+    // The signature follows a struct field and a branch: each variant is named
+    // by the field that its selector call read.
+    let (output, mut names) = emit_abi_function_names(fixture, "FieldFlowContract");
+    names.sort();
+    assert_eq!(names, ["first", "second"], "FieldFlow ABI names:\n{output}");
+    assert!(!output.contains("skipping recv arm"), "{output}");
+
+    // A cast, a newtype cast and a constant tuple each lose the signature: the
+    // arm is skipped with a warning and the build still succeeds. The
+    // zero-field variants have no arity error. The same holds for a cast whose
+    // enum payload is read back, a cast of four nested array repeats, a
+    // reassigned local and arithmetic that does not change the number.
+    for (contract, arm) in [
+        ("NewtypeCastContract", "Raw"),
+        ("EnumPayloadCastContract", "Raw"),
+        ("NestedCastContract", "Raw"),
+        ("ReassignedContract", "Raw"),
+        ("OrZeroContract", "Raw"),
+        ("ScalarCastContract", "Alpha"),
+        ("ThroughTupleContract", "Saved"),
+    ] {
+        let (output, names) = emit_abi_function_names(fixture, contract);
+        assert!(names.is_empty(), "{contract} has no ABI entry:\n{output}");
+        assert!(
+            output.contains(&unknown(arm)),
+            "{contract} expected the unknown-signature warning:\n{output}"
+        );
+        assert!(!output.contains("9-0007"), "{contract}:\n{output}");
+    }
+}
+
 #[test]
 fn test_cli_build_emit_abi_follows_the_called_mode() {
     let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

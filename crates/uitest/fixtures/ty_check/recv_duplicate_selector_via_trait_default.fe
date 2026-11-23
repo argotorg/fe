@@ -1,0 +1,38 @@
+// Selector conflicts across recv blocks are checked on the selector value
+// whether it was reached directly, through a trait default or through a
+// generic const fn.
+
+trait Wire {
+    const NAME: u32
+    const VIA_DEFAULT: u32 = Self::NAME
+}
+
+struct Alpha {}
+impl Wire for Alpha {
+    const NAME: u32 = std::abi::sol("alpha(uint64)")
+}
+
+const fn pick<T: Wire>() -> u32 {
+    T::NAME
+}
+
+msg First {
+    #[selector = <Alpha as Wire>::VIA_DEFAULT]
+    A { amount: u64 } -> u64,
+}
+
+msg Second {
+    #[selector = pick<Alpha>()]
+    B { amount: u64 } -> u64,
+}
+
+pub contract Clash {
+    recv First {
+        A { amount } -> u64 uses () { amount }
+    }
+
+    // Error: `B` has the same selector as `A`
+    recv Second {
+        B { amount } -> u64 uses () { amount }
+    }
+}

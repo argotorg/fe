@@ -1,0 +1,27 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/msg_duplicate_selector_via_trait_default.fe
+---
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_duplicate_selector_via_trait_default.fe:23:5
+   │
+19 │     #[selector = std::abi::sol("alpha(uint64)")]
+   │     -------------------------------------------- `Direct` with selector 0x79513fd4 declared here
+   ·
+23 │     #[selector = <Alpha as Wire>::VIA_DEFAULT]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ViaDefault` has selector 0x79513fd4 which conflicts with `Direct`
+   │
+   = each variant in a msg block must have a unique selector
+
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_duplicate_selector_via_trait_default.fe:27:5
+   │
+19 │     #[selector = std::abi::sol("alpha(uint64)")]
+   │     -------------------------------------------- `Direct` with selector 0x79513fd4 declared here
+   ·
+27 │     #[selector = pick<Alpha>()]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `ViaGeneric` has selector 0x79513fd4 which conflicts with `Direct`
+   │
+   = each variant in a msg block must have a unique selector

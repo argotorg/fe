@@ -1,0 +1,87 @@
+// A selector keeps its signature through a const item and a const that reads
+// it. A cast, even one that only wraps and unwraps a newtype, builds a new
+// value: the selector is raw and is not checked against the fields.
+
+struct Wrapped {
+    v: u32,
+}
+
+const X: u32 = std::abi::sol("alpha(uint64)")
+const Y: u32 = X
+
+// OK: `Y` is `alpha(uint64)`, one argument for one field.
+msg ConstRead {
+    #[selector = Y]
+    Alpha { amount: u64 } -> u64,
+}
+
+// Error 9-0007: `X` is `alpha(uint64)`, one argument for two fields.
+msg ConstArity {
+    #[selector = X]
+    Alpha { amount: u64, extra: u64 } -> u64,
+}
+
+// OK: a raw selector, no signature to check.
+msg NewtypeCast {
+    #[selector = (std::abi::sol("alpha(uint64)") as Wrapped) as u32]
+    Raw {} -> u64,
+}
+
+// OK: a raw selector, no signature to check against the `u64` field.
+msg ScalarCast {
+    #[selector = std::abi::sol("alpha(uint64,bool)") as u32]
+    Alpha { amount: u64 } -> u64,
+}
+
+// OK: a reassigned local holds the literal, not the hash.
+const fn reassigned() -> u32 {
+    var x = std::abi::sol("alpha(uint64)")
+    x = 0x79513fd4
+    x
+}
+
+msg Reassigned {
+    #[selector = reassigned()]
+    Raw {} -> u64,
+}
+
+// OK: arithmetic builds a new value, so there is no signature to check
+// against the zero fields.
+msg OrZero {
+    #[selector = std::abi::sol("alpha(uint64)") | 0]
+    Raw {} -> u64,
+}
+
+// OK: a cast clears the signature inside an enum payload, which is read back
+// after the cast.
+enum Choice {
+    Hash(u32),
+    Other,
+}
+
+struct Boxed {
+    c: Choice,
+}
+
+const fn payload_after_cast() -> u32 {
+    let boxed = Choice::Hash(std::abi::sol("alpha(uint64)")) as Boxed
+    match boxed.c {
+        Choice::Hash(h) => h,
+        Choice::Other => 0,
+    }
+}
+
+msg EnumPayloadCast {
+    #[selector = payload_after_cast()]
+    Raw {} -> u64,
+}
+
+// Error 9-0009: the stored text of a `String<20>` constant is the 13 bytes
+// padded with leading zero bytes to the declared width, and that text is the
+// signature.
+const PADDED: String<20> = "alpha(uint64)"
+
+msg Padded {
+    #[selector = std::abi::sol(PADDED)]
+    Alpha { amount: u64 } -> u64,
+}
