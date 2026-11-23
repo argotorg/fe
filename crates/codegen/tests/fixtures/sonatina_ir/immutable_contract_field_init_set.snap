@@ -247,15 +247,16 @@ func inline(always) private %contract_init_abi_ImmutableContractFieldInitSet() {
         v26.i256 = extract_value v25 0.i256;
         v28.*i8 = evm_malloc 32.i256;
         v29.i256 = ptr_to_int v28 i256;
-        v30.objref<i256> = obj.alloc i256;
-        call %__ImmutableContractFieldInitSet_init v26 v30;
-        v32.i256 = obj.load v30;
-        (v33.i256, v34.i1) = umulo 0.i256 32.i256;
-        br v34 block6 block8;
+        memzero v29 32.i256;
+        v31.objref<i256> = obj.alloc i256;
+        call %__ImmutableContractFieldInitSet_init v26 v31;
+        v33.i256 = obj.load v31;
+        (v34.i256, v35.i1) = umulo 0.i256 32.i256;
+        br v35 block6 block8;
 
     block8:
-        v36.i256 = add v29 v33;
-        mstore v36 v32 i256;
+        v37.i256 = add v29 v34;
+        mstore v37 v33 i256;
         mstore 0.i256 v29 i256;
         return;
 }
