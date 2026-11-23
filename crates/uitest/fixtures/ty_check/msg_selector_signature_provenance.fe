@@ -1,0 +1,53 @@
+// The signature checked for a variant is the text of the `std::abi::sol` call
+// whose result IS the selector. Arithmetic, a literal that only equals a hash,
+// and a discarded call give a raw selector, which is not checked.
+
+use std::abi::sol as h
+
+const fn discards_then_literal() -> u32 {
+    let _ = std::abi::sol("alpha(uint64)")
+    0x79513fd4
+}
+
+const S: String<18> = "alpha(uint64,bool)"
+
+fn runtime() -> u32 {
+    1
+}
+
+// OK: a raw selector stays valid for a variant with no fields. The discarded
+// `alpha(uint64)` call must not make this an arity error.
+msg DiscardedThenLiteral {
+    #[selector = discards_then_literal()]
+    Raw {} -> u64,
+}
+
+// `burn(uint256)` and `collate_propagate_storage(bytes16)` hash to the same
+// selector. Error 9-0004: the two variants are duplicates. Error 9-0006: the
+// field of `Collate` is not a `bytes16`.
+msg Collision {
+    #[selector = std::abi::sol("burn(uint256)")]
+    Burn { amount: u256 } -> u256,
+    #[selector = std::abi::sol("collate_propagate_storage(bytes16)")]
+    Collate { amount: u256 } -> u256,
+}
+
+// Error 9-0009: the alias resolves to `std::abi::sol`, whose text has a space.
+msg Aliased {
+    #[selector = h("a b(uint64)")]
+    Spaced { amount: u64 } -> u64,
+}
+
+// Error 9-0007: the argument is a const, not a literal. Its text is
+// `alpha(uint64,bool)`, which has two arguments for one field.
+msg FromConst {
+    #[selector = std::abi::sol(S)]
+    TwoArgs { amount: u64 } -> u64,
+}
+
+// Error: `runtime` is not a const fn. Only that error is reported; no
+// signature error follows, because there is no value to attribute.
+msg Failing {
+    #[selector = runtime()]
+    Runtime { amount: u64 } -> u64,
+}

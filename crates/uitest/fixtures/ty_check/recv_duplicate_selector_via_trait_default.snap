@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/recv_duplicate_selector_via_trait_default.fe
+---
+error[8-0047]: duplicate selector across recv blocks
+   ┌─ recv_duplicate_selector_via_trait_default.fe:26:5
+   │
+21 │     A { amount: u64 } -> u64,
+   │     - `A` with selector 0x79513fd4 declared here
+   ·
+26 │     B { amount: u64 } -> u64,
+   │     ^ `B` has selector 0x79513fd4 which conflicts with `A`
+   │
+   = each msg variant in a contract must have a unique selector

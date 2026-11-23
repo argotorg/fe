@@ -1,0 +1,47 @@
+// A selector reached through a trait default (`const VIA_DEFAULT: u32 =
+// Self::NAME`) is checked like a direct `sol("...")` selector: the signature
+// is read from the evaluation that fixes the selector, so a malformed
+// signature or an argument list that does not match the fields is an error.
+
+trait Wire {
+    const NAME: u32
+    const VIA_DEFAULT: u32 = Self::NAME
+}
+
+struct Malformed {}
+impl Wire for Malformed {
+    const NAME: u32 = std::abi::sol("alpha(uint64, bool)")
+}
+
+struct Arity {}
+impl Wire for Arity {
+    const NAME: u32 = std::abi::sol("beta(uint64,bool)")
+}
+
+struct Mismatch {}
+impl Wire for Mismatch {
+    const NAME: u32 = std::abi::sol("gamma(uint256)")
+}
+
+struct Matching {}
+impl Wire for Matching {
+    const NAME: u32 = std::abi::sol("delta(uint64)")
+}
+
+msg ViaDefault {
+    // Error: whitespace changes the keccak-derived selector
+    #[selector = <Malformed as Wire>::VIA_DEFAULT]
+    Spaced { amount: u64 } -> u64,
+
+    // Error: two arguments declared, one field
+    #[selector = <Arity as Wire>::VIA_DEFAULT]
+    TooFew { amount: u64 } -> u64,
+
+    // Error: `uint256` declared, field is `u64`
+    #[selector = <Mismatch as Wire>::VIA_DEFAULT]
+    Wide { amount: u64 } -> u64,
+
+    // OK
+    #[selector = <Matching as Wire>::VIA_DEFAULT]
+    Fine { amount: u64 } -> u64,
+}

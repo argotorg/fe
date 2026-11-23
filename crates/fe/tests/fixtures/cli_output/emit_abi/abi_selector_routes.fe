@@ -1,0 +1,67 @@
+// Two implementations of one selector trait. Each msg variant takes its
+// selector from a different selection, through three routes: the selected
+// implementation's own constant, the trait default that forwards to
+// `Self::NAME`, and a generic const fn instantiated at each implementation.
+// The ABI entry of each variant must carry the signature whose hash is the
+// numeric selector.
+
+trait Wire {
+    const NAME: u32
+    const VIA_DEFAULT: u32 = Self::NAME
+}
+
+struct Alpha {}
+impl Wire for Alpha {
+    const NAME: u32 = std::abi::sol("alpha(uint64)")
+}
+
+struct Beta {}
+impl Wire for Beta {
+    const NAME: u32 = std::abi::sol("beta(uint64)")
+}
+
+const fn pick<T: Wire>() -> u32 {
+    T::NAME
+}
+
+msg Direct {
+    #[selector = <Alpha as Wire>::NAME]
+    DirectAlpha { amount: u64 } -> u64,
+    #[selector = <Beta as Wire>::NAME]
+    DirectBeta { amount: u64 } -> u64,
+}
+
+msg ViaDefault {
+    #[selector = <Alpha as Wire>::VIA_DEFAULT]
+    DefaultAlpha { amount: u64 } -> u64,
+    #[selector = <Beta as Wire>::VIA_DEFAULT]
+    DefaultBeta { amount: u64 } -> u64,
+}
+
+msg ViaGeneric {
+    #[selector = pick<Alpha>()]
+    GenericAlpha { amount: u64 } -> u64,
+    #[selector = pick<Beta>()]
+    GenericBeta { amount: u64 } -> u64,
+}
+
+pub contract DirectContract {
+    recv Direct {
+        DirectAlpha { amount } -> u64 { amount + 1 }
+        DirectBeta { amount } -> u64 { amount + 2 }
+    }
+}
+
+pub contract DefaultContract {
+    recv ViaDefault {
+        DefaultAlpha { amount } -> u64 { amount + 3 }
+        DefaultBeta { amount } -> u64 { amount + 4 }
+    }
+}
+
+pub contract GenericContract {
+    recv ViaGeneric {
+        GenericAlpha { amount } -> u64 { amount + 5 }
+        GenericBeta { amount } -> u64 { amount + 6 }
+    }
+}

@@ -1,0 +1,43 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/msg_selector_signature_provenance.fe
+---
+error[9-0004]: duplicate selector in msg block
+   ┌─ msg_selector_signature_provenance.fe:31:5
+   │
+29 │     #[selector = std::abi::sol("burn(uint256)")]
+   │     -------------------------------------------- `Burn` with selector 0x42966c68 declared here
+30 │     Burn { amount: u256 } -> u256,
+31 │     #[selector = std::abi::sol("collate_propagate_storage(bytes16)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Collate` has selector 0x42966c68 which conflicts with `Burn`
+   │
+   = each variant in a msg block must have a unique selector
+
+error[9-0006]: selector declares `bytes16` but field `amount` has ABI type `uint256`
+   ┌─ msg_selector_signature_provenance.fe:32:15
+   │
+32 │     Collate { amount: u256 } -> u256,
+   │               ^^^^^^^^^^^^ expected a `bytes16`-typed value
+   │
+   = `std::abi::Bytes16` decodes and encodes Solidity `bytes16`
+
+error[9-0007]: selector signature declares 2 argument(s) but msg variant `TwoArgs` has 1 field(s)
+   ┌─ msg_selector_signature_provenance.fe:44:5
+   │
+44 │     #[selector = std::abi::sol(S)]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector signature arity does not match the variant's fields
+
+error[9-0009]: malformed selector signature `a b(uint64)` for msg variant `Spaced`
+   ┌─ msg_selector_signature_provenance.fe:37:5
+   │
+37 │     #[selector = h("a b(uint64)")]
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ selector function name must be a single identifier
+   │
+   = expected a canonical Solidity signature such as `transfer(address,uint256)`
+
+error[8-0064]: const value must be resolvable during type checking
+   ┌─ msg_selector_signature_provenance.fe:51:18
+   │
+51 │     #[selector = runtime()]
+   │                  ^^^^^^^^^ requires fully-resolved const value

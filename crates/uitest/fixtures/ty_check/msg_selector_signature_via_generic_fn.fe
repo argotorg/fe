@@ -1,0 +1,41 @@
+// A selector reached through a generic const fn (`pick<T: Wire>() ->
+// T::NAME`) is checked like a direct `sol("...")` selector: the signature is
+// read from the evaluation that fixes the selector, with the substitution the
+// evaluator uses.
+
+trait Wire {
+    const NAME: u32
+}
+
+struct Malformed {}
+impl Wire for Malformed {
+    const NAME: u32 = std::abi::sol("alpha(uint64, bool)")
+}
+
+struct Mismatch {}
+impl Wire for Mismatch {
+    const NAME: u32 = std::abi::sol("alpha(uint256)")
+}
+
+struct Matching {}
+impl Wire for Matching {
+    const NAME: u32 = std::abi::sol("delta(uint64)")
+}
+
+const fn pick<T: Wire>() -> u32 {
+    T::NAME
+}
+
+msg ViaGeneric {
+    // Error: whitespace changes the keccak-derived selector
+    #[selector = pick<Malformed>()]
+    Spaced { amount: u64 } -> u64,
+
+    // Error: `uint256` declared, field is `u64`
+    #[selector = pick<Mismatch>()]
+    Wide { amount: u64 } -> u64,
+
+    // OK
+    #[selector = pick<Matching>()]
+    Fine { amount: u64 } -> u64,
+}

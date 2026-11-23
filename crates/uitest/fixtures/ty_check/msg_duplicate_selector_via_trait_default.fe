@@ -1,0 +1,29 @@
+// Selectors that reach the same number through a trait default, a generic
+// const fn and a direct `sol("...")` are duplicates.
+
+trait Wire {
+    const NAME: u32
+    const VIA_DEFAULT: u32 = Self::NAME
+}
+
+struct Alpha {}
+impl Wire for Alpha {
+    const NAME: u32 = std::abi::sol("alpha(uint64)")
+}
+
+const fn pick<T: Wire>() -> u32 {
+    T::NAME
+}
+
+msg Dup {
+    #[selector = std::abi::sol("alpha(uint64)")]
+    Direct { amount: u64 } -> u64,
+
+    // Error: same selector as `Direct`
+    #[selector = <Alpha as Wire>::VIA_DEFAULT]
+    ViaDefault { amount: u64 } -> u64,
+
+    // Error: same selector as `Direct`
+    #[selector = pick<Alpha>()]
+    ViaGeneric { amount: u64 } -> u64,
+}

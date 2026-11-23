@@ -27,7 +27,7 @@ pub mod symbol;
 use crate::analysis::HirAnalysisDb;
 use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
-use crate::analysis::ty::corelib::{resolve_core_trait, resolve_lib_func_path};
+use crate::analysis::ty::corelib::resolve_core_trait;
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
 use crate::analysis::ty::fold::TyFoldable;
@@ -2845,16 +2845,13 @@ pub(crate) fn get_variant_selector_info<'db>(
     variant_ty: TyId<'db>,
     scope: ScopeId<'db>,
 ) -> VariantSelectorInfo {
-    use crate::analysis::semantic::{
-        EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
-    };
+    use crate::analysis::semantic::{EvalOutcome, GenericSubst, eval_selector_with_signature};
     use crate::analysis::ty::{
         canonical::Canonical,
         corelib::resolve_core_trait,
         trait_def::impls_for_ty,
         ty_def::{PrimTy, TyBase, TyData},
     };
-    use num_traits::ToPrimitive;
 
     let Some(msg_variant_trait) = resolve_core_trait(db, scope, &["message", "MsgVariant"]) else {
         return VariantSelectorInfo {
@@ -2909,223 +2906,53 @@ pub(crate) fn get_variant_selector_info<'db>(
             signature: None,
         };
     }
-    let signature = selector_signature_from_body(db, body, hir_impl.scope());
     let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
-    let value = match eval_body_owner_const(
+    let evaluation = eval_selector_with_signature(
         db,
         crate::analysis::ty::ty_check::BodyOwner::AnonConstBody {
             body,
             expected: expected_ty,
         },
         GenericSubst::none(db),
-    ) {
-        EvalOutcome::Ready(value) => match value.value(db) {
-            SemConstValue::Scalar {
-                value: SemConstScalar::Int { value },
-                ..
-            } => value.to_u32(),
-            _ => None,
-        },
+    );
+    let value = match &evaluation.outcome {
+        EvalOutcome::Ready(value) => sem_const_u32(db, *value),
         EvalOutcome::Blocked(_) | EvalOutcome::Failed(_) => None,
     };
+    // The signature is the text of the `std::abi::sol` call whose result is the
+    // selector value itself. A number that only equals a hash (a hex literal,
+    // arithmetic on a hash, a discarded call next to a literal) has none. As a
+    // guard against a wrong attribution, a text that does not hash to the
+    // selector is dropped.
+    let signature = value.and(evaluation.signature).filter(|text| {
+        use tiny_keccak::{Hasher, Keccak};
+        let mut hasher = Keccak::v256();
+        hasher.update(text.as_bytes());
+        let mut digest = [0u8; 32];
+        hasher.finalize(&mut digest);
+        value
+            == Some(u32::from_be_bytes([
+                digest[0], digest[1], digest[2], digest[3],
+            ]))
+    });
 
     VariantSelectorInfo { value, signature }
 }
 
-fn selector_signature_from_body<'db>(
+fn sem_const_u32<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    scope: ScopeId<'db>,
-) -> Option<String> {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase, TyData};
+    value: crate::analysis::semantic::SemConstId<'db>,
+) -> Option<u32> {
+    use crate::analysis::semantic::{SemConstScalar, SemConstValue};
+    use num_traits::ToPrimitive;
 
-    let expected_ty = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::U32)));
-    let (_, typed_body) =
-        crate::analysis::ty::ty_check::check_anon_const_body(db, body, expected_ty);
-    let mut visited = SelectorSearchVisited::new();
-
-    selector_signature_from_typed_body(db, body, scope, typed_body, &mut visited)
-}
-
-/// Tracks already-visited items to prevent cycles when following const/fn references.
-struct SelectorSearchVisited<'db> {
-    consts: FxHashSet<Const<'db>>,
-    inherent_consts: FxHashSet<Body<'db>>,
-    funcs: FxHashSet<Func<'db>>,
-    locals: FxHashSet<PatId>,
-}
-
-impl<'db> SelectorSearchVisited<'db> {
-    fn new() -> Self {
-        Self {
-            consts: FxHashSet::default(),
-            inherent_consts: FxHashSet::default(),
-            funcs: FxHashSet::default(),
-            locals: FxHashSet::default(),
-        }
+    match value.value(db) {
+        SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } => value.to_u32(),
+        _ => None,
     }
-}
-
-fn selector_signature_from_typed_body<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    scope: ScopeId<'db>,
-    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
-    visited: &mut SelectorSearchVisited<'db>,
-) -> Option<String> {
-    let expr_id = body.expr(db);
-    selector_signature_from_expr(db, body, scope, typed_body, visited, expr_id)
-}
-
-fn selector_signature_from_expr<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    scope: ScopeId<'db>,
-    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
-    visited: &mut SelectorSearchVisited<'db>,
-    expr_id: ExprId,
-) -> Option<String> {
-    match expr_id.data(db, body) {
-        Partial::Present(Expr::Call(_callee, args)) => {
-            if args.len() == 1
-                && args[0].label.is_none()
-                && let Partial::Present(Expr::Lit(LitKind::String(signature))) =
-                    args[0].expr.data(db, body)
-            {
-                let resolved_sol = resolve_lib_func_path(db, scope, "std::abi::sol")?;
-                if let crate::hir_def::CallableDef::Func(func) =
-                    typed_body.callable_expr(expr_id)?.callable_def
-                    && func == resolved_sol
-                {
-                    return Some(signature.data(db).to_string());
-                }
-            }
-
-            // Follow const fn calls
-            if let Some(callable) = typed_body.callable_expr(expr_id)
-                && let crate::hir_def::CallableDef::Func(func) = callable.callable_def
-                && func.is_const(db)
-                && visited.funcs.insert(func)
-            {
-                let (_, func_typed_body) = crate::analysis::ty::ty_check::check_func_body(db, func);
-                if let Some(func_body) = func_typed_body.body() {
-                    return selector_signature_from_typed_body(
-                        db,
-                        func_body,
-                        func.scope(),
-                        func_typed_body,
-                        visited,
-                    );
-                }
-            }
-        }
-        Partial::Present(Expr::Block(stmts, _)) => {
-            if let Some(last_stmt) = stmts.last()
-                && let Partial::Present(Stmt::Expr(inner_expr)) = last_stmt.data(db, body)
-            {
-                return selector_signature_from_expr(
-                    db,
-                    body,
-                    scope,
-                    typed_body,
-                    visited,
-                    *inner_expr,
-                );
-            }
-        }
-        _ => {}
-    }
-
-    if let Some(signature) =
-        selector_signature_from_local_binding(db, body, scope, typed_body, visited, expr_id)
-    {
-        return Some(signature);
-    }
-
-    match typed_body.expr_const_ref(expr_id)? {
-        crate::analysis::ty::ty_check::ConstRef::Const(const_) => {
-            if !visited.consts.insert(const_) {
-                return None;
-            }
-            let (_, const_typed_body) = crate::analysis::ty::ty_check::check_const_body(db, const_);
-            let const_body = const_typed_body.body()?;
-            selector_signature_from_typed_body(
-                db,
-                const_body,
-                const_.scope(),
-                const_typed_body,
-                visited,
-            )
-        }
-        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
-            // Follow the inherent const's value body so a selector that
-            // delegates to `Selectors::TRANSFER` resolves the underlying
-            // `sol("...")` signature, mirroring the top-level `Const` branch.
-            let (const_body, _) = crate::analysis::ty::const_ty::inherent_const_body_and_impl_args(
-                db,
-                use_.impl_(),
-                use_.receiver_ty(),
-                use_.name(),
-            )?;
-            if !visited.inherent_consts.insert(const_body) {
-                return None;
-            }
-            let expected = crate::analysis::ty::const_ty::inherent_const_expected_ty(
-                db,
-                use_.impl_(),
-                use_.receiver_ty(),
-                use_.name(),
-            )?;
-            let (_, const_typed_body) =
-                crate::analysis::ty::ty_check::check_anon_const_body(db, const_body, expected);
-            selector_signature_from_typed_body(
-                db,
-                const_body,
-                use_.impl_().scope(),
-                const_typed_body,
-                visited,
-            )
-        }
-        crate::analysis::ty::ty_check::ConstRef::TraitConst { .. } => None,
-    }
-}
-
-fn selector_signature_from_local_binding<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    scope: ScopeId<'db>,
-    typed_body: &crate::analysis::ty::ty_check::TypedBody<'db>,
-    visited: &mut SelectorSearchVisited<'db>,
-    expr_id: ExprId,
-) -> Option<String> {
-    let crate::analysis::ty::ty_check::LocalBinding::Local { pat, .. } =
-        typed_body.expr_binding(expr_id)?
-    else {
-        return None;
-    };
-
-    if !visited.locals.insert(pat) {
-        return None;
-    }
-
-    let init_expr = selector_local_binding_init_expr(db, body, pat)?;
-    selector_signature_from_expr(db, body, scope, typed_body, visited, init_expr)
-}
-
-fn selector_local_binding_init_expr<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    pat: PatId,
-) -> Option<ExprId> {
-    for (_, stmt) in body.stmts(db).iter() {
-        if let Partial::Present(Stmt::Let(stmt_pat, _, Some(init_expr), _)) = stmt
-            && *stmt_pat == pat
-        {
-            return Some(*init_expr);
-        }
-    }
-
-    None
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
