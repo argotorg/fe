@@ -1,0 +1,21 @@
+// `Foo<T>: Size` needs `T: Wrap<Foo<T>>`, which needs `Foo<T>: Size` again
+// and `T: Gate<Foo<T>::N>`. Selecting the impl through itself does not prove
+// it, so `Foo<T>::N` has no value and the bound is not satisfied.
+trait Other {}
+trait Gate<const N: usize> {}
+trait Size {
+    const N: usize
+    fn values(self) -> [u8; Self::N]
+}
+trait Wrap<S: Size> {}
+impl<T, S: Size> Wrap<S> for T where T: Gate<S::N> {}
+
+struct Foo<T> {}
+impl<T: Other + Wrap<Foo<T>>> Size for Foo<T> {
+    const N: usize = 1
+    fn values(self) -> [u8; 1] { [0] }
+}
+
+fn f<T: Other + Gate<1>>(_ x: Foo<T>) -> [u8; 1] {
+    x.values()
+}

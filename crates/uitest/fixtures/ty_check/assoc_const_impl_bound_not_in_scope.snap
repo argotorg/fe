@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_impl_bound_not_in_scope.fe
+---
+error[8-0000]: type mismatch
+   ┌─ assoc_const_impl_bound_not_in_scope.fe:19:27
+   │
+19 │     let values: [u8; 2] = l.values()
+   │                           ^^^^^^^^^^ expected `[u8; 2]`, but `[u8; Loose<P>::COUNT]` is given

@@ -1,0 +1,21 @@
+// An associated constant from a signature selects its impl only where the
+// impl's own bound holds. Here `P: Preset` is not in scope, so
+// `Loose<P>::COUNT` stays symbolic and is not `2`.
+trait Preset {}
+
+trait Fields {
+    const COUNT: usize
+    fn values(self) -> [u8; Self::COUNT]
+}
+
+struct Loose<P> { tag: u8 }
+
+impl<P: Preset> Fields for Loose<P> {
+    const COUNT: usize = 2
+    fn values(self) -> [u8; 2] { [self.tag, 4] }
+}
+
+fn weak<P>(_ l: Loose<P>) -> u8 where Loose<P>: Fields {
+    let values: [u8; 2] = l.values()
+    values[0]
+}

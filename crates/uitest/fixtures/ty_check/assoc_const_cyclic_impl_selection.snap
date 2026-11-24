@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/assoc_const_cyclic_impl_selection.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ assoc_const_cyclic_impl_selection.fe:20:5
+   │
+20 │     x.values()
+   │     ^^^^^^^^^^
+   │     │
+   │     `Foo<T>` doesn't implement `Size`
+   │     trait bound `T: Wrap<Foo<T>>` is not satisfied
+
+error[8-0000]: type mismatch
+   ┌─ assoc_const_cyclic_impl_selection.fe:20:5
+   │
+20 │     x.values()
+   │     ^^^^^^^^^^ expected `[u8; 1]`, but `[u8; Foo<T>::N]` is given
