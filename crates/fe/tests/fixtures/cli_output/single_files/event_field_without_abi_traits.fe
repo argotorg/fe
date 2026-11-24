@@ -1,0 +1,7 @@
+// A data field of an `#[event]` without ABI traits is reported at the field.
+pub struct Plain { pub a: u256 }
+
+#[event]
+pub struct BadEvent {
+    pub p: Plain,
+}

@@ -7,6 +7,7 @@ use crate::analysis::{
         abi_ty::{is_composite_event_ty, is_dynamic_event_ty},
         adt_def::AdtRef,
         corelib::{resolve_core_trait, resolve_lib_trait_path, resolve_lib_type_path},
+        missing_event_field_traits,
         trait_def::TraitInstId,
         trait_resolution::{GoalSatisfiability, TraitSolveCx, is_goal_satisfiable},
         ty_lower::lower_hir_ty,
@@ -312,10 +313,22 @@ fn semantic_field_type_errors<'db>(
             }
 
             let resolved_ty = lower_hir_ty(db, hir_ty, scope, assumptions);
-            // Only a type with an ABI encoding lacks just its Solidity name;
-            // the generated code reports types that cannot be encoded.
+            // A data field of an event needs the traits the event provider's
+            // output uses; without them the provider would fail inside std.
+            let missing_codec = if context == AbiFieldContext::Event && !field.is_event_indexed {
+                missing_event_field_traits(db, scope, assumptions, resolved_ty)
+            } else {
+                Vec::new()
+            };
+            // Otherwise the type needs a Solidity name only. The generated code of
+            // an error reports types that cannot be encoded.
             let kind = if resolved_ty.is_tuple(db) {
                 AbiFieldDiagnosticKind::Unsupported
+            } else if !missing_codec.is_empty() {
+                AbiFieldDiagnosticKind::MissingCodec {
+                    abi_size: missing_codec.contains(&"AbiSize"),
+                    encode: missing_codec.contains(&"Encode<Sol>"),
+                }
             } else if !resolved_ty.has_invalid(db)
                 && let (Some(sol_ty), Some(abi_size), Some(encode), Some(sol_compat)) = traits
                 && implements(abi_size, vec![resolved_ty])

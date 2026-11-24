@@ -13,6 +13,9 @@ pub enum AbiFieldDiagnosticKind {
     UnsupportedArray,
     /// A type without a Solidity type name for the signature.
     MissingSolCompat,
+    /// A data field of an event whose type lacks an ABI trait that the
+    /// event provider needs of it: `AbiSize`, `Encode<Sol>`, or both.
+    MissingCodec { abi_size: bool, encode: bool },
 }
 
 /// Diagnostics for unsupported field types in ABI-bearing structs.

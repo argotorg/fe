@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/event_field_without_abi_traits.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/event_field_without_abi_traits.fe
+
+error[10-0012]: unsupported ABI field type
+  ┌─ event_field_without_abi_traits.fe:6:12
+  │
+6 │     pub p: Plain,
+  │            ^^^^^ `Plain` does not implement `AbiSize`, `Encode<Sol>`
+  │
+  = the fields of an event must implement `AbiSize` and `Encode<Sol>`, as ABI types and `#[abi]` structs do
+
+
+=== EXIT CODE: 1 ===

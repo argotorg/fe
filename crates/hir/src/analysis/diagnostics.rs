@@ -856,6 +856,8 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
             ) => 4,
             (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Event) => 11,
             (AbiFieldDiagnosticKind::MissingSolCompat, AbiFieldContext::Error) => 7,
+            (AbiFieldDiagnosticKind::MissingCodec { .. }, AbiFieldContext::Event) => 12,
+            (AbiFieldDiagnosticKind::MissingCodec { .. }, AbiFieldContext::Error) => 8,
         };
         let ty = &self.ty;
         let (message, label, note) = match self.kind {
@@ -877,6 +879,19 @@ impl DiagnosticVoucher for crate::AbiFieldDiagnostic {
                     "the signature of {field_context} names the Solidity type of each field, which `std::abi::SolCompat` provides"
                 ),
             ),
+            AbiFieldDiagnosticKind::MissingCodec { abi_size, encode } => {
+                let missing = [(abi_size, "AbiSize"), (encode, "Encode<Sol>")]
+                    .into_iter()
+                    .filter_map(|(missing, name)| missing.then_some(name))
+                    .format("`, `");
+                (
+                    "unsupported ABI field type",
+                    format!("`{ty}` does not implement `{missing}`"),
+                    format!(
+                        "the fields of {field_context} must implement `AbiSize` and `Encode<Sol>`, as ABI types and `#[abi]` structs do"
+                    ),
+                )
+            }
         };
 
         CompleteDiagnostic::new(

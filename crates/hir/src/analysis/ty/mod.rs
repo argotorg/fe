@@ -7,11 +7,12 @@ use crate::analysis::ty::trait_resolution::{
 use crate::analysis::ty::ty_check::EffectParamOwner;
 use crate::core::adt_lower::lower_adt;
 use crate::core::hir_def::{
-    GenericParamOwner, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
+    GenericParamOwner, HirIngot, IdentId, ItemKind, PathId, TopLevelMod, Trait, TypeAlias,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use adt_def::{AdtDef, AdtRef};
 use common::compilation::Target;
+use common::ingot::Ingot;
 use diagnostics::{DefConflictError, TraitLowerDiag, TyLowerDiag};
 use fold::{TyFoldable, TyFolder};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -485,8 +486,52 @@ fn local_implementation_name_conflicts<'db>(
 
 pub struct BodyAnalysisPass {}
 
+/// The ABI traits of `ty` that an `#[event]` data field needs, which the
+/// event provider's output requires of it and `ty` does not implement:
+/// `AbiSize` and `Encode<Sol>`, from `push_record_field` and
+/// `abi_field_head_size` in `std/src/derive`.
+pub(crate) fn missing_event_field_traits<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    ty: TyId<'db>,
+) -> Vec<&'static str> {
+    if ty.has_invalid(db) {
+        return Vec::new();
+    }
+    let (Some(sol_ty), Some(abi_size), Some(encode)) = (
+        corelib::resolve_lib_type_path(db, scope, "std::abi::Sol"),
+        corelib::resolve_core_trait(db, scope, &["abi", "AbiSize"]),
+        corelib::resolve_core_trait(db, scope, &["abi", "Encode"]),
+    ) else {
+        return Vec::new();
+    };
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
+    [
+        ("AbiSize", abi_size, vec![ty]),
+        ("Encode<Sol>", encode, vec![ty, sol_ty]),
+    ]
+    .into_iter()
+    .filter(|(_, trait_, args)| {
+        matches!(
+            is_goal_satisfiable(
+                db,
+                solve_cx,
+                trait_def::TraitInstId::new_simple(db, *trait_, args.clone()),
+            ),
+            GoalSatisfiability::UnSat(_) | GoalSatisfiability::NeedsConfirmation { .. }
+        )
+    })
+    .map(|(name, ..)| name)
+    .collect()
+}
+
+/// The `#[event]` structs of the module with a field that the event
+/// provider's output cannot handle: an indexed field that has no topic form,
+/// or a data field without the ABI traits the provider needs. Each is
+/// reported at the field.
 #[salsa::tracked(returns(ref))]
-fn events_with_unsupported_indexed_fields<'db>(
+fn events_with_unsupported_fields<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
 ) -> FxHashSet<EventDesugared> {
@@ -511,12 +556,16 @@ fn events_with_unsupported_indexed_fields<'db>(
         };
         let assumptions = crate::semantic::constraints_for(db, event_struct.into());
         if event_struct.hir_fields(db).data(db).iter().any(|field| {
-            field.is_event_indexed
-                && field.type_ref().to_opt().is_some_and(|field_ty| {
-                    let field_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
+            field.type_ref().to_opt().is_some_and(|field_ty| {
+                let field_ty = lower_hir_ty(db, field_ty, event_struct.scope(), assumptions);
+                if field.is_event_indexed {
                     abi_ty::is_dynamic_event_ty(db, field_ty)
                         || abi_ty::is_composite_event_ty(db, field_ty)
-                })
+                } else {
+                    !missing_event_field_traits(db, event_struct.scope(), assumptions, field_ty)
+                        .is_empty()
+                }
+            })
         }) {
             events.insert(event_origin.clone());
         }
@@ -682,8 +731,25 @@ enum AbiFieldCheck {
 
 /// Origins of generated ABI code whose failures are reported at the source
 /// struct or msg variant instead: at its fields, or at its recursive type.
+/// This is the module's part of `abi_short_form_exclusions`.
 #[salsa::tracked(returns(ref))]
 fn generated_abi_reported_at_source<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    check: AbiFieldCheck,
+) -> FxHashSet<DesugaredOrigin> {
+    abi_short_form_exclusions(db, top_mod.ingot(db), check)
+        .iter()
+        .filter(|exclusion| exclusion.top_mod == top_mod)
+        .map(|exclusion| exclusion.origin.clone())
+        .collect()
+}
+
+/// The origins in `top_mod` that a short-form request must not run its
+/// provider for, before containment is considered: the structs, msg variants
+/// and events with a field reported at the source.
+#[salsa::tracked(returns(ref))]
+fn directly_reported_at_source<'db>(
     db: &'db dyn HirAnalysisDb,
     top_mod: TopLevelMod<'db>,
     check: AbiFieldCheck,
@@ -694,7 +760,7 @@ fn generated_abi_reported_at_source<'db>(
         };
         msg_selector::msg_variant_reported_at_source(db, struct_, check).then_some(origin)
     });
-    let invalid_events = events_with_unsupported_indexed_fields(db, top_mod)
+    let invalid_events = events_with_unsupported_fields(db, top_mod)
         .iter()
         .cloned()
         .map(DesugaredOrigin::Event);
@@ -705,6 +771,115 @@ fn generated_abi_reported_at_source<'db>(
         .cloned()
         .chain(invalid_events)
         .collect()
+}
+
+/// A short-form request that `abi_short_form_exclusions` excludes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
+struct ShortFormExclusion<'db> {
+    top_mod: TopLevelMod<'db>,
+    origin: DesugaredOrigin,
+}
+
+/// The short-form requests of an ingot (`#[abi]` structs, msg variants and
+/// events) whose provider must not run, each with its module: the ones with
+/// a field reported at the source, and the ones that contain such a request's
+/// target in a field type, however deeply. In the input view a declared
+/// header counts as an implementor, so the field check alone admits a struct
+/// whose field type is excluded; its provider's output would then fail
+/// inside `std/src/derive`, away from the user's code.
+#[salsa::tracked(returns(ref))]
+fn abi_short_form_exclusions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ingot: Ingot<'db>,
+    check: AbiFieldCheck,
+) -> Vec<ShortFormExclusion<'db>> {
+    let mut excluded: FxHashSet<(TopLevelMod<'db>, DesugaredOrigin)> = FxHashSet::default();
+    // The requests not yet excluded, with the structs their fields mention.
+    let mut pending = Vec::new();
+    for &top_mod in ingot.all_modules(db) {
+        excluded.extend(
+            directly_reported_at_source(db, top_mod, check)
+                .iter()
+                .map(|origin| (top_mod, origin.clone())),
+        );
+        for &struct_ in top_mod.all_structs(db) {
+            let HirOrigin::Desugared(
+                origin @ (DesugaredOrigin::AbiStruct(_)
+                | DesugaredOrigin::Msg(_)
+                | DesugaredOrigin::Event(_)),
+            ) = struct_.origin(db)
+            else {
+                continue;
+            };
+            if excluded.contains(&(top_mod, origin.clone())) {
+                continue;
+            }
+            let contained = structs_in_fields(db, struct_);
+            if !contained.is_empty() {
+                pending.push((top_mod, origin.clone(), contained));
+            }
+        }
+    }
+    loop {
+        let (hit, rest): (Vec<_>, Vec<_>) = pending.into_iter().partition(|(_, _, contained)| {
+            contained.iter().any(|inner| {
+                matches!(
+                    inner.origin(db),
+                    HirOrigin::Desugared(inner_origin)
+                        if excluded.contains(&(inner.top_mod(db), inner_origin.clone()))
+                )
+            })
+        });
+        if hit.is_empty() {
+            break;
+        }
+        excluded.extend(
+            hit.into_iter()
+                .map(|(top_mod, origin, _)| (top_mod, origin)),
+        );
+        pending = rest;
+    }
+    excluded
+        .into_iter()
+        .map(|(top_mod, origin)| ShortFormExclusion { top_mod, origin })
+        .collect()
+}
+
+/// The structs that the field types of `struct_` mention.
+fn structs_in_fields<'db>(
+    db: &'db dyn HirAnalysisDb,
+    struct_: crate::hir_def::Struct<'db>,
+) -> Vec<crate::hir_def::Struct<'db>> {
+    struct Collector<'db> {
+        db: &'db dyn HirAnalysisDb,
+        structs: Vec<crate::hir_def::Struct<'db>>,
+    }
+    impl<'db> visitor::TyVisitor<'db> for Collector<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_adt(&mut self, adt: AdtDef<'db>) {
+            if let AdtRef::Struct(inner) = adt.adt_ref(self.db)
+                && !self.structs.contains(&inner)
+            {
+                self.structs.push(inner);
+            }
+        }
+    }
+
+    let assumptions = crate::semantic::constraints_for(db, struct_.into());
+    let mut collector = Collector {
+        db,
+        structs: Vec::new(),
+    };
+    for field in struct_.hir_fields(db).data(db) {
+        if let Some(hir_ty) = field.type_ref().to_opt() {
+            let field_ty = lower_hir_ty(db, hir_ty, struct_.scope(), assumptions);
+            visitor::TyVisitable::visit_with(&field_ty, &mut collector);
+        }
+    }
+    collector.structs
 }
 
 /// The generated `SolCompat` impl of an `#[abi]` struct with a field that has
