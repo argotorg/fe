@@ -70,8 +70,14 @@ extern {
     pub const fn query_field<F: * -> *, R>(_ ty: FieldType) -> R
 }
 
+/// The kinds of code that a fold starts from: `empty<K>()` takes only these.
+pub trait Seed {}
+impl Seed for Item {}
+impl Seed for Arm {}
+impl Seed for Where {}
+
 extern {
     /// The empty fragment of kind `K`, the seed of a fold over items, arms or
     /// where predicates.
-    pub const fn empty<K>() -> Code<K>
+    pub const fn empty<K: Seed>() -> Code<K>
 }

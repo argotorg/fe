@@ -4272,3 +4272,23 @@ const fn run() -> u256 { S::f() }
         .unwrap();
     assert_generated_integer(&output, output_file, "run", "3");
 }
+
+#[test]
+fn empty_takes_only_the_kinds_that_seed_a_fold() {
+    for kind in ["Item", "Arm", "Where"] {
+        let source = format!(
+            "use core::meta::{{Arm, Code, Item, Where, empty}}\nconst fn seed() -> Code<{kind}> {{ empty<{kind}>() }}\n"
+        );
+        let (db, file) = input(&source);
+        let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+        assert!(diagnostics.is_empty(), "{kind}: {diagnostics}");
+    }
+    for kind in ["Expr", "Pat", "u256", "bool"] {
+        let source = format!(
+            "use core::meta::{{Code, Expr, Pat, empty}}\nconst fn seed() -> Code<{kind}> {{ empty<{kind}>() }}\n"
+        );
+        let (db, file) = input(&source);
+        let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+        assert!(diagnostics.contains("Seed"), "{kind}: {diagnostics}");
+    }
+}
