@@ -1397,9 +1397,10 @@ struct UninhabitedCx<'db> {
     visiting: FxHashSet<TyId<'db>>,
 }
 
-impl<'db> UninhabitedCx<'db> {
-    const MAX_DEPTH: usize = 128;
+/// How deep [`TyId::is_uninhabited`] searches a type's fields.
+pub(crate) const UNINHABITED_SEARCH_DEPTH: usize = 128;
 
+impl<'db> UninhabitedCx<'db> {
     fn new(
         db: &'db dyn HirAnalysisDb,
         scope: Option<ScopeId<'db>>,
@@ -1432,7 +1433,7 @@ impl<'db> UninhabitedCx<'db> {
         if let Some(&cached) = self.memo.get(&ty) {
             return (cached, false);
         }
-        if depth > Self::MAX_DEPTH || !self.visiting.insert(ty) {
+        if depth > UNINHABITED_SEARCH_DEPTH || !self.visiting.insert(ty) {
             return (false, true);
         }
         let db = self.db;

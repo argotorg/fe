@@ -24,7 +24,7 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         canonical::{Canonical, Solution},
-        clearable::clearable_implementor,
+        clearable::{clearable_implementor, clearable_needs_impl_projection},
         closure::{CallableValue, callable_implementor},
         fold::{TyFoldable, TyFolder},
         normalize::{normalize_from_assumptions, normalize_ty},
@@ -119,7 +119,7 @@ enum Mismatch {
 /// Whether `value` names a projection that an impl could resolve: one whose
 /// trait reference the header of some impl matches, or whose self type is a
 /// callable value. Any other projection resolves only through an assumption.
-fn names_resolvable_projection<'db>(
+pub(crate) fn names_resolvable_projection<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
     value: impl TyVisitable<'db>,
@@ -617,9 +617,10 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let assumption_clauses = (0..assumptions).map(Clause::Assumption);
         // Without impl normalization, only an assumption answers a goal that
         // names a projection an impl could resolve, as the goal is. Past
-        // that it is undecided: which impls apply depends on the projection.
+        // that it is undecided: which impls apply depends on the projection,
+        // as whether a type is clearable depends on one in its fields.
         if !self.resolve_impls
-            && (goal
+            && ((goal
                 .args(self.db)
                 .iter()
                 .any(|ty| ty.has_projection(self.db))
@@ -627,7 +628,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     .assoc_type_bindings(self.db)
                     .values()
                     .any(|ty| ty.has_projection(self.db)))
-            && names_resolvable_projection(self.db, self.origin_ingot, goal)
+                && names_resolvable_projection(self.db, self.origin_ingot, goal)
+                || clearable_needs_impl_projection(self.db, self.origin_ingot, goal))
         {
             self.undecided = true;
             return Ok(CallbackOutcome::Continue(assumption_clauses.collect()));
