@@ -4951,9 +4951,8 @@ fn test_cli_test_checks_moves_in_the_initializer_of_every_constant() {
         ),
         (
             "nested_module_constant",
-            format!(
-                "mod m {{\n    pub struct B {{ v: u256 }}\n    pub const fn take(_ b: own B) -> u256 {{ b.v }}\n    pub const D: u256 = {{ let b = B {{ v: 1 }}\n        let x = take(b)\n        let y = take(b)\n        x + y }}\n}}\n#[test]\nfn t() {{ assert!(m::D == 2) }}\n"
-            ),
+            "mod m {\n    pub struct B { v: u256 }\n    pub const fn take(_ b: own B) -> u256 { b.v }\n    pub const D: u256 = { let b = B { v: 1 }\n        let x = take(b)\n        let y = take(b)\n        x + y }\n}\n#[test]\nfn t() { assert!(m::D == 2) }\n"
+                .to_string(),
         ),
         (
             "trait_default_read",
