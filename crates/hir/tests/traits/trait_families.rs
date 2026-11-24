@@ -2,6 +2,7 @@ use common::indexmap::IndexMap;
 use fe_hir::{
     analysis::ty::{
         trait_def::TraitInstId,
+        trait_resolution::PredicateListId,
         ty_def::{Kind, TraitFamilyId, TyData, TyId},
     },
     hir_def::{ItemKind, ModeMarker},
@@ -261,4 +262,37 @@ fn constraint_kind_bound_needs_no_parentheses() {
         let (module, _) = db.top_mod(file);
         db.assert_no_diags(module);
     }
+}
+
+#[test]
+fn recursion_through_a_family_argument_ends_bound_elaboration() {
+    // The bound `Chain<Wrap<Self::Next>>` of `Next` names `Next` again at every
+    // step. The family case must end as the type-application case does.
+    let elaborated = |wrap: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "family_recursive_bound.fe".into(),
+            &format!(
+                "trait Rel<T> {{}}\nstruct Box<T> {{}}\nstruct Family<P: * -> Constraint> {{}}\ntrait Chain<X> {{ type Next: Chain<{wrap}> }}\n"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let chain = module
+            .all_traits(&db)
+            .iter()
+            .copied()
+            .find(|def| def.name(&db).to_opt().unwrap().data(&db) == "Chain")
+            .expect("test trait Chain");
+        let bool_ty = TyId::bool(&db);
+        let goal = TraitInstId::new_simple(&db, chain, vec![bool_ty, bool_ty]);
+        PredicateListId::new(&db, vec![goal])
+            .extend_all_bounds(&db)
+            .list(&db)
+            .len()
+    };
+    assert_eq!(
+        elaborated("Family<trait Rel<Self::Next>>"),
+        elaborated("Box<Self::Next>")
+    );
 }
