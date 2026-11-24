@@ -15,7 +15,7 @@ use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 
 use super::{
-    closure::settle_function_item_providers,
+    closure::{is_function_item_callable_goal, settle_function_item_providers},
     const_ty::const_body_assumptions,
     effects::rows::RowPath,
     fold::{TyFoldable, TyFolder},
@@ -531,6 +531,15 @@ pub enum Evidence<'db> {
     /// implementation has none. The proof names no goal: goals that differ
     /// only in their mode or associated-type equalities share it, and each
     /// use answers its own.
+    ///
+    /// The callable implementation of a function item (`ImplementorOrigin::Callable`)
+    /// has the proofs of the function's own bounds as conditions, except those
+    /// on the providers of its effects. Where the item is passed, a provider
+    /// that is still open is a placeholder (`()`) in the goal proved
+    /// (`settle_function_item_providers`): the proof does not depend on the
+    /// provider, and the call or the row that supplies it makes its own proof.
+    /// No condition may name a provider, and nothing may read the provider
+    /// positions of the proved goal's function item type as a type.
     Impl {
         selected: ImplementorId<'db>,
         instantiated: ImplementorId<'db>,
@@ -1246,7 +1255,13 @@ fn prove_outcome_in<'db>(
     goal: TraitInstId<'db>,
     dict: Option<PredicateListId<'db>>,
 ) -> ProofOutcome<'db> {
-    let goal = settle_function_item_providers(db, goal);
+    // Only the callable goal of a function item has hidden provider arguments
+    // that a call or a row supplies later.
+    let goal = if is_function_item_callable_goal(db, goal) {
+        settle_function_item_providers(db, goal)
+    } else {
+        goal
+    };
     // Inference variables belong to the checker's unification table. Header
     // matching uses its own table and must only receive settled proof inputs.
     // Unresolved calls retain their ordinary inference diagnostics; evidence

@@ -1,0 +1,45 @@
+// Other ways a function-item value is formed and passed.
+// Expected (proofs made where the item is passed to the
+// callable bound): let_then_pass 2, chosen_at_value 1 (not proposed:
+// fixing dictionaries where the value is written), two_bounds 2,
+// inferred 2, inherent 2, inherent_direct 2.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+
+fn helper<T: Pick>() -> u256 { T::pick() }
+fn helper_arg<T: Pick>(_ x: T) -> u256 { T::pick() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn run_arg<F: Fn(u256) -> u256>(_ f: F) -> u256 uses (F::E) { f(5) }
+fn outer<G: Fn() -> u256>(_ g: G) -> u256 uses (G::E) { run(g) }
+
+struct Wrapper<T> {}
+impl<T: Pick> Wrapper<T> {
+    fn get() -> u256 { T::pick() }
+}
+
+fn let_then_pass() -> u256 {
+    let f = helper<u256>
+    with (Alt) { run(f) }
+}
+fn chosen_at_value() -> u256 {
+    let f = with (Alt) { helper<u256> }
+    run(f)
+}
+fn two_bounds() -> u256 { with (Alt) { outer(helper<u256>) } }
+fn inferred() -> u256 { with (Alt) { run_arg(helper_arg) } }
+fn inherent() -> u256 { with (Alt) { run(Wrapper<u256>::get) } }
+fn inherent_direct() -> u256 { with (Alt) { Wrapper<u256>::get() } }
+
+#[test]
+fn t_let_then_pass() { assert(let_then_pass() == 2) }
+#[test]
+fn t_chosen_at_value() { assert(chosen_at_value() == 1) }
+#[test]
+fn t_two_bounds() { assert(two_bounds() == 2) }
+#[test]
+fn t_inferred() { assert(inferred() == 2) }
+#[test]
+fn t_inherent() { assert(inherent() == 2) }
+#[test]
+fn t_inherent_direct() { assert(inherent_direct() == 2) }

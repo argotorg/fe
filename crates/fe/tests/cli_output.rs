@@ -6216,6 +6216,35 @@ fn concrete_component_runtime() {
 }
 
 #[test]
+fn named_function_item_and_spliced_row_forms() {
+    // A function item passed to a callable bound runs with the proofs of its
+    // bounds made where it is passed, in the forms of a trait method, a
+    // method with its own bound, a function with an effect passed under
+    // several providers, and a relay through a generic body. A spliced row
+    // supplies its components in the forms of two components, a direct effect
+    // before the row, a supertrait of the key trait and two generic bodies.
+    for (fixture, passed) in [
+        ("named_function_item_trait_method.fe", 7),
+        ("named_function_item_forms.fe", 6),
+        ("named_function_item_providers.fe", 1),
+        ("named_function_item_method_bound.fe", 3),
+        ("named_function_item_relay_by_choice.fe", 3),
+        ("named_function_item_relay_named_only.fe", 3),
+        ("named_spliced_row_forms.fe", 7),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(
+            output.contains(&format!("test result: ok. {passed} passed; 0 failed")),
+            "{fixture}: {output}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
     // Two implementations of a foreign trait overlap through an implementation
     // of a foreign bound that the checking ingot declares, which the trait's

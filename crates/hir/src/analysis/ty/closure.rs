@@ -23,6 +23,7 @@ use super::{
     trait_resolution::PredicateListId,
     ty_check::{BodyOwner, EffectParamSite, func_declared_bounds, infer_body},
     ty_def::{ClosureDef, ClosureTy, TyBase, TyData, TyId},
+    visitor::mentions_effect_provider,
 };
 use crate::{
     analysis::HirAnalysisDb,
@@ -187,26 +188,70 @@ pub(crate) fn func_item_conditions<'db>(
     let Some(CallableValue::Func(func, args)) = CallableValue::of(db, self_ty) else {
         return PredicateListId::empty_list(db);
     };
+    let declared: Vec<_> = func_declared_bounds(db, func, None)
+        .list(db)
+        .iter()
+        .copied()
+        .filter(|&bound| !is_effect_provider_bound(db, bound))
+        .collect();
+    // The callable proof of a function item is made with a placeholder for
+    // each provider still open (`settle_function_item_providers`), which is
+    // sound only while no condition names a provider. Providers are made by
+    // trait-keyed effects alone, and the bounds on them are the ones removed
+    // above.
+    debug_assert!(
+        declared
+            .iter()
+            .all(|&bound| !mentions_effect_provider(db, bound)),
+        "a condition of the callable implementation of `{}` mentions an effect provider parameter: {:?}",
+        self_ty.pretty_print(db),
+        declared
+            .iter()
+            .filter(|&&bound| mentions_effect_provider(db, bound))
+            .map(|bound| bound.pretty_print(db, true))
+            .collect::<Vec<_>>(),
+    );
     PredicateListId::new(
         db,
-        func_declared_bounds(db, func, None)
-            .list(db)
-            .iter()
-            .filter(|bound| !is_effect_provider_bound(db, **bound))
-            .map(|&bound| Binder::bind(func.into(), bound).instantiate(db, args))
+        declared
+            .into_iter()
+            .map(|bound| Binder::bind(func.into(), bound).instantiate(db, args))
             .collect::<Vec<_>>(),
     )
 }
 
-/// `goal`, a callable goal of a function item, with the hidden provider
-/// arguments of the item that inference left open set to a placeholder. A
-/// call or a row supplies those providers later; the item's callable
-/// dictionary holds proofs of its other bounds only, so it is the same
-/// whatever they are, and it can be proved where the item is passed.
+/// Whether `goal` is a callable goal (`Fn` or `FnMut`) of a function item: the
+/// only kind of goal that has hidden provider arguments to settle.
+pub(crate) fn is_function_item_callable_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> bool {
+    matches!(
+        CallableValue::of(db, goal.self_ty(db)),
+        Some(CallableValue::Func(..))
+    ) && CallableTrait::of(db, goal.def(db)).is_some()
+}
+
+/// `goal`, a callable goal of a function item (`is_function_item_callable_goal`),
+/// with the hidden provider arguments of the item that inference left open set
+/// to the placeholder `()`. A call or a row supplies those providers later; the
+/// item's callable dictionary holds proofs of its other bounds only
+/// (`func_item_conditions`), so it is the same whatever they are, and it can be
+/// proved where the item is passed.
+///
+/// The placeholder is not a selection and appears in no condition. It stays
+/// sound while two things hold: no condition of the callable implementation
+/// names a provider, and nothing reads the provider positions of a callable
+/// proof's instantiated arguments. No other goal is rewritten.
 pub(crate) fn settle_function_item_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     goal: TraitInstId<'db>,
 ) -> TraitInstId<'db> {
+    debug_assert!(
+        is_function_item_callable_goal(db, goal),
+        "only the callable goal of a function item has providers to settle: {}",
+        goal.pretty_print(db, true)
+    );
     let Some(CallableValue::Func(func, args)) = CallableValue::of(db, goal.self_ty(db)) else {
         return goal;
     };
