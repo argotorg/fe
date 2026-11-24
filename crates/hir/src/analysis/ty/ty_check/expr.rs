@@ -673,12 +673,7 @@ impl<'db> TyChecker<'db> {
 
         actual.ty = normalize_ty(self.db, actual.ty, self.env.scope(), self.env.assumptions());
         self.report_normalization_limit(expr, actual.ty, expected);
-        let compile_time = match self.env.owner() {
-            BodyOwner::Func(function, _) => function.is_const(self.db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
-            _ => false,
-        };
-        if !compile_time
+        if !self.is_compile_time_body()
             && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(self.db, actual.ty)
         {
             self.push_diag(BodyDiag::CompileTimePhase {
@@ -7063,6 +7058,18 @@ impl<'db> TyChecker<'db> {
         match ptr.to_node(root.syntax()).kind() {
             ast::ExprKind::Quote(quote) => Some(quote),
             _ => None,
+        }
+    }
+}
+
+impl<'db> TyChecker<'db> {
+    /// Whether the body runs at compile time, where compile-time-only values
+    /// are ordinary.
+    pub(super) fn is_compile_time_body(&self) -> bool {
+        match self.env.owner() {
+            BodyOwner::Func(function, _) => function.is_const(self.db),
+            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+            _ => false,
         }
     }
 }

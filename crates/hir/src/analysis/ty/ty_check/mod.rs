@@ -7947,6 +7947,8 @@ struct TyCheckerFinalizer<'db> {
     direct_call_callees: FxHashSet<ExprId>,
     /// Literals a cast or negation already checked against its type.
     range_checked_literals: FxHashSet<ExprId>,
+    /// Whether the body runs at compile time.
+    compile_time: bool,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -7988,6 +7990,28 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
             self.check_unknown(prop.ty, span.clone().into(), false);
+            // A type that inference settled after the expression was checked
+            // may be compile-time-only, as in `let x: Option<Code<Expr>> =
+            // Option::None`.
+            if !self.compile_time
+                && self.body.body() == Some(ctxt.body())
+                && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(
+                    self.db,
+                    normalize_ty(self.db, prop.ty, ctxt.body().scope(), self.assumptions),
+                )
+            {
+                self.diags.push(
+                    BodyDiag::CompileTimePhase {
+                        primary: span.clone().into(),
+                        message: format!(
+                            "`{}` is compile-time-only in a runtime expression",
+                            meta.pretty_print(self.db)
+                        ),
+                        label: BodyDiag::RUNTIME_CONTEXT_LABEL,
+                    }
+                    .into(),
+                );
+            }
             // A string literal only gets an oversized `String<N>` type through
             // inference fallback; report it here instead of leaving an invalid
             // literal type for constant evaluation to trip over.
@@ -8172,6 +8196,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
+        let compile_time = checker.is_compile_time_body();
         checker.resolve_deferred();
         checker.check_access_captures();
         for (_, _, diag) in std::mem::take(&mut checker.missing_effects) {
@@ -8210,6 +8235,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
             range_checked_literals,
+            compile_time,
             diags: checker.diags,
         }
     }

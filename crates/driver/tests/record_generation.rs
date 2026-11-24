@@ -355,6 +355,8 @@ fn runtime_metadata_refuses_and_compile_time_quotes_stay_valid() {
         "use core::meta::{Code, Item}\nfn runtime_quote() -> Code<Item> { quote { fn generated() -> usize { 1 } } }\n",
         "use core::meta::Record\nfn runtime_tuple(_ value: (Record, usize)) -> (Record, usize) { value }\n",
         "use core::meta::Record\nstruct Wrapped { value: Record }\nfn runtime_wrapper(_ value: Wrapped) -> Wrapped { value }\n",
+        // The carrier is known only when the binding's type is inferred.
+        "use core::meta::{Code, Expr}\nfn runtime_inferred_carrier() { let _x: Option<Code<Expr>> = Option::None }\n",
     ] {
         let (db, file) = input(source);
         let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
@@ -383,6 +385,7 @@ fn test_helper() {
 "#,
         "use core::meta::{Code, Item, Record}\nconst fn compile_time_tuple(_ value: (Record, usize)) -> usize { let _q: Code<Item> = quote { fn generated() -> usize { 1 } }\n value.1 }\n",
         "use core::meta::{Code, Item}\nconst Q: Code<Item> = quote { fn generated() -> usize { 1 } }\n",
+        "use core::meta::{Code, Expr}\nconst fn compile_time_inferred_carrier() { let _x: Option<Code<Expr>> = Option::None }\n",
     ] {
         let (db, file) = input(source);
         let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
