@@ -33,13 +33,18 @@ use std::iter;
 ///
 /// Nested items and anonymous const bodies are checked as their own owners,
 /// and never inherit an enclosing unsafe context.
+///
+/// Returns the diagnostics and, for the operations that an unsafe context
+/// allowed, the sites of those operations. Whoever wrote an operation relies
+/// on the context that discharges it, so build policy judges the operation's
+/// own text too (see `access::trust`).
 pub(crate) fn check_unsafe_ops<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     typed_body: &TypedBody<'db>,
-) -> Vec<FuncBodyDiag<'db>> {
+) -> (Vec<FuncBodyDiag<'db>>, Vec<UnsafeOpSite>) {
     let Some(body) = owner.body(db) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
 
     let mut checker = UnsafeChecker {
@@ -51,9 +56,18 @@ pub(crate) fn check_unsafe_ops<'db>(
         written_fields: FxHashSet::default(),
         state_accesses: FxHashSet::default(),
         diags: Vec::new(),
+        discharged: Vec::new(),
     };
     checker.check_expr(body.expr(db));
-    checker.diags
+    (checker.diags, checker.discharged)
+}
+
+/// The expression or binding pattern of an unsafe operation that an `unsafe`
+/// block or `unsafe fn` allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnsafeOpSite {
+    Expr(ExprId),
+    Pat(PatId),
 }
 
 struct UnsafeChecker<'db, 'a> {
@@ -71,13 +85,18 @@ struct UnsafeChecker<'db, 'a> {
     /// is checked before the read of the same place.
     state_accesses: FxHashSet<ExprId>,
     diags: Vec<FuncBodyDiag<'db>>,
+    /// The unsafe operations an unsafe context allowed, in the order found.
+    discharged: Vec<UnsafeOpSite>,
 }
 
 impl<'db> UnsafeChecker<'db, '_> {
-    /// Reports an unsafe operation, unless an unsafe context allows it.
-    fn push_unsafe(&mut self, diag: BodyDiag<'db>) {
+    /// Reports an unsafe operation, unless an unsafe context allows it, in
+    /// which case the operation's `site` is recorded as discharged.
+    fn push_unsafe(&mut self, diag: BodyDiag<'db>, site: UnsafeOpSite) {
         if !self.in_unsafe {
             self.diags.push(diag.into());
+        } else if !self.discharged.contains(&site) {
+            self.discharged.push(site);
         }
     }
 
@@ -210,11 +229,14 @@ impl<'db> UnsafeChecker<'db, '_> {
         if let Some((field, name)) = self.unsafe_field_of_place(expr)
             && self.written_fields.insert(field)
         {
-            self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                primary: field.span(self.body).into(),
-                name,
-                write: true,
-            });
+            self.push_unsafe(
+                BodyDiag::UnsafeFieldRequiresUnsafe {
+                    primary: field.span(self.body).into(),
+                    name,
+                    write: true,
+                },
+                UnsafeOpSite::Expr(field),
+            );
         }
     }
 
@@ -235,11 +257,14 @@ impl<'db> UnsafeChecker<'db, '_> {
             if let Some(name) = field.label_eagerly(self.db, self.body)
                 && self.is_unsafe_field(parent, name)
             {
-                self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                    primary: span.clone().field(idx).into(),
-                    name,
-                    write: false,
-                });
+                self.push_unsafe(
+                    BodyDiag::UnsafeFieldRequiresUnsafe {
+                        primary: span.clone().field(idx).into(),
+                        name,
+                        write: false,
+                    },
+                    UnsafeOpSite::Expr(expr),
+                );
             }
         }
     }
@@ -261,11 +286,14 @@ impl<'db> UnsafeChecker<'db, '_> {
                 && field.is_unsafe(self.db)
                 && let Some(name) = field.name(self.db)
             {
-                self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                    primary: expr.span(self.body).into(),
-                    name,
-                    write: false,
-                });
+                self.push_unsafe(
+                    BodyDiag::UnsafeFieldRequiresUnsafe {
+                        primary: expr.span(self.body).into(),
+                        name,
+                        write: false,
+                    },
+                    UnsafeOpSite::Expr(expr),
+                );
                 return;
             }
             ty = field_ty;
@@ -302,11 +330,14 @@ impl<'db> UnsafeChecker<'db, '_> {
                         && self.is_unsafe_field(parent, name)
                         && let Some(binding) = self.mut_binding(field.pat)
                     {
-                        self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                            primary: binding.span(self.body).into(),
-                            name,
-                            write: true,
-                        });
+                        self.push_unsafe(
+                            BodyDiag::UnsafeFieldRequiresUnsafe {
+                                primary: binding.span(self.body).into(),
+                                name,
+                                write: true,
+                            },
+                            UnsafeOpSite::Pat(binding),
+                        );
                     }
                     self.check_pat(field.pat);
                 }
@@ -356,9 +387,12 @@ impl<'db> UnsafeChecker<'db, '_> {
             .then_some(receiver)
     }
     fn report_deref(&mut self, expr: ExprId) {
-        self.push_unsafe(BodyDiag::UnsafeDerefRequiresUnsafe {
-            primary: expr.span(self.body).into(),
-        });
+        self.push_unsafe(
+            BodyDiag::UnsafeDerefRequiresUnsafe {
+                primary: expr.span(self.body).into(),
+            },
+            UnsafeOpSite::Expr(expr),
+        );
     }
 
     /// Reports a call, method call or operator whose callee is an
@@ -378,10 +412,13 @@ impl<'db> UnsafeChecker<'db, '_> {
                         IngotKind::Core | IngotKind::Std
                     ))
         {
-            self.push_unsafe(BodyDiag::UnsafeCallRequiresUnsafe {
-                primary: expr.span(self.body).into(),
-                callee,
-            });
+            self.push_unsafe(
+                BodyDiag::UnsafeCallRequiresUnsafe {
+                    primary: expr.span(self.body).into(),
+                    callee,
+                },
+                UnsafeOpSite::Expr(expr),
+            );
         }
         let typed_body = self.typed_body;
         for arg in typed_body.call_effect_args(expr).into_iter().flatten() {

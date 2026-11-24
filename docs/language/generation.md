@@ -391,7 +391,7 @@ A marker trait takes an empty output, `empty<Item>()`. A callable provider names
 
 ### Unsafe code in generated code
 
-Unsafe code that a provider generates is accepted only if every package that contributed to it is trusted: the package whose text contains the `unsafe` block, and each package whose quotation spliced that text into the code that runs. The package that asked for the code is not a contributor. A package is trusted when it is a package being checked, `core` or `std`, or a dependency that a trusted package lists with `allow_unsafe = true`. The package `dep` has this `src/lib.fe`:
+Unsafe code that a provider generates is accepted only if every package that contributed to it is trusted: the package whose text contains the `unsafe` block, the package whose text contains each operation in it that needs an `unsafe` block, such as a dereference `*p` that another quotation spliced into the block, and each package whose quotation spliced that text into the code that runs. The package that asked for the code is not a contributor. A package is trusted when it is a package being checked, `core` or `std`, or a dependency that a trusted package lists with `allow_unsafe = true`. The package `dep` has this `src/lib.fe`:
 
 ```fe
 use core::derive::Derive

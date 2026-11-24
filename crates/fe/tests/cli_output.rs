@@ -4803,6 +4803,11 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
             "untrusted_provider_splices_a_trusted_item",
         ),
         (
+            "unsafe_trust_spliced_safe_fragment",
+            "spliced_safe_fragment",
+        ),
+        ("unsafe_trust_spliced_operation_allowed", "spliced_deref"),
+        (
             "unsafe_trust_dispatcher_allowed",
             "dispatcher_encodes_with_trusted_code",
         ),
@@ -5012,6 +5017,37 @@ fn test_cli_test_unsafe_trust_judges_a_spliced_fragment_by_every_package_that_co
             "a trusted package is never named:\n{output}"
         );
     }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_operation_by_the_package_that_wrote_it() {
+    // `t` is trusted, `u` is not. `t`'s provider writes the `unsafe` block and
+    // splices `u`'s fragment `*p` into it. The dereference needs an `unsafe`
+    // block, and the package that wrote its text is `u`, so the call is
+    // refused although the block is `t`'s. The control `spliced_safe_fragment`
+    // splices a fragment that needs no `unsafe` block, which stays accepted.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_spliced_operation");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("this call reaches unsafe code in `u`")
+            && output.contains("S {}.run(p)")
+            && output.contains("unsafe code in `u`")
+            && output.contains("*p"),
+        "unexpected diagnostics:\n{output}"
+    );
+    assert_eq!(
+        output
+            .matches("call reaches unsafe code in `u`, which is not allowed to use it")
+            .count(),
+        1,
+        "one error for the call:\n{output}"
+    );
+    assert!(
+        !output.contains("unsafe code in `t`"),
+        "a trusted package is never named:\n{output}"
+    );
 }
 
 #[test]

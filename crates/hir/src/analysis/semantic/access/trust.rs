@@ -17,7 +17,9 @@
 //! that asked is not a contributor. A fragment that a quotation splices keeps
 //! its writer, and each quotation around it placed the fragment into the code
 //! that runs, so the writer and every placer must be trusted for an `unsafe`
-//! block in it. An `unsafe impl` asserts all of its members, whoever wrote
+//! block in it. The same holds for each operation that needs an unsafe
+//! context, such as a dereference: the packages of the operation's own text
+//! must be trusted, whoever wrote the block that allows it. An `unsafe impl` asserts all of its members, whoever wrote
 //! them, so the ingot that wrote the `unsafe impl` is the one that must be
 //! trusted for them.
 //!
@@ -38,7 +40,10 @@ use crate::{
         HirAnalysisDb,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{SemOrigin, diagnostics::SemanticDiagnosticSpan},
-        ty::ty_check::BodyOwner,
+        ty::{
+            ty_check::{BodyOwner, infer_body},
+            unsafe_check::UnsafeOpSite,
+        },
     },
     hir_def::{BlockKind, Expr, HirIngot, ImplTrait, ItemKind, Partial, TopLevelMod},
     span::LazySpan,
@@ -133,39 +138,62 @@ impl UnsafeTrust {
     }
 
     /// The unsafe code `owner` runs and the first untrusted ingot that
-    /// contributed to it:
-    /// - all of the body, for a method of an `unsafe impl` that an untrusted
-    ///   ingot wrote, whose body is what the impl asserts correct (even if a
-    ///   provider of a trusted ingot supplied it);
-    /// - all of the body, for an `unsafe fn` that an untrusted ingot wrote or
-    ///   placed;
-    /// - else the first `unsafe` block, in any position of the body, that an
-    ///   untrusted ingot wrote or placed. Each block has its own chain: a
-    ///   fragment spliced into a body keeps the writer of its text, and the
-    ///   quotations around the fragment are its placers.
+    /// contributed to it: the first of its `obligations` whose chain has an
+    /// untrusted ingot.
     pub(super) fn untrusted_site<'db>(
         &self,
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
     ) -> Option<(SemOrigin<'db>, Ingot<'db>)> {
-        let body = owner.body(db)?;
-        if let Some(chain) = unsafe_impl_chain(db, owner)
-            && let Some(ingot) = self.first_untrusted(db, &chain)
-        {
-            return Some((SemOrigin::Body(owner), ingot));
+        self.obligations(db, owner)
+            .into_iter()
+            .find_map(|(site, chain)| Some((site, self.first_untrusted(db, &chain)?)))
+    }
+
+    /// The places where `owner` relies on an unsafe assertion, each with the
+    /// modules of the quotations that wrote and placed the asserting text,
+    /// writer first. Each is unsafe code of every package of its chain:
+    /// - all of the body, for a method of an `unsafe impl`, whose body is what
+    ///   the impl asserts correct (even if a provider of a trusted ingot
+    ///   supplied it); the chain is the impl's;
+    /// - all of the body, for an `unsafe fn`;
+    /// - each `unsafe` block, in any position of the body. Each block has its
+    ///   own chain: a fragment spliced into a body keeps the writer of its
+    ///   text, and the quotations around the fragment are its placers;
+    /// - each operation that needs an unsafe context (a dereference of a
+    ///   pointer, a call of an `unsafe fn`, an `unsafe` field), found by the
+    ///   unsafe checker. Its chain is that of the operation's own text, which
+    ///   may differ from the chain of the context that allows it.
+    fn obligations<'db>(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> Vec<(SemOrigin<'db>, Vec<TopLevelMod<'db>>)> {
+        let Some(body) = owner.body(db) else {
+            return Vec::new();
+        };
+        let mut obligations = Vec::new();
+        if let Some(chain) = unsafe_impl_chain(db, owner) {
+            obligations.push((SemOrigin::Body(owner), chain));
         }
-        if matches!(owner, BodyOwner::Func(func, _) if func.is_unsafe(db))
-            && let Some(ingot) = self.first_untrusted(db, &body.quote_chain(db))
-        {
-            return Some((SemOrigin::Body(owner), ingot));
+        if matches!(owner, BodyOwner::Func(func, _) if func.is_unsafe(db)) {
+            obligations.push((SemOrigin::Body(owner), body.quote_chain(db)));
         }
-        body.exprs(db).iter().find_map(|(expr, data)| {
-            if !matches!(data, Partial::Present(Expr::Block(_, BlockKind::Unsafe))) {
-                return None;
+        for (expr, data) in body.exprs(db).iter() {
+            if matches!(data, Partial::Present(Expr::Block(_, BlockKind::Unsafe))) {
+                obligations.push((SemOrigin::Expr(expr), body.expr_quote_chain(db, expr)));
             }
-            let ingot = self.first_untrusted(db, &body.expr_quote_chain(db, expr))?;
-            Some((SemOrigin::Expr(expr), ingot))
-        })
+        }
+        let typed_body = &infer_body(db, owner).1;
+        for site in typed_body.discharged_unsafe_ops() {
+            obligations.push(match *site {
+                UnsafeOpSite::Expr(expr) => {
+                    (SemOrigin::Expr(expr), body.expr_quote_chain(db, expr))
+                }
+                UnsafeOpSite::Pat(pat) => (SemOrigin::Pat(pat), body.pat_quote_chain(db, pat)),
+            });
+        }
+        obligations
     }
 }
 

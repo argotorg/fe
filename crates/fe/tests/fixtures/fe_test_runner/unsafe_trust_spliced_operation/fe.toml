@@ -1,0 +1,7 @@
+[ingot]
+name = "unsafe_trust_spliced_operation"
+version = "0.1.0"
+
+[dependencies]
+t = { path = "../unsafe_trust_operation_vendor/t", allow_unsafe = true }
+u = { path = "../unsafe_trust_operation_vendor/u" }

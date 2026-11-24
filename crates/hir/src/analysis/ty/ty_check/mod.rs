@@ -118,7 +118,7 @@ use super::{
     },
     ty_lower::{CompleteSubst, collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
-    unsafe_check::check_unsafe_ops,
+    unsafe_check::{UnsafeOpSite, check_unsafe_ops},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
@@ -1287,8 +1287,10 @@ fn infer_body_query<'db>(
     };
 
     checker.run();
-    let (mut diags, typed_body) = checker.finish();
-    diags.extend(check_unsafe_ops(db, owner, &typed_body));
+    let (mut diags, mut typed_body) = checker.finish();
+    let (unsafe_diags, discharged) = check_unsafe_ops(db, owner, &typed_body);
+    diags.extend(unsafe_diags);
+    typed_body.tables_mut().unsafe_ops = discharged;
     if let BodyOwner::Func(func, mode) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -1716,6 +1718,7 @@ fn typed_body_for_bodyless_func<'db>(
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashMap::default(),
         unsafe_splits: FxHashSet::default(),
+        unsafe_ops: Vec::new(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
         builtin_ops: FxHashMap::default(),
@@ -5039,6 +5042,9 @@ mod typed_body_tables {
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
+        /// The unsafe operations that an `unsafe` block or `unsafe fn` allows,
+        /// as the unsafe checker found them.
+        pub(super) unsafe_ops: Vec<UnsafeOpSite>,
         /// The tuples passed to product parameters, a part each.
         pub(super) product_args: FxHashSet<ExprId>,
         /// The calls `f(..)` of callable values: the callee is the receiver
@@ -6046,6 +6052,12 @@ impl<'db> TypedBody<'db> {
     /// from [`Self::const_refs`], which belong to expressions.
     pub fn pat_const_ref(&self, pat: PatId) -> Option<ConstRef<'db>> {
         self.tables.pat_const_refs[pat]
+    }
+
+    /// The unsafe operations of the body that an `unsafe` block or `unsafe fn`
+    /// allows. Build policy judges each by the package that wrote it.
+    pub fn discharged_unsafe_ops(&self) -> &[UnsafeOpSite] {
+        &self.tables.unsafe_ops
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
@@ -7639,6 +7651,7 @@ impl<'db> TypedBody<'db> {
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
+            unsafe_ops: Vec::new(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
             builtin_ops: FxHashMap::default(),
