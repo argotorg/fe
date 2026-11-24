@@ -2205,6 +2205,7 @@ mod tests {
             super::generation::ProviderHints {
                 traits: vec![trait_],
                 open: false,
+                heads: vec![(trait_, None)],
             },
             module.scope(),
         )

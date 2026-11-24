@@ -4179,3 +4179,154 @@ const fn run() -> u256 { with (OPENING) { Pair::score() } }
         assert!(!cause.contains("division by zero"), "{opening}: {cause}");
     }
 }
+
+/// A provider offers the family it names when the goal omits a defaulted
+/// parameter: the method of an offered trait is looked up at that family, not
+/// at holes that nothing in the call fixes.
+#[test]
+fn scoped_lookup_uses_the_unique_offered_family() {
+    let sources = [
+        (
+            "const default",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Sized2<const N: usize = 3> { const fn n(self) -> usize }
+struct P {}
+impl Derive<trait Sized2> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn n(self) -> usize { 3 } }
+    }
+}
+struct R { a: u256 }
+const fn run() -> usize {
+    with (P) { R { a: 0 }.n() }
+}
+"#,
+            "3",
+        ),
+        (
+            "type default",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Sized2<T = u8> { const fn n(self) -> usize }
+struct P {}
+impl Derive<trait Sized2> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn n(self) -> usize { 3 } }
+    }
+}
+struct R { a: u256 }
+const fn run() -> usize {
+    with (P) { R { a: 0 }.n() }
+}
+"#,
+            "3",
+        ),
+        (
+            "path call",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Scale<T = u8> { const fn scale() -> usize }
+struct Pair { a: u256 }
+struct P {}
+impl Derive<trait Scale> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn scale() -> usize { 5 } }
+    }
+}
+const fn run() -> usize {
+    with (P) { Pair::scale() }
+}
+"#,
+            "5",
+        ),
+        (
+            "two closed families keep the type of the use",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Conv<T> { const fn conv(self) -> T }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Conv<u8>> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn conv(self) -> u8 { 1 } }
+    }
+}
+impl Derive<trait Conv<u16>> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn conv(self) -> u16 { 2 } }
+    }
+}
+const fn run() -> u16 {
+    let x: u8 = with (P) { R { a: 0 }.conv() }
+    x as u16
+}
+"#,
+            "1",
+        ),
+    ];
+    for (name, source, expected) in sources {
+        let output = prepare(source).unwrap_or_else(|cause| panic!("{name}: {cause}"));
+        assert_eq!(output_diagnostics(&output), "", "{name}");
+        assert_eq!(eval_const_fn_u256(&output, "run"), expected, "{name}");
+    }
+}
+
+/// The omitted default and the written default are one family, so two
+/// providers that offer them overlap, whether or not the block uses the trait.
+#[test]
+fn scoped_providers_that_spell_one_family_two_ways_overlap() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Fixed<const N: usize = 4> { const fn fixed() -> usize }
+struct Target {}
+struct Omitted {}
+struct Written {}
+impl Derive<trait Fixed> for Omitted {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn fixed() -> usize { 1 } }
+    }
+}
+impl Derive<trait Fixed<4>> for Written {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn fixed() -> usize { 2 } }
+    }
+}
+impl Fixed for Target { const fn fixed() -> usize { 0 } }
+const fn idle() -> usize {
+    with (OPENINGS) { 0 }
+}
+"#;
+    for openings in ["Omitted, Written", "Written, Omitted"] {
+        let failure = prepare_err(&source.replace("OPENINGS", openings));
+        assert!(
+            failure.contains("two derive providers for the same trait application"),
+            "{openings}: {failure}"
+        );
+    }
+    // The same program that uses the trait stays refused, and one provider
+    // alone is used.
+    let used = source.replace("{ 0 }\n}", "{ <Target as Fixed>::fixed() }\n}");
+    let used = used.replace("const fn idle()", "const fn run()");
+    for openings in ["Omitted, Written", "Written, Omitted"] {
+        let failure = prepare_err(&used.replace("OPENINGS", openings));
+        assert!(
+            failure.contains("two derive providers for"),
+            "{openings}: {failure}"
+        );
+    }
+    let output =
+        prepare(&used.replace("OPENINGS", "Omitted")).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval_const_fn_u256(&output, "run"), "1");
+}
+

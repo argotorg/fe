@@ -11,13 +11,14 @@ use crate::{
         HirAnalysisDb,
         semantic::{SemanticInstance, SemanticInstanceKey, root_semantic_instance_key},
     },
+    core::meta::family_identity,
     hir_def::{Trait, scope_graph::ScopeId},
 };
 
 use super::super::{
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorOrigin, TraitInstId},
-    ty_def::TyId,
+    ty_def::{TraitFamilyId, TyData, TyId},
     visitor::{TyVisitable, TyVisitor},
 };
 use super::{
@@ -40,6 +41,10 @@ pub struct ProviderOpening<'db> {
 pub struct ProviderHints<'db> {
     pub(crate) traits: Vec<Trait<'db>>,
     pub(crate) open: bool,
+    /// One entry per distinct offer head, in the order found: the trait it
+    /// offers, and the closed family when the offer names one (`None` for an
+    /// offer that is open in its arguments).
+    pub(crate) heads: Vec<(Trait<'db>, Option<TyId<'db>>)>,
 }
 
 /// Whether a scoped derive can implement `trait_`: an implementation it
@@ -59,6 +64,33 @@ impl<'db> ProviderOpening<'db> {
             || (hints.open
                 && trait_.ingot(db) == self.scope(db).ingot(db)
                 && scoped_derivable(db, trait_))
+    }
+
+    /// The one closed family this opening offers for `trait_`, when it offers
+    /// exactly one head for it and no open offer exists: a call that looks the
+    /// trait up through this opening may then apply the family to its
+    /// receiver, so that parameters nothing in the call fixes (defaults, a
+    /// parameter a closed offer determines) are settled by the offer.
+    pub(crate) fn unique_family(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        trait_: Trait<'db>,
+    ) -> Option<TraitFamilyId<'db>> {
+        let hints = self.hints(db);
+        if hints.open {
+            return None;
+        }
+        let mut heads = hints.heads.iter().filter(|(offered, _)| *offered == trait_);
+        let (_, Some(family)) = heads.next()? else {
+            return None;
+        };
+        if heads.next().is_some() {
+            return None;
+        }
+        match family.data(db) {
+            TyData::TraitFamily(family) => Some(*family),
+            _ => None,
+        }
     }
 
     pub(crate) fn traits_for_lookup(
@@ -242,10 +274,20 @@ pub(crate) fn provider_hints<'db>(
         None => Vec::new(),
     };
     let mut traits = IndexSet::default();
+    let mut heads = Vec::new();
+    let mut seen = IndexSet::default();
     let mut open = false;
     for (head, _) in offers {
         if let Some(trait_) = head.trait_hint(db) {
             traits.insert(trait_);
+            let family = match head {
+                OfferHead::Family(family) => Some(family),
+                _ => None,
+            };
+            // Two spellings of one family are one head.
+            if seen.insert((trait_, family.map(|family| family_identity(db, family)))) {
+                heads.push((trait_, family));
+            }
         } else {
             open = true;
         }
@@ -253,6 +295,7 @@ pub(crate) fn provider_hints<'db>(
     Ok((open || !traits.is_empty()).then(|| ProviderHints {
         traits: traits.into_iter().collect(),
         open,
+        heads,
     }))
 }
 
@@ -264,7 +307,7 @@ pub(crate) fn closed_offers<'db>(
         provider_headers(db, opening.scope(db), opening.provider_ty(db))?
             .into_iter()
             .filter_map(|(head, _)| match head {
-                OfferHead::Family(family) => Some(family),
+                OfferHead::Family(family) => Some(family_identity(db, family)),
                 _ => None,
             })
             .collect(),

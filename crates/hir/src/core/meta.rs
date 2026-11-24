@@ -2052,6 +2052,17 @@ fn finalized_derive_provider<'db>(
     Ok((finalized.key, input))
 }
 
+/// The identity under which two spellings of a family are one: the constants
+/// it names are evaluated, so an omitted default and a written literal of the
+/// same value compare equal. Hashed or compared consumers of families key on
+/// this, not on the interned type.
+pub(crate) fn family_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    family: crate::analysis::ty::ty_def::TyId<'db>,
+) -> crate::analysis::ty::ty_def::TyId<'db> {
+    crate::analysis::ty::trait_def::consts_evaluated(db, family)
+}
+
 /// The ordinary protocol keys that describe an elaborated goal on this subject.
 /// A declared trailing default can be omitted only when applying the smaller
 /// family reconstructs the complete arguments in the request's environment.

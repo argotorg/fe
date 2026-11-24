@@ -2968,6 +2968,8 @@ impl<'db> TyChecker<'db> {
                         },
                     };
                     for family in families {
+                        // Two spellings of one family claim it once.
+                        let family = crate::core::meta::family_identity(self.db, family);
                         if let Some(previous_provider) = claimed.insert(family, provider)
                             && (previous_provider || provider)
                         {

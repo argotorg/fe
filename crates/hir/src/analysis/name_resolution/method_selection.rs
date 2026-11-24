@@ -576,17 +576,28 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                     let Some(&method) = trait_.method_defs(self.db).get(&self.method_name) else {
                         continue;
                     };
-                    // Declaration parameters become inference variables. The
-                    // provider only decides whether it can serve the resolved goal.
                     let mut table = UnificationTable::new(self.db);
                     let receiver = self.receiver.canonical().extract_identity(&mut table);
-                    let mut args = vec![receiver];
-                    let params = crate::analysis::ty::ty_lower::collect_generic_params(
-                        self.db,
-                        trait_.into(),
-                    );
-                    args.extend_from_slice(&params.params(self.db)[1..]);
-                    let inst = TraitInstId::new_simple(self.db, trait_, args);
+                    // An opening that offers exactly one closed family of the
+                    // trait settles the parameters nothing in the call fixes.
+                    let offered = opening.unique_family(self.db, trait_).and_then(|family| {
+                        match family.apply(self.db, receiver).data(self.db) {
+                            TyData::ConstraintTerm(inst) => Some(*inst),
+                            _ => None,
+                        }
+                    });
+                    // Otherwise declaration parameters become inference
+                    // variables. The provider only decides whether it can serve
+                    // the resolved goal.
+                    let inst = offered.unwrap_or_else(|| {
+                        let mut args = vec![receiver];
+                        let params = crate::analysis::ty::ty_lower::collect_generic_params(
+                            self.db,
+                            trait_.into(),
+                        );
+                        args.extend_from_slice(&params.params(self.db)[1..]);
+                        TraitInstId::new_simple(self.db, trait_, args)
+                    });
                     self.candidates
                         .traits
                         .insert(AssembledTraitMethodCand::Offered { inst, method });

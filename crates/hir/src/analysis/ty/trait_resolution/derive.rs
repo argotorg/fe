@@ -292,6 +292,10 @@ impl<'db> ProviderSearch<'db> {
             } else {
                 family
             };
+            // A deferred default and the literal that equals it are one family:
+            // the head is closed when it is closed once its constants are
+            // evaluated.
+            let family = crate::core::meta::family_identity(db, family);
             let head = match family.data(db) {
                 TyData::TraitFamily(family_id)
                     if family.has_var(db) || family.has_param(db) || family.has_projection(db) =>
