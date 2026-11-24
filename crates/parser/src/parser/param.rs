@@ -763,15 +763,18 @@ impl super::Parse for WhereClauseScope {
             if parser.bump_if(SyntaxKind::Comma) {
                 continue;
             }
-            let Some(kind) = parser.current_kind().filter(|kind| starts_predicate(*kind)) else {
+            if !parser.current_kind().is_some_and(starts_predicate) {
                 break;
-            };
+            }
             // Another predicate follows without a `,`.
             parser.set_newline_as_trivia(false);
             let newline = parser.current_kind() == Some(SyntaxKind::Newline);
             parser.set_newline_as_trivia(true);
             if newline {
-                if self.item_block == ItemBlock::Absent && kind == SyntaxKind::TraitKw {
+                // A clause with no block after it ends at the end of its line:
+                // the next line starts another item, such as a trait, a
+                // shape member or a splice of items.
+                if self.item_block == ItemBlock::Absent {
                     break;
                 }
                 parser.add_error(ParseError::expected(

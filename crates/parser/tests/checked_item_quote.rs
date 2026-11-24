@@ -252,3 +252,35 @@ fn an_attribute_that_nothing_follows_is_an_error_and_not_a_panic() {
         assert!(!errors.is_empty(), "{source}");
     }
 }
+
+#[test]
+fn where_clause_of_a_quoted_derive_header_ends_at_the_line_end() {
+    use fe_parser::{
+        SyntaxKind,
+        ast::{ImplTrait, WhereClauseOwner},
+    };
+    // A derive header has no block, so the next line starts a new member: a
+    // splice, a shape member or an item. None of them is another predicate.
+    for next in ["${more}", "shape Step = (own usize, T)", "fn other() {}"] {
+        let source = format!(
+            "const fn gen() {{ quote {{\n impl<T> Tr for S<T> with (Q) where T: Bound\n {next}\n }} }}"
+        );
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{next}: {errors:?}");
+        let root = SyntaxNode::new_root(green);
+        let header = root.descendants().find_map(ImplTrait::cast).unwrap();
+        assert_eq!(
+            header.where_clause().unwrap().into_iter().count(),
+            1,
+            "{next}"
+        );
+        let quote = root.descendants().find_map(QuoteExpr::cast).unwrap();
+        let members = quote.item_list().unwrap().syntax().children().count();
+        assert_eq!(members, 2, "{next}: {:#?}", quote.syntax());
+        assert!(
+            root.descendants()
+                .all(|node| node.kind() != SyntaxKind::Error),
+            "{next}"
+        );
+    }
+}
