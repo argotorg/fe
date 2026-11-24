@@ -1263,7 +1263,8 @@ impl<'db> PredicateListId<'db> {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
         let mut edges: Vec<BoundEdge<'db>> = Vec::new();
-        let mut truncated: Option<TraitInstId<'db>> = None;
+        let mut truncated: Vec<u32> = Vec::new();
+        let mut capped = false;
         let slots = all_predicates.len();
 
         // Each entry says how many associated types the predicate lies below the
@@ -1328,7 +1329,7 @@ impl<'db> PredicateListId<'db> {
                             > 0
                     })
                 }) {
-                    truncated.get_or_insert(pred);
+                    truncated.push(parent);
                 }
                 continue;
             }
@@ -1369,7 +1370,8 @@ impl<'db> PredicateListId<'db> {
                         let below = if below_concrete { depth + 1 } else { 0 };
                         worklist.push_back((trait_inst, below));
                         if keep_concrete && all_predicates.len() - slots > COMPONENT_MEMBER_LIMIT {
-                            truncated.get_or_insert(trait_inst);
+                            // Every bound still waiting is left unfollowed.
+                            capped = true;
                             worklist.clear();
                         }
                     }
@@ -1381,6 +1383,7 @@ impl<'db> PredicateListId<'db> {
             list: Self::new(db, all_predicates.into_iter().collect::<Vec<_>>()),
             edges,
             truncated,
+            capped,
         }
     }
 }
@@ -1421,6 +1424,9 @@ pub(crate) struct Component<'db> {
     /// Every derivation that enters the member, as the position in the walk
     /// of the bound it is read from and the step that reads it.
     pub(crate) entering: Vec<(u32, BoundStep<'db>)>,
+    /// Whether the walk did not follow the associated-type bounds of the
+    /// member, at its depth limit.
+    pub(crate) truncated: bool,
 }
 
 /// The concrete bounds a list of slots derives and are not slots, with where
@@ -1436,9 +1442,10 @@ pub(crate) struct ComponentTable<'db> {
     pub(crate) members: Vec<Component<'db>>,
     /// The concrete members of each trait, as positions in `members`.
     by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)>,
-    /// The first bound whose associated-type bounds the walk did not follow,
-    /// at its depth or member limit.
-    pub(crate) truncated: Option<TraitInstId<'db>>,
+    /// Whether the walk reached its member limit. The bounds it had not yet
+    /// followed were dropped without a record, so no member is known to be
+    /// complete: the whole table counts as truncated.
+    pub(crate) capped: bool,
 }
 
 impl<'db> ComponentTable<'db> {
@@ -1447,7 +1454,7 @@ impl<'db> ComponentTable<'db> {
             slots: 0,
             members: Vec::new(),
             by_trait: Vec::new(),
-            truncated: None,
+            capped: false,
         }
     }
 
@@ -1535,6 +1542,7 @@ pub(crate) fn concrete_components<'db>(
             root,
             path,
             entering,
+            truncated: walk.truncated.contains(&(position as u32)),
         });
     }
     let mut by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)> = Vec::new();
@@ -1555,7 +1563,7 @@ pub(crate) fn concrete_components<'db>(
         slots: n as u32,
         members,
         by_trait,
-        truncated: walk.truncated,
+        capped: walk.capped,
     }
 }
 
@@ -1594,12 +1602,20 @@ pub(crate) struct BoundEdge<'db> {
 pub(crate) struct BoundWalk<'db> {
     pub(crate) list: PredicateListId<'db>,
     pub(crate) edges: Vec<BoundEdge<'db>>,
-    /// The first bound whose associated-type bounds the walk that keeps
-    /// concrete bounds did not follow, at its depth or member limit.
-    pub(crate) truncated: Option<TraitInstId<'db>>,
+    /// The positions in `list` of the bounds whose associated-type bounds the
+    /// walk that keeps concrete bounds did not follow, at its depth limit.
+    pub(crate) truncated: Vec<u32>,
+    /// Whether the walk stopped at its member limit, which leaves every bound
+    /// that had not yet been followed unfollowed.
+    pub(crate) capped: bool,
 }
 
 impl<'db> BoundWalk<'db> {
+    /// Whether any bound's associated-type bounds were left unfollowed.
+    pub(crate) fn is_truncated(&self) -> bool {
+        self.capped || !self.truncated.is_empty()
+    }
+
     /// The steps from the first predicate to the member at `target`, along
     /// the shortest chain of recorded derivations.
     pub(crate) fn path_to(
@@ -1713,7 +1729,8 @@ fn bound_walk_cycle_initial<'db>(
     BoundWalk {
         list: predicates,
         edges: Vec::new(),
-        truncated: None,
+        truncated: Vec::new(),
+        capped: false,
     }
 }
 

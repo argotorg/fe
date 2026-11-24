@@ -4632,6 +4632,85 @@ const fn chosen() -> u256 { with (Loud) { read<C0<C1<C2<C3<C4<C5<Foo>>>>>>>() } 
     refused(program, "chosen", "C5<Foo>: H5<V = Foo>");
 }
 
+// Two pinned roots, each with a chain five associated-type levels deep. The
+// chain of `A` (over `Bar`) holds no named implementation; the chain of `B`
+// (over `Foo`) holds `Loud` at its bottom. Both chains are cut at the limit,
+// and the refusal does not depend on which root comes first: the root whose
+// dictionary holds the named implementation is the one refused for it. A value
+// that reads `Foo: Show` from the ordinary proof and `C5<Foo>::via` from the
+// chosen dictionary is never given.
+#[test]
+fn concrete_component_depth_two_frontiers() {
+    let program = |bounds: &str, arguments: &str| {
+        r#"
+trait Show { const fn show() -> u256 }
+struct Foo {}
+struct Bar {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { const fn show() -> u256 { 70 } }
+impl Show for Bar { const fn show() -> u256 { 5 } }
+struct C0<T> {}
+struct C1<T> {}
+struct C2<T> {}
+struct C3<T> {}
+struct C4<T> {}
+struct C5<T> {}
+trait H0 { type V: H1<V = C2<C3<C4<C5<Foo>>>>> }
+trait H1 { type V: H2<V = C3<C4<C5<Foo>>>> }
+trait H2 { type V: H3<V = C4<C5<Foo>>> }
+trait H3 { type V: H4<V = C5<Foo>> }
+trait H4 { type V: H5<V = Foo> }
+trait H5 {
+    type V: Show
+    const fn via() -> u256
+}
+impl<T: H1<V = C2<C3<C4<C5<Foo>>>>>> H0 for C0<T> { type V = T }
+impl<T: H2<V = C3<C4<C5<Foo>>>>> H1 for C1<T> { type V = T }
+impl<T: H3<V = C4<C5<Foo>>>> H2 for C2<T> { type V = T }
+impl<T: H4<V = C5<Foo>>> H3 for C3<T> { type V = T }
+impl<T: H5<V = Foo>> H4 for C4<T> { type V = T }
+impl<T: Show> H5 for C5<T> {
+    type V = T
+    const fn via() -> u256 { T::show() }
+}
+struct D0<T> {}
+struct D1<T> {}
+struct D2<T> {}
+struct D3<T> {}
+struct D4<T> {}
+struct D5<T> {}
+trait G0 { type V: G1<V = D2<D3<D4<D5<Bar>>>>> }
+trait G1 { type V: G2<V = D3<D4<D5<Bar>>>> }
+trait G2 { type V: G3<V = D4<D5<Bar>>> }
+trait G3 { type V: G4<V = D5<Bar>> }
+trait G4 { type V: G5<V = Bar> }
+trait G5 { type V: Show }
+impl<T: G1<V = D2<D3<D4<D5<Bar>>>>>> G0 for D0<T> { type V = T }
+impl<T: G2<V = D3<D4<D5<Bar>>>>> G1 for D1<T> { type V = T }
+impl<T: G3<V = D4<D5<Bar>>>> G2 for D2<T> { type V = T }
+impl<T: G4<V = D5<Bar>>> G3 for D3<T> { type V = T }
+impl<T: G5<V = Bar>> G4 for D4<T> { type V = T }
+impl<T: Show> G5 for D5<T> { type V = T }
+const fn read<@BOUNDS@>() -> u256 { Foo::show() * 1000 + <C5<Foo> as H5>::via() }
+const fn plain() -> u256 { read<@ARGUMENTS@>() }
+const fn chosen() -> u256 { with (Loud) { read<@ARGUMENTS@>() } }
+"#
+        .replace("@BOUNDS@", bounds)
+        .replace("@ARGUMENTS@", arguments)
+    };
+    let a = "A: G0<V = D1<D2<D3<D4<D5<Bar>>>>>>";
+    let b = "B: H0<V = C1<C2<C3<C4<C5<Foo>>>>>>";
+    let (d, c) = ("D0<D1<D2<D3<D4<D5<Bar>>>>>>", "C0<C1<C2<C3<C4<C5<Foo>>>>>>");
+    for (bounds, arguments) in [
+        (format!("{a}, {b}"), format!("{d}, {c}")),
+        (format!("{b}, {a}"), format!("{c}, {d}")),
+    ] {
+        let program = program(&bounds, &arguments);
+        values(&program, &[("plain", 100100)]);
+        refused(&program, "chosen", "C5<Foo>: H5<V = Foo>");
+    }
+}
+
 // A closure that escapes a `with` block of an unrelated choice and is called
 // outside it keeps the dictionary of the instance that defined it.
 #[test]

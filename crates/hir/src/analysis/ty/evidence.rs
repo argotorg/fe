@@ -1636,7 +1636,7 @@ fn impl_component<'db>(
     let mut truncated = false;
     for (index, &condition) in basis.list(db).iter().enumerate() {
         let walk = PredicateListId::new(db, vec![condition]).bound_walk_keeping_concrete(db);
-        truncated |= walk.truncated.is_some();
+        truncated |= walk.is_truncated();
         for (member, &candidate) in walk.list.list(db).iter().enumerate().skip(1) {
             let answering = if closed {
                 same_identity(db, scope, candidate, declared)
@@ -2857,22 +2857,35 @@ fn component_agreement<'db>(
     }
     // A walk that stopped at its limit left bounds below its frontier unread:
     // a dictionary that holds a named implementation is refused, not given a
-    // value that mixes the component it holds with an ordinary proof.
-    if let Some(frontier) = table.truncated
-        && let Some(root) = table
-            .members
-            .iter()
-            .find(|member| member.goal == frontier)
-            .map(|member| member.root as usize)
-        && closed[root]
-        && entries[root].is_some_and(|proof| proof.has_named_impl(db))
-    {
-        return Some(RefusedGoal {
-            goal: frontier,
-            reason: Refusal::TooDeep {
-                root: goal_at(root),
-            },
+    // value that mixes the component it holds with an ordinary proof. Every
+    // member that was cut is checked, with the root of each derivation that
+    // enters it, so the answer does not depend on which bound comes first; a
+    // walk that reached its member limit cut every member.
+    let named =
+        |slot: usize| closed[slot] && entries[slot].is_some_and(|proof| proof.has_named_impl(db));
+    for (position, member) in table.members.iter().enumerate() {
+        if !(member.truncated || table.capped) {
+            continue;
+        }
+        let entering_roots = member.entering.iter().map(|&(parent, _)| {
+            if (parent as usize) < count {
+                parent as usize
+            } else {
+                table.members[parent as usize - count].root as usize
+            }
         });
+        let root = std::iter::once(member.root as usize)
+            .chain(entering_roots)
+            .find(|&root| named(root));
+        let value_named = values[position].is_some_and(|proof| proof.has_named_impl(db));
+        if let Some(root) = root.or_else(|| value_named.then_some(member.root as usize)) {
+            return Some(RefusedGoal {
+                goal: member.goal,
+                reason: Refusal::TooDeep {
+                    root: goal_at(root),
+                },
+            });
+        }
     }
     // Components of one implementation hold one dictionary in an instance.
     let scope = solve_cx.origin_scope(db);
