@@ -236,6 +236,19 @@ fn validate_build_request(
     }
 }
 
+/// Print a generation error where it is placed, and record it in the report.
+fn report_generation_error(
+    db: &DriverDataBase,
+    error: &driver::generation::GenerationError,
+    report: Option<&BuildReportContext>,
+) {
+    let text = error.located(db);
+    eprintln!("{text}");
+    if let Some(report) = report {
+        write_report_file(report, "errors/generation.txt", &format!("{text}\n"));
+    }
+}
+
 fn write_report_file(report: &BuildReportContext, rel: &str, contents: &str) {
     let path = report.root_dir.join(rel);
     if let Some(parent) = path.parent() {
@@ -684,7 +697,7 @@ fn build_file(
         }
         Ok(None) => {}
         Err(error) => {
-            eprintln!("{}", error.located(db));
+            report_generation_error(db, &error, report);
             return true;
         }
     }
@@ -820,7 +833,7 @@ fn build_directory(
             if let Err(error) =
                 driver::generation::prepare_ingots_in_place(db, std::slice::from_ref(&url))
             {
-                eprintln!("{}", error.located(db));
+                report_generation_error(db, &error, report);
                 return true;
             }
             let default_out_dir = canonical.join("out");
@@ -916,7 +929,7 @@ fn build_workspace(
         .map(|member| member.url.clone())
         .collect::<Vec<_>>();
     if let Err(error) = driver::generation::prepare_ingots_in_place(db, &roots) {
-        eprintln!("{}", error.located(db));
+        report_generation_error(db, &error, report);
         return true;
     }
 

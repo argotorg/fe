@@ -285,13 +285,22 @@ fn prepare_generation(
     match driver::generation::prepare_ingots_in_place(db, roots) {
         Ok(()) => false,
         Err(error) => {
-            let text = error.located(db);
-            eprintln!("{text}");
-            if let Some(report) = report {
-                write_report_file(report, "errors/generation.txt", &format!("{text}\n"));
-            }
+            report_generation_error(db, &error, report);
             true
         }
+    }
+}
+
+/// Print a generation error where it is placed, and record it in the report.
+fn report_generation_error(
+    db: &DriverDataBase,
+    error: &driver::generation::GenerationError,
+    report: Option<&ReportContext>,
+) {
+    let text = error.located(db);
+    eprintln!("{text}");
+    if let Some(report) = report {
+        write_report_file(report, "errors/generation.txt", &format!("{text}\n"));
     }
 }
 
@@ -495,7 +504,7 @@ fn check_single_file(
             }
             Ok(None) => {}
             Err(error) => {
-                eprintln!("{}", error.located(db));
+                report_generation_error(db, &error, report);
                 return true;
             }
         }

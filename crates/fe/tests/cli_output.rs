@@ -7076,3 +7076,47 @@ fn test_cli_check_locates_a_generation_error_by_line_and_column() {
     assert!(!output.contains(".fe:44..70"), "{output}");
 }
 
+#[test]
+fn test_cli_report_records_a_generation_error() {
+    // A report of a failed command holds the generation error, as the report
+    // of `fe check` on a package does.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("bad_header.fe");
+    fs::write(
+        &path,
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+    for command in ["check", "build"] {
+        let archive = temp.path().join(format!("{command}-report.tar.gz"));
+        let args = [
+            command,
+            "--report",
+            "--report-out",
+            archive.to_str().unwrap(),
+            path.to_str().unwrap(),
+        ];
+        let (output, exit) = run_fe_main(&args);
+        assert_eq!(exit, 1, "{command}: {output}");
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&archive)
+            .output()
+            .expect("tar lists the report");
+        let listing = String::from_utf8_lossy(&listing.stdout).to_string();
+        let entry = listing
+            .lines()
+            .find(|line| line.ends_with("errors/generation.txt"))
+            .unwrap_or_else(|| panic!("{command}: no generation error in the report:\n{listing}"));
+        let text = Command::new("tar")
+            .arg("-xzOf")
+            .arg(&archive)
+            .arg(entry)
+            .output()
+            .expect("tar reads the entry");
+        assert!(
+            String::from_utf8_lossy(&text.stdout).contains("NotAProvider"),
+            "{command}: {text:?}"
+        );
+    }
+}

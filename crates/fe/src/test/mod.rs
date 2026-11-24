@@ -1746,8 +1746,12 @@ fn prepare_tests_single_file(
         }
         Ok(None) => {}
         Err(error) => {
+            let msg = error.located(db);
+            if let Some(report) = report {
+                write_report_error(report, "compilation_errors.txt", &msg);
+            }
             return SuitePreparation {
-                results: suite_error_result(suite, "compile", error.located(db)),
+                results: suite_error_result(suite, "compile", msg),
                 single_jobs: Vec::new(),
             };
         }
