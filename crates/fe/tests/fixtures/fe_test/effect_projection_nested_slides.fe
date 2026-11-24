@@ -125,6 +125,30 @@ fn read_back_sites(_ out: mut u256, _ c: bool) -> mut Frame uses (frame: mut Fra
     if c { read_back(mut out, 1) } else { read_back(mut out, 2) }
 }
 
+// One body for both modes: at `ref` the slide only reads the provider.
+fn read_back_either(_ out: mut u256, _ k: u256) -> mut? Frame uses (frame: mut? Frame) {
+    yield mut? frame
+    out = out * 10 + frame.x + k
+}
+
+fn either_sites(_ out: mut u256, _ c: bool) -> mut? Frame uses (frame: mut? Frame) {
+    if c { read_back_either(mut out, 1) } else { read_back_either(mut out, 2) }
+}
+
+struct Table { xs: [u256; 4] }
+
+const ONE: Table = Table { xs: [1, 2, 3, 4] }
+const TWO: Table = Table { xs: [5, 6, 7, 8] }
+
+fn peek(_ out: mut u256, _ i: usize) -> ref u256 uses (table: Table) {
+    yield ref table.xs[i]
+    out = out * 100 + table.xs[i]
+}
+
+fn peek_sites(_ out: mut u256, _ c: bool, _ i: usize) -> ref u256 uses (table: Table) {
+    if c { peek(mut out, i) } else { peek(mut out, i + 1) }
+}
+
 fn fresh() -> Frame {
     Frame { x: 0, log: 0 }
 }
@@ -357,4 +381,93 @@ fn write_read_back_sites(_ c: bool) -> u256 {
 fn slides_reading_the_provider_run_the_slide_taken() {
     assert!(write_read_back_sites(true) == 8)
     assert!(write_read_back_sites(false) == 9)
+}
+
+fn read_either_sites(_ c: bool) -> u256 {
+    let frame = Frame { x: 4, log: 0 }
+    var out: u256 = 0
+    let x = with (Frame = frame) {
+        let f = ref either_sites(mut out, c)
+        f.x
+    }
+    x * 100 + out
+}
+
+fn write_either_sites(_ c: bool) -> u256 {
+    var frame = fresh()
+    var out: u256 = 0
+    with (Frame = mut frame) {
+        let f = mut either_sites(mut out, c)
+        f.x = 7
+    }
+    frame.x * 100 + out
+}
+
+#[test]
+fn maybe_mut_projections_run_the_slide_taken() {
+    assert!(read_either_sites(true) == 405)
+    assert!(read_either_sites(false) == 406)
+    assert!(write_either_sites(true) == 708)
+    assert!(write_either_sites(false) == 709)
+}
+
+fn read_peek_sites(_ one: bool, _ c: bool, _ i: usize) -> u256 {
+    var out: u256 = 0
+    let v = if one {
+        with (Table = ONE) { peek_sites(mut out, c, i) }
+    } else {
+        with (Table = TWO) { peek_sites(mut out, c, i) }
+    }
+    v * 10000 + out
+}
+
+#[test]
+fn const_providers_run_the_slide_taken() {
+    assert!(read_peek_sites(true, true, 1) == 20002)
+    assert!(read_peek_sites(true, false, 1) == 30003)
+    assert!(read_peek_sites(false, true, 2) == 70007)
+    assert!(read_peek_sites(false, false, 2) == 80008)
+}
+
+// The session ends on two paths, each running its own copy of the slides.
+fn end_early(_ c: bool, _ stop: bool) -> u256 uses (frame: mut Frame) {
+    let f = mut two_sites(c)
+    f.x += 7
+    if stop {
+        return frame.log
+    }
+    f.x += 1
+    frame.log + 100
+}
+
+fn run_end_early(_ c: bool, _ stop: bool) -> (u256, Frame) {
+    var frame = fresh()
+    let log = with (Frame = mut frame) { end_early(c, stop) }
+    (log, frame)
+}
+
+#[test]
+fn each_end_runs_the_slide_taken() {
+    let (log, a) = run_end_early(true, true)
+    assert!(log == 1 && a.x == 7 && a.log == 1)
+    let (log, b) = run_end_early(false, true)
+    assert!(log == 2 && b.x == 7 && b.log == 2)
+    let (log, c) = run_end_early(true, false)
+    assert!(log == 101 && c.x == 8 && c.log == 1)
+    let (log, d) = run_end_early(false, false)
+    assert!(log == 102 && d.x == 8 && d.log == 2)
+}
+
+#[test]
+fn each_iteration_runs_the_slide_taken() {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        var i: u256 = 0
+        while i < 3 {
+            let f = mut two_sites(i % 2 == 0)
+            f.x += 1
+            i += 1
+        }
+    }
+    assert!(frame.x == 3 && frame.log == 121)
 }

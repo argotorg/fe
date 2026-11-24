@@ -3,7 +3,9 @@
 // the provider in storage, or stores back a packed lane's copy, which a
 // halt while the grant is live stores back first. Each test reads back
 // what only the site its path took wrote, and the lanes it did not take
-// keep their values.
+// keep their values. A run that does not halt stores each copy back once,
+// at the end of its session.
+use std::abi::Sol
 use std::evm::Evm
 use std::evm::storage_bytes::encode_bytes_return_from_calldata
 
@@ -42,6 +44,23 @@ fn pick_small(_ c: bool) -> mut u8 uses (pair: mut Pair) {
     }
 }
 
+// A site whose slide never ends the nested session it holds a copy for:
+// only the halt stores the copy back.
+fn loop_slide(_ c: bool) -> mut u8 uses (pair: mut Pair) {
+    if c {
+        with (Small = mut pair.first) {
+            let x = mut lane_a()
+            x = 9
+            yield mut pair.second.a
+            while true {
+                x = 10
+            }
+        }
+    } else {
+        yield mut pair.second.b
+    }
+}
+
 /// Returns the 32 bytes after the selector as ABI `bytes`.
 fn halt() -> ! {
     encode_bytes_return_from_calldata(data_ptr: 4, len: 32)
@@ -55,12 +74,14 @@ msg Msg {
     #[selector = 1]
     Write { c: bool },
     #[selector = 2]
-    PickLane { c: bool } -> Bytes,
+    PickLane { c: bool, halts: bool } -> Bytes,
     #[selector = 3]
-    PickSmall { c: bool } -> Bytes,
+    PickSmall { c: bool, halts: bool } -> Bytes,
     #[selector = 4]
-    Init {},
+    LoopSlide { c: bool } -> Bytes,
     #[selector = 5]
+    Init {},
+    #[selector = 6]
     Get -> u256,
 }
 
@@ -76,18 +97,27 @@ pub contract C {
                 f.x += 7
             }
         }
-        PickLane { c } -> Bytes uses (mut small) {
+        PickLane { c, halts } -> Bytes uses (mut small) {
             with (mut small) {
                 let q = mut pick_lane(c)
                 q = 5
-                maybe_halt(true)
+                maybe_halt(halts)
                 q += 1
             }
             halt()
         }
-        PickSmall { c } -> Bytes uses (mut pair) {
+        PickSmall { c, halts } -> Bytes uses (mut pair) {
             with (mut pair) {
                 let q = mut pick_small(c)
+                q = 5
+                maybe_halt(halts)
+                q += 1
+            }
+            halt()
+        }
+        LoopSlide { c } -> Bytes uses (mut pair) {
+            with (mut pair) {
+                let q = mut loop_slide(c)
                 q = 5
                 maybe_halt(true)
                 q += 1
@@ -96,12 +126,13 @@ pub contract C {
         }
         Init {} uses (mut small, mut pair) {
             small = Small { a: 1, b: 2 }
-            pair.first.a = 3
-            pair.second.a = 4
+            pair = Pair { first: Small { a: 3, b: 5 }, second: Small { a: 4, b: 6 } }
         }
         Get -> u256 uses (frame, small, pair) {
-            frame.x * 0x10000000000 + frame.log * 0x100000000 + small.a as u256 * 0x1000000
-                + small.b as u256 * 0x10000 + pair.first.a as u256 * 0x100 + pair.second.a as u256
+            frame.x * 0x1000000000000000 + frame.log * 0x100000000000000
+                + small.a as u256 * 0x10000000000 + small.b as u256 * 0x100000000
+                + pair.first.a as u256 * 0x1000000 + pair.first.b as u256 * 0x10000
+                + pair.second.a as u256 * 0x100 + pair.second.b as u256
         }
     }
 }
@@ -116,31 +147,52 @@ fn get(_ c: Address) -> u256 uses (evm: mut Evm) {
     evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Get {})
 }
 
+/// `Get` after `Init` and nothing else.
+const INIT: u256 = 0x010203050406
+
+/// Sends `message` and returns what `Get` reads afterwards.
+fn send<M>(_ c: Address, _ message: own M) -> u256
+    uses (evm: mut Evm)
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+{
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message)
+    get(c)
+}
+
 #[test]
 fn storage_providers_run_the_slide_taken() uses (evm: mut Evm) {
     let c = fresh(1)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Write { c: true })
-    assert(get(c) == 7 * 0x10000000000 + 1 * 0x100000000 + 0x01020304)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Write { c: false })
-    assert(get(c) == 14 * 0x10000000000 + 12 * 0x100000000 + 0x01020304)
+    assert(send(c, Msg::Write { c: true }) == 7 * 0x1000000000000000 + 1 * 0x100000000000000 + INIT)
+    assert(send(c, Msg::Write { c: false }) == 14 * 0x1000000000000000 + 12 * 0x100000000000000 + INIT)
 }
 
 #[test]
 fn halts_store_back_the_lane_taken() uses (evm: mut Evm) {
-    let c = fresh(1)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::PickLane { c: true })
-    assert(get(c) == 0x05020304)
-    let d = fresh(2)
-    evm.call(addr: d, gas: 10000000, value: Wei::zero(), message: Msg::PickLane { c: false })
-    assert(get(d) == 0x01050304)
+    assert(send(fresh(1), Msg::PickLane { c: true, halts: true }) == INIT + 4 * 0x10000000000)
+    assert(send(fresh(2), Msg::PickLane { c: false, halts: true }) == INIT + 3 * 0x100000000)
+}
+
+#[test]
+fn slides_store_back_the_lane_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickLane { c: true, halts: false }) == INIT + 5 * 0x10000000000)
+    assert(send(fresh(2), Msg::PickLane { c: false, halts: false }) == INIT + 4 * 0x100000000)
 }
 
 #[test]
 fn halts_store_back_through_the_with_provider_taken() uses (evm: mut Evm) {
-    let c = fresh(1)
-    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::PickSmall { c: true })
-    assert(get(c) == 0x01020504)
-    let d = fresh(2)
-    evm.call(addr: d, gas: 10000000, value: Wei::zero(), message: Msg::PickSmall { c: false })
-    assert(get(d) == 0x01020305)
+    assert(send(fresh(1), Msg::PickSmall { c: true, halts: true }) == INIT + 2 * 0x1000000)
+    assert(send(fresh(2), Msg::PickSmall { c: false, halts: true }) == INIT + 1 * 0x100)
+}
+
+#[test]
+fn slides_store_back_through_the_with_provider_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickSmall { c: true, halts: false }) == INIT + 3 * 0x1000000)
+    assert(send(fresh(2), Msg::PickSmall { c: false, halts: false }) == INIT + 2 * 0x100)
+}
+
+#[test]
+fn halts_store_back_a_copy_no_slide_ends() uses (evm: mut Evm) {
+    // The taken site's copy holds 9, the grant 5.
+    assert(send(fresh(1), Msg::LoopSlide { c: true }) == INIT + 6 * 0x1000000 + 1 * 0x100)
+    assert(send(fresh(2), Msg::LoopSlide { c: false }) == INIT - 1)
 }
