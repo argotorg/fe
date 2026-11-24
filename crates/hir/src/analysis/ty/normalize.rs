@@ -14,6 +14,11 @@ use super::{
     canonical::Canonical,
     canonical::Canonicalized,
     closure::callable_out_ty,
+    const_expr::ConstExpr,
+    const_ty::{
+        ConstTyData, ConstTyId, abstract_const_ty_from_assoc_const_use,
+        const_ty_or_abstract_from_assoc_const_use,
+    },
     fold::{TyFoldable, TyFolder},
     shape::Shape,
     trait_def::{
@@ -22,11 +27,11 @@ use super::{
     trait_lower::complete_impl_assoc_ty,
     trait_resolution::{PredicateListId, TraitSolveCx},
     ty_def::{
-        AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyId, TyParam,
+        AssocTy, InvalidCause, ShapeCon, ShapeMode, TyBase, TyData, TyFlags, TyId, TyParam,
         collect_variables,
     },
     unify::UnificationTable,
-    visitor::{TyVisitor, walk_ty},
+    visitor::{TyVisitor, collect_flags, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -99,7 +104,7 @@ pub struct TypeNormalizer<'db> {
     assumptions: PredicateListId<'db>,
     resolve_impls: bool,
     // Projection cache: None = in progress (cycle guard), Some(ty) = normalized result
-    cache: FxHashMap<AssocTy<'db>, Option<TyId<'db>>>,
+    cache: FxHashMap<TyId<'db>, Option<TyId<'db>>>,
     /// Projections currently being resolved, counted against
     /// [`PROJECTION_DEPTH_LIMIT`].
     projection_depth: usize,
@@ -257,7 +262,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 ty
             }
             TyData::AssocTy(assoc_ty) => {
-                match self.cache.entry(*assoc_ty) {
+                match self.cache.entry(ty) {
                     Entry::Occupied(entry) => match entry.get() {
                         Some(cached) => return *cached,
                         None => return ty, // cycle: leave unresolved
@@ -268,7 +273,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 }
 
                 if let Err(limit) = self.enter_projection(ty) {
-                    self.cache.insert(*assoc_ty, Some(limit));
+                    self.cache.insert(ty, Some(limit));
                     return limit;
                 }
                 // An associated shape resolves to its impl's value at the
@@ -283,13 +288,13 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                 };
                 self.projection_depth -= 1;
                 if let Some(normalized) = resolved {
-                    self.cache.insert(*assoc_ty, Some(normalized));
+                    self.cache.insert(ty, Some(normalized));
                     return normalized;
                 }
 
                 // Not resolved; still fold internals (e.g., normalize self type)
                 let folded = ty.super_fold_with(db, self);
-                self.cache.insert(*assoc_ty, Some(folded));
+                self.cache.insert(ty, Some(folded));
                 folded
             }
             // The value or carrier type of a shape reduces once the shape is
@@ -313,6 +318,54 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     shape if *con == ShapeCon::Value => self.fold_ty(db, shape.erased_ty(db)),
                     shape => self.fold_ty(db, shape.carrier_ty(db)),
                 }
+            }
+            // A trait constant's use carries the bounds it was lowered under.
+            // From an instantiated signature, those are the callee's bounds,
+            // which need not prove the selected impl's own: `T::COUNT` with
+            // `T = W<P>` selects `impl<P: Preset> Fields for W<P>` only where
+            // `P: Preset` holds. Select it under the bounds in scope here, and
+            // normalize the value it selects, which can name another constant.
+            TyData::ConstTy(const_ty)
+                if self.resolve_impls
+                    && let ConstTyData::Abstract(expr, _) = const_ty.data(db)
+                    && matches!(expr.data(db), ConstExpr::TraitConst(_)) =>
+            {
+                match self.cache.entry(ty) {
+                    Entry::Occupied(entry) => return entry.get().unwrap_or(ty),
+                    Entry::Vacant(entry) => {
+                        entry.insert(None);
+                    }
+                }
+                // A constant that exceeds the limits stays a constant, as the
+                // description it can be part of requires.
+                if self.enter_projection(ty).is_err() {
+                    let limit = TyId::const_ty(
+                        db,
+                        ConstTyId::invalid(db, InvalidCause::TypeNormalizationLimit),
+                    );
+                    self.cache.insert(ty, Some(limit));
+                    return limit;
+                }
+                let folded = ty.super_fold_with(db, self);
+                let resolved = if let TyData::ConstTy(const_ty) = folded.data(db)
+                    && let ConstTyData::Abstract(expr, expected_ty) = const_ty.data(db)
+                    && let ConstExpr::TraitConst(use_) = expr.data(db)
+                    && !collect_flags(db, use_.inst()).contains(TyFlags::HAS_VAR)
+                    && !expected_ty.has_var(db)
+                {
+                    let use_ = use_.with_env(self.scope, self.assumptions);
+                    let unresolved = abstract_const_ty_from_assoc_const_use(db, use_, *expected_ty);
+                    const_ty_or_abstract_from_assoc_const_use(db, use_, *expected_ty)
+                        .filter(|&resolved| resolved != unresolved)
+                } else {
+                    None
+                };
+                let normalized = resolved.map_or(folded, |resolved| {
+                    self.fold_ty(db, TyId::const_ty(db, resolved))
+                });
+                self.projection_depth -= 1;
+                self.cache.insert(ty, Some(normalized));
+                normalized
             }
             _ => ty.super_fold_with(db, self),
         }
@@ -495,13 +548,13 @@ mod tests {
     use camino::Utf8PathBuf;
     use common::indexmap::IndexMap;
 
-    use super::normalize_ty;
+    use super::{normalize_from_assumptions, normalize_ty};
     use crate::analysis::ty::{
         trait_def::TraitInstId,
         trait_resolution::PredicateListId,
         ty_def::{ShapeMode, TyId},
     };
-    use crate::hir_def::{IdentId, ItemKind, ModeMarker};
+    use crate::hir_def::{CallableDef, IdentId, ItemKind, ModeMarker};
     use crate::test_db::HirAnalysisTestDb;
 
     /// An associated shape normalizes to its impl's value at the mode it is
@@ -570,5 +623,71 @@ fn probe(_ d: own Enumerate<Enumerate<Identity>>) {}
         };
         assert_eq!(at(ShapeMode::Ref), "(own usize, (own usize, ref u256))");
         assert_eq!(at(ShapeMode::Mut), "(own usize, (own usize, mut u256))");
+    }
+
+    /// A trait constant in an instantiated signature selects its impl under
+    /// the bounds normalization is given, and only where it may select impls.
+    #[test]
+    fn trait_consts_select_under_given_bounds() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("trait_consts_select_under_given_bounds.fe"),
+            r#"
+trait Preset {}
+
+trait Fields {
+    const COUNT: usize
+    fn values(self) -> [u8; Self::COUNT]
+}
+
+struct Generic<P> {}
+
+impl<P: Preset> Fields for Generic<P> {
+    const COUNT: usize = 2
+    fn values(self) -> [u8; 2] { [0, 1] }
+}
+
+impl<P: Preset> Generic<P> {
+    fn probe(self) {}
+}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let items: Vec<_> = top_mod.children_non_nested(&db).collect();
+        let values = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Trait(trait_) => trait_.methods(&db).next(),
+                _ => None,
+            })
+            .expect("missing values");
+        let impl_ = items
+            .iter()
+            .find_map(|item| match item {
+                ItemKind::Impl(impl_) => Some(*impl_),
+                _ => None,
+            })
+            .expect("missing impl");
+        let probe = impl_.funcs(&db).next().expect("missing probe");
+        let values_ty = CallableDef::Func(values)
+            .ret_ty(&db)
+            .instantiate(&db, &[impl_.ty(&db)]);
+        let (scope, assumptions) = (probe.scope(), probe.assumptions(&db));
+        let print = |ty: TyId<'_>| ty.pretty_print(&db).to_string();
+        assert_eq!(print(values_ty), "[u8; Generic<P>::COUNT]");
+        assert_eq!(
+            print(normalize_ty(&db, values_ty, scope, assumptions)),
+            "[u8; 2]"
+        );
+        assert_eq!(
+            print(normalize_from_assumptions(
+                &db,
+                values_ty,
+                scope,
+                assumptions
+            )),
+            "[u8; Generic<P>::COUNT]"
+        );
     }
 }

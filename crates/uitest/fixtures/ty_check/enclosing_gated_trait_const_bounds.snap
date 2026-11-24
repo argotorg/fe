@@ -10,13 +10,13 @@ error[6-0003]: trait bound is not satisfied
    │                                -------------------------- required by this bound on `need`
    ·
 50 │ fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
-   │                                  ^^^^^^^^^^^^^^^^^^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
+   │                                  ^^^^^^^^^^^^^^^^^^ `U` doesn't implement `Has<4>`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ enclosing_gated_trait_const_bounds.fe:50:47
    │
 50 │ fn wrong<T: Gate, U: Has<5>>() { Foo<T>::need<3, U>() }
-   │                                               ^ `U` doesn't implement `Has<Marker<T, 3>::LEN>`
+   │                                               ^ `U` doesn't implement `Has<4>`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ enclosing_gated_trait_const_bounds.fe:52:30

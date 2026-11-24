@@ -477,7 +477,7 @@ enum ImplSelection<'db> {
 }
 
 /// Call sites and method checks select the same implementations repeatedly.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(copy), cycle_initial = resolve_trait_impl_instance_cycle_initial)]
 fn resolve_trait_impl_instance_query<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -497,6 +497,19 @@ fn resolve_trait_impl_instance_query<'db>(
         Selection::Ambiguous(_) => ImplSelection::Ambiguous,
         Selection::NotFound => ImplSelection::NotFound,
     }
+}
+
+/// A selection that needs itself does not hold. Normalizing a goal under the
+/// selection can name a constant of the impl being selected, such as
+/// `T: Gate<Foo<T>::N>` while selecting `Foo<T>: Size`; that constant has no
+/// value until the selection holds without it.
+fn resolve_trait_impl_instance_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _solve_cx: TraitSolveCx<'db>,
+    _inst: TraitInstId<'db>,
+) -> ImplSelection<'db> {
+    ImplSelection::NotFound
 }
 
 /// A selected method retains the proof origin and the nominal trait reference.

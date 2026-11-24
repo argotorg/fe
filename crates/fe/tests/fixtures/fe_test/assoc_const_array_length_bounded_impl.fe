@@ -1,0 +1,210 @@
+// A trait method's associated-const array length, called in a generic impl
+// whose parameter has a bound, normalizes to the value of the impl it selects.
+
+trait Preset {
+    const N: usize
+}
+
+struct Small {}
+
+impl Preset for Small {
+    const N: usize = 4
+}
+
+trait Fields {
+    const COUNT: usize
+    fn values(self) -> [u8; Self::COUNT]
+    fn padded(self) -> [u8; Self::COUNT + 1]
+}
+
+fn sum<const N: usize>(_ values: [u8; N]) -> u8 {
+    var total: u8 = 0
+    for value in values {
+        total += value
+    }
+    total
+}
+
+fn values_of<F: Fields>(_ f: F) -> [u8; F::COUNT] {
+    f.values()
+}
+
+fn total_of<F: Fields>(_ f: F) -> u8 {
+    sum(f.values())
+}
+
+struct Generic<P: Preset> { tag: u8 }
+
+impl<P: Preset> Fields for Generic<P> {
+    const COUNT: usize = 2
+    fn values(self) -> [u8; 2] {
+        [self.tag, 4]
+    }
+    fn padded(self) -> [u8; 3] {
+        [self.tag, 4, 1]
+    }
+}
+
+impl<P: Preset> Generic<P> {
+    fn total(self) -> u8 {
+        sum(self.values())
+    }
+
+    fn annotated(self) -> u8 {
+        let values: [u8; 2] = self.values()
+        sum(values)
+    }
+
+    fn explicit(self) -> u8 {
+        sum<{ Self::COUNT }>(self.values())
+    }
+
+    fn through_free(self) -> u8 {
+        sum(values_of(self))
+    }
+
+    fn padded_total(self) -> u8 {
+        sum(self.padded())
+    }
+}
+
+// The impl's value names the bound's own constant.
+trait Chained {
+    const COUNT: usize
+    fn items(self) -> [u8; Self::COUNT]
+}
+
+struct Chain<P: Preset> { tag: u8 }
+
+impl<P: Preset> Chained for Chain<P> {
+    const COUNT: usize = P::N
+    fn items(self) -> [u8; P::N] {
+        [self.tag; P::N]
+    }
+}
+
+impl<P: Preset> Chain<P> {
+    fn chained(self) -> [u8; P::N] {
+        self.items()
+    }
+
+    fn chained_total(self) -> u8 {
+        sum(self.items())
+    }
+}
+
+// `Chain<Wrap<Q>>::COUNT` selects `P::N`, which needs the caller's `Q: Marker`
+// to select its own impl.
+trait Marker {}
+
+struct Tagged {}
+
+impl Marker for Tagged {}
+
+struct Wrap<Q> {}
+
+impl<Q: Marker> Preset for Wrap<Q> {
+    const N: usize = 4
+}
+
+fn two_hop<Q: Marker>(_ c: Chain<Wrap<Q>>) -> [u8; 4] {
+    c.items()
+}
+
+// A trait's default method, and a default value an impl keeps or overrides.
+trait Defaults {
+    const COUNT: usize = 1
+    fn values(self) -> [u8; Self::COUNT]
+    fn total(self) -> u8 {
+        sum(self.values())
+    }
+}
+
+struct Overrides<P: Preset> { tag: u8 }
+
+impl<P: Preset> Defaults for Overrides<P> {
+    const COUNT: usize = 2
+    fn values(self) -> [u8; 2] {
+        [self.tag, 4]
+    }
+}
+
+struct Keeps<P: Preset> { tag: u8 }
+
+impl<P: Preset> Defaults for Keeps<P> {
+    fn values(self) -> [u8; 1] {
+        [self.tag]
+    }
+}
+
+trait Has<const N: usize> {}
+
+struct Three {}
+
+impl Has<3> for Three {}
+
+impl<P: Preset> Overrides<P> {
+    fn own_total(self) -> u8 {
+        sum(self.values())
+    }
+
+    fn need<U: Has<{ Self::COUNT + 1 }>>() -> u8 {
+        1
+    }
+
+    fn bound() -> u8 {
+        Self::need<Three>()
+    }
+}
+
+impl<P: Preset> Keeps<P> {
+    fn own_total(self) -> u8 {
+        sum(self.values())
+    }
+}
+
+// Without the impl's bound in scope the constant stays symbolic.
+struct Loose<P> { tag: u8 }
+
+impl<P: Preset> Fields for Loose<P> {
+    const COUNT: usize = 2
+    fn values(self) -> [u8; 2] {
+        [self.tag, 4]
+    }
+    fn padded(self) -> [u8; 3] {
+        [self.tag, 4, 1]
+    }
+}
+
+fn loose_total<P>(_ l: Loose<P>) -> u8 where Loose<P>: Fields {
+    sum(l.values())
+}
+
+#[test]
+fn bounded_impl_assoc_const_lengths() {
+    let g: Generic<Small> = Generic { tag: 3 }
+    assert!(g.total() == 7)
+    assert!(g.annotated() == 7)
+    assert!(g.explicit() == 7)
+    assert!(g.through_free() == 7)
+    assert!(g.padded_total() == 8)
+    assert!(total_of(g) == 7)
+}
+
+#[test]
+fn chained_and_default_assoc_const_lengths() {
+    let c: Chain<Small> = Chain { tag: 3 }
+    assert!(sum(c.chained()) == 12)
+    assert!(c.chained_total() == 12)
+    let w: Chain<Wrap<Tagged>> = Chain { tag: 3 }
+    assert!(sum(two_hop(w)) == 12)
+    let o: Overrides<Small> = Overrides { tag: 3 }
+    assert!(o.total() == 7)
+    assert!(o.own_total() == 7)
+    assert!(Overrides<Small>::bound() == 1)
+    let k: Keeps<Small> = Keeps { tag: 3 }
+    assert!(k.total() == 3)
+    assert!(k.own_total() == 3)
+    let l: Loose<Small> = Loose { tag: 3 }
+    assert!(loose_total(l) == 7)
+}
