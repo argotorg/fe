@@ -46,7 +46,7 @@ use crate::{
         name_resolution::Tier,
         semantic::{SemOrigin, SemanticInstance, diagnostics::SemanticDiagnosticSpan},
         ty::{
-            evidence::{Evidence, EvidenceId, instance_evidence, prove},
+            evidence::{Evidence, EvidenceId, instance_evidence},
             trait_def::ImplementorOrigin,
             trait_resolution::TraitSolveCx,
             ty_check::{BodyOwner, infer_body},
@@ -148,11 +148,11 @@ impl<'db> UnsafeTrust<'db> {
     /// The `unsafe impl`s that the untrusted ingots wrote or placed and that
     /// `instance` relies on: those that prove one of the assumptions its body
     /// is checked under, a bound of the function, of its implementation or of
-    /// its trait, `Self: Trait` for a member of a trait, and the trait
-    /// instance a trait constant is read through, and recursively the
+    /// its trait, `Self: Trait` for a member of a trait, and recursively the
     /// implementations selected for the conditions of each. The proofs are
     /// the instance's own evidence (`instance_evidence`), the ones its body
-    /// runs with. An assumption of a generic caller proves nothing here: it is
+    /// runs with, so an implementation that a `with` choice replaced is not
+    /// reached. An assumption of a generic caller proves nothing here: it is
     /// judged at the call that supplies the implementation.
     fn relied_unsafe_impls(
         &self,
@@ -174,13 +174,6 @@ impl<'db> UnsafeTrust<'db> {
                 .flatten()
                 .copied()
                 .collect();
-        let witness_cx = solve_cx.with_assumptions(impl_env.assumptions(db));
-        pending.extend(
-            impl_env
-                .witnesses(db)
-                .iter()
-                .filter_map(|goal| prove(db, witness_cx, *goal)),
-        );
         let mut relied = Vec::new();
         while let Some(proof) = pending.pop() {
             if let Evidence::Impl {

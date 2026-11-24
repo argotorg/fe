@@ -5322,6 +5322,66 @@ fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_where_a_running_body_relies_
 }
 
 #[test]
+fn test_cli_test_unsafe_trust_judges_each_shape_of_reliance_on_an_unsafe_impl() {
+    // Each program relies on an `unsafe impl` of `u`, which nothing trusts,
+    // without calling a method of it: through the supertrait of a bound, the
+    // condition of a blanket implementation, the default constant of its
+    // trait, a named implementation of `u` that `with` chooses, and the
+    // provider of a trait-keyed effect.
+    for (fixture, calls) in [
+        (
+            "unsafe_trust_relied_supertrait",
+            &["t::peek_w(u::Sup {})"][..],
+        ),
+        (
+            "unsafe_trust_relied_blanket_condition",
+            &["t::show2_it(u::X {})", "u::X {}.show2()"][..],
+        ),
+        (
+            "unsafe_trust_relied_default_constant",
+            &["t::read_k2<u::K2>()", "u::K2::K"][..],
+        ),
+        ("unsafe_trust_relied_untrusted_choice", &["u::Y {}.b()"][..]),
+        ("unsafe_trust_relied_effect_provider", &["t::charge2()"][..]),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        for call in calls {
+            assert!(
+                output.contains("call relies on an `unsafe impl` that `u` wrote")
+                    && output.contains(call),
+                "{fixture}: expected a reliance error at `{call}`:\n{output}"
+            );
+        }
+        assert_eq!(
+            output
+                .matches("which is not allowed to use unsafe code")
+                .count(),
+            calls.len(),
+            "{fixture}: one error for each call:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_does_not_judge_an_unsafe_impl_that_a_choice_replaces() {
+    // The default method `b` of `Checked` is checked under `Self: Checked`.
+    // `with (t::GoodC)` chooses the trusted named implementation `GoodC` for
+    // it, so `u`'s ordinary `unsafe impl Checked for Y` never runs and needs
+    // no trust.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_relied_trusted_choice");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] chosen_default"),
+        "expected chosen_default to pass, got:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_judges_an_unsafe_fn_by_the_packages_that_placed_it() {
     // `t2` is trusted and wrote the `unsafe fn`; `u` is not and spliced the
     // item into its own quotation, so the function is unsafe code that `u`

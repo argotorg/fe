@@ -1,0 +1,6 @@
+// The trusted named template `t::GoodC`, chosen by `with`, answers
+// `Self: Checked` for the default method `b`; `u`'s ordinary
+// `unsafe impl Checked for Y` is not used. Expected: accepted.
+use t::Checked
+#[test]
+fn chosen_default() { assert!(with (t::GoodC) { u::Y {}.b() } == 1) }
