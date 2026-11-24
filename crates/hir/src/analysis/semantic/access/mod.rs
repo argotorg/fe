@@ -588,10 +588,8 @@ fn collect_semantic_access_with_blocked<'db>(
                     // reports as a mismatch against the rigid `Self::X`. The
                     // constant is checked where it is written, so a constant
                     // that a body reads is followed as far as it is admitted.
-                    if matches!(
-                        owner,
-                        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }
-                    ) && !own.contains(&instance)
+                    if matches!(owner, BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. })
+                        && !own.contains(&instance)
                     {
                         continue;
                     }
