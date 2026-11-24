@@ -11,6 +11,10 @@ use url::Url;
 
 use crate::virtual_files::{VirtualFiles, materialize_builtins};
 
+/// Test hook: the next preparation for this url panics.
+#[cfg(test)]
+pub(crate) static FORCE_PREPARATION_PANIC: Mutex<Option<Url>> = Mutex::new(None);
+
 /// Failure modes for work dispatched via [`Backend::spawn_on_workers`].
 ///
 /// Callers need to distinguish a genuine panic in the analysis pipeline
@@ -188,10 +192,43 @@ impl Backend {
                 .clone()
                 .map(|prepared| prepared.unwrap_or_else(|| self.db.clone()));
         }
-        let result = if standalone {
-            driver::generation::prepare_file(&self.db, file)
-        } else {
-            driver::generation::prepare_ingots(&self.db, std::slice::from_ref(&key))
+        // Preparation runs the providers of the package. A panic in it fails
+        // the request that asked for the view, as a generation error, and not
+        // the server. Salsa's cancellation is a panic too and goes on.
+        let prepared = panic::catch_unwind(AssertUnwindSafe(|| {
+            #[cfg(test)]
+            if FORCE_PREPARATION_PANIC
+                .lock()
+                .unwrap()
+                .take_if(|forced| *forced == *url)
+                .is_some()
+            {
+                panic!("__test_induced_preparation_panic__");
+            }
+            if standalone {
+                driver::generation::prepare_file(&self.db, file)
+            } else {
+                driver::generation::prepare_ingots(&self.db, std::slice::from_ref(&key))
+            }
+        }));
+        let result = match prepared {
+            Ok(result) => result,
+            Err(payload) => {
+                if payload.is::<salsa::Cancelled>() {
+                    panic::resume_unwind(payload);
+                }
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("<non-string panic>");
+                tracing::error!("preparing the view of {url} panicked: {message}");
+                Err(driver::generation::GenerationError {
+                    file: url.clone(),
+                    range: parser::TextRange::empty(0.into()),
+                    cause: format!("generation panicked: {message}"),
+                })
+            }
         };
         self.prepared_views
             .lock()
@@ -346,9 +383,10 @@ fn normalize_file_uri(uri: Url) -> Url {
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, WorkerError, normalize_file_uri};
+    use super::{Backend, FORCE_PREPARATION_PANIC, WorkerError, normalize_file_uri};
     use async_lsp::MainLoop;
     use async_lsp::router::Router;
+    use common::InputDb;
     use url::Url;
 
     #[test]
@@ -373,6 +411,40 @@ mod tests {
     fn test_backend() -> Backend {
         let (_main_loop, client_socket) = MainLoop::new_server(|_client| Router::<()>::new(()));
         Backend::new(client_socket, None, None, None)
+    }
+
+    /// A panic while a view is prepared fails the request that asked for the
+    /// view, not the server: the request gets the generation error, and the
+    /// next request is answered.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_panic_in_preparation_fails_one_request() {
+        let mut backend = test_backend();
+        let url = Url::parse("file:///tmp/fe-preparation-panic.fe").unwrap();
+        backend.db.workspace().touch(
+            &mut backend.db,
+            url.clone(),
+            Some("fn f() -> u256 { 1 }\n".to_string()),
+        );
+        *FORCE_PREPARATION_PANIC.lock().unwrap() = Some(url.clone());
+
+        let Err(error) = backend.try_analysis_db_for_url(&url) else {
+            panic!("the induced panic is reported as a generation error");
+        };
+        assert_eq!(error.file, url);
+        assert!(
+            error.cause.contains("__test_induced_preparation_panic__"),
+            "unexpected cause: {}",
+            error.cause
+        );
+
+        // The failure belongs to the request: after the views are dropped, the
+        // same file is prepared again and answered.
+        backend.invalidate_analysis_views();
+        assert!(backend.try_analysis_db_for_url(&url).is_ok());
+
+        tokio::task::spawn_blocking(move || drop(backend))
+            .await
+            .unwrap();
     }
 
     /// Regression test: `spawn_on_workers` must `catch_unwind` inside the
