@@ -6402,6 +6402,19 @@ impl<'db> TypedBody<'db> {
         seen: &mut FxHashSet<Func<'db>>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
+        let projection = place
+            .projections
+            .iter()
+            .map(|projection| match projection {
+                // A value read through a raw pointer, or at a collection's
+                // entry, is not a part of the binding.
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
+                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+                PlaceProjection::Index { index_expr, .. } => {
+                    self.return_index_projection(db, body, *index_expr)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
         let PlaceBase::Binding(binding) = place.base;
         let sources = match binding {
             LocalBinding::Param {
@@ -6451,22 +6464,6 @@ impl<'db> TypedBody<'db> {
                 ..
             } => return None,
         };
-        if place.has_entry() {
-            return None;
-        }
-        let projection = place
-            .projections
-            .iter()
-            .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
-                PlaceProjection::Field { index, .. } => {
-                    Some(Some(ReturnProjectionStep::Field(*index)))
-                }
-                PlaceProjection::Index { index_expr, .. } => {
-                    Some(self.return_index_projection(db, body, *index_expr))
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)
     }
 

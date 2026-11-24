@@ -78,14 +78,6 @@ impl<'db> Place<'db> {
         self.projections.push(proj);
     }
 
-    /// Whether the place reaches an entry of a collection whose elements are
-    /// places, which lies at a slot computed at runtime.
-    pub fn has_entry(&self) -> bool {
-        self.projections
-            .iter()
-            .any(|projection| matches!(projection, PlaceProjection::Entry { .. }))
-    }
-
     pub fn is_definitely_place_expr(typed_body: &TypedBody<'db>, expr: ExprId) -> bool {
         typed_body.expr_place(expr).is_some()
     }
