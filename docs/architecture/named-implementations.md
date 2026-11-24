@@ -100,9 +100,12 @@ type, alias or anonymous constant whose formation reads a choice is refused
 The same comparison runs at a concrete goal that a proof answers through a
 named implementation at any depth (`concrete_goal_output_mismatch`,
 `trait_def`). `SemanticInstance::output_agreement_diagnostic` applies it to
-every proof a body's uses carry, and to its callees that receive a named
-implementation in a dictionary, before the body is lowered. The codec proofs
-that `entry_codec_callees` completes after admission are checked there.
+every proof a body's uses carry before the body is lowered. A callee's own
+uses are checked when the callee is admitted. Where the admission of an
+instance fails internally, the first disagreement in the instances it calls
+(only those within the instance limits) is reported instead
+(`callee_output_disagreement`). The codec proofs that `entry_codec_callees`
+completes after admission are checked there.
 
 An overlap used to compare outputs binds the structural arguments first.
 It then uses the declared equalities from both implementations to normalize

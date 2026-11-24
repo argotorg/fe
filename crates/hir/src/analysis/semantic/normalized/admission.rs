@@ -186,6 +186,7 @@ fn normalize_and_verify<'db>(
             if let Err(error) = verify_normalized_body(db, &artifacts.body) {
                 return internal_failure(
                     db,
+                    instance,
                     normalized_body_verify_error_to_diag(db, instance, error),
                 );
             }
@@ -194,6 +195,7 @@ fn normalize_and_verify<'db>(
             {
                 return internal_failure(
                     db,
+                    instance,
                     normalized_layout_plan_verify_error_to_diag(db, instance, error),
                 );
             }
@@ -203,7 +205,11 @@ fn normalize_and_verify<'db>(
                 artifacts.layout_plan,
             ))
         }
-        Err(error) => internal_failure(db, normalized_body_error_to_diag(db, instance, error)),
+        Err(error) => internal_failure(
+            db,
+            instance,
+            normalized_body_error_to_diag(db, instance, error),
+        ),
     }
 }
 
@@ -269,10 +275,14 @@ fn admission_failure<'db>(
                 SemanticBodyAdmission::Rejected,
             ),
         SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => {
-            internal_failure(db, smir_lowering_admission_diag(db, instance, &causes))
+            internal_failure(
+                db,
+                instance,
+                smir_lowering_admission_diag(db, instance, &causes),
+            )
         }
         SemanticBodyAdmissionError::CallSiteFinalization(diag) => {
-            SemanticBodyAdmission::InternalFailure(diag)
+            attributed_internal_failure(db, instance, diag)
         }
         SemanticBodyAdmissionError::InvalidConcreteType(diag)
         | SemanticBodyAdmissionError::InstanceLimit(diag) => SemanticBodyAdmission::Rejected(diag),
@@ -281,7 +291,25 @@ fn admission_failure<'db>(
 
 fn internal_failure<'db>(
     db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
     diagnostic: SemanticDiagnostic<'db>,
 ) -> SemanticBodyAdmission<'db> {
-    SemanticBodyAdmission::InternalFailure(SemanticDiagnosticId::new(db, diagnostic))
+    attributed_internal_failure(db, instance, SemanticDiagnosticId::new(db, diagnostic))
+}
+
+/// An internal failure of `instance`, unless a callee it calls has a use whose
+/// outputs disagree with ordinary normalization (see
+/// `concrete_goal_output_mismatch`). The caller is checked against the
+/// outputs of its callees as ordinary normalization gives them, so a callee
+/// that disagrees makes it fail verification. The callee's disagreement is
+/// then the diagnostic.
+fn attributed_internal_failure<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    diagnostic: SemanticDiagnosticId<'db>,
+) -> SemanticBodyAdmission<'db> {
+    match instance.callee_output_disagreement(db) {
+        Some(disagreement) => SemanticBodyAdmission::Rejected(disagreement),
+        None => SemanticBodyAdmission::InternalFailure(diagnostic),
+    }
 }

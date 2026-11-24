@@ -924,7 +924,7 @@ fn provisional_call_site<'db>(
     }
 }
 
-#[salsa::tracked(returns(copy), cycle_initial = output_agreement_cycle_initial)]
+#[salsa::tracked(returns(copy))]
 fn output_agreement_diagnostic_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -957,47 +957,30 @@ fn output_agreement_diagnostic_query<'db>(
                 output_disagreement_diagnostic(db, instance, expr, own, mismatch)
             });
     });
-    if found.is_some() {
-        return found;
-    }
-    // A callee that receives a named implementation in a dictionary can
-    // answer a goal with it where its caller cannot see the goal. The caller
-    // cannot be lowered over a callee that disagrees, so the callee is
-    // checked first and its diagnostic is the caller's.
-    let key = instance.key(db);
-    typed.for_each_callable(|_, callable| {
-        if found.is_some() {
-            return;
-        }
-        let evidence = callable.use_evidence();
-        let named = evidence.bounds.is_some_and(|bounds| {
-            bounds
-                .entries
-                .entries(db)
-                .iter()
-                .flatten()
-                .any(|proof| proof.has_named_impl(db))
-                || bounds
-                    .entries
-                    .rows(db)
-                    .iter()
-                    .filter_map(|row| row.proof)
-                    .any(|proof| proof.has_named_impl(db))
-        });
-        if !named {
-            return;
-        }
-        if let Ok(Some(callee)) =
-            semantic_callee_key_with_effect_providers(db, key, callable, &[], &[])
-            && callee.key != key
-        {
-            found = output_agreement_diagnostic_query(db, SemanticInstance::new(db, callee.key));
-        }
-    });
     found
 }
 
-fn output_agreement_cycle_initial<'db>(
+/// The first disagreement with ordinary normalization (see
+/// `output_agreement_diagnostic_query`) in an instance that `instance` calls,
+/// directly or through other calls. Only instances within the instance limits
+/// are followed, so the walk ends for recursion that grows its generic
+/// arguments.
+#[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
+fn callee_output_disagreement_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    instance_calls(db, instance)
+        .into_iter()
+        .map(|(_, callee)| SemanticInstance::new(db, callee.key))
+        .filter(|&callee| callee != instance && instance_limit_violation(db, callee).is_none())
+        .find_map(|callee| {
+            output_agreement_diagnostic_query(db, callee)
+                .or_else(|| callee_output_disagreement_query(db, callee))
+        })
+}
+
+fn callee_output_disagreement_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     _instance: SemanticInstance<'db>,
@@ -1944,6 +1927,18 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<SemanticDiagnosticId<'db>> {
         output_agreement_diagnostic_query(db, self)
+    }
+
+    /// The first disagreement with ordinary normalization in an instance this
+    /// one calls, directly or through other calls. A body is checked against the
+    /// outputs of its callees as ordinary normalization gives them, so a callee
+    /// that disagrees can make the body fail verification. Admission asks for it
+    /// only after such a failure.
+    pub(crate) fn callee_output_disagreement(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        callee_output_disagreement_query(db, self)
     }
 
     /// The disagreement in `proof`, a proof this instance's body completed

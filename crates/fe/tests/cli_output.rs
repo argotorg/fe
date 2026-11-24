@@ -6207,3 +6207,99 @@ fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
     let (output, exit_code) = run_fe_main(&["check", disjoint.to_str().expect("utf8")]);
     assert_eq!(exit_code, 0, "{output}");
 }
+
+/// Runs `fe` and fails the test, killing the process, if it has not finished
+/// within `limit`. A compiler that does not stop is the failure under test.
+fn run_fe_main_within(args: &[&str], limit: std::time::Duration) -> (String, i32) {
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let dir = tempdir().expect("tempdir");
+    let stdout = fs::File::create(dir.path().join("stdout")).expect("stdout file");
+    let stderr = fs::File::create(dir.path().join("stderr")).expect("stderr file");
+    let mut child = Command::new(fe_binary())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to spawn fe {args:?}"));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for fe") {
+            break Some(status);
+        }
+        if start.elapsed() > limit {
+            child.kill().expect("kill fe");
+            child.wait().expect("reap fe");
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let read = |name: &str| {
+        normalize_output(&String::from_utf8_lossy(
+            &fs::read(dir.path().join(name)).expect("read output"),
+        ))
+    };
+    let output = format!("{}{}", read("stdout"), read("stderr"));
+    let Some(status) = status else {
+        panic!("fe {args:?} did not finish within {limit:?}: {output}");
+    };
+    (output, status.code().unwrap_or(-1))
+}
+
+#[test]
+fn named_polymorphic_recursion_reaches_the_instance_limit() {
+    // The recursive call's dictionary holds a named implementation, and every
+    // instance of `deep` is new. The instance limit ends the chain, as it does
+    // for the same recursion without a choice or with the choice inside the
+    // body.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for name in [
+        "named_polyrec_control.fe",
+        "named_polyrec_local_choice.fe",
+        "named_polyrec_named.fe",
+    ] {
+        let path = fixtures.join(name);
+        let (output, exit) = run_fe_main_within(
+            &["check", path.to_str().unwrap()],
+            std::time::Duration::from_secs(120),
+        );
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(output.contains("16-0016"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_condition_answered_goal_needs_ordinary_outputs() {
+    // A goal with outputs, answered only through a choice, is refused even
+    // where the program reads no output: no ordinary implementation defines
+    // the outputs the type checker would assume for it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_unused_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains("no ordinary implementation defines its associated outputs"),
+        "{output}"
+    );
+    assert!(!output.contains("16-0004"), "{output}");
+}
+
+#[test]
+fn named_constant_computed_under_its_own_choice() {
+    // The constant of a named implementation runs a method of the same
+    // implementation under `with`. Checking the constant checks the
+    // computation, which uses the implementation again.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let limit = std::time::Duration::from_secs(120);
+    let path = fixtures.join("named_const_cycle.fe");
+    let (output, exit) =
+        run_fe_main_within(&["test", "--jobs", "1", path.to_str().unwrap()], limit);
+    assert_eq!(exit, 0, "{output}");
+
+    let path = fixtures.join("named_const_cycle_disagree.fe");
+    let (output, exit) = run_fe_main_within(&["check", path.to_str().unwrap()], limit);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+}
