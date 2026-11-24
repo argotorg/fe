@@ -513,7 +513,7 @@ fn collect_semantic_access_with_blocked<'db>(
             }
             let owner = instance.key(db).owner(db);
             if let (Some(trust), Some(call)) = (judge, &call)
-                && let Some((site, author)) = trust.untrusted_site(db, owner)
+                && let Some((site, author)) = trust.untrusted_site(db, instance)
                 && seen_untrusted.insert((author, call.clone()))
             {
                 diags.push(Box::new(UntrustedUnsafeUse {
@@ -586,18 +586,6 @@ fn collect_semantic_access_with_blocked<'db>(
                 }
             }
         }
-    }
-    // An `unsafe impl` without a function has nothing for a call to reach, so it
-    // is judged where it is declared, once for the program of a trust root.
-    if let Some(trust) = &trust
-        && top_mod == top_mod.ingot(db).root_mod(db)
-    {
-        diags.extend(
-            trust
-                .untrusted_unsafe_impls(db, top_mod.ingot(db))
-                .into_iter()
-                .map(|unsafe_impl| Box::new(unsafe_impl) as Box<dyn DiagnosticVoucher + 'db>),
-        );
     }
     diags
 }

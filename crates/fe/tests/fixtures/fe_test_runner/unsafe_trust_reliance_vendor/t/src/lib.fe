@@ -1,0 +1,17 @@
+use core::abi::{load_word, store_word}
+use core::ptr
+pub unsafe trait PodM { fn tag(self) -> u256 }
+pub unsafe trait PodE {}
+pub unsafe trait Checked {
+    fn a(self)
+    fn b(self) -> u256 { 1 }
+}
+fn raw() -> u256 {
+    let p = ptr::alloc_bytes(32)
+    unsafe {
+        store_word(ptr: p, value: 7)
+        load_word(p)
+    }
+}
+pub fn peek_m<T: PodM>(_ t: T) -> u256 { raw() }
+pub fn peek_e<T: PodE>(_ t: T) -> u256 { raw() }

@@ -4807,6 +4807,7 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
             "spliced_safe_fragment",
         ),
         ("unsafe_trust_spliced_operation_allowed", "spliced_deref"),
+        ("unsafe_trust_unused_unsafe_impls", "builds_values"),
         ("unsafe_trust_const_allowed", "via_const"),
         ("unsafe_trust_const_allowed", "assoc"),
         ("unsafe_trust_const_allowed", "pat"),
@@ -5192,23 +5193,54 @@ fn test_cli_test_unsafe_trust_follows_the_drop_that_drop_elaboration_inserts() {
 }
 
 #[test]
-fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_with_no_function_where_it_is_declared() {
-    // `peek` of the trusted `t` relies on what `unsafe impl Pod` asserts, and an
-    // `unsafe impl` with no function has nothing for a call to reach. The one
-    // that `v`, which nothing trusts, wrote for its own type is refused where
-    // it is declared.
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_where_it_is_relied_on_without_a_call_of_its_own()
+ {
+    // `peek` of the trusted `t` relies on what `unsafe impl Pod` asserts. The
+    // one that `v`, which nothing trusts, wrote for its own type is judged
+    // where the call to `peek` passes the type, not where it is declared.
     let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_pod_written");
     let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
     let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
     assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
     assert!(
-        output.contains("unsafe impl from `v`, which is not allowed to use unsafe code")
+        output.contains("call relies on an `unsafe impl` that `v` wrote, which is not allowed to use unsafe code")
+            && output.contains("peek(VType {})")
             && output.contains("unsafe impl t::Pod for VType {}")
             && output.contains(
                 "to trust `v`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml"
             ),
         "unexpected diagnostics:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_where_a_running_body_relies_on_it() {
+    // An `unsafe impl` of `u`, which nothing trusts, is relied on by code that
+    // runs: through a bound that it proves (with a method, and without one),
+    // and through the default method of its trait. Each is refused at the call
+    // that makes the code run, whether or not a method of the impl is called.
+    for (fixture, call) in [
+        ("unsafe_trust_relied_method_impl", "t::peek_m(u1::Evil {})"),
+        ("unsafe_trust_relied_default_method", "u2::Evil2 {}.b()"),
+        ("unsafe_trust_relied_marker_impl", "t::peek_e(u0::Evil0 {})"),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        assert!(
+            output.contains("call relies on an `unsafe impl` that `u` wrote")
+                && output.contains(call),
+            "{fixture}: unexpected diagnostics:\n{output}"
+        );
+        assert_eq!(
+            output
+                .matches("which is not allowed to use unsafe code")
+                .count(),
+            1,
+            "{fixture}: one error for the call:\n{output}"
+        );
+    }
 }
 
 #[test]
