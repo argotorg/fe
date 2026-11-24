@@ -28,49 +28,45 @@ impl std::evm::Event for ManyFields {
 
     #[inline(always)]
     fn emit<L: Log>(own self, _ log: mut L) {
-        let head = 0 as u256 + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>() + abi_field_head_size<u256>()
-        let total = head + 0 as u256 + dynamic_payload_size<u256>(self.f0) + dynamic_payload_size<u256>(self.f1) + dynamic_payload_size<u256>(self.f2) + dynamic_payload_size<u256>(self.f3) + dynamic_payload_size<u256>(self.f4) + dynamic_payload_size<u256>(self.f5) + dynamic_payload_size<u256>(self.f6) + dynamic_payload_size<u256>(self.f7) + dynamic_payload_size<u256>(self.f8) + dynamic_payload_size<u256>(self.f9) + dynamic_payload_size<u256>(self.f10) + dynamic_payload_size<u256>(self.f11)
+        var size = DataSize { head: 0, payload: 0 }
+        {
+            ()
+            size.add(self.f0)
+            size.add(self.f1)
+            size.add(self.f2)
+            size.add(self.f3)
+            size.add(self.f4)
+            size.add(self.f5)
+            size.add(self.f6)
+            size.add(self.f7)
+            size.add(self.f8)
+            size.add(self.f9)
+            size.add(self.f10)
+            size.add(self.f11)
+            ()
+        }
+        let head = size.head
+        let total = head + size.payload
         let buffer = MemBuffer::new(allocation_len(total))
         let out = unsafe {
             AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
         }
         var writer = RecordWriter<Sol>::new(out, head_size: head, fields: 12 as usize)
         {
-            {
-                {
-                    {
-                        {
-                            {
-                                {
-                                    {
-                                        {
-                                            {
-                                                {
-                                                    {
-                                                        ()
-                                                        push_record_field(mut writer, self.f0)
-                                                    }
-                                                    push_record_field(mut writer, self.f1)
-                                                }
-                                                push_record_field(mut writer, self.f2)
-                                            }
-                                            push_record_field(mut writer, self.f3)
-                                        }
-                                        push_record_field(mut writer, self.f4)
-                                    }
-                                    push_record_field(mut writer, self.f5)
-                                }
-                                push_record_field(mut writer, self.f6)
-                            }
-                            push_record_field(mut writer, self.f7)
-                        }
-                        push_record_field(mut writer, self.f8)
-                    }
-                    push_record_field(mut writer, self.f9)
-                }
-                push_record_field(mut writer, self.f10)
-            }
-            push_record_field(mut writer, self.f11)
+            ()
+            writer.push(self.f0)
+            writer.push(self.f1)
+            writer.push(self.f2)
+            writer.push(self.f3)
+            writer.push(self.f4)
+            writer.push(self.f5)
+            writer.push(self.f6)
+            writer.push(self.f7)
+            writer.push(self.f8)
+            writer.push(self.f9)
+            writer.push(self.f10)
+            writer.push(self.f11)
+            ()
         }
         let data = buffer.span()
         log.log2(data: data, topic0: Self::TOPIC0, topic1: self.who.as_topic())
