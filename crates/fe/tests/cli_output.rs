@@ -4826,6 +4826,7 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
         ),
         ("generated_code_visibility_provider_members", "own_method"),
         ("generated_code_visibility_provider_members", "own_field"),
+        ("generated_code_visibility_provider_cast", "cast_own"),
         ("generated_code_visibility_generated_path", "by_call"),
         ("generated_code_visibility_generated_path", "by_path"),
         ("generated_code_visibility_alias_self", "alias_pub"),
@@ -4950,9 +4951,8 @@ fn test_cli_test_checks_moves_in_the_initializer_of_every_constant() {
         ),
         (
             "nested_module_constant",
-            format!(
-                "mod m {{\n    pub struct B {{ v: u256 }}\n    pub const fn take(_ b: own B) -> u256 {{ b.v }}\n    pub const D: u256 = {{ let b = B {{ v: 1 }}\n        let x = take(b)\n        let y = take(b)\n        x + y }}\n}}\n#[test]\nfn t() {{ assert!(m::D == 2) }}\n"
-            ),
+            "mod m {\n    pub struct B { v: u256 }\n    pub const fn take(_ b: own B) -> u256 { b.v }\n    pub const D: u256 = { let b = B { v: 1 }\n        let x = take(b)\n        let y = take(b)\n        x + y }\n}\n#[test]\nfn t() { assert!(m::D == 2) }\n"
+                .to_string(),
         ),
         (
             "trait_default_read",
@@ -5325,6 +5325,25 @@ fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_i
             );
         }
     }
+}
+
+#[test]
+fn test_cli_test_generated_code_sees_through_a_newtype_by_the_field_that_its_writer_sees() {
+    // A cast sees through a newtype only if the writer of the cast can see its
+    // field. `prov` writes `self.vault as u256`, and the field `balance` of
+    // `Vault` is private to the package that asked, so the cast is refused with
+    // the reason. A cast that `prov` writes of its own newtype `W`, whose field
+    // is `pub(ingot)` in `prov`, is accepted (`generated_code_visibility_provider_cast`).
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_cast_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a cast error:\n{output}");
+    assert!(
+        output.contains("error[8-0055]")
+            && output.contains("cannot cast `Vault` to `u256`")
+            && output.contains("cast is not allowed because the struct field is not `pub`"),
+        "unexpected diagnostics:\n{output}"
+    );
 }
 
 #[test]
@@ -6803,6 +6822,28 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
             ]);
             assert_eq!(exit, 0, "{fixture} at O{level}: {output}");
         }
+    }
+}
+
+// A program that names no implementation is unaffected by the checks that read
+// implied bounds from dictionaries. A message field of a recursive type has no
+// `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
+// `Node: AbiSize` from; the instance stays admitted, as it was before those
+// checks. The refusal where a named implementation is involved is covered by
+// `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
+// `fe-hir`.
+#[test]
+fn named_checks_leave_recursive_message_fields_without_choices_alone() {
+    for fixture in [
+        "named_checks_recursive_field_without_choice.fe",
+        "named_checks_phantom_field_without_choice.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(!output.contains("16-0019"), "{fixture}: {output}");
     }
 }
 

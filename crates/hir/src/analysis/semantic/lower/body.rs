@@ -27,10 +27,11 @@ use crate::{
             normalize::normalize_ty,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
-                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CodeRegionIntrinsicKind,
-                ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding, PathReadSemantics,
-                RecordInitLowering, RecordLike, SemanticExprLowering, SumShapeOp, TypedBody,
-                ValuePathRef, constructed_variant, infer_body, transparent_newtype_field_ty,
+                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CastLayers,
+                CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding,
+                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering,
+                SumShapeOp, TypedBody, ValuePathRef, constructed_variant, infer_body,
+                single_field_newtype_ty,
             },
             ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy, ty_is_snapshot,
@@ -667,17 +668,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.emit_expr_with_origin(SemOrigin::Synthetic, ty, expr)
     }
 
-    /// The field type of `ty` when it is a transparent newtype.
+    /// The field type of `ty` when it is a newtype. Which newtypes a cast sees
+    /// through is the type checker's decision for the writer of the cast
+    /// (`CastLayers`), so this asks only for the structure.
     fn newtype_field(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
         let scope = self.body.scope();
-        transparent_newtype_field_ty(
-            self.db,
-            scope,
-            normalize_ty(self.db, ty, scope, self.assumptions),
-        )
+        single_field_newtype_ty(self.db, normalize_ty(self.db, ty, scope, self.assumptions))
     }
 
-    /// A cast of the value of `value`, of type `from`, to `to`. One that
+    /// A cast of the value of `value`, of type `from`, to `to`, through the
+    /// newtype `layers` that the type checker found it sees through. One that
     /// unwraps a newtype projects its operand's place, as a field access
     /// does: it reads the leaf it reaches, not the whole value.
     fn lower_cast_expr(
@@ -686,40 +686,53 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         value: ExprId,
         from: TyId<'db>,
         to: TyId<'db>,
+        layers: CastLayers,
     ) -> SValueId {
-        if self.newtype_field(from).is_some()
+        if layers.from > 0
             && let Some(mut place) = self.try_lower_place(value)
         {
             let mut leaf = from;
-            while let Some(field_ty) = self.newtype_field(leaf) {
+            for _ in 0..layers.from {
+                let Some(field_ty) = self.newtype_field(leaf) else {
+                    break;
+                };
                 place.push_field(FieldIndex(0));
                 leaf = field_ty;
             }
             let read = self.emit_expr_with_origin(origin, leaf, SExpr::ReadPlace { place });
-            return self.lower_cast(origin, SOperand::expr(read, value), leaf, to);
+            let layers = CastLayers { from: 0, ..layers };
+            return self.lower_cast(origin, SOperand::expr(read, value), leaf, to, layers);
         }
         let operand = self.lower_expr_operand(value);
-        self.lower_cast(origin, operand, from, to)
+        self.lower_cast(origin, operand, from, to, layers)
     }
 
-    /// A cast sees through transparent newtypes (`check_cast`): it unwraps
-    /// the source's, converts the leaf and wraps the result in the target's.
+    /// A cast sees through the newtype `layers` that the type checker found
+    /// (`check_cast`): it unwraps the source's, converts the leaf and wraps
+    /// the result in the target's.
     fn lower_cast(
         &mut self,
         origin: SemOrigin<'db>,
         mut value: SOperand,
         from: TyId<'db>,
         to: TyId<'db>,
+        cast_layers: CastLayers,
     ) -> SValueId {
         let mut layers = Vec::new();
         let mut leaf = to;
-        while let Some(field_ty) = self.newtype_field(leaf) {
+        for _ in 0..cast_layers.to {
+            let Some(field_ty) = self.newtype_field(leaf) else {
+                break;
+            };
             layers.push(leaf);
             leaf = field_ty;
         }
         let mut from = from;
         let mut unwrapped = false;
-        while let Some(field_ty) = self.newtype_field(from) {
+        for _ in 0..cast_layers.from {
+            let Some(field_ty) = self.newtype_field(from) else {
+                break;
+            };
             let field = SExpr::Field {
                 base: value,
                 field: FieldIndex(0),
@@ -1446,7 +1459,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Cast(value, _) => {
                 let from = self.expr_ty(*value);
-                self.lower_cast_expr(origin, *value, from, ty)
+                let layers = self.typed_body.cast_layers(expr);
+                self.lower_cast_expr(origin, *value, from, ty, layers)
             }
             Expr::Call(_, args) => {
                 self.lower_call(expr, self.typed_body.call_receiver(self.db, expr), args)

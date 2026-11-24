@@ -9,7 +9,7 @@ use crate::analysis::ty::effects::rows::expand_rows;
 use crate::analysis::ty::provider::AddressSpace;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::ty_check::{BodyOwner, EffectArg, TypedBody};
-use crate::analysis::ty::ty_check::{RecordInitLowering, transparent_newtype_field_ty};
+use crate::analysis::ty::ty_check::{RecordInitLowering, newtype_chain, single_field_newtype_ty};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef};
 use crate::core::semantic::EffectEnvView;
@@ -20,7 +20,6 @@ use crate::hir_def::{
 };
 use common::ingot::IngotKind;
 use rustc_hash::FxHashSet;
-use std::iter;
 
 /// Reports the unsafe operations of a body that are outside an unsafe
 /// context: an `unsafe { .. }` block, or the body of an `unsafe fn`. These are
@@ -285,13 +284,15 @@ impl<'db> UnsafeChecker<'db, '_> {
     /// initializes: the only field of a layer the cast builds, one of the
     /// target's newtype layers above the first type `inner`'s type peels to.
     fn check_cast_init(&mut self, expr: ExprId, inner: ExprId) {
-        let scope = self.owner.scope();
-        let peel = |ty| transparent_newtype_field_ty(self.db, scope, ty);
+        // The layers are the type checker's decision for the writer of the cast.
+        let layers = self.typed_body.cast_layers(expr);
         let from = self.typed_body.expr_ty(self.db, inner);
-        let from_layers: Vec<_> = iter::successors(Some(from), |ty| peel(*ty)).collect();
+        let from_layers: Vec<_> = newtype_chain(self.db, from, layers.from).collect();
         let mut ty = self.typed_body.expr_ty(self.db, expr);
-        while !from_layers.contains(&ty)
-            && let Some(field_ty) = peel(ty)
+        let mut built = 0;
+        while built < layers.to
+            && !from_layers.contains(&ty)
+            && let Some(field_ty) = single_field_newtype_ty(self.db, ty)
         {
             if let Some(AdtRef::Struct(struct_)) = ty.adt_ref(self.db)
                 && let Some(field) = FieldParent::Struct(struct_).fields(self.db).next()
@@ -309,6 +310,7 @@ impl<'db> UnsafeChecker<'db, '_> {
                 return;
             }
             ty = field_ty;
+            built += 1;
         }
     }
 

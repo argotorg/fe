@@ -163,3 +163,21 @@ impl DeriveInherent for OwnPaths {
         }
     }
 }
+// A newtype of the provider whose only field is `pub(ingot)`: the provider's
+// own generated code may see through it, as it may use the field.
+pub struct W { pub(ingot) v: u256 }
+pub(ingot) fn mk_w() -> W { W { v: 9 } }
+pub struct CastOwn {}
+impl DeriveInherent for CastOwn {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn cast_own() -> u256 { mk_w() as u256 } }
+    }
+}
+// A cast of the requesting record's own newtype, whose field is private to the
+// requesting package.
+pub struct CastLeak {}
+impl DeriveInherent for CastLeak {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn cast_leak(self) -> u256 { self.vault as u256 } }
+    }
+}

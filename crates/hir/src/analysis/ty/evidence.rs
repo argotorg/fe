@@ -917,6 +917,27 @@ pub(crate) fn proof_output_mismatch<'db>(
         .find_map(|&cond| proof_output_mismatch(db, scope, cond))
 }
 
+/// Whether a dictionary holds a named implementation. The one test that decides
+/// whether a refusal that turns on the contents of dictionaries applies: a
+/// component that cannot be read from one (`Refusal::NoComponent`) or a walk
+/// that was cut (`Refusal::TooDeep`). Where no dictionary a check involves
+/// holds one, the program names no implementation the check could contradict,
+/// and the slot keeps the proof ordinary resolution gives it.
+fn names_impl<'db>(db: &'db dyn HirAnalysisDb, proof: Option<EvidenceId<'db>>) -> bool {
+    proof.is_some_and(|proof| proof.has_named_impl(db))
+}
+
+/// Whether the dictionary of the closed slot `slot` holds a named
+/// implementation.
+fn slot_names_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closed: &[bool],
+    entries: &[Option<EvidenceId<'db>>],
+    slot: usize,
+) -> bool {
+    closed[slot] && names_impl(db, entries[slot])
+}
+
 #[salsa::tracked(returns(copy))]
 fn evidence_is_closed<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId<'db>) -> bool {
     match evidence.data(db) {
@@ -2802,7 +2823,31 @@ pub(crate) fn instance_evidence<'db>(
                 }
             }
         }
-        if let Some(reason) = refusal {
+        // A parent with no dictionary, or one that gives no component, refuses
+        // the slot only where a dictionary involved holds a named
+        // implementation: the slot's own proof, or the dictionary of a slot
+        // that implies it. Otherwise the slot keeps the proof it would have
+        // had without implied-bound agreement, and a goal no proof answers is
+        // reported where it is used.
+        let ordinary = matches!(refusal, Some(Refusal::NoComponent { .. })) && {
+            let implying = edges
+                .iter()
+                .filter(|edge| edge.child as usize == index)
+                .map(|edge| edge.parent as usize)
+                .filter(|&parent| parent != index && closed[parent]);
+            !names_impl(db, own[index])
+                && !implying.into_iter().any(|parent| {
+                    let dictionary = if parent < index {
+                        entries[parent]
+                    } else {
+                        own[parent]
+                    };
+                    names_impl(db, dictionary)
+                })
+        };
+        if ordinary {
+            entries[index] = own[index].or_else(|| prove(db, solve_cx, goal_at(index)));
+        } else if let Some(reason) = refusal {
             entries[index] = None;
             refused.get_or_insert(RefusedGoal {
                 goal: goal_at(index),
@@ -2821,7 +2866,10 @@ pub(crate) fn instance_evidence<'db>(
             continue;
         };
         let reason = match project(source, edge.step, child) {
-            None => Some(no_component(parent)),
+            None if names_impl(db, Some(source)) || names_impl(db, Some(entry)) => {
+                Some(no_component(parent))
+            }
+            None => None,
             Some(component) if !same_dictionary(db, component, entry, assumptions) => {
                 Some(Refusal::Differs {
                     a: goal_at(parent),
@@ -2876,6 +2924,26 @@ fn component_agreement<'db>(
             table.members[parent - count].root as usize
         })
     };
+    // The slots whose dictionaries `member` is read from: the root of its walk
+    // and the root of each derivation that enters it.
+    let roots = |member: &Component<'db>| {
+        let entering = member.entering.iter().map(|&(parent, _)| {
+            if (parent as usize) < count {
+                parent as usize
+            } else {
+                table.members[parent as usize - count].root as usize
+            }
+        });
+        std::iter::once(member.root as usize)
+            .chain(entering)
+            .collect::<Vec<_>>()
+    };
+    let named = |slot: usize| slot_names_impl(db, closed, entries, slot);
+    // A derivation that finds no dictionary or no component refuses only a
+    // member read from a dictionary that holds a named implementation.
+    let applies = |member: &Component<'db>, reason: &Refusal<'db>| {
+        !matches!(reason, Refusal::NoComponent { .. }) || roots(member).into_iter().any(named)
+    };
     let mut values: Vec<Option<EvidenceId<'db>>> = vec![None; table.members.len()];
     // The dictionary a derivation entering `member` from `parent` gives.
     let derive = |values: &[Option<EvidenceId<'db>>],
@@ -2927,8 +2995,8 @@ fn component_agreement<'db>(
                 continue;
             }
             match derive(&values, member, (parent, step)) {
-                Err(reason) => return Some(refuse(member, reason)),
-                Ok(None) => {}
+                Err(reason) if applies(member, &reason) => return Some(refuse(member, reason)),
+                Err(_) | Ok(None) => {}
                 Ok(Some(proof)) => match agreed {
                     Some((first, first_parent))
                         if !same_dictionary(db, first, proof, assumptions) =>
@@ -2958,7 +3026,7 @@ fn component_agreement<'db>(
                 continue;
             }
             match derive(&values, member, (parent, step)) {
-                Err(reason) => return Some(refuse(member, reason)),
+                Err(reason) if applies(member, &reason) => return Some(refuse(member, reason)),
                 Ok(Some(proof)) if !same_dictionary(db, value, proof, assumptions) => {
                     return Some(refuse(
                         member,
@@ -2968,7 +3036,7 @@ fn component_agreement<'db>(
                         },
                     ));
                 }
-                Ok(_) => {}
+                Err(_) | Ok(_) => {}
             }
         }
     }
@@ -2978,23 +3046,12 @@ fn component_agreement<'db>(
     // member that was cut is checked, with the root of each derivation that
     // enters it, so the answer does not depend on which bound comes first; a
     // walk that reached its member limit cut every member.
-    let named =
-        |slot: usize| closed[slot] && entries[slot].is_some_and(|proof| proof.has_named_impl(db));
     for (position, member) in table.members.iter().enumerate() {
         if !(member.truncated || table.capped) {
             continue;
         }
-        let entering_roots = member.entering.iter().map(|&(parent, _)| {
-            if (parent as usize) < count {
-                parent as usize
-            } else {
-                table.members[parent as usize - count].root as usize
-            }
-        });
-        let root = std::iter::once(member.root as usize)
-            .chain(entering_roots)
-            .find(|&root| named(root));
-        let value_named = values[position].is_some_and(|proof| proof.has_named_impl(db));
+        let root = roots(member).into_iter().find(|&root| named(root));
+        let value_named = names_impl(db, values[position]);
         if let Some(root) = root.or_else(|| value_named.then_some(member.root as usize)) {
             return Some(RefusedGoal {
                 goal: member.goal,
@@ -3266,6 +3323,78 @@ fn holds<H: Holds>() {}
             }
             assert!(checked > 0, "{source}");
         }
+    }
+
+    /// A closed slot whose implying slot has no dictionary is refused by the
+    /// instance only where a dictionary involved holds a named implementation.
+    /// `Item: Sub` has no implementation, so the instance of `ctx<Item>` has no
+    /// dictionary to read `Item: Base` from. A supplied proof of `Item: Base`
+    /// that is the ordinary implementation leaves the slot with that proof, as
+    /// before implied bounds were read from dictionaries; the named
+    /// implementation refuses it.
+    #[test]
+    fn instance_missing_dictionary_refuses_only_with_a_named_implementation() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "missing_dictionary.fe".into(),
+            r#"
+trait Base {}
+trait Sub: Base {}
+struct Item {}
+impl Base for Item {}
+impl Base for Item as Named {}
+fn ctx<V: Sub>() {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let func = find_func(&db, module, "ctx");
+        let signature = func_signature(&db, func, None);
+        assert_eq!(signature.list(&db).len(), 2);
+        let item = adt_ty(&db, module, "Item", &[]);
+        let subst = CompleteSubst::for_owner(&db, func.into(), vec![item]).unwrap();
+        let goals = substitute_complete(&db, signature, &subst).unwrap();
+        let cx = TraitSolveCx::new(&db, module.scope(), Tier::All);
+        let base = goals.list(&db)[1];
+        let named = module
+            .children_non_nested(&db)
+            .find_map(|item| match item {
+                ItemKind::ImplTrait(implementation)
+                    if implementation.selection_name(&db).is_some() =>
+                {
+                    lower_impl_trait(&db, implementation)
+                }
+                _ => None,
+            })
+            .expect("the named implementation");
+        let chosen = ChosenImpls::push(&db, None, named);
+        let ordinary_proof = prove(&db, cx, base).expect("the ordinary implementation");
+        let named_proof =
+            prove(&db, cx.with_choices(Some(chosen)), base).expect("the named implementation");
+        assert!(!ordinary_proof.has_named_impl(&db));
+        assert!(named_proof.has_named_impl(&db));
+        let instance = |proof| {
+            instance_evidence(
+                &db,
+                goals,
+                signature,
+                EvidenceList::of(&db, vec![None, Some(proof)]),
+                cx,
+            )
+        };
+        let ordinary = instance(ordinary_proof);
+        assert_eq!(ordinary.refused, None);
+        assert_eq!(ordinary.proofs.get(&db, 1), Some(ordinary_proof));
+        let refused = instance(named_proof)
+            .refused
+            .expect("a named implementation is refused");
+        assert_eq!(refused.goal, base);
+        assert_eq!(
+            refused.reason,
+            Refusal::NoComponent {
+                root: Some(goals.list(&db)[0])
+            }
+        );
     }
 
     const PINNED: &str = r#"

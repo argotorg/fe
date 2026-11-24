@@ -235,6 +235,8 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Whether the body is a constant checked against a declared type that
     /// mentions a parameter, and typed as its tail.
     tail_depends_on_instantiation: bool,
+    /// The newtype layers that each cast sees through (`TyChecker::accept_cast`).
+    cast_layers: FxHashMap<ExprId, super::CastLayers>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -413,6 +415,7 @@ impl<'db> TyCheckEnv<'db> {
             place_entries: FxHashMap::default(),
             never_coercions: FxHashSet::default(),
             tail_depends_on_instantiation: false,
+            cast_layers: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -1079,6 +1082,11 @@ impl<'db> TyCheckEnv<'db> {
     /// that it is coerced to (`TyChecker::check_tail_against_declared_type`).
     pub(super) fn mark_tail_depends_on_instantiation(&mut self) {
         self.tail_depends_on_instantiation = true;
+    }
+
+    /// Records the newtype layers that the cast `expr` sees through.
+    pub(super) fn register_cast_layers(&mut self, expr: ExprId, layers: super::CastLayers) {
+        self.cast_layers.insert(expr, layers);
     }
 
     pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
@@ -2053,6 +2061,7 @@ impl<'db> TyCheckEnv<'db> {
             unsafe_ops: Vec::new(),
             never_coercions: self.never_coercions,
             tail_depends_on_instantiation: self.tail_depends_on_instantiation,
+            cast_layers: self.cast_layers,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,
