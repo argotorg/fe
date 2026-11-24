@@ -4808,6 +4808,18 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
         ),
         ("unsafe_trust_spliced_operation_allowed", "spliced_deref"),
         ("unsafe_trust_unused_unsafe_impls", "builds_values"),
+        (
+            "generated_code_visibility_own_record",
+            "reads_its_own_record_and_helpers",
+        ),
+        (
+            "generated_code_visibility_provider_items",
+            "provider_pub_ingot_helper",
+        ),
+        (
+            "generated_code_visibility_provider_items",
+            "provider_private_helper",
+        ),
         ("unsafe_trust_const_allowed", "via_const"),
         ("unsafe_trust_const_allowed", "assoc"),
         ("unsafe_trust_const_allowed", "pat"),
@@ -5116,6 +5128,28 @@ fn test_cli_test_unsafe_trust_follows_the_encoding_of_a_panic_value() {
         output.contains("call reaches unsafe code in `u`, which is not allowed to use it")
             && output.contains("mk().unwrap()"),
         "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_sees_only_what_is_public() {
+    // `prov` writes `leak` and a header in `user` asks for it. Code that a
+    // package writes into another package can use what is public there, the
+    // fields of the requested record, and what `prov` itself generated. The
+    // private method `hidden` of the requested record and the private field
+    // `balance` of an unrelated struct are `user`'s, not handed over by the
+    // header. `self.vault`, a field of the requested record, is.
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected visibility errors:\n{output}");
+    assert!(
+        output.contains("`hidden` is not visible") && output.contains("`balance` is not visible"),
+        "unexpected diagnostics:\n{output}"
+    );
+    assert!(
+        !output.contains("`vault` is not visible"),
+        "a field of the requested record stays visible:\n{output}"
     );
 }
 

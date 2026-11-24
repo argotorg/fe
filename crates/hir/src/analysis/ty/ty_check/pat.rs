@@ -10,7 +10,8 @@ use either::Either;
 use num_bigint::BigUint;
 
 use super::{
-    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker,
+    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, expr::MemberSite,
+    path::RecordInitChecker,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -881,8 +882,11 @@ impl<'db> TyChecker<'db> {
                 )
             }
             TupleVariantResolution::TupleStruct(struct_ty) => {
-                let fields_visible =
-                    self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
+                let fields_visible = self.check_tuple_struct_fields_visible(
+                    struct_ty,
+                    pat_span.clone(),
+                    MemberSite::Pat(pat),
+                );
                 let (semantic_ty, struct_ty) =
                     self.equate_nominal_pat_ty(struct_ty, expected, pat_span);
                 let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
@@ -1279,7 +1283,7 @@ impl<'db> TyChecker<'db> {
         let mut field_status_by_idx = rustc_hash::FxHashMap::default();
 
         let pat_span = pat.span(self.body()).into_record_pat();
-        let mut rec_checker = RecordInitChecker::new(self, &record_like);
+        let mut rec_checker = RecordInitChecker::new(self, &record_like, MemberSite::Pat(pat));
 
         for (i, field_pat) in fields.iter().enumerate() {
             if field_pat.pat.is_rest(hir_db, rec_checker.tc.body()) {

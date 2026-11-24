@@ -1512,6 +1512,11 @@ impl<'db> TyCheckEnv<'db> {
         self.expr_stack.pop();
     }
 
+    /// The expression being checked.
+    pub(super) fn current_expr(&self) -> Option<ExprId> {
+        self.expr_stack.last().copied()
+    }
+
     pub(super) fn parent_expr(&self) -> Option<ExprId> {
         self.expr_stack.iter().nth_back(1).copied()
     }

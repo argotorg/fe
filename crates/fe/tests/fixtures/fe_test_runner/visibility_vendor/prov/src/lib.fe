@@ -1,0 +1,41 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record}
+pub(ingot) fn helper() -> u256 { 5 }
+fn private_helper() -> u256 { 6 }
+pub struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn viai() -> u256 { helper() } }
+    }
+}
+pub struct Q {}
+impl DeriveInherent for Q {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn viap() -> u256 { private_helper() } }
+    }
+}
+// literal (non-generated) code of the provider package reading a private item of the user package
+pub struct Peek {}
+impl DeriveInherent for Peek {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub fn peek() -> u256 { 1 } }
+    }
+}
+pub struct Leak {}
+impl DeriveInherent for Leak {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak(self) -> u256 { self.hidden() }
+            pub fn leak_field(self) -> u256 { self.vault.balance }
+        }
+    }
+}
+pub struct Own {}
+impl DeriveInherent for Own {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn twice(self) -> u256 { self.a + self.a }
+            pub fn total(self) -> u256 { self.twice() + helper() }
+        }
+    }
+}

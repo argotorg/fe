@@ -31,6 +31,7 @@ use super::{
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
+use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::{
     AddressSpace,
     assoc_const::{AssocConstUse, InherentConstUse},
@@ -94,7 +95,7 @@ use crate::analysis::{
         Decision, EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket,
         NameResolutionError, PathRes, QueryDirective, Tier, authored_first, choose_in_tiers,
         diagnostics::PathResDiag,
-        is_scope_visible_from,
+        is_visible_to_writer,
         method_selection::{
             AmbiguousTraitMethodCand, AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
             TraitMethodCand, select_callable_value_method, select_method_candidate_in,
@@ -1722,6 +1723,7 @@ impl<'db> TyChecker<'db> {
         &mut self,
         ty: TyId<'db>,
         span: DynLazySpan<'db>,
+        site: MemberSite,
     ) -> bool {
         let Some(struct_) = ty.as_tuple_struct(self.db) else {
             return true;
@@ -1729,7 +1731,7 @@ impl<'db> TyChecker<'db> {
         let parent = FieldParent::Struct(struct_);
         for (idx, field) in parent.fields(self.db).enumerate() {
             let scope = ScopeId::Field(parent, idx as u16);
-            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+            if !self.member_visible(scope, site) {
                 let Some(name) = field.name(self.db) else {
                     continue;
                 };
@@ -1741,10 +1743,26 @@ impl<'db> TyChecker<'db> {
     }
 
     fn peel_transparent_newtypes(&self, mut ty: TyId<'db>) -> TyId<'db> {
-        while let Some(inner) = transparent_newtype_field_ty(self.db, self.env.scope(), ty) {
+        while let Some(inner) = transparent_newtype_field_ty(self.db, self.env.scope(), ty)
+            && self.newtype_field_visible(ty)
+        {
             ty = inner;
         }
         ty
+    }
+
+    /// Whether the field of the newtype `ty` is visible to the code being
+    /// checked, by the rule of `member_visible`. A cast sees through a
+    /// newtype only then.
+    fn newtype_field_visible(&self, ty: TyId<'db>) -> bool {
+        match ty.adt_ref(self.db) {
+            Some(AdtRef::Struct(struct_)) if ty.field_types(self.db).len() == 1 => self
+                .member_visible(
+                    ScopeId::Field(FieldParent::Struct(struct_), 0),
+                    MemberSite::Current,
+                ),
+            _ => true,
+        }
     }
 
     fn prim_int_signed_bits(&self, ty: TyId<'db>, target: Target) -> Option<(bool, usize)> {
@@ -4455,6 +4473,20 @@ impl<'db> TyChecker<'db> {
             }
         };
 
+        // The selection sees the members of the package the code runs in. Code
+        // that another package wrote may use only what `member_visible` allows.
+        if let MethodCandidate::InherentMethod(method) = &candidate {
+            let scope = method.def.scope();
+            if !self.member_visible(scope, MemberSite::Expr(expr)) {
+                self.push_diag(PathResDiag::Invisible(
+                    call_span.method_name().into(),
+                    method_name,
+                    scope.name_span(self.db),
+                ));
+                return ExprProp::invalid(self.db);
+            }
+        }
+
         let (candidate, args_typed) = self.trait_method_for_arguments(
             candidate,
             &canonical_r_ty,
@@ -4924,9 +4956,11 @@ impl<'db> TyChecker<'db> {
                     } else if matches!(reso, PathRes::Ty(_))
                         && let Some(ctor_ty) = ty.tuple_struct_ctor_ty(self.db)
                     {
-                        if !self
-                            .check_tuple_struct_fields_visible(ty, path_expr_span.clone().into())
-                        {
+                        if !self.check_tuple_struct_fields_visible(
+                            ty,
+                            path_expr_span.clone().into(),
+                            MemberSite::Expr(expr),
+                        ) {
                             return ExprProp::invalid(self.db);
                         }
                         self.env
@@ -5404,7 +5438,7 @@ impl<'db> TyChecker<'db> {
         };
         let span = expr.span(self.body()).into_record_init_expr().fields();
 
-        let mut rec_checker = RecordInitChecker::new(self, record_like);
+        let mut rec_checker = RecordInitChecker::new(self, record_like, MemberSite::Expr(expr));
 
         for (i, field) in fields.iter().enumerate() {
             let label = field.label_eagerly(rec_checker.tc.db, rec_checker.tc.body());
@@ -5478,7 +5512,7 @@ impl<'db> TyChecker<'db> {
                     let record_like = RecordLike::from_ty(resolved_field.base_ty);
                     if let Some(field_ty) = record_like.record_field_ty(self.db, label) {
                         if let Some(scope) = record_like.record_field_scope(self.db, label)
-                            && !is_scope_visible_from(self.db, scope, self.env.scope())
+                            && !self.member_visible(scope, MemberSite::Expr(expr))
                         {
                             // Check the visibility of the field.
                             let diag = PathResDiag::Invisible(
@@ -6924,5 +6958,63 @@ impl TraitOps for AugAssignOp {
             // Range doesn't have an augmented assignment form
             Range => unreachable!("Range operator cannot be used in augmented assignment"),
         }
+    }
+}
+
+/// Where a member of a type is used, for `TyChecker::member_visible`: an
+/// expression, a pattern, or the expression being checked.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum MemberSite {
+    Expr(ExprId),
+    Pat(PatId),
+    Current,
+}
+
+impl<'db> TyChecker<'db> {
+    /// Whether the code at `site` may use `target`, a field, a variant or an
+    /// inherent method. The code's writer is the package of the innermost
+    /// quotation around it (the package that holds hand-written code), and
+    /// what it may use is decided by `is_visible_to_writer`.
+    pub(super) fn member_visible(&self, target: ScopeId<'db>, site: MemberSite) -> bool {
+        let body = self.body();
+        let chain = match site {
+            MemberSite::Expr(expr) => body.expr_quote_chain(self.db, expr),
+            MemberSite::Pat(pat) => body.pat_quote_chain(self.db, pat),
+            MemberSite::Current => match self.env.current_expr() {
+                Some(expr) => body.expr_quote_chain(self.db, expr),
+                None => body.quote_chain(self.db),
+            },
+        };
+        let writer = chain[0].ingot(self.db);
+        is_visible_to_writer(self.db, target, self.env.scope(), writer, || {
+            self.requested_record()
+        })
+    }
+
+    /// The record that the derive header around the code being checked asks
+    /// for, if the code is generated for one: the type of the nearest header
+    /// that holds the body's scope.
+    fn requested_record(&self) -> Option<AdtRef<'db>> {
+        let mut scope = Some(self.env.scope());
+        while let Some(current) = scope {
+            let ty = match current {
+                ScopeId::Item(ItemKind::Impl(impl_))
+                    if impl_.derive_provider(self.db).is_some() =>
+                {
+                    Some(impl_.ty(self.db))
+                }
+                ScopeId::Item(ItemKind::ImplTrait(impl_))
+                    if impl_.derive_provider(self.db).is_some() =>
+                {
+                    Some(impl_.ty(self.db))
+                }
+                _ => None,
+            };
+            if let Some(ty) = ty {
+                return ty.adt_ref(self.db);
+            }
+            scope = current.parent(self.db);
+        }
+        None
     }
 }

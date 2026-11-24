@@ -1,8 +1,11 @@
-use crate::core::hir_def::{ItemKind, Use, scope_graph::ScopeId};
+use common::ingot::Ingot;
+
+use crate::core::hir_def::{FieldParent, ItemKind, Use, scope_graph::ScopeId};
 
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
+        adt_def::AdtRef,
         const_ty::ConstTyData,
         ty_def::{TyBase, TyData, TyId},
     },
@@ -88,6 +91,47 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
             };
             from_scope.is_transitive_child_of(db, def_scope)
         }
+    }
+}
+
+/// Whether code that the package `writer` wrote may use `target`, a member of
+/// a type (a field, a variant or an inherent method), where the code runs, at
+/// `from_scope`.
+///
+/// What a template can use is decided at the package that wrote it, as the
+/// names in it are. Code written by a package may use the members that are
+/// visible from `from_scope` of its own items and of what it generated, and,
+/// for another package's items, what is public. A header hands the code that a
+/// provider writes for it the fields and variants of the record it requests,
+/// `requested`, and nothing else of the package that asked: the private and
+/// `pub(ingot)` members of the asking package are not the provider's to use.
+/// Code written and used in one package sees what `is_scope_visible_from`
+/// says.
+pub fn is_visible_to_writer<'db>(
+    db: &'db dyn HirAnalysisDb,
+    target: ScopeId<'db>,
+    from_scope: ScopeId<'db>,
+    writer: Ingot<'db>,
+    requested: impl FnOnce() -> Option<AdtRef<'db>>,
+) -> bool {
+    if writer == target.ingot(db) || target.syntax_top_mod(db).ingot(db) == writer {
+        return is_scope_visible_from(db, target, from_scope);
+    }
+    if target.data(db).vis.is_pub()
+        || matches!(target, ScopeId::Item(ItemKind::Func(_)))
+            && matches!(target.parent_item(db), Some(ItemKind::Trait(..)))
+    {
+        return true;
+    }
+    let Some(requested) = requested() else {
+        return false;
+    };
+    match target {
+        ScopeId::Field(FieldParent::Struct(struct_), _) => requested == AdtRef::Struct(struct_),
+        ScopeId::Field(FieldParent::Variant(variant), _) | ScopeId::Variant(variant) => {
+            requested == AdtRef::Enum(variant.enum_)
+        }
+        _ => false,
     }
 }
 
