@@ -171,7 +171,7 @@ pub(crate) fn path_arg_diags<'db>(
                         path,
                         scope,
                         assumptions,
-                        &mut |_, _| {},
+                        &mut |_, _, _| {},
                         &LoweringContext::for_const_bodies(ConstBodyLowering::Eager),
                     ) {
                         Ok(PathRes::Trait(inst)) => Some(inst.def(db)),
