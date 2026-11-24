@@ -13,7 +13,7 @@ pub use semantic::{
     CallEffectArg, CallSiteLowering, ForLoopCallSites, InstantiatedEffectEnv,
     RootSemanticInstanceError, SemanticEffectEnvInstantiationError, SemanticInstance,
     SemanticInstanceKey, exceeds_instance_limits, identity_semantic_instance_key,
-    instantiated_effect_env, panic_payload_encodable,
+    instantiated_effect_env, panic_payload_encodable, panic_payload_revert_key,
     resolved_provider_binding_for_instance_effect, root_semantic_instance_key,
     validate_instantiated_effect_env_key,
 };
@@ -22,7 +22,7 @@ pub(crate) use semantic::{
     SemanticBodyAdmissionError,
 };
 pub(crate) use semantic::{
-    instance_limit_violation, provisional_provider_binding_for_instance_effect,
+    instance_limit_violation, panic_revert_edges, provisional_provider_binding_for_instance_effect,
     provisional_provider_idx_for_requirement, refined_callee, row_expansion_for_key,
     semantic_instance_base_assumptions_for_key,
 };

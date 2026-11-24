@@ -25,7 +25,7 @@ use crate::{
             closure::closure_regions,
             corelib::{
                 ContractMetadataKind, RuntimeBuiltinFuncKind, contract_metadata_kind,
-                presence_trait, resolve_core_trait, resolve_lib_type_path,
+                presence_trait, resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path,
                 runtime_builtin_func_kind,
             },
             effects::{
@@ -78,7 +78,7 @@ use thin_vec::ThinVec;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv,
-    const_ref::{body_effect, root_impl_env},
+    const_ref::{body_effect, generated_callee_key, root_impl_env},
     instantiate_typed_body, provisional_semantic_callee_key,
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
@@ -2031,20 +2031,33 @@ impl<'db> SemanticInstance<'db> {
     }
 
     /// The instances that running the body evaluates besides its explicit
-    /// calls: the constants it reads and the codec callees of its place
-    /// entries. A constant is not a callee, but evaluating it runs its body.
+    /// calls: the constants it reads, in expressions and in patterns, and the
+    /// codec callees of its place entries. A constant is not a callee, but
+    /// evaluating it runs its body.
     pub fn implicit_dependencies(
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<SemanticInstanceKey<'db>> {
+        self.implicit_dependencies_with_origins(db)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// The same dependencies as `implicit_dependencies`, each with the
+    /// expression or pattern that makes it run.
+    pub fn implicit_dependencies_with_origins(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
         let typed_body = self.key(db).typed_body(db);
         let Some(body) = typed_body.body() else {
             return Vec::new();
         };
-        let mut keys = Vec::new();
-        let mut push = |key| {
-            if !keys.contains(&key) {
-                keys.push(key);
+        let mut keys: Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> = Vec::new();
+        let mut push = |key, origin| {
+            if !keys.iter().any(|(known, _)| *known == key) {
+                keys.push((key, origin));
             }
         };
         for expr in body.exprs(db).keys() {
@@ -2056,12 +2069,30 @@ impl<'db> SemanticInstance<'db> {
                     SemOrigin::Expr(expr),
                 )
             {
-                push(resolved.instance(db));
+                push(resolved.instance(db), SemOrigin::Expr(expr));
             }
             if typed_body.place_entry_calls(expr).is_some()
                 && let Ok(codec) = self.entry_codec_callees(db, expr)
             {
-                codec.into_iter().for_each(&mut push);
+                codec
+                    .into_iter()
+                    .for_each(|key| push(key, SemOrigin::Expr(expr)));
+            }
+        }
+        for pat in body.pats(db).keys() {
+            // The constant has the value type of the pattern, without the
+            // capability of the place the pattern is matched against.
+            let ty = typed_body.pat_ty(db, pat);
+            let value_ty = ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+            if let Some(const_ref) = typed_body.pat_const_ref(pat)
+                && let Some(resolved) = super::const_ref::resolve_semantic_const_ref(
+                    db,
+                    const_ref,
+                    value_ty,
+                    SemOrigin::Pat(pat),
+                )
+            {
+                push(resolved.instance(db), SemOrigin::Pat(pat));
             }
         }
         keys
@@ -2371,6 +2402,80 @@ pub fn panic_payload_encodable<'db>(
         .is_some_and(|encode| satisfied(TraitInstId::new_simple(db, encode, vec![ty, abi])))
         && resolve_core_trait(db, scope, &["abi", "AbiSize"])
             .is_some_and(|size| satisfied(TraitInstId::new_simple(db, size, vec![ty])))
+}
+
+/// The instance that a panic with a value of type `value_ty` calls to build its
+/// revert data: `std::evm::revert_error` for a type with an error variant,
+/// `std::evm::revert` otherwise. None if the value has no encoding. Runtime
+/// lowering and the trust walk both ask this one function, so what the walk
+/// follows is what the compiler runs.
+pub fn panic_payload_revert_key<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_env: ImplEnv<'db>,
+    value_ty: TyId<'db>,
+) -> Option<SemanticInstanceKey<'db>> {
+    let scope = impl_env.normalization_scope(db);
+    let assumptions = impl_env.assumptions(db);
+    if !panic_payload_encodable(db, scope, assumptions, value_ty) {
+        return None;
+    }
+    let func_path = if panic_payload_is_error_variant(db, scope, assumptions, value_ty) {
+        "std::evm::revert_error"
+    } else {
+        "std::evm::revert"
+    };
+    let func = resolve_lib_func_path(db, scope, func_path)?;
+    generated_callee_key(db, scope, assumptions, func, None, &[value_ty]).ok()
+}
+
+fn panic_payload_is_error_variant<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    value_ty: TyId<'db>,
+) -> bool {
+    let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
+        return false;
+    };
+    // A type has an error variant only by an implementation written in the
+    // package or a dependency: a generated one is refused where it is
+    // requested, since it would change what a revert of the value carries.
+    let Some(error_variant_trait) = presence_trait(db, scope, "core::error::ErrorVariant") else {
+        return false;
+    };
+    let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
+    matches!(
+        is_goal_satisfiable(db, solve_cx, error_variant),
+        GoalSatisfiability::Satisfied(_)
+    )
+}
+
+/// The panic-with-value calls of `instance`, each with its origin and the
+/// instance that builds the revert data of the value it panics with.
+pub fn panic_revert_edges<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+    let impl_env = instance.key(db).impl_env(db);
+    instance_calls(db, instance)
+        .into_iter()
+        .filter_map(|(origin, callee)| {
+            let is_panic = matches!(
+                callee.key.owner(db),
+                BodyOwner::Func(func, _)
+                    if runtime_builtin_func_kind(db, func)
+                        == Some(RuntimeBuiltinFuncKind::PanicWithValue)
+            );
+            if !is_panic {
+                return None;
+            }
+            let &[ty] = callee.key.subst(db).generic_args(db) else {
+                return None;
+            };
+            Some((panic_payload_revert_key(db, impl_env, ty)?, origin))
+        })
+        .collect()
 }
 
 /// The type `callee` panics with, called from `instance`, that can't be

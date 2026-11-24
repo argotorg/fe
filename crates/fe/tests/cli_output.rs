@@ -4807,6 +4807,11 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
             "spliced_safe_fragment",
         ),
         ("unsafe_trust_spliced_operation_allowed", "spliced_deref"),
+        ("unsafe_trust_const_allowed", "via_const"),
+        ("unsafe_trust_const_allowed", "assoc"),
+        ("unsafe_trust_const_allowed", "pat"),
+        ("unsafe_trust_const_safe", "reads_a_safe_constant"),
+        ("unsafe_trust_panic_payload_allowed", "unwrap_err"),
         (
             "unsafe_trust_dispatcher_allowed",
             "dispatcher_encodes_with_trusted_code",
@@ -5071,6 +5076,45 @@ fn test_cli_test_unsafe_trust_still_refuses_unsafe_code_that_u_wrote_in_its_own_
             .count(),
         2,
         "one error for each call:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_follows_the_constants_a_body_reads() {
+    // The initializer of a constant runs wherever the constant is read, in an
+    // expression or in a pattern, and when a `static_assert` of the checked
+    // package is evaluated. `u` wrote the `unsafe` blocks of its constants and
+    // nothing trusts `u`. `unsafe_trust_const_safe` reads a constant of `u`
+    // without unsafe code, which stays accepted.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_const_reads");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected trust errors:\n{output}");
+    for call in ["u::get()", "u::get_assoc()", "u::pat(0)", "u::SA == 0"] {
+        assert!(
+            output.contains("this call reaches unsafe code in `u`") && output.contains(call),
+            "{call}: unexpected diagnostics:\n{output}"
+        );
+    }
+    assert!(
+        output.contains("call reaches unsafe code in `u`, which is not allowed to use it"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_follows_the_encoding_of_a_panic_value() {
+    // `Result::unwrap` on an error panics with the error value, and the revert
+    // data is the value's `Encode` implementation, which no call names. `u`
+    // wrote an `unsafe` block in it and nothing trusts `u`.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_panic_payload");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("call reaches unsafe code in `u`, which is not allowed to use it")
+            && output.contains("mk().unwrap()"),
+        "unexpected diagnostics:\n{output}"
     );
 }
 

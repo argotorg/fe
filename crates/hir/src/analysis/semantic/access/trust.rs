@@ -35,6 +35,8 @@ use common::{
 };
 use url::Url;
 
+use super::EntryKind;
+
 use crate::{
     analysis::{
         HirAnalysisDb,
@@ -243,9 +245,9 @@ pub(super) struct UntrustedUnsafeUse<'db> {
     pub root: Ingot<'db>,
     /// The call in the trust root's code.
     pub call: SemanticDiagnosticSpan<'db>,
-    /// Whether `call` stands for the run of a generated `#[test]` function by
-    /// `fe test`, which no call in the code names.
-    pub runs_as_test: bool,
+    /// Why `call` stands for the run of a generated body that no call in the
+    /// code names, such as a `#[test]` function that `fe test` runs.
+    pub entry: Option<EntryKind>,
     /// The function whose body holds the unsafe code.
     pub user: BodyOwner<'db>,
     pub site: SemOrigin<'db>,
@@ -261,12 +263,18 @@ impl DiagnosticVoucher for UntrustedUnsafeUse<'_> {
             owner: self.user,
             origin: self.site,
         };
-        let (title, primary) = if self.runs_as_test {
+        let (title, primary) = if let Some(entry) = self.entry {
+            let what = match entry {
+                EntryKind::Test => "test",
+                EntryKind::Export => "export",
+                EntryKind::Main => "entry point",
+                EntryKind::Contract => "contract",
+            };
             (
                 format!(
-                    "generated test runs unsafe code in `{name}`, which is not allowed to use it"
+                    "generated {what} runs unsafe code in `{name}`, which is not allowed to use it"
                 ),
-                format!("this generated test runs unsafe code in `{name}`"),
+                format!("this generated {what} runs unsafe code in `{name}`"),
             )
         } else {
             (

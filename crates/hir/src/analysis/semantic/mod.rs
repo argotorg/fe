@@ -24,13 +24,13 @@ pub use instance::{
     RootSemanticInstanceError, SemanticEffectEnvInstantiationError, SemanticInstance,
     SemanticInstanceKey, TypedBodyTemplate, core_method_callee_key, exceeds_instance_limits,
     generated_callee, generated_callee_key, identity_semantic_instance_key, instantiate_typed_body,
-    instantiated_effect_env, panic_payload_encodable,
+    instantiated_effect_env, panic_payload_encodable, panic_payload_revert_key,
     resolved_provider_binding_for_instance_effect, root_semantic_instance_key, typed_body_template,
     validate_instantiated_effect_env_key,
 };
 pub(crate) use instance::{
-    provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
-    semantic_instance_base_assumptions_for_key,
+    panic_revert_edges, provisional_provider_binding_for_instance_effect,
+    provisional_provider_idx_for_requirement, semantic_instance_base_assumptions_for_key,
 };
 pub use ir::*;
 pub use lower::{
