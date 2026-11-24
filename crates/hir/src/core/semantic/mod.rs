@@ -210,6 +210,7 @@ pub fn constraints_for<'db>(
             trait_self_predicate(db, t),
         ),
         ItemKind::ImplTrait(i) => collect_constraints(db, i.into()).instantiate_identity(),
+        ItemKind::TypeAlias(a) => collect_constraints(db, a.into()).instantiate_identity(),
         _ => PredicateListId::empty_list(db),
     }
 }
@@ -2835,7 +2836,7 @@ fn resolve_sol_abi_ty<'db>(
         .push_ident(db, IdentId::new(db, "Sol".to_string()));
 
     match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => Some(ty),
         _ => None,
     }
 }

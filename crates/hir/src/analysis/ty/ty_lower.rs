@@ -354,7 +354,7 @@ pub(crate) fn lower_const_body_path<'db>(
                     ConstTyId::invalid(db, InvalidCause::Other)
                 }
             }
-            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => match ty.data(db) {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) => match ty.data(db) {
                 TyData::ConstTy(const_ty) => *const_ty,
                 _ => return None,
             },
@@ -411,7 +411,7 @@ pub(crate) fn lower_type_position_path<'db>(
         lowering_cx,
     )?;
     Ok(match res {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty) => ty,
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) | PathRes::Func(ty) => ty,
         PathRes::Const(const_def, ty) => {
             if let Some(body) = const_def.body(db).to_opt() {
                 let const_ty = ConstTyId::from_body(db, body, Some(ty), Some(const_def));
@@ -806,14 +806,16 @@ impl<'db> TyAlias<'db> {
 
     /// Instantiates the alias with `args` and the defaults of the parameters
     /// after them. `missing` gives the argument of each parameter left
-    /// without one, if it can; otherwise the alias is unbound.
+    /// without one, if it can; otherwise the alias is unbound. Returns the
+    /// type and, unless it is invalid for want of them, the arguments of all
+    /// the alias's parameters, which its parameters' bounds are stated on.
     pub(crate) fn instantiate(
         &self,
         db: &'db dyn HirAnalysisDb,
         args: &[TyId<'db>],
         lowering_cx: &LoweringContext<'db>,
         mut missing: impl FnMut(TyId<'db>) -> Option<TyId<'db>>,
-    ) -> TyId<'db> {
+    ) -> (TyId<'db>, Option<Vec<TyId<'db>>>) {
         let expected = self.param_set.explicit_param_count(db);
         debug_assert!(
             args.len() <= expected,
@@ -839,8 +841,8 @@ impl<'db> TyAlias<'db> {
                 Ok(args)
             });
         match completed {
-            Ok(args) => self.alias_to.instantiate(db, &args),
-            Err(cause) => TyId::invalid(db, cause),
+            Ok(args) => (self.alias_to.instantiate(db, &args), Some(args)),
+            Err(cause) => (TyId::invalid(db, cause), None),
         }
     }
 }

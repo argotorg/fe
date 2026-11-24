@@ -111,7 +111,7 @@ impl super::Parse for FuncSignatureScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_generic_params_opt(parser, false)?;
+        parse_generic_params_opt(parser)?;
 
         if parser.find_and_pop(
             SyntaxKind::LParen,

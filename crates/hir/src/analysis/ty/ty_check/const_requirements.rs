@@ -10,7 +10,7 @@ use crate::analysis::name_resolution::{
     resolve_path_with_minter,
 };
 use crate::analysis::ty::canonical::Canonicalized;
-use crate::analysis::ty::trait_resolution::mentions_ty;
+use crate::analysis::ty::trait_resolution::{constraint::collect_constraints, mentions_ty};
 use crate::analysis::ty::{
     const_ty::ConstBodyLowering,
     subst::substitute_complete,
@@ -1055,7 +1055,7 @@ fn segment_const_args<'db>(
         match res {
             // An alias's arguments are its own parameters', whether or not the
             // aliased type uses them.
-            PathRes::TyAlias(alias, _) => {
+            PathRes::TyAlias(alias, ..) => {
                 for (arg, param) in args.data(db).iter().zip(alias.params(db)) {
                     if let GenericArg::Const(arg) = arg
                         && let Partial::Present(body) = arg.value
@@ -1101,33 +1101,50 @@ fn path_res_tys<'db>(db: &'db dyn HirAnalysisDb, res: PathRes<'db>) -> Vec<TyId<
     tys
 }
 
-/// The applications of records and enums with conditions that a path
-/// resolution carries, at any depth: `Bounded<0>` for the segment `Bounded<0>`
-/// of `Bounded<0>::Out`, or for the receiver of `Bounded<0>::L`. Path
-/// resolution reports every segment it resolves, so the lowering of a written
-/// type and the inference of a body record these for every prefix of every
-/// path they resolve, and the requirement checks read them from there. This
-/// reads only declarations, so inference can call it while it resolves.
-pub(super) fn constrained_applications<'db>(
-    db: &'db dyn HirAnalysisDb,
-    res: &PathRes<'db>,
-) -> Vec<TyId<'db>> {
-    fn collect<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut Vec<TyId<'db>>) {
-        for &arg in ty.decompose_ty_app(db).1 {
-            collect(db, arg, found);
+/// What the arguments that path resolutions apply must meet, which the
+/// resolved types do not hold. Path resolution reports every segment it
+/// resolves, so the lowering of a written type and the inference of a body
+/// collect these for every prefix of every path they resolve, and the checks
+/// read them from there: a written type's (`written_type_check`), and a
+/// body's after inference, which supplies the arguments an alias is named
+/// without (`check_body_requirements` and `TyCheckerFinalizer`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, SalsaValue)]
+pub(crate) struct PathRequirements<'db> {
+    /// The applications of records and enums with conditions that the
+    /// resolutions carry, at any depth: `Bounded<0>` for the segment
+    /// `Bounded<0>` of `Bounded<0>::Out`, or for the receiver of
+    /// `Bounded<0>::L`.
+    pub(crate) applications: Vec<TyId<'db>>,
+    /// The bounds of the parameters of the aliases they name, on the
+    /// arguments: `bool: Preset` for `Tagged<bool>` in `Tagged<bool>::new`
+    /// with `type Tagged<T: Preset> = Small`. The alias's expansion does not
+    /// hold them, even when it uses the parameter.
+    pub(crate) bounds: Vec<TraitInstId<'db>>,
+}
+
+impl<'db> PathRequirements<'db> {
+    /// Adds what the resolution of one segment requires. This reads only
+    /// declarations, so inference can call it while it resolves.
+    pub(crate) fn add(&mut self, db: &'db dyn HirAnalysisDb, res: &PathRes<'db>) {
+        fn collect<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>, found: &mut Vec<TyId<'db>>) {
+            for &arg in ty.decompose_ty_app(db).1 {
+                collect(db, arg, found);
+            }
+            if adt_declaration(db, ty).is_some_and(|declaration| {
+                !declaration.where_clause(db).const_predicates(db).is_empty()
+            }) && !found.contains(&ty)
+            {
+                found.push(ty);
+            }
         }
-        if adt_declaration(db, ty).is_some_and(|declaration| {
-            !declaration.where_clause(db).const_predicates(db).is_empty()
-        }) && !found.contains(&ty)
-        {
-            found.push(ty);
+        for ty in path_res_tys(db, res.clone()) {
+            collect(db, ty, &mut self.applications);
+        }
+        if let PathRes::TyAlias(alias, _, Some(args)) = res {
+            let bounds = collect_constraints(db, alias.alias.into()).instantiate(db, args);
+            self.bounds.extend(bounds.list(db));
         }
     }
-    let mut found = Vec::new();
-    for ty in path_res_tys(db, res.clone()) {
-        collect(db, ty, &mut found);
-    }
-    found
 }
 
 /// The first unmet requirement of an application that a path passed through.
@@ -1694,7 +1711,11 @@ fn written_applications<'db>(
     {
         for entry in written_types(db, item) {
             if let WrittenEntry::Type(written) = entry {
-                for &ty in written.lowered.iter().chain(&written.applications) {
+                for &ty in written
+                    .lowered
+                    .iter()
+                    .chain(&written.requirements.applications)
+                {
                     examined(db, ty, &mut found);
                 }
             }
@@ -1736,8 +1757,8 @@ struct WrittenType<'db> {
     scope: ScopeId<'db>,
     /// Its lowering, unless that is invalid.
     lowered: Option<TyId<'db>>,
-    /// The constrained applications its paths passed through.
-    applications: Vec<TyId<'db>>,
+    /// What the segments of its path require.
+    requirements: PathRequirements<'db>,
     /// Whether it is in an argument its alias drops, which no expansion
     /// holds for its position to check.
     dropped: bool,
@@ -1911,29 +1932,35 @@ fn written_types_query<'db>(
         ) {
             let db = self.db;
             let assumptions = assumptions_at(db, scope);
-            let (ty, applications) = match hir_ty.data(db) {
-                // Only a path of two or more segments passes through types
-                // that its lowering does not hold. A one-segment path lowers
-                // to what it resolves to, its arguments are written types or
-                // anonymous constants of their own, and an alias's arguments
-                // are checked after expansion or as constants
-                // (`written_const_args`).
+            // What a path requires is read from its segments' resolutions. A
+            // path of two or more segments passes through types that its
+            // lowering does not hold. A one-segment path lowers to what it
+            // resolves to, and its arguments are written types or anonymous
+            // constants of their own, so it requires no more than the bounds
+            // of the alias it may name. An alias's arguments are checked after
+            // expansion or as constants (`written_const_args`).
+            let (ty, resolutions) = match hir_ty.data(db) {
                 TypeKind::Path(Partial::Present(path)) if path.len(db) > 1 => {
-                    let (ty, resolutions) = lower_hir_ty_with_resolutions(
+                    lower_hir_ty_with_resolutions(
                         db,
                         hir_ty,
                         scope,
                         assumptions,
                         ConstBodyLowering::Eager,
-                    );
-                    let applications = resolutions
-                        .iter()
-                        .flat_map(|(_, res)| constrained_applications(db, res))
-                        .collect();
-                    (ty, applications)
+                    )
                 }
+                TypeKind::Path(Partial::Present(path)) => (
+                    lower_hir_ty(db, hir_ty, scope, assumptions),
+                    resolve_path(db, *path, scope, assumptions, false)
+                        .map(|res| vec![(*path, res)])
+                        .unwrap_or_default(),
+                ),
                 _ => (lower_hir_ty(db, hir_ty, scope, assumptions), Vec::new()),
             };
+            let mut requirements = PathRequirements::default();
+            for (_, res) in &resolutions {
+                requirements.add(db, res);
+            }
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
             if self.default_depth == 0 {
@@ -1943,20 +1970,22 @@ fn written_types_query<'db>(
                 }
             }
             let alias_args = match hir_ty.data(db) {
-                TypeKind::Path(Partial::Present(path)) => {
-                    match resolve_path(db, *path, scope, assumptions, false) {
-                        Ok(PathRes::TyAlias(alias, _)) => {
-                            let expansion = *alias.alias_to.skip_binder();
-                            let dropped = alias
-                                .params(db)
-                                .iter()
-                                .map(|&param| !mentions_ty(db, expansion, param))
-                                .collect();
-                            Some((path.generic_args(db), dropped))
-                        }
-                        _ => None,
+                TypeKind::Path(Partial::Present(path)) => match resolutions
+                    .iter()
+                    .rev()
+                    .find_map(|(resolved, res)| (resolved == path).then_some(res))
+                {
+                    Some(PathRes::TyAlias(alias, ..)) => {
+                        let expansion = *alias.alias_to.skip_binder();
+                        let dropped = alias
+                            .params(db)
+                            .iter()
+                            .map(|&param| !mentions_ty(db, expansion, param))
+                            .collect();
+                        Some((path.generic_args(db), dropped))
                     }
-                }
+                    _ => None,
+                },
                 _ => None,
             };
             let enclosing_alias_args = std::mem::replace(&mut self.alias_args, alias_args);
@@ -1968,7 +1997,7 @@ fn written_types_query<'db>(
                     span,
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
-                    applications,
+                    requirements,
                     dropped: self.dropped_depth > 0,
                     nested_from,
                 }));
@@ -2009,9 +2038,25 @@ fn written_type_check_query<'db>(
     region: WrittenTypeRegion<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let entries = written_types(db, region.item(db));
+    let solve_cx = |scope| {
+        TraitSolveCx::new(db, scope).with_assumptions(param_env(db, enclosing_item(db, scope)))
+    };
+    let ill_formed_diag = |span: &DynLazySpan<'db>, wf| match wf {
+        WellFormedness::IllFormed { goal, subgoal } => Some(FuncBodyDiag::Ty(
+            TraitConstraintDiag::TraitBoundNotSat {
+                span: span.clone(),
+                primary_goal: goal,
+                unsat_subgoal: subgoal,
+                required_by: None,
+            }
+            .into(),
+        )),
+        WellFormedness::WellFormed => None,
+    };
     let mut diags = Vec::new();
-    // The failing application each entry reported, if any.
+    // The failing application and alias bound each entry reported, if any.
     let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
+    let mut reported_bounds: Vec<Option<TraitInstId<'db>>> = Vec::with_capacity(entries.len());
     // Whether each entry reported itself ill-formed.
     let mut ill_formed: Vec<bool> = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -2021,60 +2066,75 @@ fn written_type_check_query<'db>(
             WrittenEntry::Type(written)
                 if written.dropped && !ill_formed[written.nested_from..].contains(&true) =>
             {
-                written.lowered.is_some_and(|ty| {
-                    let solve_cx = TraitSolveCx::new(db, written.scope)
-                        .with_assumptions(param_env(db, enclosing_item(db, written.scope)));
-                    let WellFormedness::IllFormed { goal, subgoal } = check_ty_wf(db, solve_cx, ty)
-                    else {
-                        return false;
-                    };
-                    diags.push(FuncBodyDiag::Ty(
-                        TraitConstraintDiag::TraitBoundNotSat {
-                            span: written.span.clone(),
-                            primary_goal: goal,
-                            unsat_subgoal: subgoal,
-                            required_by: None,
-                        }
-                        .into(),
-                    ));
-                    true
-                })
+                let diag = written.lowered.and_then(|ty| {
+                    ill_formed_diag(&written.span, check_ty_wf(db, solve_cx(written.scope), ty))
+                });
+                let found = diag.is_some();
+                diags.extend(diag);
+                found
             }
             _ => false,
         });
-        let report = match entry {
+        // A use of an alias meets the bounds of its parameters, as a use of a
+        // struct does. Its requirements are checked once they hold.
+        let (report, bound) = match entry {
             WrittenEntry::ConstBodies(bodies) => {
                 for &(body, expected) in bodies {
                     diags.extend(anon_const_position_check(db, body, expected).diags);
                 }
-                None
+                (None, None)
             }
             WrittenEntry::Type(written) => {
-                let nested: FxHashSet<_> = reported[written.nested_from..]
+                let nested_bounds: FxHashSet<_> = reported_bounds[written.nested_from..]
                     .iter()
                     .flatten()
                     .copied()
                     .collect();
-                let unmet = written
-                    .lowered
-                    .and_then(|ty| check_type_requirements(db, ty, written.scope, &nested))
-                    .or_else(|| {
-                        written.applications.iter().find_map(|&application| {
-                            check_path_application(db, application, written.scope, &nested)
-                        })
+                let unmet_bound = written
+                    .requirements
+                    .bounds
+                    .iter()
+                    .filter(|bound| !nested_bounds.contains(bound))
+                    .find_map(|&bound| {
+                        let wf = check_goals_wf(db, solve_cx(written.scope), &[bound]);
+                        Some((bound, ill_formed_diag(&written.span, wf)?))
                     });
-                unmet.map(|unmet| {
-                    diags.push(unmet_requirement_diag(
-                        written.span.clone(),
-                        unmet.predicate,
-                        unmet.failure,
-                        None,
-                    ));
-                    unmet.ty
-                })
+                if let Some((bound, diag)) = unmet_bound {
+                    diags.push(diag);
+                    (None, Some(bound))
+                } else {
+                    let nested: FxHashSet<_> = reported[written.nested_from..]
+                        .iter()
+                        .flatten()
+                        .copied()
+                        .collect();
+                    let unmet = written
+                        .lowered
+                        .and_then(|ty| check_type_requirements(db, ty, written.scope, &nested))
+                        .or_else(|| {
+                            written
+                                .requirements
+                                .applications
+                                .iter()
+                                .find_map(|&application| {
+                                    check_path_application(db, application, written.scope, &nested)
+                                })
+                        });
+                    let report = unmet.map(|unmet| {
+                        diags.push(unmet_requirement_diag(
+                            written.span.clone(),
+                            unmet.predicate,
+                            unmet.failure,
+                            None,
+                        ));
+                        unmet.ty
+                    });
+                    (report, None)
+                }
             }
         };
         reported.push(report);
+        reported_bounds.push(bound);
     }
     diags
 }

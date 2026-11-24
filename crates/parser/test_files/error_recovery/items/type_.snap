@@ -1,10 +1,10 @@
 ---
 source: crates/parser/tests/error_recovery.rs
 expression: node
-input_file: crates/parser/test_files/error_recovery/items/type_.fe
+input_file: test_files/error_recovery/items/type_.fe
 ---
-Root@0..72
-  ItemList@0..70
+Root@0..119
+  ItemList@0..118
     Item@0..29
       TypeAlias@0..29
         TypeKw@0..4 "type"
@@ -51,8 +51,10 @@ Root@0..72
               Colon@41..42 ":"
               WhiteSpace@42..43 " "
               TypeBound@43..46
-                Error@43..46
-                  Ident@43..46 "i32"
+                TraitRef@43..46
+                  Path@43..46
+                    PathSegment@43..46
+                      Ident@43..46 "i32"
           Comma@46..47 ","
           WhiteSpace@47..48 " "
           TypeGenericParam@48..54
@@ -61,8 +63,10 @@ Root@0..72
               Colon@49..50 ":"
               WhiteSpace@50..51 " "
               TypeBound@51..54
-                Error@51..54
-                  Ident@51..54 "i32"
+                TraitRef@51..54
+                  Path@51..54
+                    PathSegment@51..54
+                      Ident@51..54 "i32"
           Gt@54..55 ">"
         WhiteSpace@55..56 " "
         Eq@56..57 "="
@@ -86,4 +90,44 @@ Root@0..72
                       PathSegment@68..69
                         Ident@68..69 "U"
                 Gt@69..70 ">"
-  Newline@70..72 "\n\n"
+    Newline@70..72 "\n\n"
+    Item@72..118
+      TypeAlias@72..118
+        TypeKw@72..76 "type"
+        WhiteSpace@76..77 " "
+        Ident@77..84 "Bounded"
+        GenericParamList@84..106
+          Lt@84..85 "<"
+          ConstGenericParam@85..105
+            ConstKw@85..90 "const"
+            WhiteSpace@90..91 " "
+            Ident@91..92 "N"
+            Colon@92..93 ":"
+            WhiteSpace@93..94 " "
+            PathType@94..99
+              Path@94..99
+                PathSegment@94..99
+                  Ident@94..99 "usize"
+            TypeBoundList@99..105
+              Colon@99..100 ":"
+              WhiteSpace@100..101 " "
+              TypeBound@101..105
+                Error@101..105
+                  Ident@101..105 "Copy"
+          Gt@105..106 ">"
+        WhiteSpace@106..107 " "
+        Eq@107..108 "="
+        WhiteSpace@108..109 " "
+        PathType@109..118
+          Path@109..118
+            PathSegment@109..118
+              Ident@109..115 "Result"
+              GenericArgList@115..118
+                Lt@115..116 "<"
+                TypeGenericArg@116..117
+                  PathType@116..117
+                    Path@116..117
+                      PathSegment@116..117
+                        Ident@116..117 "N"
+                Gt@117..118 ">"
+  Newline@118..119 "\n"

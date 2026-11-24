@@ -784,7 +784,7 @@ fn resolve_sol_abi_ty<'db>(
 
     let assumptions = PredicateListId::empty_list(db);
     match resolve_path(db, sol_path, scope, assumptions, false) {
-        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => Ok(ty),
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) => Ok(ty),
         Ok(other) => Err(format!(
             "expected `std::abi::Sol` to resolve to a type, got `{other:?}`"
         )),

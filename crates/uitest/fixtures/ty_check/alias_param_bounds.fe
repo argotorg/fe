@@ -1,0 +1,253 @@
+trait Preset {
+    const N: usize
+}
+
+struct Small {
+    len: usize,
+}
+
+impl Small {
+    const CAP: usize = 4
+
+    fn new() -> Self {
+        Small { len: 0 }
+    }
+}
+
+impl Preset for Small {
+    const N: usize = 4
+}
+
+trait HasItem {
+    type Item
+}
+
+impl HasItem for Small {
+    type Item = u32
+}
+
+struct Bits<const N: usize> {
+    bytes: [u8; N],
+}
+
+struct Holder<const N: usize> {}
+
+struct Pair<T, U> {
+    first: T,
+    second: U,
+}
+
+impl<T, U> Pair<T, U> {
+    fn make(_ first: T, _ second: U) -> Self {
+        Pair { first, second }
+    }
+}
+
+trait Other {}
+
+trait Takes<T> {}
+
+type Doubled<P: Preset> = Bits<{ P::N * 2 }>
+
+// The bound need not be used by the alias's type to be required.
+type Tagged<T: Preset> = Small
+
+type First<P: Preset> = Pair<P, u8>
+
+type WithItem<P: HasItem<Item = U>, U> = Pair<P, u8>
+
+enum Maybe<T> {
+    Nothing,
+    Just(T),
+}
+
+type MaybeTagged<T: Preset> = Maybe<T>
+
+trait Sub: Preset {}
+
+impl Sub for Small {}
+
+type Both<A: Preset, B: HasItem> = Small
+
+type DefaultBad<P: Preset = bool> = Small
+
+type UnknownBound<P: Missing> = Small
+
+type MaybeMutBound<P: mut? Preset> = Small
+
+fn id<T>(_ x: own T) -> T {
+    x
+}
+
+// Each use of an alias whose arguments don't meet its bounds is reported
+// where it is written.
+
+fn param(_ tag: Tagged<bool>) {}
+
+fn ret() -> Tagged<bool> {
+    Small::new()
+}
+
+struct Field {
+    tag: Tagged<bool>,
+}
+
+fn in_let() {
+    let _: Tagged<u16> = Small::new()
+}
+
+impl Other for Tagged<u8> {}
+
+impl Takes<Tagged<u8>> for u8 {}
+
+fn in_bound<T: Takes<Tagged<u8>>>() {}
+
+fn nested(_ pair: Pair<Tagged<bool>, u8>) {}
+
+fn not_satisfied(_ bits: Doubled<u8>) {}
+
+fn call() -> Small {
+    Tagged<bool>::new()
+}
+
+fn record_init() -> Small {
+    Tagged<bool> { len: 0 }
+}
+
+fn tuple_of_paths() -> (usize, Small) {
+    (Tagged<bool>::CAP, Tagged<u8>::new())
+}
+
+fn let_pattern(_ s: Small) -> usize {
+    let Tagged<bool> { len } = s
+    len
+}
+
+fn match_pattern(_ s: Small) -> usize {
+    match s {
+        Tagged<u8> { len } => len,
+    }
+}
+
+fn assoc_const() -> usize {
+    Tagged<u8>::CAP
+}
+
+fn assoc_type(_ item: Tagged<u8>::Item) {}
+
+fn const_arg(_ holder: Holder<Tagged<u8>::CAP>) {}
+
+fn param_without_bound<T>(_ tag: Tagged<T>) {}
+
+fn body_param_without_bound<T>() -> usize {
+    Tagged<T>::CAP
+}
+
+// An alias over another alias restates its bounds.
+type Quadrupled<P> = Doubled<P>
+
+type Retagged = Tagged<bool>
+
+type Also<P: Preset> = Doubled<P>
+
+fn alias_over_alias(_ bits: Also<u8>) {}
+
+// The arguments inference finds must meet the bounds too.
+fn inferred_not_satisfied() {
+    let _: Pair<bool, u8> = First::make(true, 0)
+}
+
+fn not_inferred() -> Small {
+    Tagged::new()
+}
+
+// An argument named only by an associated type binding is inferred too.
+fn assoc_binding_not_inferred() -> Pair<Small, u8> {
+    WithItem::make(Small::new(), 0)
+}
+
+fn assoc_binding_not_satisfied() -> Pair<Small, u8> {
+    WithItem<Small, bool>::make(Small::new(), 0)
+}
+
+fn qualified_type(_ item: <Tagged<bool> as HasItem>::Item) {}
+
+fn qualified_const() -> usize {
+    <Tagged<bool> as Preset>::N
+}
+
+fn where_clause<T>()
+where
+    T: Takes<Tagged<bool>>,
+{}
+
+fn variant_expr() -> Maybe<bool> {
+    MaybeTagged<bool>::Nothing
+}
+
+fn variant_pattern(_ m: Maybe<u8>) -> u8 {
+    match m {
+        MaybeTagged<u8>::Just(x) => x,
+        MaybeTagged<u8>::Nothing => 0,
+    }
+}
+
+fn variant_inferred() -> Maybe<bool> {
+    MaybeTagged::Just(true)
+}
+
+fn effect() uses (tag: Tagged<bool>) {}
+
+fn path_generic_args() -> Pair<Small, u8> {
+    Pair<Tagged<bool>, u8>::make(Small::new(), 0)
+}
+
+fn call_generic_args() -> Small {
+    id<Tagged<bool>>(Small::new())
+}
+
+fn defaulted(_ tag: DefaultBad) {}
+
+fn defaulted_in_body() -> Small {
+    DefaultBad::new()
+}
+
+fn both_unsatisfied(_ tag: Both<bool, bool>) -> Small {
+    Both<bool, bool>::new()
+}
+
+// The same uses with arguments that meet the bounds.
+
+fn param_ok(_ tag: Tagged<Small>, _ bits: Doubled<Small>, _ pair: Pair<Tagged<Small>, u8>) {}
+
+fn param_with_bound<T: Preset>(_ tag: Tagged<T>) {}
+
+fn body_param_with_bound<T: Preset>() -> usize {
+    Tagged<T>::CAP
+}
+
+fn paths_ok() -> usize {
+    let Tagged<Small> { len } = Tagged<Small>::new()
+    let _: Small = Tagged<Small> { len }
+    let _: Pair<Small, u8> = First::make(Small::new(), 0)
+    let cap = Tagged<Small>::CAP
+    len + cap
+}
+
+fn assoc_ok(_ item: Tagged<Small>::Item, _ holder: Holder<Tagged<Small>::CAP>) {}
+
+fn alias_over_alias_ok(_ bits: Also<Small>) {}
+
+fn supertrait<P: Sub>(_ tag: Tagged<P>) -> usize {
+    Tagged<P>::CAP
+}
+
+fn assoc_binding_ok() -> Pair<Small, u8> {
+    WithItem<Small, u32>::make(Small::new(), 0)
+}
+
+fn variant_ok() -> Maybe<Small> {
+    MaybeTagged::Just(Small::new())
+}
+
+fn qualified_ok(_ item: <Tagged<Small> as HasItem>::Item) {}

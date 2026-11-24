@@ -984,7 +984,7 @@ fn resolve_ty_path<'db>(
     )
     .ok()?
     {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => Some(ty),
         _ => None,
     }
 }
