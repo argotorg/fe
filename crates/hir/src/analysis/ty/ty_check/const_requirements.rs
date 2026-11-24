@@ -6,6 +6,7 @@
 //! unknown parameters or assuming the obligation being checked.
 use super::*;
 use crate::analysis::name_resolution::{
+    TypePosition,
     method_selection::{MethodCandidate, select_method_candidate},
     resolve_path_with_minter,
 };
@@ -1792,10 +1793,11 @@ fn written_types_query<'db>(
     use crate::visitor::{
         Visitor, VisitorCtxt,
         prelude::{
-            LazyBodySpan, LazyExprSpan, LazyGenericArgListSpan, LazyItemSpan, LazyTraitRefSpan,
+            LazyBodySpan, LazyExprSpan, LazyGenericArgListSpan, LazyGenericArgSpan, LazyItemSpan,
+            LazyTraitRefSpan,
         },
-        walk_body, walk_expr, walk_generic_arg_list, walk_item, walk_path, walk_trait_ref,
-        walk_type,
+        walk_body, walk_expr, walk_generic_arg, walk_generic_arg_list, walk_item, walk_path,
+        walk_trait_ref, walk_type,
     };
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
@@ -1867,7 +1869,34 @@ fn written_types_query<'db>(
         ) {
             let scope = ctxt.scope();
             let span = ctxt.span().map(Into::into);
-            self.written_type(hir_ty, scope, span, |this| walk_type(this, ctxt, hir_ty));
+            self.written_type(hir_ty, scope, span, TypePosition::Type, |this| {
+                walk_type(this, ctxt, hir_ty)
+            });
+        }
+
+        // A type argument is lowered as the constant its path names, if it
+        // names one (`lower_generic_arg_list`).
+        fn visit_generic_arg(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, LazyGenericArgSpan<'db>>,
+            arg: &GenericArg<'db>,
+        ) {
+            let (GenericArg::Type(type_arg), Some(span)) = (arg, ctxt.span()) else {
+                return walk_generic_arg(self, ctxt, arg);
+            };
+            let Some(hir_ty) = type_arg.ty.to_opt() else {
+                return;
+            };
+            let scope = ctxt.scope();
+            let span = span.into_type_arg().ty();
+            let mut ty_ctxt = VisitorCtxt::new(self.db, scope, span.clone());
+            self.written_type(
+                hir_ty,
+                scope,
+                Some(span.into()),
+                TypePosition::GenericArg,
+                |this| walk_type(this, &mut ty_ctxt, hir_ty),
+            );
         }
 
         fn visit_generic_arg_list(
@@ -1911,50 +1940,61 @@ fn written_types_query<'db>(
                         .param(idx)
                         .path();
                     let mut key_ctxt = VisitorCtxt::new(self.db, ctxt.scope(), span.clone());
-                    self.written_type(hir_ty, ctxt.scope(), Some(span.into()), |this| {
-                        walk_path(this, &mut key_ctxt, key)
-                    });
+                    self.written_type(
+                        hir_ty,
+                        ctxt.scope(),
+                        Some(span.into()),
+                        TypePosition::Type,
+                        |this| walk_path(this, &mut key_ctxt, key),
+                    );
                 }
             }
             walk_expr(self, ctxt, expr);
         }
     }
     impl<'db> Collector<'db> {
-        /// Lists a written type at `span`: the anonymous constants written in
-        /// it, then the types nested in it, which `walk_nested` visits, then
-        /// the type itself.
+        /// Lists a written type at `span`, written at `position`: the
+        /// anonymous constants written in it, then the types nested in it,
+        /// which `walk_nested` visits, then the type itself.
         fn written_type(
             &mut self,
             hir_ty: crate::hir_def::TypeId<'db>,
             scope: ScopeId<'db>,
             span: Option<DynLazySpan<'db>>,
+            position: TypePosition,
             walk_nested: impl FnOnce(&mut Self),
         ) {
             let db = self.db;
             let assumptions = assumptions_at(db, scope);
-            // What a path requires is read from its segments' resolutions. A
-            // path of two or more segments passes through types that its
-            // lowering does not hold. A one-segment path lowers to what it
-            // resolves to, and its arguments are written types or anonymous
-            // constants of their own, so it requires no more than the bounds
-            // of the alias it may name. An alias's arguments are checked after
-            // expansion or as constants (`written_const_args`).
+            // What a path requires is read from the resolutions its lowering
+            // used for its segments. A path of two or more segments passes
+            // through types that its lowering does not hold. A one-segment
+            // path lowers to what it resolves to, and its arguments are
+            // written types or anonymous constants of their own, so it
+            // requires no more than the bounds of the alias it may name: its
+            // own last resolution, the one its lowering kept. An alias's
+            // arguments are checked after expansion or as constants
+            // (`written_const_args`).
             let (ty, resolutions) = match hir_ty.data(db) {
-                TypeKind::Path(Partial::Present(path)) if path.len(db) > 1 => {
-                    lower_hir_ty_with_resolutions(
+                TypeKind::Path(Partial::Present(path)) => {
+                    let (ty, resolutions) = lower_hir_ty_with_resolutions(
                         db,
                         hir_ty,
                         scope,
                         assumptions,
+                        position,
                         ConstBodyLowering::Eager,
-                    )
+                    );
+                    let resolutions = if path.len(db) > 1 {
+                        resolutions
+                    } else {
+                        let own = resolutions
+                            .into_iter()
+                            .rfind(|(resolved, _)| resolved == path);
+                        own.into_iter().collect()
+                    };
+                    (ty, resolutions)
                 }
-                TypeKind::Path(Partial::Present(path)) => (
-                    lower_hir_ty(db, hir_ty, scope, assumptions),
-                    resolve_path(db, *path, scope, assumptions, false)
-                        .map(|res| vec![(*path, res)])
-                        .unwrap_or_default(),
-                ),
                 _ => (lower_hir_ty(db, hir_ty, scope, assumptions), Vec::new()),
             };
             let mut requirements = PathRequirements::default();
@@ -2247,6 +2287,7 @@ fn written_const_args<'db>(
                 hir_ty,
                 scope,
                 assumptions,
+                TypePosition::Type,
                 ConstBodyLowering::Deferred,
             );
             segment_const_args(db, *path, &resolutions)

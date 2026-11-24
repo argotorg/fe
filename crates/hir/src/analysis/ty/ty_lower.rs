@@ -109,21 +109,28 @@ fn lower_hir_ty_impl<'db>(
     }
 }
 
-/// Lowers `ty` as [`lower_hir_ty`] or [`lower_hir_ty_deferred`] does, as
-/// `const_bodies` says, and returns every path segment the lowering resolved,
-/// with its resolution: the segments of the paths written in `ty`, including
-/// generic arguments and qualified types, at every prefix. Aliases and
-/// associated types are lowered by their own queries, so the paths written in
-/// their declarations are not included.
+/// Lowers `ty`, written at `position`, as [`lower_hir_ty`] or
+/// [`lower_hir_ty_deferred`] does, as `const_bodies` says, or as a type
+/// argument is lowered (`lower_type_arg`), and returns every path segment the
+/// lowering resolved, with its resolution: the segments of the paths written
+/// in `ty`, including generic arguments and qualified types, at every prefix.
+/// Aliases and associated types are lowered by their own queries, so the paths
+/// written in their declarations are not included.
 pub(crate) fn lower_hir_ty_with_resolutions<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: HirTyId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    position: TypePosition,
     const_bodies: ConstBodyLowering,
 ) -> (TyId<'db>, Vec<(PathId<'db>, PathRes<'db>)>) {
     let lowering_cx = LoweringContext::for_const_bodies(const_bodies).recording_resolutions();
-    let lowered = lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx);
+    let lowered = match position {
+        TypePosition::Type => lower_hir_ty_impl(db, ty, scope, assumptions, &lowering_cx),
+        TypePosition::GenericArg => {
+            lower_type_arg(db, Partial::Present(ty), scope, assumptions, &lowering_cx)
+        }
+    };
     (lowered, lowering_cx.into_resolutions())
 }
 
@@ -857,27 +864,9 @@ pub(crate) fn lower_generic_arg_list<'db>(
     args.data(db)
         .iter()
         .map(|arg| match arg {
-            // Generic args are syntactically ambiguous: `String<N>` may parse `N` as a type
-            // even when `String` expects a const generic arg, so a path is lowered as the
-            // constant it names, if it names one.
-            GenericArg::Type(ty_arg) => match ty_arg.ty.to_opt().map(|ty| (ty, ty.data(db))) {
-                Some((_, HirTyKind::Path(path))) => lower_path_impl(
-                    db,
-                    scope,
-                    *path,
-                    assumptions,
-                    TypePosition::GenericArg,
-                    lowering_cx,
-                ),
-                // A tuple whose parts carry modes or name a shape is a
-                // parameter list, a shape: `Fn<(own A, B)>`.
-                Some((ty, HirTyKind::Tuple(_)))
-                    if let Some(list) = lower_shape_list(db, ty, scope, assumptions) =>
-                {
-                    list
-                }
-                _ => lower_opt_hir_ty_impl(db, ty_arg.ty, scope, assumptions, lowering_cx),
-            },
+            GenericArg::Type(ty_arg) => {
+                lower_type_arg(db, ty_arg.ty, scope, assumptions, lowering_cx)
+            }
             GenericArg::Mode(_) => TyId::invalid(db, InvalidCause::ModeArgNotShape),
             // A call infers `_` itself, and nothing else takes it.
             GenericArg::Infer => TyId::invalid(db, InvalidCause::InferArgOutsideCall),
@@ -890,6 +879,37 @@ pub(crate) fn lower_generic_arg_list<'db>(
             GenericArg::AssocType(_) => TyId::invalid(db, InvalidCause::AssocBindingNotOnTrait),
         })
         .collect()
+}
+
+/// Lowers the type written as a type argument. Generic args are syntactically
+/// ambiguous: `String<N>` may parse `N` as a type even when `String` expects
+/// a const generic arg, so a path is lowered as the constant it names, if it
+/// names one.
+fn lower_type_arg<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: Partial<HirTyId<'db>>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+) -> TyId<'db> {
+    match ty.to_opt().map(|ty| (ty, ty.data(db))) {
+        Some((_, HirTyKind::Path(path))) => lower_path_impl(
+            db,
+            scope,
+            *path,
+            assumptions,
+            TypePosition::GenericArg,
+            lowering_cx,
+        ),
+        // A tuple whose parts carry modes or name a shape is a parameter
+        // list, a shape: `Fn<(own A, B)>`.
+        Some((ty, HirTyKind::Tuple(_)))
+            if let Some(list) = lower_shape_list(db, ty, scope, assumptions) =>
+        {
+            list
+        }
+        _ => lower_opt_hir_ty_impl(db, ty, scope, assumptions, lowering_cx),
+    }
 }
 
 #[salsa::interned]
