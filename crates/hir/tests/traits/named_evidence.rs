@@ -2762,3 +2762,56 @@ fn run() -> u256 {{
     assert!(!codes.contains(&"2-0010".to_string()), "{codes:?}");
     assert_eq!(codes, vec!["8-0163"]);
 }
+
+const LEN_PICKS: &str = r#"
+trait Len { const fn len() -> usize }
+struct Item {}
+impl Len for Item { const fn len() -> usize { 3 } }
+impl Len for Item as Big { const fn len() -> usize { 4 } }
+struct H<const N: usize, const M: usize = { Item::len() }> { v: u256 }
+struct Only<const N: usize> { v: u256 }
+"#;
+
+#[test]
+fn record_literals_refuse_defaults_that_read_a_choice() {
+    for literal in ["H<1> { v: 1 }", "H<{ 1 }> { v: 1 }"] {
+        let source = format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h = {literal} }} }}\n");
+        let codes = diagnostics(&source);
+        assert!(
+            codes.contains(&"8-0138".to_string()),
+            "{literal}: {codes:?}"
+        );
+        // The annotation of the same type is refused the same way, and
+        // neither is refused outside the choice.
+        let annotated = format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h: H<1> }} }}\n");
+        assert!(diagnostics(&annotated).contains(&"8-0138".to_string()));
+        let ordinary = format!("{LEN_PICKS}\nfn f() {{ let _h = {literal} }}\n");
+        assert_eq!(diagnostics(&ordinary), Vec::<String>::new(), "{literal}");
+    }
+    // A default that is written out is not read from the choice.
+    let written =
+        format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h = H<1, 5> {{ v: 1 }} }} }}\n");
+    assert_eq!(diagnostics(&written), Vec::<String>::new());
+}
+
+#[test]
+fn provider_expressions_refuse_reads_of_the_choices_before_them() {
+    let source =
+        |operands: &str| format!("{LEN_PICKS}\nfn p() -> u256 {{ with ({operands}) {{ 1 }} }}\n");
+    let after = diagnostics(&source("Big, Only<{ Item::len() }> { v: 1 }"));
+    assert!(after.contains(&"8-0138".to_string()), "{after:?}");
+    // The same type written in the body of the choice is refused.
+    let body = format!(
+        "{LEN_PICKS}\nfn p() -> u256 {{ with (Big) {{ let _h: Only<{{ Item::len() }}> = Only<{{ Item::len() }}> {{ v: 1 }}\n1 }} }}\n"
+    );
+    assert!(diagnostics(&body).contains(&"8-0138".to_string()));
+    // A provider before the choice does not see it.
+    assert_eq!(
+        diagnostics(&source("Only<{ Item::len() }> { v: 1 }, Big")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        diagnostics(&source("Only<{ Item::len() }> { v: 1 }")),
+        Vec::<String>::new()
+    );
+}

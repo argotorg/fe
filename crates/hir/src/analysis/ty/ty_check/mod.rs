@@ -5703,6 +5703,20 @@ impl<'db> TypedBody<'db> {
         self.tables.expr_choices[expr]
     }
 
+    /// The choices in force at a position written in `expr`, the innermost
+    /// expression around it, or, for one in no expression, in `scope`. An
+    /// expression can hold more choices than the block around it: an operand
+    /// of a `with` list is under the operands before it.
+    pub(super) fn choices_at(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: Option<ExprId>,
+        scope: ScopeId<'db>,
+    ) -> Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>> {
+        expr.and_then(|expr| self.expr_choices(expr))
+            .or_else(|| self.choices_in_scope(db, scope))
+    }
+
     pub(super) fn choices_in_scope(
         &self,
         db: &'db dyn HirAnalysisDb,
