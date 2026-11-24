@@ -4361,3 +4361,96 @@ const C: <S as T>::Out = quote { 1 }
     assert!(diagnostics.is_empty(), "{diagnostics}");
 }
 
+#[test]
+fn a_generated_trait_constant_meets_the_attribute_rules_of_a_written_one() {
+    let source = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Tr { const X: u256 }
+struct S { a: u256 }
+
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            #[payable]
+            const X: u256 = 1
+        }
+    }
+}
+
+impl Tr for S with (P)
+";
+    let errors = generated_diagnostics(source);
+    assert!(
+        errors.contains("unsupported `#[payable]` attribute on const `X`"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn a_standalone_file_is_prepared_against_the_builtin_sources_of_its_database() {
+    // `fe doc --stdlib-path` loads other builtin sources into the database and
+    // prepares the file in it, so a provider has to run against them.
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, edited_marker}
+
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = edited_marker()
+        quote { pub const fn generated() -> usize { ${n} } }
+    }
+}
+
+struct S { a: u256 }
+impl S with (P)
+";
+    let (mut db, file) = input(source);
+    let meta = Url::parse("builtin-core:/src/meta.fe").unwrap();
+    let original = db
+        .workspace()
+        .get(&db, &meta)
+        .expect("the embedded meta module")
+        .text(&db)
+        .clone();
+    db.workspace().update(
+        &mut db,
+        meta,
+        format!("{original}\npub const fn edited_marker() -> usize {{ 41 }}\n"),
+    );
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "generated", "41");
+}#[test]
+fn a_generated_trait_constant_meets_the_attribute_rules_of_a_written_one() {
+    let source = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Tr { const X: u256 }
+struct S { a: u256 }
+
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            #[payable]
+            const X: u256 = 1
+        }
+    }
+}
+
+impl Tr for S with (P)
+";
+    let errors = generated_diagnostics(source);
+    assert!(
+        errors.contains("unsupported `#[payable]` attribute on const `X`"),
+        "{errors}"
+    );
+}
+

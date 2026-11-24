@@ -1412,6 +1412,7 @@ impl<'db> ImplTrait<'db> {
                             ctxt.defer_generated_member_origin(generated.into());
                         }
                         Some(ast::ItemKind::Const(c)) => {
+                            validate_spliced_const(ctxt, &c);
                             consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
                         }
                         Some(ast::ItemKind::TypeAlias(alias)) => {
