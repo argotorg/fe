@@ -158,3 +158,32 @@ fn verify(value: <Pair as Parts>::Left) -> Family<trait Rel<u256>> {
     let (module, _) = db.top_mod(file);
     db.assert_no_diags(module);
 }
+
+#[test]
+fn impls_over_families_with_projections_overlap_in_coherence() {
+    let header = "trait Assoc {\n    type Item\n}\ntrait Rel<T> {}\ntrait Other<T> {}\ntrait Marker {}\nstruct Family<P: * -> Constraint> {}\nstruct Holder {}\nimpl Assoc for Holder {\n    type Item = u8\n}\n";
+    let diagnostics = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_overlap.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes.run_on_module(&db, module).len()
+    };
+
+    // Two impls whose family arguments are the same projection overlap.
+    assert_ne!(
+        diagnostics(
+            "impl<T: Assoc> Marker for Family<trait Rel<T::Item>> {}\n\
+             impl<U: Assoc> Marker for Family<trait Rel<U::Item>> {}\n"
+        ),
+        0
+    );
+    // Different families do not overlap.
+    assert_eq!(
+        diagnostics(
+            "impl<T: Assoc> Marker for Family<trait Rel<T::Item>> {}\n\
+             impl<U: Assoc> Marker for Family<trait Other<U::Item>> {}\n"
+        ),
+        0
+    );
+}
