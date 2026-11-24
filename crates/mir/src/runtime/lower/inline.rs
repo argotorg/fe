@@ -632,7 +632,8 @@ fn index_class<'db>() -> RuntimeClass<'db> {
     })
 }
 
-/// The SSA locals of `callee` its slides mention, with their classes.
+/// The SSA locals of `callee` its slides mention, with their classes,
+/// including the values of the provider bindings they name.
 fn slide_locals<'db>(
     callee: &RuntimeBody<'db>,
     resumes: &[RBlockId],
@@ -645,8 +646,8 @@ fn slide_locals<'db>(
             continue;
         }
         let mut data = callee.blocks[block.index()].clone();
-        for stmt in &mut data.stmts {
-            locals.extend(stmt.locals_mut().into_iter().map(|local| *local));
+        for stmt in &data.stmts {
+            locals.extend(stmt.locals(&callee.provider_bindings));
         }
         locals.extend(data.terminator.values_mut().into_iter().map(|value| *value));
         stack.extend(data.terminator.successors());

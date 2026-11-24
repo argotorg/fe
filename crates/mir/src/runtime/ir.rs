@@ -2066,8 +2066,10 @@ impl<'db> RStmt<'db> {
         }
     }
 
-    /// The locals the statement reads or writes, including those in its
-    /// places and in a `HoldLane`'s flush.
+    /// The locals the statement holds, including those in its places and in
+    /// a `HoldLane`'s flush. A place rooted at a provider binding reads the
+    /// binding's value, which the body's binding table holds: `locals` adds
+    /// it.
     pub fn locals_mut(&mut self) -> Vec<&mut RLocalId> {
         match self {
             Self::Assign { dst, expr } => {
@@ -2095,6 +2097,22 @@ impl<'db> RStmt<'db> {
                 .chain(flush.iter_mut().flat_map(Self::locals_mut))
                 .collect(),
         }
+    }
+
+    /// The locals the statement reads or writes: those it holds, and the
+    /// values of the `provider_bindings` its places are rooted at.
+    pub fn locals(&self, provider_bindings: &[RuntimeProviderBinding<'db>]) -> Vec<RLocalId> {
+        let mut stmt = self.clone();
+        let mut locals: Vec<_> = stmt.locals_mut().into_iter().map(|local| *local).collect();
+        locals.extend(
+            stmt.places_mut()
+                .into_iter()
+                .filter_map(|place| match place.root {
+                    PlaceRoot::Provider(binding) => Some(provider_bindings[binding.index()].value),
+                    PlaceRoot::Slot(_) | PlaceRoot::Ref(_) | PlaceRoot::Ptr { .. } => None,
+                }),
+        );
+        locals
     }
 }
 

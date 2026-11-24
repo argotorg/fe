@@ -1,0 +1,360 @@
+// A projection over an effect that yields at several sites, where a site
+// opens a nested projection over the effect whose slide writes or reads
+// the provider. Every slide is reachable from every yield once the calls
+// are inlined, so the provider a slide names must be defined on the paths
+// that do not open its session. Each slide appends its digit to `log`: a
+// test reads back exactly the digit of the site its path took.
+struct Frame { x: u256, log: u256 }
+
+trait Logs {
+    fn note(mut self, _ k: u256)
+}
+
+impl Logs for Frame {
+    fn note(mut self, _ k: u256) {
+        self.log = self.log * 10 + k
+    }
+}
+
+fn noted(_ k: u256) -> mut Frame uses (frame: mut Frame) {
+    yield mut frame
+    frame.note(k)
+}
+
+fn noted_five() -> mut Frame uses (frame: mut Frame) {
+    yield mut frame
+    frame.note(5)
+}
+
+fn two_sites(_ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { noted(1) } else { noted(2) }
+}
+
+fn three_sites(_ n: u256) -> mut Frame uses (frame: mut Frame) {
+    if n == 0 { noted(1) } else if n == 1 { noted(2) } else { noted(3) }
+}
+
+fn different_projections(_ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { noted(1) } else { noted_five() }
+}
+
+fn projection_or_place(_ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { noted(1) } else { mut frame }
+}
+
+enum Pick { A, B, C }
+
+fn matched(_ p: Pick) -> mut Frame uses (frame: mut Frame) {
+    match p {
+        Pick::A => noted(1)
+        Pick::B => noted(2)
+        Pick::C => mut frame
+    }
+}
+
+fn generic_noted<F: Logs>(_ k: u256) -> mut F uses (frame: mut F) {
+    yield mut frame
+    frame.note(k)
+}
+
+fn generic_sites<F: Logs>(_ c: bool) -> mut F uses (frame: mut F) {
+    if c { generic_noted<F>(1) } else { generic_noted<F>(2) }
+}
+
+fn viewed(_ k: u256) -> ref Frame uses (frame: mut Frame) {
+    yield ref frame
+    frame.note(k)
+}
+
+fn viewed_sites(_ c: bool) -> ref Frame uses (frame: mut Frame) {
+    if c { viewed(1) } else { viewed(2) }
+}
+
+struct Outer { frame: Frame }
+
+// The nested projection's provider is a `with` block of each site.
+fn with_sites(_ c: bool) -> mut Frame uses (outer: mut Outer) {
+    if c {
+        with (Frame = mut outer.frame) { noted(1) }
+    } else {
+        with (Frame = mut outer.frame) { noted(2) }
+    }
+}
+
+fn forwarded(_ k: u256) -> mut Frame uses (frame: mut Frame) {
+    noted(k)
+}
+
+fn forwarded_sites(_ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { forwarded(1) } else { forwarded(2) }
+}
+
+// Two levels that each yield at two sites.
+fn nested_sites(_ c: bool, _ k: u256) -> mut Frame uses (frame: mut Frame) {
+    if c { noted(k) } else { noted(k + 1) }
+}
+
+fn nested_twice(_ c: bool, _ d: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { nested_sites(d, 1) } else { nested_sites(d, 3) }
+}
+
+fn maybe_noted(_ k: u256) -> Option<mut Frame> uses (frame: mut Frame) {
+    yield Option::Some(mut frame)
+    frame.note(k)
+}
+
+fn maybe_sites(_ c: bool) -> Option<mut Frame> uses (frame: mut Frame) {
+    if c { maybe_noted(1) } else { maybe_noted(2) }
+}
+
+// Returning the empty variant is a yield site too.
+fn maybe_none(_ c: bool) -> Option<mut Frame> uses (frame: mut Frame) {
+    if !c {
+        return Option::None
+    }
+    yield Option::Some(noted(1))
+}
+
+// The slide reads the provider and writes a parameter.
+fn read_back(_ out: mut u256, _ k: u256) -> mut Frame uses (frame: mut Frame) {
+    yield mut frame
+    out = out * 10 + frame.x + k
+}
+
+fn read_back_sites(_ out: mut u256, _ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { read_back(mut out, 1) } else { read_back(mut out, 2) }
+}
+
+fn fresh() -> Frame {
+    Frame { x: 0, log: 0 }
+}
+
+fn write_two_sites(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut two_sites(c)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn two_sites_run_the_slide_taken() {
+    let a = write_two_sites(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_two_sites(false)
+    assert!(b.x == 7 && b.log == 2)
+}
+
+fn write_three_sites(_ n: u256) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut three_sites(n)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn three_sites_run_the_slide_taken() {
+    let a = write_three_sites(0)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_three_sites(1)
+    assert!(b.x == 7 && b.log == 2)
+    let c = write_three_sites(2)
+    assert!(c.x == 7 && c.log == 3)
+}
+
+fn write_different_projections(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut different_projections(c)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn different_projections_run_the_slide_taken() {
+    let a = write_different_projections(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_different_projections(false)
+    assert!(b.x == 7 && b.log == 5)
+}
+
+fn write_projection_or_place(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut projection_or_place(c)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn a_place_site_runs_no_nested_slide() {
+    let a = write_projection_or_place(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_projection_or_place(false)
+    assert!(b.x == 7 && b.log == 0)
+}
+
+fn write_matched(_ p: Pick) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut matched(p)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn match_arms_run_the_slide_taken() {
+    let a = write_matched(Pick::A)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_matched(Pick::B)
+    assert!(b.x == 7 && b.log == 2)
+    let c = write_matched(Pick::C)
+    assert!(c.x == 7 && c.log == 0)
+}
+
+fn write_generic_sites(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut generic_sites<Frame>(c)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn generic_projections_run_the_slide_taken() {
+    let a = write_generic_sites(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_generic_sites(false)
+    assert!(b.x == 7 && b.log == 2)
+}
+
+fn read_viewed_sites(_ c: bool) -> (u256, Frame) {
+    var frame = Frame { x: 4, log: 0 }
+    let x = with (Frame = mut frame) {
+        let f = ref viewed_sites(c)
+        f.x
+    }
+    (x, frame)
+}
+
+#[test]
+fn ref_projections_run_the_slide_taken() {
+    let (x, a) = read_viewed_sites(true)
+    assert!(x == 4 && a.log == 1)
+    let (y, b) = read_viewed_sites(false)
+    assert!(y == 4 && b.log == 2)
+}
+
+fn write_with_sites(_ c: bool) -> Frame {
+    var outer = Outer { frame: fresh() }
+    with (Outer = mut outer) {
+        let f = mut with_sites(c)
+        f.x = 7
+    }
+    outer.frame
+}
+
+#[test]
+fn with_block_providers_run_the_slide_taken() {
+    let a = write_with_sites(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_with_sites(false)
+    assert!(b.x == 7 && b.log == 2)
+}
+
+fn write_forwarded_sites(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut forwarded_sites(c)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn forwarded_projections_run_the_slide_taken() {
+    let a = write_forwarded_sites(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_forwarded_sites(false)
+    assert!(b.x == 7 && b.log == 2)
+}
+
+fn write_nested_twice(_ c: bool, _ d: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        let f = mut nested_twice(c, d)
+        f.x = 7
+    }
+    frame
+}
+
+#[test]
+fn nested_sites_run_the_slide_taken() {
+    let a = write_nested_twice(true, true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_nested_twice(true, false)
+    assert!(b.x == 7 && b.log == 2)
+    let c = write_nested_twice(false, true)
+    assert!(c.x == 7 && c.log == 3)
+    let d = write_nested_twice(false, false)
+    assert!(d.x == 7 && d.log == 4)
+}
+
+fn write_maybe_sites(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        if let Option::Some(mut f) = maybe_sites(c) {
+            f.x = 7
+        }
+    }
+    frame
+}
+
+#[test]
+fn optional_shapes_run_the_slide_taken() {
+    let a = write_maybe_sites(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_maybe_sites(false)
+    assert!(b.x == 7 && b.log == 2)
+}
+
+fn write_maybe_none(_ c: bool) -> Frame {
+    var frame = fresh()
+    with (Frame = mut frame) {
+        if let Option::Some(mut f) = maybe_none(c) {
+            f.x = 7
+        }
+    }
+    frame
+}
+
+#[test]
+fn empty_variant_returns_run_no_slide() {
+    let a = write_maybe_none(true)
+    assert!(a.x == 7 && a.log == 1)
+    let b = write_maybe_none(false)
+    assert!(b.x == 0 && b.log == 0)
+}
+
+fn write_read_back_sites(_ c: bool) -> u256 {
+    var frame = fresh()
+    var out: u256 = 0
+    with (Frame = mut frame) {
+        let f = mut read_back_sites(mut out, c)
+        f.x = 7
+    }
+    out
+}
+
+#[test]
+fn slides_reading_the_provider_run_the_slide_taken() {
+    assert!(write_read_back_sites(true) == 8)
+    assert!(write_read_back_sites(false) == 9)
+}

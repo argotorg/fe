@@ -3950,6 +3950,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_bytes_encode_return",
     "storage_bytes_to_memory",
     "storage_collection_loops",
+    "storage_effect_projection_nested_slides",
     "storage_heap",
     "storage_lane_grants",
     "storage_layout_agreement",
