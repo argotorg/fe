@@ -32,6 +32,7 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
+                supply_direct_effect_evidence,
             },
             ty_def::{BorrowKind, TyFlags, TyId},
             ty_lower::{ParamKey, ParamSchemaId},
@@ -1188,12 +1189,26 @@ fn semantic_callee_key_with_assumptions<'db>(
             impl_env.normalization_scope(db),
             assumptions,
         );
+        // A component the implementation splices into direct effects is no
+        // component of the body's rows: its dictionary is the proof of the
+        // bound on that effect's provider.
+        let direct_effects = EffectEnvView::new(EffectParamSite::Func(body_func, owner.mode()))
+            .requirements(db)
+            .len();
+        let mut direct = Vec::new();
         let rows = callable
             .bound_evidence()
             .into_iter()
             .flat_map(|bounds| bounds.rows(db))
             .filter_map(|row| {
                 let nominal = nominal_rows.component(&row.path)?.requirement.binding_idx;
+                if let Some(&(_, effect)) = effect_pairs
+                    .iter()
+                    .find(|&&(from, effect)| from == nominal as usize && effect < direct_effects)
+                {
+                    direct.push((effect, row.goal.self_ty(db), row.proof));
+                    return None;
+                }
                 let body = provider_pairs.iter().find(|(from, _)| *from == nominal)?.1;
                 let path = body_rows
                     .components
@@ -1207,7 +1222,19 @@ fn semantic_callee_key_with_assumptions<'db>(
                 })
             })
             .collect();
-        evidence.with_rows(db, rows)
+        let evidence = evidence.with_rows(db, rows);
+        match supply_direct_effect_evidence(
+            db,
+            body_func,
+            owner.mode(),
+            subst.generic_args(db),
+            evidence,
+            &direct,
+            assumptions,
+        ) {
+            Ok(supplied) => supplied.unwrap_or(evidence),
+            Err(goal) => return Err(MethodArgMapError::ConflictingEffectEvidence(goal)),
+        }
     };
     let evidence = if collect_flags(db, evidence).contains(TyFlags::HAS_PROJECTION) {
         normalize_ty(db, evidence, impl_env.normalization_scope(db), assumptions)

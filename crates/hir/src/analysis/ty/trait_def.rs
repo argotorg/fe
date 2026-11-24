@@ -695,6 +695,10 @@ pub enum MethodArgMapError<'db> {
         first: u32,
         second: u32,
     },
+    /// Two proofs for one bound of the callee: the checker admitted a call
+    /// whose effect rows supply a dictionary the call's bounds already hold
+    /// differently.
+    ConflictingEffectEvidence(TraitInstId<'db>),
     SignatureArity {
         func: Func<'db>,
         expected_generics: usize,

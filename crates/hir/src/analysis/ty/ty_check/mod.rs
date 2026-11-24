@@ -54,6 +54,7 @@ use crate::{
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
+pub(crate) use callable::supply_direct_effect_evidence;
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{
     CallParam, Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,

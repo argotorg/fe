@@ -427,6 +427,72 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
     }
 }
 
+/// The proofs a call holds for the bounds of `func`, `base`, completed with the
+/// dictionaries the direct effects of `func` receive: the hidden provider
+/// parameter of each listed effect (by effect index) is the given provider
+/// type, bounded by the proof given, and the bounds that implies are projected
+/// from it. Every other entry and every row of `base` is kept. A slot that
+/// already holds a different proof is a conflict, and names its goal. `None`
+/// when the call's arguments cannot be substituted.
+pub(crate) fn supply_direct_effect_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: crate::hir_def::Func<'db>,
+    mode: Option<BorrowKind>,
+    generic_args: &[TyId<'db>],
+    base: EvidenceList<'db>,
+    direct: &[(usize, TyId<'db>, Option<EvidenceId<'db>>)],
+    assumptions: PredicateListId<'db>,
+) -> Result<Option<EvidenceList<'db>>, TraitInstId<'db>> {
+    let provider_params = place_effect_provider_param_index_map(db, func);
+    let mut args = generic_args.to_vec();
+    let mut proofs = vec![None; args.len()];
+    for &(effect, provider_ty, proof) in direct {
+        if let Some(&Some(param)) = provider_params.get(effect)
+            && param < args.len()
+        {
+            args[param] = provider_ty;
+            proofs[param] = proof;
+        }
+    }
+    let Ok(subst) = CompleteSubst::for_owner(db, func.into(), args) else {
+        return Ok(None);
+    };
+    let signature = func_signature(db, func, mode);
+    let supplied = declared_bound_evidence_from(
+        db,
+        func_declared_bounds(db, func, mode),
+        signature,
+        &subst,
+        assumptions,
+        |root, _, _| match root.self_ty(db).data(db) {
+            TyData::TyParam(param) if param.is_effect_provider() => {
+                proofs.get(param.idx).copied().flatten()
+            }
+            _ => None,
+        },
+    )
+    .proofs;
+    let slots = base.entries(db).len().max(supplied.entries(db).len());
+    let mut merged = Vec::with_capacity(slots);
+    for index in 0..slots {
+        merged.push(match (base.get(db, index), supplied.get(db, index)) {
+            (Some(held), Some(given)) if held != given => {
+                let goal = signature.list(db).get(index).copied();
+                return Err(goal
+                    .and_then(|goal| {
+                        crate::analysis::ty::subst::substitute_complete(db, goal, &subst).ok()
+                    })
+                    .or(goal)
+                    .expect("a conflicting slot is in the signature"));
+            }
+            (held, given) => given.or(held),
+        });
+    }
+    Ok(Some(
+        EvidenceList::of(db, merged).with_rows(db, base.rows(db).clone()),
+    ))
+}
+
 impl<'db> Callable<'db> {
     pub fn callable_def(&self) -> CallableDef<'db> {
         self.callable_def
@@ -649,19 +715,14 @@ impl<'db> Callable<'db> {
             return;
         }
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
-        let provider_params = place_effect_provider_param_index_map(db, func);
-        let mut args = self.generic_args.clone();
-        let mut proofs = vec![None; args.len()];
+        let mut direct = Vec::new();
         let mut rows = Vec::new();
         for row in source.rows(db) {
             let Some((&entry, steps)) = row.path.steps.split_first() else {
                 continue;
             };
             if steps.is_empty() {
-                if let Some(&Some(param)) = provider_params.get(entry as usize) {
-                    args[param] = row.goal.self_ty(db);
-                    proofs[param] = row.proof;
-                }
+                direct.push((entry as usize, row.goal.self_ty(db), row.proof));
             } else {
                 rows.push(RowEvidence {
                     path: RowPath {
@@ -672,23 +733,18 @@ impl<'db> Callable<'db> {
                 });
             }
         }
-        let Ok(subst) = CompleteSubst::for_owner(db, func.into(), args) else {
+        let Ok(Some(evidence)) = supply_direct_effect_evidence(
+            db,
+            func,
+            mode,
+            &self.generic_args,
+            EvidenceList::none(db),
+            &direct,
+            assumptions,
+        ) else {
             return;
         };
-        let evidence = declared_bound_evidence_from(
-            db,
-            func_declared_bounds(db, func, mode),
-            func_signature(db, func, mode),
-            &subst,
-            assumptions,
-            |root, _, _| match root.self_ty(db).data(db) {
-                TyData::TyParam(param) if param.is_effect_provider() => {
-                    proofs.get(param.idx).copied().flatten()
-                }
-                _ => None,
-            },
-        );
-        self.set_bound_evidence(db, func, mode, evidence.proofs.with_rows(db, rows));
+        self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
     }
 
     fn set_bound_evidence(
