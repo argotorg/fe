@@ -44,7 +44,9 @@ flowchart TD
   grants nothing and so returns at once, as `?`'s exit does: a variant
   constructor is decided statically, and any other yield, such as a
   forwarded `yield self.entry(k)`, tests its value. Each yield site yields
-  on its own path.
+  on its own path. The resume block destroys what the scopes the yield
+  leaves hold: those opened in a `yield` statement's operand, before the
+  slide, or every scope.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its

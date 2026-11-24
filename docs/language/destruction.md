@@ -33,7 +33,11 @@ value's lifetime ends, and a type that holds a resource releases it in its
 - An assignment to an owned place evaluates the new value, destroys the old
   one, then stores the new one. An assignment through a `mut` access or an
   indexed element (`v[i] = x`) does the same.
-- A projection's own locals are destroyed when the access it grants ends.
+- A projection's own locals are destroyed when the access it grants ends,
+  where its session resumes. A `yield` statement's operand ends there, not
+  with the enclosing block: what its blocks and arms bind, and its
+  temporaries, are destroyed innermost first before the slide runs. After a
+  `return` or a tail yield, every scope ends there.
 
 A value that moved is not destroyed where it moved from, and a partial move
 destroys only the fields left behind. Where a value moved on some paths

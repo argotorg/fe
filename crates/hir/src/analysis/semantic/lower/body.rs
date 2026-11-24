@@ -229,8 +229,9 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     prepared_receivers: FxHashMap<ExprId, Receiver<'db>>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
-    /// The slide of the `yield` statement being lowered.
-    slide: Option<SBlockId>,
+    /// The slide of the `yield` statement being lowered, and how many scopes
+    /// enclose the statement.
+    slide: Option<(SBlockId, usize)>,
     /// The components of each unsafe split lowered so far.
     unsafe_splits: Vec<Vec<SValueId>>,
     /// The scopes enclosing the code being lowered, innermost last, with the
@@ -801,7 +802,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// being lowered, or else returns.
     /// Every scope ends on the path, and the value leaves with it. A
     /// projection's frame outlives its yield: its scopes end where its
-    /// session resumes and returns.
+    /// session resumes, those of a `yield` statement's operand before the
+    /// slide, and every one before it returns.
     fn exit(&mut self, origin: SemOrigin<'db>, value: Option<SOperand>) {
         let Some(value) = value.filter(|_| self.instance.is_projection(self.db)) else {
             self.destroy_scopes_from(0, value.map(|value| value.value));
@@ -815,13 +817,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             STerminatorKind::Yield { value, resume },
         );
         self.switch_to(resume);
-        match self.slide {
-            Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
-            None => {
-                self.destroy_scopes_from(0, None);
-                self.set_terminator(resume, origin, STerminatorKind::Return(None));
-            }
-        }
+        let (depth, kind) = match self.slide {
+            Some((slide, depth)) => (depth, STerminatorKind::Goto(slide)),
+            None => (0, STerminatorKind::Return(None)),
+        };
+        self.destroy_scopes_from(depth, None);
+        self.set_terminator(resume, origin, kind);
     }
 
     pub(super) fn set_synthetic_terminator(&mut self, block: SBlockId, kind: STerminatorKind<'db>) {
@@ -2819,7 +2820,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
-                let outer = self.slide.replace(slide);
+                let outer = self.slide.replace((slide, self.drop_scopes.len()));
                 let _ = self.lower_expr(*expr);
                 self.slide = outer;
                 self.switch_to(slide);

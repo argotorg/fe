@@ -1,15 +1,17 @@
-use core::MemBuffer
+use core::{MemBuffer, Option}
 use core::ops::Drop
 use core::ptr
 
-// A `return` in a `yield` statement's operand yields and runs no slide.
-// Each event appends a digit to a trace a raw pointer reaches, so
-// destructors log too:
+// The scopes a `yield` statement's operand opens end when the projection's
+// session resumes, after the caller's last use of the grant and before the
+// slide; a `return` in the operand yields and runs no slide. Each event
+// appends a digit to a trace a raw pointer reaches, so destructors log too:
 //
-// 1 the operand reaches its yield     5 the caller uses the grant
-// 2 an operand binding is destroyed   6 the operand leaves early
-// 3 an inner operand binding is too   9 the `yield` statement's slide runs
-// 4 the projection's own binding is
+// 1 the operand reaches its yield     6 the operand leaves early
+// 2 an operand binding is destroyed   7 a nested projection's slide runs
+// 3 an inner operand binding is too   8 a later yield's slide runs
+// 4 a binding outside the operand is  9 the `yield` statement's slide runs
+// 5 the caller uses the grant
 fn log(_ trace: *u256, _ event: u256) {
     unsafe { *trace = *trace * 10 + event }
 }
@@ -40,9 +42,69 @@ struct Cell {
     b: u256,
 }
 
+struct Tracer {
+    at: *u256,
+}
+
+fn note(_ event: u256) uses (tracer: Tracer) {
+    log(tracer.at, event)
+}
+
 fn bump(_ x: mut u256, _ trace: *u256) {
     log(trace, 5)
     x += 1
+}
+
+fn look(_ x: ref u256, _ trace: *u256) -> u256 {
+    log(trace, 5)
+    x
+}
+
+fn look_guard(_ guard: ref Guard) {
+    log(guard.trace, 5)
+}
+
+struct Holder {
+    v: u256,
+    guard: Guard,
+}
+
+// Its slide logs what the caller wrote through the grant.
+fn slot(_ holder: mut Holder, _ trace: *u256) -> mut u256 {
+    yield mut holder.v
+    log(trace, holder.v)
+}
+
+// `late` belongs to the block declaring it, though the operand assigns it.
+fn fallthrough(_ cell: mut Cell, _ trace: *u256) -> mut u256 {
+    let _own = Guard { trace, event: 4 }
+    var late: Guard
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        late = Guard { trace, event: 4 }
+        log(trace, 1)
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+// The grant borrows an operand binding, which outlives the caller's use and
+// the nested session's slide.
+fn through(_ trace: *u256) -> mut u256 {
+    yield {
+        var holder = Holder { v: 6, guard: Guard { trace, event: 2 } }
+        slot(mut holder, trace)
+    }
+    log(trace, 9)
+}
+
+// A yielded value is held in a temporary of the operand's scope.
+fn held(_ trace: *u256) -> ref Guard {
+    yield {
+        log(trace, 1)
+        Guard { trace, event: 2 }
+    }
+    log(trace, 9)
 }
 
 fn returns(_ cell: mut Cell, _ trace: *u256, _ early: bool) -> mut u256 {
@@ -61,6 +123,144 @@ fn returns(_ cell: mut Cell, _ trace: *u256, _ early: bool) -> mut u256 {
     log(trace, 9)
 }
 
+fn read_returns(_ cell: ref Cell, _ trace: *u256, _ early: bool) -> ref u256 {
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        if early {
+            log(trace, 6)
+            return ref cell.b
+        }
+        log(trace, 1)
+        ref cell.a
+    }
+    log(trace, 9)
+}
+
+fn either(_ cell: mut? Cell, _ trace: *u256, _ early: bool) -> mut? u256 {
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        if early {
+            log(trace, 6)
+            return mut? cell.b
+        }
+        log(trace, 1)
+        mut? cell.a
+    }
+    log(trace, 9)
+}
+
+fn branches(_ cell: mut Cell, _ trace: *u256, _ first: bool) -> mut u256 {
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        if first {
+            let _arm = Guard { trace, event: 3 }
+            mut cell.a
+        } else {
+            mut cell.b
+        }
+    }
+    log(trace, 9)
+}
+
+fn matched(_ cell: mut Cell, _ trace: *u256, _ arm: Option<u256>) -> mut u256 {
+    yield match arm {
+        Option::Some(event) => {
+            let _arm = Guard { trace, event }
+            mut cell.a
+        }
+        Option::None => mut cell.b
+    }
+    log(trace, 9)
+}
+
+fn nested(_ cell: mut Cell, _ trace: *u256) -> mut u256 {
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        {
+            let _inner = Guard { trace, event: 3 }
+            log(trace, 1)
+            mut cell.a
+        }
+    }
+    log(trace, 9)
+}
+
+fn provided(_ cell: mut Cell, _ trace: *u256) -> mut u256 {
+    yield with (Tracer = Tracer { at: trace }) {
+        let _operand = Guard { trace, event: 2 }
+        note(1)
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+fn tried(_ cell: mut Cell, _ trace: *u256, _ key: Option<u256>) -> Option<mut u256> {
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        let event = key?
+        log(trace, event)
+        Option::Some(mut cell.a)
+    }
+    log(trace, 9)
+}
+
+fn retried(_ cell: mut Cell, _ trace: *u256, _ tries: u256) -> mut u256 {
+    var left = tries
+    loop {
+        yield {
+            let _operand = Guard { trace, event: 2 }
+            if left > 0 {
+                left -= 1
+                log(trace, 6)
+                continue
+            }
+            mut cell.a
+        }
+        log(trace, 9)
+        break
+    }
+}
+
+fn abandoned(_ cell: mut Cell, _ trace: *u256, _ quit: bool) -> mut u256 {
+    loop {
+        yield {
+            let _operand = Guard { trace, event: 2 }
+            if quit {
+                log(trace, 6)
+                break
+            }
+            mut cell.a
+        }
+        log(trace, 9)
+        return
+    }
+    yield mut cell.b
+    log(trace, 8)
+}
+
+#[test]
+fn operand_bindings_end_before_the_slide() {
+    let trace = new_trace()
+    var cell = Cell { a: 0, b: 0 }
+    bump(mut fallthrough(mut cell, trace), trace)
+    assert(read(trace) == 152944)
+    assert(cell.a == 1)
+}
+
+#[test]
+fn a_borrowed_operand_binding_outlives_the_grant() {
+    let trace = new_trace()
+    bump(mut through(trace), trace)
+    assert(read(trace) == 5729)
+}
+
+#[test]
+fn a_yielded_value_ends_with_the_operand() {
+    let trace = new_trace()
+    look_guard(ref held(trace))
+    assert(read(trace) == 1529)
+}
+
 #[test]
 fn a_return_in_the_operand_runs_no_slide() {
     let trace = new_trace()
@@ -68,4 +268,108 @@ fn a_return_in_the_operand_runs_no_slide() {
     bump(mut returns(mut cell, trace, true), trace)
     assert(read(trace) == 65324)
     assert(cell.a == 0 && cell.b == 1)
+}
+
+#[test]
+fn an_operand_with_a_return_falls_through_to_the_slide() {
+    let trace = new_trace()
+    var cell = Cell { a: 0, b: 0 }
+    bump(mut returns(mut cell, trace, false), trace)
+    assert(read(trace) == 15294)
+    assert(cell.a == 1 && cell.b == 0)
+}
+
+#[test]
+fn a_ref_yield_operand() {
+    let cell = Cell { a: 7, b: 8 }
+    let trace = new_trace()
+    assert(look(ref read_returns(ref cell, trace, true), trace) == 8)
+    assert(read(trace) == 652)
+    let trace = new_trace()
+    assert(look(ref read_returns(ref cell, trace, false), trace) == 7)
+    assert(read(trace) == 1529)
+}
+
+#[test]
+fn a_maybe_mut_yield_operand_at_both_modes() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut either(mut cell, trace, true), trace)
+    assert(read(trace) == 652)
+    let trace = new_trace()
+    bump(mut either(mut cell, trace, false), trace)
+    assert(read(trace) == 1529)
+    let trace = new_trace()
+    assert(look(ref either(ref cell, trace, true), trace) == 1)
+    assert(read(trace) == 652)
+    let trace = new_trace()
+    assert(look(ref either(ref cell, trace, false), trace) == 1)
+    assert(read(trace) == 1529)
+}
+
+#[test]
+fn each_yielding_branch_ends_the_operand_scopes() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut branches(mut cell, trace, true), trace)
+    assert(read(trace) == 5329)
+    let trace = new_trace()
+    bump(mut branches(mut cell, trace, false), trace)
+    assert(read(trace) == 529)
+    let trace = new_trace()
+    bump(mut matched(mut cell, trace, Option::Some(3)), trace)
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    bump(mut matched(mut cell, trace, Option::None), trace)
+    assert(read(trace) == 59)
+    assert(cell.a == 2 && cell.b == 2)
+}
+
+#[test]
+fn nested_operand_scopes_end_innermost_first() {
+    let trace = new_trace()
+    var cell = Cell { a: 0, b: 0 }
+    bump(mut nested(mut cell, trace), trace)
+    assert(read(trace) == 15329)
+}
+
+#[test]
+fn a_with_block_operand() {
+    let trace = new_trace()
+    var cell = Cell { a: 0, b: 0 }
+    bump(mut provided(mut cell, trace), trace)
+    assert(read(trace) == 1529)
+}
+
+#[test]
+fn a_failing_question_mark_in_the_operand() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match tried(mut cell, trace, Option::None) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 26)
+    let trace = new_trace()
+    match tried(mut cell, trace, Option::Some(1)) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 1529)
+    assert(cell.a == 1)
+}
+
+#[test]
+fn loop_exits_from_the_operand() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut retried(mut cell, trace, 2), trace)
+    assert(read(trace) == 6262529)
+    let trace = new_trace()
+    bump(mut abandoned(mut cell, trace, true), trace)
+    assert(read(trace) == 6258)
+    let trace = new_trace()
+    bump(mut abandoned(mut cell, trace, false), trace)
+    assert(read(trace) == 529)
+    assert(cell.a == 2 && cell.b == 1)
 }
