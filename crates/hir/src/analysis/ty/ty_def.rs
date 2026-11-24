@@ -276,6 +276,17 @@ impl<'db> TyId<'db> {
         self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
+    /// Whether this type is the value or carrier of a shape, which reduces
+    /// once the shape is known (`normalize`). The bare constructor is a type
+    /// function; only its applications are queries.
+    pub(crate) fn is_shape_projection(self, db: &dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::TyApp(..))
+            && matches!(
+                self.base_ty(db).data(db),
+                TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
+            )
+    }
+
     #[salsa::tracked]
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         self.pretty_print_with_mode(db, TypePrintMode::Concrete)
@@ -2878,7 +2889,9 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     let mut collector = Collector {
         db,
-        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+            || ty.is_shape_projection(db)
+        {
             TyFlags::HAS_PROJECTION
         } else {
             TyFlags::empty()
@@ -2919,5 +2932,30 @@ mod tests {
             Some(Vec::new())
         );
         assert_eq!(u256.as_params_shape(&db), None);
+    }
+
+    #[test]
+    fn shape_projections_carry_the_projection_flag() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("shape_projection_flags.fe".into(), "fn sample() {}");
+        let (top_mod, _) = db.top_mod(file);
+        let scope = ScopeId::from_item(ItemKind::TopMod(top_mod));
+        let name = IdentId::new(&db, "S".to_string());
+        let shape = TyParam::implicit_param(name, 0, Kind::Shape, scope).ty(&db);
+        for con in [ShapeCon::Value, ShapeCon::Carrier] {
+            let projection = TyId::shape_part(&db, con, shape);
+            assert!(
+                projection.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?} of an opaque shape is a projection that normalization rewrites"
+            );
+            assert!(projection.has_projection(&db));
+        }
+        for con in [ShapeCon::Owned, ShapeCon::Access(BorrowKind::Ref)] {
+            let part = TyId::shape_part(&db, con, TyId::u256(&db));
+            assert!(
+                !part.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?}"
+            );
+        }
     }
 }
