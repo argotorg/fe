@@ -393,6 +393,14 @@ func private %downcast_unchecked(v0.i256) -> i256 {
         return v3;
 }
 
+func private %impl_trait_Address__encoded_len(v0.@layout_0) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
 func inline(always) private %encoded_len__g7528(v0.@layout_2) -> i256 {
     block0:
         jump block1;
@@ -412,14 +420,6 @@ func inline(always) private %encoded_len__g7528(v0.@layout_2) -> i256 {
 
     block3:
         return v8;
-}
-
-func private %impl_trait_Address__encoded_len(v0.@layout_0) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
 }
 
 func private %eq(v0.@layout_0, v1.@layout_0) -> i1 {
@@ -540,22 +540,22 @@ func private %impl_MemBuffer__len(noalias nocapture readonly v0.objref<@layout_1
         return v4;
 }
 
-func inline(always) private %locate__g4007(v0.i256, v1.i256, v2.@layout_2) -> @layout_4 {
-    block0:
-        jump block1;
-
-    block1:
-        v5.i256 = call %mapping_slot__g7bf4 v1 v2;
-        v7.@layout_4 = agg.make @layout_4 v5 0.i256;
-        return v7;
-}
-
 func inline(always) private %locate__g5cd5(v0.i256, v1.i256, v2.@layout_0) -> @layout_4 {
     block0:
         jump block1;
 
     block1:
         v5.i256 = call %mapping_slot__g67a8 v1 v2;
+        v7.@layout_4 = agg.make @layout_4 v5 0.i256;
+        return v7;
+}
+
+func inline(always) private %locate__g4007(v0.i256, v1.i256, v2.@layout_2) -> @layout_4 {
+    block0:
+        jump block1;
+
+    block1:
+        v5.i256 = call %mapping_slot__g7bf4 v1 v2;
         v7.@layout_4 = agg.make @layout_4 v5 0.i256;
         return v7;
 }
@@ -1224,16 +1224,6 @@ func inline(always) private %impl_trait_u256__write_key(v0.i256, v1.i256) {
         return;
 }
 
-func inline(always) private %impl_trait_Address__write_key(v0.i256, v1.@layout_0) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = extract_value v1 0.i256;
-        call %impl_trait_u256__write_key v0 v4;
-        return;
-}
-
 func inline(always) private %write_key__g7528(v0.i256, v1.@layout_2) {
     block0:
         jump block1;
@@ -1247,6 +1237,16 @@ func inline(always) private %write_key__g7528(v0.i256, v1.@layout_2) {
         v10.i256 = add v0 v9;
         v12.@layout_0 = extract_value v1 1.i256;
         call %impl_trait_Address__write_key v10 v12;
+        return;
+}
+
+func inline(always) private %impl_trait_Address__write_key(v0.i256, v1.@layout_0) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = extract_value v1 0.i256;
+        call %impl_trait_u256__write_key v0 v4;
         return;
 }
 
