@@ -1102,10 +1102,7 @@ pub(crate) fn named_output_mismatch<'db>(
     if representative.selection_name(db).is_some() {
         return Some(NamedOutputMismatch::NoOrdinaryOutputs);
     }
-    let choice = ChosenImpl {
-        template,
-        applied: None,
-    };
+    let choice = ChosenImpl::unapplied(db, template);
     let Some(ordinary_at_goal) =
         instantiate_selected_choice(db, representative_context, choice, goal)
     else {

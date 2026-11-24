@@ -39,14 +39,71 @@ pub(crate) use table_solver::{
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
+/// The arguments a named implementation declared inside a generic item
+/// inherits from it: the item's own generic parameters, as they stand where
+/// the implementation is opened. Folding a choice by the arguments a body is
+/// instantiated with substitutes them.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct InheritedArgs<'db> {
+    pub args: Vec<TyId<'db>>,
+}
+
+impl<'db> TyFoldable<'db> for InheritedArgs<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self::new(db, self.args(db).clone().fold_with(db, folder))
+    }
+}
+
+impl<'db> TyVisitable<'db> for InheritedArgs<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.args(visitor.db()).as_slice().visit_with(visitor);
+    }
+}
+
 /// A template, optionally applied to explicit lexical arguments. Applied
 /// arguments belong to the caller and must never be freshened as impl binders.
+/// An unapplied local template keeps the arguments it inherits from its
+/// enclosing item, so that substituting the choice substitutes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ChosenImpl<'db> {
     pub template: ImplementorId<'db>,
     pub applied: Option<ImplementorId<'db>>,
+    pub inherited: Option<InheritedArgs<'db>>,
 }
 impl<'db> ChosenImpl<'db> {
+    /// A template with the arguments it inherits from the item it is
+    /// declared in, if it is a named implementation declared in a generic
+    /// item.
+    pub fn unapplied(db: &'db dyn HirAnalysisDb, template: ImplementorId<'db>) -> Self {
+        let inherited = match template.origin(db) {
+            super::trait_def::ImplementorOrigin::Hir(owner)
+                if owner.selection_name(db).is_some() =>
+            {
+                crate::hir_def::GenericParamOwner::from(owner)
+                    .parent(db)
+                    .map(|parent| {
+                        InheritedArgs::new(
+                            db,
+                            super::ty_lower::collect_generic_params(db, parent)
+                                .params(db)
+                                .to_vec(),
+                        )
+                    })
+            }
+            _ => None,
+        };
+        Self {
+            template,
+            applied: None,
+            inherited,
+        }
+    }
+
     pub fn implementation(self) -> ImplementorId<'db> {
         self.applied.unwrap_or(self.template)
     }
@@ -57,16 +114,10 @@ impl<'db> ChosenImpl<'db> {
         self.applied.unwrap_or_else(|| {
             let db = table.db;
             if let super::trait_def::ImplementorOrigin::Hir(owner) = self.template.origin(db) {
-                let inherited = crate::hir_def::GenericParamOwner::from(owner)
-                    .parent(db)
-                    .filter(|_| owner.selection_name(db).is_some())
-                    .map(|parent| {
-                        super::ty_lower::collect_generic_params(db, parent)
-                            .params(db)
-                            .to_vec()
-                    })
+                let mut params = self
+                    .inherited
+                    .map(|inherited| inherited.args(db).clone())
                     .unwrap_or_default();
-                let mut params = inherited;
                 params.extend(table.instantiate_with_fresh_vars(
                     self.template.params(db)[params.len()..].to_vec(),
                 ));
@@ -86,6 +137,9 @@ impl<'db> TyFoldable<'db> for ChosenImpl<'db> {
         Self {
             template: self.template,
             applied: self.applied.map(|applied| applied.fold_with(db, folder)),
+            inherited: self
+                .inherited
+                .map(|inherited| inherited.fold_with(db, folder)),
         }
     }
 }
@@ -98,6 +152,9 @@ impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
     fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
         if let Some(applied) = self.applied {
             applied.visit_with(visitor);
+        }
+        if let Some(inherited) = self.inherited {
+            inherited.visit_with(visitor);
         }
     }
 }
@@ -119,10 +176,7 @@ impl<'db> ChosenImpls<'db> {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChosenImpl {
-            template: implementation,
-            applied: None,
-        });
+        items.push(ChosenImpl::unapplied(db, implementation));
         Self::new(db, items)
     }
     pub fn push_applied(
@@ -137,6 +191,7 @@ impl<'db> ChosenImpls<'db> {
         items.push(ChosenImpl {
             template,
             applied: Some(applied),
+            inherited: None,
         });
         Self::new(db, items)
     }

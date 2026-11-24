@@ -3903,6 +3903,8 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "named_storage_deferred_codec",
     "named_storage_entry_codec_identity",
     "named_storage_evidence",
+    "named_storage_local_generic_choice",
+    "named_storage_local_generic_codec",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -6168,4 +6170,21 @@ fn named_storage_entry_codec_identity() {
         .join("tests/fixtures/fe_test/named_storage_entry_codec_identity.fe");
     let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
     assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_local_generic_choice() {
+    // A named implementation declared inside a generic function applies, with
+    // the function's own arguments, to a codec proof that completes at the
+    // instance. The control has a header that matches at check time.
+    for fixture in [
+        "named_storage_local_generic_choice.fe",
+        "named_storage_local_generic_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
 }
