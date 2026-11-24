@@ -676,9 +676,9 @@ pub(crate) fn resolve_impl_name<'db>(
                     }
                     _ => ImplNameRes::NotFound,
                 },
-                Err(NameResolutionError::Ambiguous(candidates)) => ImplNameRes::Ambiguous(
-                    super::diagnostics::ambiguity_candidates(db, &candidates),
-                ),
+                Err(NameResolutionError::Ambiguous(candidates)) => {
+                    ImplNameRes::Ambiguous(super::diagnostics::ambiguity_candidates(db, candidates))
+                }
                 Err(NameResolutionError::Conflict(_, spans)) => {
                     ImplNameRes::Ambiguous(spans.iter().map(|span| (span.clone(), false)).collect())
                 }
