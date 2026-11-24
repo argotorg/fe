@@ -1,0 +1,6 @@
+[ingot]
+name = "entry_dep_sound_consumer"
+version = "0.1.0"
+
+[dependencies]
+entry_dep_sound_provider = { path = "../entry_dep_sound_provider" }

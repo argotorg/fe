@@ -1,0 +1,24 @@
+// `Encode<Sol> for Out<T>` holds for every `T`, but `AbiSize` for `Out<T>` needs
+// `T: Marker`. The implementation is reported where it is written. The entry
+// code of the contract is reported as well, so that no program that passes
+// `fe check` fails in `fe build`.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use std::abi::Sol
+pub trait Marker {}
+// Return type has Encode<Sol> but no AbiSize impl.
+pub struct Out<T> { v: u256 }
+impl<T> Encode<Sol> for Out<T> {
+    fn encode(self, _ out: AbiFrame) { out.store_word(at: 0, value: self.v) }
+}
+impl<T> Decode<Sol> for Out<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { Out { v: d.read_word(input) } }
+}
+msg M {
+    #[selector = 0x01]
+    Get -> Out<u8>,
+}
+pub contract R {
+    recv M {
+        Get -> Out<u8> { Out<u8> { v: 1 } }
+    }
+}

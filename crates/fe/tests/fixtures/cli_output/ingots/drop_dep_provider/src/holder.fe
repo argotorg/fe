@@ -1,0 +1,22 @@
+use core::ops::Drop
+
+// The `Drop` implementation of `Holder<T>` needs `T: Show`, and the generic
+// `hold` drops a `Holder<T>`. The type that `hold` is instantiated with is
+// chosen downstream.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Holder<T: Show> {
+    pub t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+pub fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}

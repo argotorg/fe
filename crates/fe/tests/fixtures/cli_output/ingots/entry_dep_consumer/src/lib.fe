@@ -1,0 +1,6 @@
+use entry_dep_provider::{M, Out}
+pub contract R {
+    recv M {
+        Get -> Out<u8> { Out<u8> { v: 1 } }
+    }
+}

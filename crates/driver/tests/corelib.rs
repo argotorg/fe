@@ -1266,6 +1266,7 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/ty_check/stmt.rs", "presence_trait", "&format!(\"core::iter::{name}\")", 1, HandedOn, "`Driver` and `Producer`, named in the caller"),
         ("hir/src/core/meta.rs", "resolve_core_trait", "&[\"derive\", \"Derive\"]", 1, Identity, "the written trait derive protocol"),
         ("hir/src/core/meta.rs", "resolve_core_trait", "&[\"derive\", \"DeriveInherent\"]", 1, Identity, "the written inherent derive protocol"),
+        ("hir/src/core/semantic/mod.rs", "presence_trait", "\"core::abi::Encode\"", 1, Deciding, "the entry plan asks whether the value an arm returns can be encoded"),
         ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, Unique, "the entry plan: the decode of the `init` arguments is selected or an error"),
         ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"contracts\", \"ContractHost\"]", 2, Unique, "the input type that a recv arm reads in place, and the return encode of the entry plan"),
         ("hir/src/core/semantic/mod.rs", "resolve_lib_trait_path", "\"std::abi::AbiFields\"", 1, ErrorOnly, "a `ref` field of a recv arm needs the message read field by field"),

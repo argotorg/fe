@@ -1,0 +1,7 @@
+use core::ops::Drop
+pub trait Show { fn show(self) }
+pub struct Holder<T: Show> { pub t: T }
+impl<T: Show> Drop for Holder<T> { fn drop(own self) { self.t.show() } }
+fn hold<T: Show>(_ t: own T) { let _h = Holder { t } }
+// A generic wrapper in the dependency: the drop is two calls below the application.
+pub fn wrap<T: Show>(_ t: own T) { hold(t) }

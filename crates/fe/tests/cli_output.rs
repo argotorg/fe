@@ -434,6 +434,37 @@ fn test_cli_build_contract_whose_return_encode_bound_holds() {
     assert_eq!(exit_code, 0, "fe build failed:\n{output}");
 }
 
+// A program that passes `fe check` must build: each entry plan that the
+// dispatcher can run is accepted by both commands.
+fn check_and_build_succeed(path: &str) {
+    let (output, exit_code) = run_fe_check(path);
+    assert_eq!(exit_code, 0, "fe check failed:\n{output}");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("out dir utf8"),
+        path,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/entry_builds",
+    glob: "*.fe",
+)]
+fn test_cli_entry_plans_that_check_also_build(fixture: Fixture<&str>) {
+    check_and_build_succeed(fixture.path());
+}
+
+#[test]
+fn test_cli_entry_plan_with_dependency_codec_checks_and_builds() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build_ingots/entry_dep_sound_consumer");
+    check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
+}
+
 #[test]
 fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");

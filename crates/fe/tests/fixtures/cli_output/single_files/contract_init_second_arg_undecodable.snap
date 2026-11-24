@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_init_second_arg_undecodable.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_init_second_arg_undecodable.fe
+
+error[16-0022]: the entry code of contract `C` cannot be generated
+   ┌─ contract_init_second_arg_undecodable.fe:35:19
+   │
+35 │     init(a: u256, w: W<u8>) {}
+   │                   ^^^^^^^^ the dispatcher cannot decode this `init` argument: `W<u8>: Decode<Sol>` is not satisfied, because `u8: Marker` is not satisfied
+
+
+=== EXIT CODE: 1 ===

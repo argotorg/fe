@@ -1,0 +1,17 @@
+use drop_dep_provider::holder::{Show, hold}
+
+// `Tag2` is a `Show` only where the block chooses `Loud2`. The library's `hold`
+// drops a `Holder<Tag2>`, whose `Drop` implementation is proved without the
+// choice, so the call below has no proof for that drop.
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+#[test]
+fn a_library_drop_has_no_proof_from_a_choice() {
+    with (Loud2) {
+        hold(Tag2 {})
+    }
+}

@@ -1,0 +1,33 @@
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::message::MsgVariant
+use std::abi::Sol
+use std::abi::AbiFields
+pub struct Raw {}
+impl AbiSize for Raw {
+const HEAD_SIZE: u256 = 32
+const IS_DYNAMIC: bool = false
+}
+pub struct W<T> { pub tag: u8, pub v: T }
+impl<T> AbiSize for W<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T> AbiFields for W<T> {}
+impl<T> Encode<Sol> for W<T> { fn encode(self, _ f: AbiFrame) {} }
+impl<T> Decode<Sol> for W<T> {
+fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { panic() }
+}
+impl MsgVariant<Sol> for W<u8> {
+const SELECTOR: u32 = 1
+type Return = u8
+}
+impl MsgVariant<Sol> for W<Raw> {
+const SELECTOR: u32 = 2
+type Return = u8
+}
+pub contract C {
+recv {
+W<u8> { ref tag, v } -> u8 { tag }
+W<Raw> { ref tag, v } -> u8 { tag }
+}
+}

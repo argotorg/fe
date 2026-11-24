@@ -16,6 +16,7 @@ use rustc_hash::FxHashSet;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        name_resolution::Tier,
         semantic::{
             DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex, drop_callee,
             drop_elaboration,
@@ -26,11 +27,12 @@ use crate::{
         ty::{
             adt_def::AdtRef,
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
+            trait_resolution::TraitSolveCx,
             ty_check::BodyOwner,
             ty_def::TyId,
         },
     },
-    semantic::{RecvArmInput, contract_entry_plan},
+    semantic::{RecvArmInput, UnmetGoal, contract_entry_plan},
 };
 /// The instances the dispatcher runs for `owner`, which is an `init` or a
 /// `recv` arm of a contract: the decode of the arguments, and for an arm the
@@ -113,11 +115,18 @@ pub(super) fn drop_callees<'db>(
     }
 }
 
+/// A type that is destroyed whose `Drop` implementation has no ordinary proof,
+/// and the goal that the implementation lacks, when known.
+pub(super) struct UnprovedDrop<'db> {
+    pub(super) ty: TyId<'db>,
+    pub(super) unmet: Option<UnmetGoal>,
+}
+
 /// The result of `drop_callees`.
 #[derive(Default)]
 pub(super) struct DropCallees<'db> {
     pub(super) keys: Vec<SemanticInstanceKey<'db>>,
-    pub(super) unproved: Vec<TyId<'db>>,
+    pub(super) unproved: Vec<UnprovedDrop<'db>>,
 }
 
 /// Whether `target` is the `self` of the `Drop::drop` that `instance` runs.
@@ -156,7 +165,7 @@ struct DropWalk<'db> {
     seen: FxHashSet<TyId<'db>>,
     callees: Vec<SemanticInstanceKey<'db>>,
     /// The types whose `Drop` implementation has no proof, in the order met.
-    unproved: Vec<TyId<'db>>,
+    unproved: Vec<UnprovedDrop<'db>>,
 }
 
 impl<'db> DropWalk<'db> {
@@ -186,16 +195,23 @@ impl<'db> DropWalk<'db> {
             return;
         }
         let adt = ty.adt_def(db);
-        if !field_wise
-            && adt
-                .as_ref()
-                .is_some_and(|adt| adt_drop_impl(db, adt.adt_ref(db)).is_some())
-        {
+        let drop_impl = adt
+            .as_ref()
+            .and_then(|adt| adt_drop_impl(db, adt.adt_ref(db)));
+        if !field_wise && let Some(drop_impl) = drop_impl {
             match drop_callee(db, ty) {
                 Ok(key) => self.callees.push(key),
                 // A type with parameters is proved where it is instantiated.
                 Err(_) if ty.has_param(db) => {}
-                Err(_) => self.unproved.push(ty),
+                Err(_) => {
+                    // The type's `Drop` has no proof in its own scope: name
+                    // the first bound of the implementation that it lacks.
+                    let goal = drop_impl.trait_inst(db).with_self_ty(db, ty);
+                    let unmet = ty.as_scope(db).and_then(|scope| {
+                        UnmetGoal::of(db, TraitSolveCx::new(db, scope, Tier::All), goal)
+                    });
+                    self.unproved.push(UnprovedDrop { ty, unmet });
+                }
             }
             return;
         }

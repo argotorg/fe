@@ -41,6 +41,7 @@ use crate::{
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
                 SemanticDiagnosticKind, SemanticDiagnosticSpan, SemanticNormalizationFailure,
+                checker_name,
             },
             identity_semantic_instance_key,
             normalized::{
@@ -53,7 +54,6 @@ use crate::{
         ty::{
             provider::AddressSpace,
             ty_check::{BodyOwner, ReturnProjectionStep},
-            ty_def::TyId,
         },
     },
     hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
@@ -61,6 +61,7 @@ use crate::{
 
 use self::{
     check::access_components,
+    implicit::UnprovedDrop,
     place::Step,
     trust::{UnsafeTrust, UntrustedUnsafeUse},
 };
@@ -531,7 +532,9 @@ fn collect_semantic_access_with_blocked<'db>(
                         );
                     }
                     let generated = generated_callees(db, instance);
-                    for diag in generated.failures {
+                    for (drop, origin) in &generated.failures {
+                        let diag =
+                            unproved_drop_diagnostic(db, instance, drop, *origin, call.as_ref());
                         if seen_diags.insert(diag) {
                             diags.push(Box::new(diag));
                         }
@@ -670,12 +673,7 @@ fn generated_callees<'db>(
             let origin = implicit::drop_origin(owner, body, statement.origin, target);
             let drops = implicit::drop_callees(db, instance, body, statement.id, target);
             callees.extend(drops.keys.into_iter().map(|key| (key, origin)));
-            failures.extend(
-                drops
-                    .unproved
-                    .into_iter()
-                    .map(|ty| unproved_drop_diagnostic(db, instance, ty, origin)),
-            );
+            failures.extend(drops.unproved.into_iter().map(|drop| (drop, origin)));
         }
         let mut visit = |place: &NPlace<'db>| {
             for (idx, projection) in place.path.iter().enumerate() {
@@ -737,34 +735,60 @@ fn generated_callees<'db>(
 /// The result of `generated_callees`.
 struct GeneratedCallees<'db> {
     callees: Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)>,
-    failures: Vec<SemanticDiagnosticId<'db>>,
+    failures: Vec<(UnprovedDrop<'db>, SemOrigin<'db>)>,
 }
 
-/// A value of `ty` is destroyed at `origin`, but no `Drop` implementation of
-/// it has an ordinary proof. A choice made by a `with` around the value does
-/// not reach its drop, so a bound that only a chosen implementation satisfies
-/// is not proved there.
+/// A value of `drop.ty` is destroyed at `origin`, but no `Drop` implementation
+/// of it has an ordinary proof. A choice made by a `with` around the value
+/// does not reach its drop, so a bound that only a chosen implementation
+/// satisfies is not proved there. `call` is the call in the module's own code
+/// that instantiated the body with that type, when the body is not the
+/// module's own; it is where the error is reported, and the drop is the
+/// secondary label.
 fn unproved_drop_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-    ty: TyId<'db>,
+    drop: &UnprovedDrop<'db>,
     origin: SemOrigin<'db>,
+    call: Option<&SemanticDiagnosticSpan<'db>>,
 ) -> SemanticDiagnosticId<'db> {
-    SemanticDiagnosticId::new(
-        db,
-        SemanticDiagnostic::new(
+    let ty = drop.ty.pretty_print(db);
+    let needs = drop.unmet.as_ref().map_or_else(
+        || "an implementation that no ordinary proof gives".to_string(),
+        |unmet| {
+            format!(
+                "`{}`, which no ordinary implementation proves",
+                unmet.needs()
+            )
+        },
+    );
+    let reason = format!(
+        "its `Drop` implementation needs {needs} (only one that a `with` chose does); a drop does not read a `with`"
+    );
+    let owner = instance.key(db).owner(db);
+    let site = SemanticDiagnosticSpan::Origin { owner, origin };
+    let diagnostic = match call {
+        Some(call) => {
+            let mut diagnostic = SemanticDiagnostic::new(
+                instance,
+                SemanticDiagnosticKind::UnprovedDrop,
+                format!(
+                    "this call reaches `{}`, which destroys `{ty}`; {reason}",
+                    checker_name(db, instance)
+                ),
+                call.clone(),
+            );
+            diagnostic.push_secondary(format!("`{ty}` is destroyed here"), site);
+            diagnostic
+        }
+        None => SemanticDiagnostic::new(
             instance,
             SemanticDiagnosticKind::UnprovedDrop,
-            format!(
-                "`{}` is destroyed here, but its `Drop` implementation cannot be proved without the implementations that a `with` chose; a drop does not read a `with`",
-                ty.pretty_print(db),
-            ),
-            SemanticDiagnosticSpan::Origin {
-                owner: instance.key(db).owner(db),
-                origin,
-            },
+            format!("`{ty}` is destroyed here, and {reason}"),
+            site,
         ),
-    )
+    };
+    SemanticDiagnosticId::new(db, diagnostic)
 }
 
 /// Whether `owner` is a function that `fe test` runs: one with `#[test]`.

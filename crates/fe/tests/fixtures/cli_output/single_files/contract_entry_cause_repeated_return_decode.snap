@@ -1,0 +1,25 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_entry_cause_repeated_return_decode.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_cause_repeated_return_decode.fe
+
+error[6-0003]: trait bound is not satisfied
+  ┌─ contract_entry_cause_repeated_return_decode.fe:8:12
+  │
+8 │     Get -> S2,
+  │            ^^ `S2` doesn't implement `Decode<Sol>`
+
+error[16-0022]: the entry code of contract `R` cannot be generated
+   ┌─ contract_entry_cause_repeated_return_decode.fe:8:12
+   │
+ 8 │     Get -> S2,
+   │            ^^ the dispatcher cannot encode this return type: `S2: Encode<Sol>` is not satisfied
+   ·
+12 │         Get -> S2 { S2 { x: 1 } }
+   │         --- returned by this arm
+
+
+=== EXIT CODE: 1 ===

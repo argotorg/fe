@@ -24,12 +24,12 @@ use crate::{
         },
         semantic::{
             ConstUsePolicy, EvalOutcome, GenericSubst, SemConstScalar, SemConstValue,
-            contract_init_assigned_fields, eval_body_owner_const,
+            contract_init_assigned_fields, diagnostics::foreign_ingot_note, eval_body_owner_const,
         },
         ty::{
             adt_def::AdtRef,
             const_ty::LoweringContext,
-            corelib::{resolve_core_trait, resolve_lib_type_path},
+            corelib::resolve_core_trait,
             diagnostics::{
                 BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
             },
@@ -47,7 +47,7 @@ use crate::{
         },
     },
     core::semantic::{
-        EntryPlanError, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
+        EntryPlanError, RecvView, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
         resolve_sol_abi_ty,
     },
     hir_def::{
@@ -1025,43 +1025,43 @@ pub(super) fn get_msg_variant_return_type<'db>(
     msg_variant_impl.assoc_ty(db, return_name)
 }
 
-/// The step of a contract's entry code that has no instance to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EntryStep {
-    InitArgs,
-    RecvInput,
-    RecvReturn,
-}
-
-/// A step of the entry code of a contract that cannot be generated: the
-/// instance it runs has no proof. The entry plan holds the instances, and the
-/// lowering of the contract reads the same plan, so this is reported exactly
-/// where lowering would fail.
+/// A step of the entry code of a contract that cannot be generated: a goal
+/// that the dispatcher needs has no implementation. The entry plan holds the
+/// instances, and the lowering of the contract reads the same plan, so this is
+/// reported exactly where lowering would fail, and not where a check of the
+/// message or of an implementation reports the cause.
 pub(crate) struct ContractEntryFailure<'db> {
     contract_name: String,
-    step: EntryStep,
     span: DynLazySpan<'db>,
     message: String,
+    /// Another place that the failure is about, with what it is.
+    secondary: Option<(DynLazySpan<'db>, &'static str)>,
 }
 
 impl DiagnosticVoucher for ContractEntryFailure<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let step = match self.step {
-            EntryStep::InitArgs => "decoding the arguments of `init`",
-            EntryStep::RecvInput => "reading the message of this arm",
-            EntryStep::RecvReturn => "encoding the value this arm returns",
-        };
+        let primary = self.span.resolve(db);
+        let mut labels = vec![SubDiagnostic::new(
+            LabelStyle::Primary,
+            self.message.clone(),
+            primary.clone(),
+        )];
+        if let Some((span, what)) = &self.secondary {
+            let span = span.resolve(db);
+            let note = foreign_ingot_note(db, primary.as_ref(), span.as_ref());
+            labels.push(SubDiagnostic::new(
+                LabelStyle::Secondary,
+                format!("{what}{note}"),
+                span,
+            ));
+        }
         CompleteDiagnostic::new(
             Severity::Error,
             format!(
                 "the entry code of contract `{}` cannot be generated",
                 self.contract_name
             ),
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                format!("{step}: {}", self.message),
-                self.span.resolve(db),
-            )],
+            labels,
             Vec::new(),
             GlobalErrorCode::new(DiagnosticPass::SemanticAccess, 22),
         )
@@ -1073,9 +1073,10 @@ pub(crate) fn contract_entry_failures<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Vec<ContractEntryFailure<'db>> {
+    let scope = contract.scope();
     // A contract with no ABI library has no entry code to generate; the
     // lowering names the missing item.
-    if resolve_lib_type_path(db, contract.scope(), "std::abi::Sol").is_none() {
+    if resolve_sol_abi_ty(db, scope, PredicateListId::empty_list(db)).is_none() {
         return Vec::new();
     }
     let contract_name = contract
@@ -1086,22 +1087,36 @@ pub(crate) fn contract_entry_failures<'db>(
     let plan = contract_entry_plan(db, contract, None);
     let span = contract.span();
     let mut failures = Vec::new();
-    let mut fail = |step, span: DynLazySpan<'db>, error: &EntryPlanError| {
-        if let EntryPlanError::NoInstance(message) = error {
-            failures.push(ContractEntryFailure {
-                contract_name: contract_name.clone(),
-                step,
-                span,
-                message: message.clone(),
-            });
-        }
+    let mut fail = |span, message, secondary| {
+        failures.push(ContractEntryFailure {
+            contract_name: contract_name.clone(),
+            span,
+            message,
+            secondary,
+        })
     };
-    if let Err(error) = &plan.init {
-        fail(
-            EntryStep::InitArgs,
-            span.clone().init_block().params().into(),
-            error,
-        );
+    if let Err(EntryPlanError::NoInstance(unmet)) = &plan.init {
+        let params = span.clone().init_block().params();
+        for unmet in unmet {
+            match unmet.arg {
+                Some(idx) => fail(
+                    params.clone().param(idx).into(),
+                    format!(
+                        "the dispatcher cannot decode this `init` argument: {}",
+                        unmet.describe()
+                    ),
+                    None,
+                ),
+                None => fail(
+                    params.clone().into(),
+                    format!(
+                        "the dispatcher cannot decode the arguments of `init`: {}",
+                        unmet.describe()
+                    ),
+                    None,
+                ),
+            }
+        }
     }
     for arm in &plan.arms {
         let arm_span = span
@@ -1109,11 +1124,63 @@ pub(crate) fn contract_entry_failures<'db>(
             .recv(arm.recv_idx as usize)
             .arms()
             .arm(arm.arm_idx as usize);
-        if let Err(error) = &arm.input {
-            fail(EntryStep::RecvInput, arm_span.clone().pat().into(), error);
+        if let Err(EntryPlanError::NoInstance(unmet)) = &arm.input {
+            for unmet in unmet {
+                fail(
+                    arm_span.clone().pat().into(),
+                    format!(
+                        "the dispatcher cannot read the message of this arm: {}",
+                        unmet.describe()
+                    ),
+                    None,
+                );
+            }
         }
-        if let Err(error) = &arm.ret {
-            fail(EntryStep::RecvReturn, arm_span.ret_ty().into(), error);
+        if let Err(EntryPlanError::NoInstance(unmet)) = &arm.ret {
+            let declared = RecvView::new(db, contract, arm.recv_idx)
+                .arms(db)
+                .find(|view| view.arm_idx(db) == arm.arm_idx)
+                .and_then(|view| view.return_decl_span(db));
+            let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
+            for unmet in unmet {
+                let message = format!(
+                    "the dispatcher cannot encode this return type: {}",
+                    unmet.describe()
+                );
+                match &declared {
+                    // A declaration in the contract's own ingot is where the
+                    // error is, with the arm as the secondary label. In
+                    // another ingot, the arm stays primary.
+                    Some(declared)
+                        if declared.top_mod(db).map(|top_mod| top_mod.ingot(db))
+                            == Some(contract.top_mod(db).ingot(db)) =>
+                    {
+                        fail(
+                            declared.clone(),
+                            message,
+                            Some((pat_span.clone(), "returned by this arm")),
+                        )
+                    }
+                    Some(declared) => {
+                        let written = contract.recvs(db).data(db)[arm.recv_idx as usize]
+                            .arms
+                            .data(db)[arm.arm_idx as usize]
+                            .ret_ty
+                            .is_some();
+                        let primary = if written {
+                            arm_span.clone().ret_ty().into()
+                        } else {
+                            pat_span.clone()
+                        };
+                        fail(
+                            primary,
+                            message,
+                            Some((declared.clone(), "the `Return` type is declared here")),
+                        )
+                    }
+                    None => fail(pat_span.clone(), message, None),
+                }
+            }
         }
     }
     failures

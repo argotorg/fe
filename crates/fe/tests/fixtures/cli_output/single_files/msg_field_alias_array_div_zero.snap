@@ -12,11 +12,5 @@ error[3-0025]: division by zero in const context
 1 │ type Arr<const N: usize> = [u8; { 10 / N }]
   │                                   ^^^^^^ cannot divide by zero
 
-error[16-0022]: the entry code of contract `C` cannot be generated
-   ┌─ msg_field_alias_array_div_zero.fe:10:9
-   │
-10 │         Read { value } -> u8 {
-   │         ^^^^^^^^^^^^^^ reading the message of this arm: the generated call of `decode_runtime_args` has no instance: its bound `Read: Decode<Sol>` is not proved
-
 
 === EXIT CODE: 1 ===

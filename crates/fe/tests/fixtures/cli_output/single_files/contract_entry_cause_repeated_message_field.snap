@@ -1,0 +1,24 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_entry_cause_repeated_message_field.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_cause_repeated_message_field.fe
+
+error[9-0008]: message field does not satisfy ABI requirements in msg variant `Put`
+   ┌─ contract_entry_cause_repeated_message_field.fe:21:14
+   │
+21 │     Put { w: W<u8> } -> u256,
+   │              ^^^^^ `W<u8>` does not satisfy `Decode<Sol>`
+   │
+   = message fields must implement `AbiSize`, `Encode<Sol>`, and `Decode<Sol>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ contract_entry_cause_repeated_message_field.fe:25:9
+   │
+25 │         Put { w } -> u256 { w.v }
+   │         ^^^^^^^^^ `W<u8>` doesn't implement `Decode<Sol>`
+
+
+=== EXIT CODE: 1 ===

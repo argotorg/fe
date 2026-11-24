@@ -23,7 +23,7 @@ use crate::{
     },
     hir_def::{
         Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
-        scope_graph::ScopeId,
+        Visibility, scope_graph::ScopeId,
     },
 };
 use common::{
@@ -939,6 +939,108 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
         None,
         true,
     )
+}
+
+/// The constraint that stops the one implementation that could prove `goal`:
+/// the first constraint, that no implementation satisfies, of the only
+/// implementation whose head and associated types match `goal`.
+/// Implementations for a type constructor are considered before blanket ones.
+/// A blanket implementation that needs a trait that is private to another
+/// ingot is not considered: no code of the origin ingot can satisfy it, so it
+/// is no cause to name. `None` when no implementation matches, or when
+/// several do.
+pub(crate) fn blocking_constraint<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<TraitInstId<'db>> {
+    let ingot = solve_cx.origin_ingot();
+    let env = ingot_trait_env(db, ingot, solve_cx.tier().in_ingot(db, ingot));
+    let ty = goal.self_ty(db);
+    if ty.has_invalid(db) {
+        return None;
+    }
+    let (mut nominal, mut blanket) = (Vec::new(), Vec::new());
+    for impl_ in env.impls_for_trait(db, goal.def(db)) {
+        if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
+            continue;
+        }
+        // The associated types that `goal` binds are those of the candidate.
+        let Some(impl_) = goal
+            .assoc_type_bindings(db)
+            .keys()
+            .try_fold(impl_, |impl_, binding| {
+                super::trait_lower::complete_candidate_impl_assoc_ty(db, impl_, binding.name)
+            })
+        else {
+            continue;
+        };
+        let mut table = UnificationTable::new(db);
+        let inst = table.instantiate_with_fresh_vars(impl_);
+        let impl_ty = table.instantiate_to_term(inst.self_ty(db));
+        let ty_term = table.instantiate_to_term(ty);
+        let head_matches = table.unify_for_overlap(impl_ty, ty_term).is_ok()
+            && inst
+                .trait_(db)
+                .args(db)
+                .iter()
+                .zip(goal.args(db))
+                .all(|(&impl_arg, &arg)| {
+                    let arg = table.instantiate_to_term(arg);
+                    table.unify_for_overlap(impl_arg, arg).is_ok()
+                });
+        // An implementation that binds an associated type to another type than
+        // `goal` does is not the one that could prove it, whatever its bounds.
+        let assoc_matches = head_matches
+            && goal
+                .assoc_type_bindings(db)
+                .iter()
+                .all(|(&binding, &want)| {
+                    let Some(have) = inst.trait_inst(db).bound_assoc_ty(db, binding) else {
+                        return false;
+                    };
+                    let (have, want) = (
+                        table.instantiate_to_term(have),
+                        table.instantiate_to_term(want),
+                    );
+                    have.has_projection(db)
+                        || want.has_projection(db)
+                        || table.unify_for_overlap(have, want).is_ok()
+                });
+        if !assoc_matches {
+            continue;
+        }
+        let constraints = inst.constraints(db).list(db);
+        let sealed = |constraint: &TraitInstId<'db>| {
+            let trait_ = constraint.def(db);
+            trait_.vis(db) != Visibility::Public && trait_.top_mod(db).ingot(db) != ingot
+        };
+        let nominal_impl = matches!(impl_.self_ty(db).base_ty(db).data(db), TyData::TyBase(_));
+        if !nominal_impl && constraints.iter().any(sealed) {
+            continue;
+        }
+        let unmet = constraints.iter().find_map(|&constraint| {
+            let constraint = constraint.fold_with(db, &mut table);
+            let holds = matches!(
+                is_goal_satisfiable(db, solve_cx, constraint),
+                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
+            );
+            (!holds).then_some(constraint)
+        });
+        let Some(unmet) = unmet else {
+            continue;
+        };
+        if nominal_impl {
+            nominal.push(unmet)
+        } else {
+            blanket.push(unmet)
+        }
+    }
+    let candidates = if nominal.is_empty() { blanket } else { nominal };
+    match candidates[..] {
+        [only] => Some(only),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

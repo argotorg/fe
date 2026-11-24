@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[16-0021]: `Drop` without an ordinary proof in `fn hold`
+   ┌─ src/lib.fe:15:9
+   │
+15 │         hold(Tag2 {})
+   │         ^^^^^^^^^^^^^ this call reaches `hold`, which destroys `Holder<Tag2>`; its `Drop` implementation needs `Tag2: Show`, which no ordinary implementation proves (only one that a `with` chose does); a drop does not read a `with`
+   │
+   ┌─ src/holder.fe:21:9
+   │
+21 │     let _held = Holder { t }
+   │         ----- `Holder<Tag2>` is destroyed here (in package `drop_dep_provider`)
+
+
+=== EXIT CODE: 1 ===

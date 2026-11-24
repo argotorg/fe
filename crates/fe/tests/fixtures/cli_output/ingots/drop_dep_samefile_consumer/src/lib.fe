@@ -1,0 +1,5 @@
+use drop_dep_samefile_provider::{Show, wrap}
+pub struct Tag2 {}
+pub impl Show for Tag2 as Loud2 { fn show(self) {} }
+#[test]
+fn t() { with (Loud2) { wrap(Tag2 {}) } }

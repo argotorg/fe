@@ -19,10 +19,10 @@ error[3-0025]: division by zero in const context
   │               ^^^^^^ cannot divide by zero
 
 error[16-0022]: the entry code of contract `StructArg` cannot be generated
-   ┌─ contract_init_array_div_zero.fe:12:9
+   ┌─ contract_init_array_div_zero.fe:12:10
    │
 12 │     init(value: S<0>) {}
-   │         ^^^^^^^^^^^^^ decoding the arguments of `init`: the generated call of `decode_payload` for `(S<0>): Decode<Sol>` has no instance: a goal or a bound of the call is not proved
+   │          ^^^^^^^^^^^ the dispatcher cannot decode this `init` argument: `S<0>: Decode<Sol>` is not satisfied
 
 
 === EXIT CODE: 1 ===
