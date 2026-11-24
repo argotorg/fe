@@ -45,6 +45,36 @@ fn trait_items_and_trait_family_bounds_after_where_predicates() {
     }
 }
 
+#[test]
+fn constraint_kind_parses_with_and_without_parentheses() {
+    for (source, kind_arrows, trait_refs) in [
+        ("struct A<F: Constraint -> *> {}", 1, 0),
+        ("struct A<F: (Constraint) -> *> {}", 1, 0),
+        ("struct A<F: * -> Constraint> {}", 1, 0),
+        ("fn f<F: Constraint -> *>() {}", 1, 0),
+        ("struct A<F> where F: Constraint -> * {}", 1, 0),
+        // Alone, `Constraint` names a trait.
+        ("struct A<F: Constraint> {}", 0, 1),
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}\n{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(root.to_string(), source);
+        for (kind, count) in [
+            (SyntaxKind::KindBoundAbs, kind_arrows),
+            (SyntaxKind::TraitRef, trait_refs),
+        ] {
+            assert_eq!(
+                root.descendants()
+                    .filter(|node| node.kind() == kind)
+                    .count(),
+                count,
+                "{source}",
+            );
+        }
+    }
+}
+
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/syntax_node/items",
     glob: "*.fe"

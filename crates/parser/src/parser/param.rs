@@ -389,10 +389,15 @@ impl super::Parse for TypeBoundScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        let is_type_kind = matches!(
-            parser.current_kind(),
-            Some(SyntaxKind::LParen | SyntaxKind::Star)
-        );
+        // `Constraint` starts a kind only as the argument of an arrow;
+        // alone it names a trait.
+        let is_constraint_arrow = parser.is_ident("Constraint")
+            && parser.peek_n_non_trivia(2).get(1) == Some(&SyntaxKind::Arrow);
+        let is_type_kind = is_constraint_arrow
+            || matches!(
+                parser.current_kind(),
+                Some(SyntaxKind::LParen | SyntaxKind::Star)
+            );
 
         if is_type_kind {
             parse_kind_bound(parser)

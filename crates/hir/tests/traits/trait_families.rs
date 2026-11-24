@@ -249,3 +249,16 @@ fn family_arguments_satisfy_parameter_bounds() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn constraint_kind_bound_needs_no_parentheses() {
+    for source in [
+        "struct A<F: Constraint -> *> {}",
+        "struct A<F: (Constraint) -> *> {}",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("constraint_kind.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+    }
+}
