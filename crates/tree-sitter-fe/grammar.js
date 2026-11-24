@@ -100,6 +100,12 @@ module.exports = grammar({
     // an attribute list after a contract field can start another field, the
     // `init` block or a `recv` block
     [$.contract_fields],
+    [$.where_clause, $._condition_operand, $._condition_atom_no_let],
+    [$._condition_operand, $._condition_atom_no_let, $._path],
+    [$._condition_operand, $._condition_atom_no_let, $._path, $.path_segment],
+    [$._condition_operand, $._condition_atom_no_let],
+    [$._condition_operand, $._path, $.path_segment],
+    [$._condition_operand, $._path],
   ],
 
   rules: {
@@ -1149,19 +1155,178 @@ module.exports = grammar({
       ')',
     ),
 
+    // In condition position `quote` is a variable, as in the compiler's
+    // parser, which reads a quotation only where a record may be initialized:
+    // `if quote { .. }` tests the variable. The forms below repeat the unary,
+    // cast, postfix, assignment, range and mode forms of `_expression` over
+    // operands that cannot start a quotation, so that the scanner is not asked
+    // for the quote keyword where a condition starts. They are aliased to the
+    // node names of the ordinary forms.
+    _condition_operand: $ => choice(
+      $.quote_splice,
+      alias($._condition_unary_expression, $.unary_expression),
+      alias($._condition_cast_expression, $.cast_expression),
+      alias($._condition_call_expression, $.call_expression),
+      alias($._condition_macro_call_expression, $.macro_call_expression),
+      alias($._condition_method_call_expression, $.method_call_expression),
+      alias($._condition_instantiation_expression, $.instantiation_expression),
+      alias($._condition_field_expression, $.field_expression),
+      alias($._condition_index_expression, $.index_expression),
+      alias($._condition_try_expression, $.try_expression),
+      prec.left($.identifier),
+      $.scoped_path,
+      'self',
+      'Self',
+      'super',
+      'ingot',
+      $.tuple_expression,
+      $.array_expression,
+      $.array_repeat_expression,
+      $.paren_expression,
+      $.literal,
+      $.if_expression,
+      $.match_expression,
+      $.with_expression,
+      $.unsafe_expression,
+      $.block,
+      $.qualified_path_expression,
+      alias($._condition_mode_expression, $.mode_expression),
+    ),
+
+    _condition_unary_expression: $ => prec(PREC.UNARY, seq(
+      field('operator', choice('!', '-', '~', '+', '*')),
+      field('operand', $._condition_operand),
+    )),
+
+    _condition_cast_expression: $ => prec.left(PREC.CAST, seq(
+      field('value', $._condition_operand),
+      'as',
+      field('type', $._type),
+    )),
+
+    _condition_call_expression: $ => prec(PREC.POSTFIX, seq(
+      field('function', $._condition_operand),
+      field('arguments', $.call_arg_list),
+    )),
+
+    _condition_macro_call_expression: $ => prec(PREC.POSTFIX, seq(
+      field('function', $._condition_operand),
+      '!',
+      field('arguments', $.call_arg_list),
+    )),
+
+    _condition_instantiation_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._condition_operand),
+      field('type_arguments', $.generic_arg_list),
+    )),
+
+    _condition_method_call_expression: $ => choice(
+      prec.left(PREC.POSTFIX + 1, seq(
+        field('value', $._condition_operand),
+        '.',
+        field('method', $.identifier),
+        '::',
+        $.generic_arg_list,
+        field('arguments', $.call_arg_list),
+      )),
+      prec.left(PREC.POSTFIX, seq(
+        field('value', $._condition_operand),
+        '.',
+        field('method', $.identifier),
+        field('arguments', $.call_arg_list),
+      )),
+    ),
+
+    _condition_field_expression: $ => prec.left(PREC.POSTFIX, seq(
+      field('value', $._condition_operand),
+      '.',
+      field('field', choice($.identifier, $.integer_literal, $.quote_splice)),
+    )),
+
+    _condition_try_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._condition_operand),
+      '?',
+    )),
+
+    _condition_index_expression: $ => prec(PREC.POSTFIX, seq(
+      field('value', $._condition_operand),
+      '[',
+      field('index', $._expression),
+      ']',
+    )),
+
+    _condition_mode_expression: $ => prec(PREC.UNARY, seq(
+      field('mode', choice('mut', 'mut?', 'ref', 'own')),
+      field('value', $._condition_operand),
+    )),
+
+    _condition_assignment_expression: $ => prec.right(PREC.ASSIGN, seq(
+      field('left', $._condition_operand),
+      '=',
+      field('right', $._expression),
+    )),
+
+    _condition_augmented_assignment_expression: $ => prec.right(PREC.ASSIGN, seq(
+      field('left', $._condition_operand),
+      field('operator', choice('+=', '-=', '*=', '/=', '%=', '**=', '|=', '&=', '^=', '<<=', '>>=')),
+      field('right', $._expression),
+    )),
+
+    // The start of a range in condition position holds binary operators over
+    // operands, as an ordinary range start does: `for i in n + 1..m`.
+    _condition_range_start: $ => choice(
+      $._condition_operand,
+      alias($._condition_start_binary_expression, $.binary_expression),
+    ),
+
+    _condition_start_binary_expression: $ => {
+      const table = [
+        [PREC.OR, '||'],
+        [PREC.AND, '&&'],
+        [PREC.COMPARE, choice('==', '!=', $._comparison_lt, '>', '<=', '>=')],
+        [PREC.BITOR, '|'],
+        [PREC.BITXOR, '^'],
+        [PREC.BITAND, '&'],
+        [PREC.SHIFT, choice('<<', '>>')],
+        [PREC.ADD, choice('+', '-')],
+        [PREC.MUL, choice('*', '/', '%')],
+      ];
+
+      return choice(
+        ...table.map(([precedence, operator]) =>
+          prec.left(precedence, seq(
+            field('left', $._condition_range_start),
+            field('operator', operator),
+            field('right', $._condition_range_start),
+          ))
+        ),
+        prec.right(PREC.EXP, seq(
+          field('left', $._condition_range_start),
+          field('operator', '**'),
+          field('right', $._condition_range_start),
+        )),
+      );
+    },
+
+    _condition_range_expression: $ => prec.left(PREC.RANGE, seq(
+      field('start', $._condition_range_start),
+      '..',
+      field('end', $._expression),
+    )),
+
     // Condition expression atoms excluding let-conditions and condition-specific
     // binary operator nodes.
     _condition_atom_no_let: $ => choice(
       $.quote_splice,
-      $.unary_expression,
-      $.cast_expression,
-      $.call_expression,
-      $.macro_call_expression,
-      $.method_call_expression,
-      $.instantiation_expression,
-      $.field_expression,
-      $.index_expression,
-      $.try_expression,
+      alias($._condition_unary_expression, $.unary_expression),
+      alias($._condition_cast_expression, $.cast_expression),
+      alias($._condition_call_expression, $.call_expression),
+      alias($._condition_macro_call_expression, $.macro_call_expression),
+      alias($._condition_method_call_expression, $.method_call_expression),
+      alias($._condition_instantiation_expression, $.instantiation_expression),
+      alias($._condition_field_expression, $.field_expression),
+      alias($._condition_index_expression, $.index_expression),
+      alias($._condition_try_expression, $.try_expression),
       prec.left($.identifier),
       $.scoped_path,
       'self',
@@ -1179,11 +1344,11 @@ module.exports = grammar({
       $.with_expression,
       $.unsafe_expression,
       $.block,
-      $.assignment_expression,
-      $.augmented_assignment_expression,
-      $.range_expression,
+      alias($._condition_assignment_expression, $.assignment_expression),
+      alias($._condition_augmented_assignment_expression, $.augmented_assignment_expression),
+      alias($._condition_range_expression, $.range_expression),
       $.qualified_path_expression,
-      $.mode_expression,
+      alias($._condition_mode_expression, $.mode_expression),
     ),
 
     // Condition expression atoms, including let-conditions.
@@ -1228,15 +1393,15 @@ module.exports = grammar({
     _condition_let_value: $ => choice(
       $.quote_splice,
       $.condition_binary_expression_let_value,
-      $.unary_expression,
-      $.cast_expression,
-      $.call_expression,
-      $.macro_call_expression,
-      $.method_call_expression,
-      $.instantiation_expression,
-      $.field_expression,
-      $.index_expression,
-      $.try_expression,
+      alias($._condition_unary_expression, $.unary_expression),
+      alias($._condition_cast_expression, $.cast_expression),
+      alias($._condition_call_expression, $.call_expression),
+      alias($._condition_macro_call_expression, $.macro_call_expression),
+      alias($._condition_method_call_expression, $.method_call_expression),
+      alias($._condition_instantiation_expression, $.instantiation_expression),
+      alias($._condition_field_expression, $.field_expression),
+      alias($._condition_index_expression, $.index_expression),
+      alias($._condition_try_expression, $.try_expression),
       prec.left($.identifier),
       $.scoped_path,
       'self',
@@ -1254,7 +1419,7 @@ module.exports = grammar({
       $.unsafe_expression,
       $.block,
       $.qualified_path_expression,
-      $.mode_expression,
+      alias($._condition_mode_expression, $.mode_expression),
     ),
 
     // Destructuring condition for `if`/`while` condition chains.
