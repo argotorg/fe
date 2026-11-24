@@ -282,6 +282,52 @@ fn opt_nested_yield(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u
     log(trace, 9)
 }
 
+// A tuple yield whose element is a block with a `return`.
+fn pair(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
+    yield ({
+        let _g = Guard { trace, event: 2 }
+        if c {
+            return (mut cell.b, mut cell.a)
+        }
+        mut cell.a
+    }, mut cell.b)
+    log(trace, 9)
+}
+
+// A block in a compound yield passes its bindings on to the resume.
+fn opt_block(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
+    yield Option::Some({
+        let _g = Guard { trace, event: 2 }
+        mut cell.a
+    })
+    log(trace, 9)
+}
+
+fn owned_block(_ cell: mut Cell, _ trace: *u256) -> (u256, mut u256) {
+    yield ({
+        let _g = Guard { trace, event: 3 }
+        7
+    }, mut cell.a)
+    log(trace, 9)
+}
+
+// The grant borrows a binding of a block in a compound yield.
+fn opt_ref(_ trace: *u256) -> Option<ref Guard> {
+    yield Option::Some({
+        let g = Guard { trace, event: 2 }
+        ref g
+    })
+    log(trace, 9)
+}
+
+// A tail compound yield ends the block with every scope.
+fn tail_opt(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
+    Option::Some({
+        let _g = Guard { trace, event: 2 }
+        mut cell.a
+    })
+}
+
 // A `return` in the operand whose own value opens scopes, branches, or
 // is the empty variant.
 fn return_block(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
@@ -584,6 +630,50 @@ fn a_nested_yield_in_a_compound_yield() {
     }
     assert(read(trace) == 59)
     assert(cell.a == 1 && cell.b == 1)
+}
+
+#[test]
+fn a_tuple_yield_with_a_return() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    let (mut x, _) = pair(mut cell, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 52)
+    let trace = new_trace()
+    let (mut y, _) = pair(mut cell, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 529)
+    assert(cell.a == 1 && cell.b == 1)
+}
+
+#[test]
+fn a_block_in_a_compound_yield_ends_at_resume() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match opt_block(mut cell, trace) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 529)
+    let trace = new_trace()
+    let (n, mut x) = owned_block(mut cell, trace)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 539)
+    let trace = new_trace()
+    match tail_opt(mut cell, trace) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 52)
+}
+
+#[test]
+fn a_compound_yield_grants_a_block_binding() {
+    let trace = new_trace()
+    if let Option::Some(ref g) = opt_ref(trace) {
+        look_guard(ref g)
+    }
+    assert(read(trace) == 529)
 }
 
 #[test]

@@ -1532,7 +1532,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.unit_value()
             }
-            Expr::Block(stmts, _) => self.lower_block_expr(stmts),
+            Expr::Block(stmts, _) => self.lower_block_expr(expr, stmts),
             Expr::If(cond, then_expr, else_expr) => {
                 self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
@@ -2709,11 +2709,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// A block's scope holds its bindings and its tail's temporaries; its
-    /// value passes to the enclosing scope.
-    fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
+    /// value passes to the enclosing scope. In a compound yield, such as
+    /// `Option::Some({ .. })` or a tuple, the yield comes after a block
+    /// that is a yield site, which passes everything it holds on: the
+    /// projection's locals live until its session resumes.
+    fn lower_block_expr(&mut self, expr: ExprId, stmts: &[StmtId]) -> SValueId {
         self.push_drop_scope(true);
         let value = self.lower_block_stmts(stmts);
-        self.pop_drop_scope(Some(value));
+        if self.yield_depth > 0 && self.typed_body.yield_shape(expr).is_some() {
+            self.pass_drop_scope();
+        } else {
+            self.pop_drop_scope(Some(value));
+        }
         value
     }
 
@@ -2824,11 +2831,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.yield_depth = yield_depth;
                 self.slide = slide;
             }
+            // The operand's scope holds its temporaries until the session
+            // resumes.
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
                 let outer = self.slide.replace((slide, self.drop_scopes.len()));
                 let yield_depth = mem::take(&mut self.yield_depth);
+                self.push_drop_scope(false);
                 let _ = self.lower_expr(*expr);
+                self.pop_drop_scope(None);
                 self.yield_depth = yield_depth;
                 self.slide = outer;
                 self.switch_to(slide);

@@ -45,8 +45,13 @@ flowchart TD
   constructor is decided statically, and any other yield, such as a
   forwarded `yield self.entry(k)`, tests its value. Each yield site yields
   on its own path. The resume block destroys what the scopes the yield
-  leaves hold: those opened in a `yield` statement's operand, before the
-  slide, or every scope.
+  leaves hold: before the slide, those of a `yield` statement's operand,
+  whose own scope holds the statement's temporaries; or every scope. A
+  compound yield site, a tuple or variant constructor, yields once after
+  its elements: a block among them passes what it holds to the enclosing
+  scope, a branch of an `if` or `match` among them destroys what it holds
+  where it ends, and a `return` or `yield` statement inside one yields on
+  its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
