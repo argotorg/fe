@@ -1969,6 +1969,39 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 }
             }
 
+            Self::UnknownAssocBinding {
+                span,
+                name,
+                trait_,
+                declared_by,
+            } => {
+                let trait_name = |trait_: Trait<'_>| {
+                    trait_
+                        .name(db)
+                        .to_opt()
+                        .map_or_else(|| "<missing>".to_string(), |name| name.data(db).to_string())
+                };
+                let name = name.data(db);
+                let trait_label = trait_name(*trait_);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{trait_label}` has no associated type `{name}`"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{name}` is not declared by `{trait_label}`"),
+                        span: span.resolve(db),
+                    }],
+                    notes: declared_by
+                        .into_iter()
+                        .map(|declared_by| {
+                            let declared_by = trait_name(*declared_by);
+                            format!("`{name}` is declared by `{declared_by}`; bind it on that trait")
+                        })
+                        .collect(),
+                    error_code,
+                }
+            }
+
             Self::MaybeMutInShape(span) => primary_diag(
                 Severity::Error,
                 "`mut?` in a shape argument",

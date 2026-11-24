@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        GenericArg, GenericArgListId, ItemKind, PathId, PathKind, TraitRefId, TypeId, TypeKind,
-        TypeMode, scope_graph::ScopeId,
+        GenericArg, GenericArgListId, IdentId, ItemKind, PathId, PathKind, Trait, TraitRefId,
+        TypeId, TypeKind, TypeMode, scope_graph::ScopeId,
     },
     span::{
         params::{LazyGenericArgListSpan, LazyGenericArgSpan},
@@ -159,12 +159,28 @@ pub(crate) fn path_arg_diags<'db>(
                         return Vec::new();
                     };
                     let span = span.into_assoc_type_arg();
-                    let decl = binding.name.to_opt().and_then(|name| {
-                        match resolve_path(db, path, scope, assumptions, false) {
-                            Ok(PathRes::Trait(inst)) => inst.def(db).assoc_ty(db, name),
-                            _ => None,
-                        }
-                    });
+                    let trait_ = match resolve_path(db, path, scope, assumptions, false) {
+                        Ok(PathRes::Trait(inst)) => Some(inst.def(db)),
+                        _ => None,
+                    };
+                    let decl = binding
+                        .name
+                        .to_opt()
+                        .zip(trait_)
+                        .and_then(|(name, trait_)| trait_.assoc_ty(db, name));
+                    // A binding names an associated item of the trait itself.
+                    if let (Some(name), Some(trait_), None) = (binding.name.to_opt(), trait_, &decl)
+                    {
+                        return vec![
+                            TyLowerDiag::UnknownAssocBinding {
+                                span: span.name().into(),
+                                name,
+                                trait_,
+                                declared_by: super_trait_declaring(db, trait_, name),
+                            }
+                            .into(),
+                        ];
+                    }
                     // An associated shape is bound to a shape at a mode, and
                     // nothing else is bound at one.
                     match (decl.is_some_and(|decl| decl.is_shape()), binding.mode) {
@@ -246,6 +262,34 @@ pub(crate) fn path_arg_diags<'db>(
         })
         .chain(duplicates)
         .collect()
+}
+
+/// A super trait of `trait_`, directly or through others, that declares the
+/// associated type `name`.
+fn super_trait_declaring<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    name: IdentId<'db>,
+) -> Option<Trait<'db>> {
+    let mut seen = vec![trait_];
+    let mut pending = vec![trait_];
+    while let Some(current) = pending.pop() {
+        for super_trait in current
+            .super_trait_bounds(db)
+            .map(|inst| inst.def(db))
+            .collect::<Vec<_>>()
+        {
+            if seen.contains(&super_trait) {
+                continue;
+            }
+            if super_trait.assoc_ty(db, name).is_some() {
+                return Some(super_trait);
+            }
+            seen.push(super_trait);
+            pending.push(super_trait);
+        }
+    }
+    None
 }
 
 /// Diagnostics for the types written as generic arguments of `path`'s
