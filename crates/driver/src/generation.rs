@@ -1416,21 +1416,13 @@ fn prepared_view(
     requests: &[common::generation::FrozenGenerationRequest],
 ) -> DriverDataBase {
     let mut output = match basis {
+        // The file over the builtin sources of the database it is prepared in,
+        // which may differ from the embedded ones (`fe doc --stdlib-path`).
         ViewBasis::Standalone(file) => {
             let url = file.url(db).expect("indexed generation input");
-            let mut output = DriverDataBase::default();
-            output
-                .workspace()
-                .touch(&mut output, url.clone(), Some(file.text(db).clone()));
-            output
-                .compiler_options()
-                .set_recovery_mode(&mut output)
-                .to(db.compiler_options().recovery_mode(db));
-            output
-                .compilation_settings()
-                .set_profile(&mut output)
-                .to(db.compilation_settings().profile(db).clone());
-            output
+            db.fork_inputs_selecting(|candidate| {
+                *candidate == url || common::stdlib::is_embedded_builtin(candidate)
+            })
         }
         ViewBasis::Package => db.fork_inputs(),
     };

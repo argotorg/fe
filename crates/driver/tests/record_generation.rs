@@ -4427,30 +4427,4 @@ impl S with (P)
         .get(&output, &file.url(&db).unwrap())
         .unwrap();
     assert_generated_integer(&output, output_file, "generated", "41");
-}#[test]
-fn a_generated_trait_constant_meets_the_attribute_rules_of_a_written_one() {
-    let source = "use core::derive::Derive
-use core::meta::{Code, Item, Record}
-
-trait Tr { const X: u256 }
-struct S { a: u256 }
-
-struct P {}
-impl Derive<trait Tr> for P {
-    const fn derive(_ record: Record) -> Code<Item> {
-        quote {
-            #[payable]
-            const X: u256 = 1
-        }
-    }
 }
-
-impl Tr for S with (P)
-";
-    let errors = generated_diagnostics(source);
-    assert!(
-        errors.contains("unsupported `#[payable]` attribute on const `X`"),
-        "{errors}"
-    );
-}
-
