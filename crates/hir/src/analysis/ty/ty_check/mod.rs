@@ -229,7 +229,7 @@ pub(crate) fn const_type_diag<'db>(
 ) -> Option<TyDiagCollection<'db>> {
     // A constant is a value, so its type has kind `*`.
     if !ty.has_invalid(db) && !ty.is_star_kind(db) {
-        return Some(TyLowerDiag::ExpectedStarKind(span.into()).into());
+        return Some(TyLowerDiag::ExpectedStarKind(span).into());
     }
     if let Some(view) = ty.is_view(db).then_some(ty).or_else(|| ty.view_part(db)) {
         return Some(

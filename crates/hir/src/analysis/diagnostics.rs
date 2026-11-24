@@ -2002,7 +2002,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         span: span.resolve(db),
                     }],
                     notes: declared_by
-                        .into_iter()
+                        .iter()
                         .map(|declared_by| {
                             let declared_by = trait_name(*declared_by);
                             format!("`{name}` is declared by `{declared_by}`; bind it on that trait")
