@@ -3,7 +3,7 @@ use crate::analysis::place::resolve_place_field;
 use crate::analysis::semantic::effect_param_site;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::closure::{closure_effect_requirements, closure_regions};
-use crate::analysis::ty::corelib::effect_key_state_access;
+use crate::analysis::ty::corelib::{effect_key_state_access, resolve_core_trait};
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::effects::rows::expand_rows;
 use crate::analysis::ty::provider::AddressSpace;
@@ -101,7 +101,8 @@ impl<'db> UnsafeChecker<'db, '_> {
                 .then_some(expr),
             Partial::Present(Expr::Field(base, Partial::Present(field))) => {
                 let base_ty = self.typed_body.expr_ty(self.db, *base);
-                if self.is_state_pointer(base_ty)
+                if self.typed_body.semantic_expr_lowering(expr).is_none()
+                    && self.is_state_pointer(base_ty)
                     && resolve_place_field(self.db, base_ty, *field)
                         .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
                 {
@@ -178,12 +179,43 @@ impl<'db> UnsafeChecker<'db, '_> {
             .is_some_and(|field| field.is_unsafe(self.db))
     }
 
+    /// The field a selection `expr` names, when the checker lowered it to a
+    /// call of `ProjectField::project`: the field of the projected target
+    /// that the call's descriptor `Field<Target, F, Before>` stands for.
+    fn projected_field(&self, expr: ExprId) -> Option<(FieldParent<'db>, IdentId<'db>)> {
+        let Partial::Present(Expr::Field(_, Partial::Present(FieldIndex::Ident(name)))) =
+            expr.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let inst = self.typed_body.callable_expr(expr)?.trait_inst()?;
+        let projector = resolve_core_trait(self.db, self.body.scope(), &["ops", "ProjectField"])?;
+        if inst.def(self.db) != projector {
+            return None;
+        }
+        let descriptor = *inst.args(self.db).get(1)?;
+        let (_, parts) = descriptor.decompose_ty_app(self.db);
+        let target = *parts.first()?;
+        match target.adt_ref(self.db)? {
+            AdtRef::Struct(struct_) => Some((FieldParent::Struct(struct_), *name)),
+            AdtRef::Enum(_) => None,
+        }
+    }
+
     /// The outermost `unsafe` field selection the place `expr` goes through:
-    /// `self.len` in `self.len`, and `self.buf` in `self.buf[i].x`.
+    /// `self.len` in `self.len`, and `self.buf` in `self.buf[i].x`. A
+    /// selection the checker lowered to a projection names a field of the
+    /// projected target, never one of the handle it is selected on.
     fn unsafe_field_of_place(&self, expr: ExprId) -> Option<(ExprId, IdentId<'db>)> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Field(base, Partial::Present(field))) => {
-                if let FieldIndex::Ident(name) = field
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    if let Some((parent, name)) = self.projected_field(expr)
+                        && self.is_unsafe_field(parent, name)
+                    {
+                        return Some((expr, name));
+                    }
+                } else if let FieldIndex::Ident(name) = field
                     && let Some(resolved) = resolve_place_field(
                         self.db,
                         self.typed_body.expr_ty(self.db, *base),
@@ -473,14 +505,19 @@ impl<'db> UnsafeChecker<'db, '_> {
 
             Expr::Field(inner, field) => {
                 self.check_expr(*inner);
-                let inner_ty = self.typed_body.expr_ty(self.db, *inner);
-                if let Some(field) = field.to_opt()
-                    && resolve_place_field(self.db, inner_ty, field)
-                        .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
-                {
-                    self.report_deref(expr);
-                    if self.is_state_pointer(inner_ty) {
-                        self.check_state_access(expr, false);
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    // A projected selection is a call of `project`.
+                    self.check_call(expr);
+                } else {
+                    let inner_ty = self.typed_body.expr_ty(self.db, *inner);
+                    if let Some(field) = field.to_opt()
+                        && resolve_place_field(self.db, inner_ty, field)
+                            .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
+                    {
+                        self.report_deref(expr);
+                        if self.is_state_pointer(inner_ty) {
+                            self.check_state_access(expr, false);
+                        }
                     }
                 }
             }
