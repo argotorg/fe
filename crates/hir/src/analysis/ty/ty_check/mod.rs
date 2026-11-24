@@ -3616,6 +3616,12 @@ impl<'db> TyChecker<'db> {
                     input_ty: *input_ty,
                     abi_ty: *abi_ty,
                 },
+                RecvReadingFailure::BoundNotMet { pat, bound } => {
+                    BodyDiag::RecvArmReadBoundNotMet {
+                        primary: pat.span(self.body()).into(),
+                        bound: *bound,
+                    }
+                }
             };
             self.push_diag(diag);
         }

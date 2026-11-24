@@ -4530,6 +4530,23 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
+            Self::RecvArmReadBoundNotMet { primary, bound } => {
+                let goal = bound.pretty_print(db, true);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "this arm reads its message where it lies, which needs a trait that is not implemented".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{goal}` is not satisfied"),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![
+                        "an arm that names a field with `ref` locates each field it reads by the sizes of the fields before it (`AbiSize`), and needs a copyable input; bind every field by a plain name to decode the whole message instead".to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
             Self::VarOfAccess { primary } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "`var` binds a value, not an access".to_string(),

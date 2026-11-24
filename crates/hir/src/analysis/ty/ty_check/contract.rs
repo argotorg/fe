@@ -42,7 +42,9 @@ use crate::{
             ty_error::{emit_invalid_ty_error, path_generic_arg_diags},
         },
     },
-    core::semantic::{ValidatedFieldLayoutPlan, msg_variant_impl, resolve_sol_abi_ty},
+    core::semantic::{
+        RecvArmView, RecvView, ValidatedFieldLayoutPlan, msg_variant_impl, resolve_sol_abi_ty,
+    },
     hir_def::{
         Body, Contract, ContractRecvArm, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId,
         PathKind, Struct, scope_graph::ScopeId,
@@ -111,9 +113,13 @@ fn check_ty_decodable<'db>(
     }
 }
 
+/// Requires `Decode<Sol>` of the fields that `arm` decodes in full, which its
+/// reading decides: a field read in place with `ref` or bound to no name is
+/// not decoded.
 fn check_recv_variant_param_types_decodable<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
+    arm: RecvArmView<'db>,
     variant_ty: TyId<'db>,
     span: DynLazySpan<'db>,
     assumptions: PredicateListId<'db>,
@@ -127,7 +133,11 @@ fn check_recv_variant_param_types_decodable<'db>(
     };
     let solve_cx = TraitSolveCx::new(db, contract.scope(), Tier::All).with_assumptions(assumptions);
 
-    for field_ty in variant_ty.field_types(db) {
+    let field_tys = variant_ty.field_types(db);
+    for &index in &arm.reading(db).decoded {
+        let Some(&field_ty) = field_tys.get(index as usize) else {
+            continue;
+        };
         check_ty_decodable(
             db,
             solve_cx,
@@ -568,6 +578,7 @@ pub fn check_contract_recv_block<'db>(
             check_recv_variant_param_types_decodable(
                 db,
                 contract,
+                RecvArmView::new(db, RecvView::new(db, contract, recv_idx), arm_idx as u32),
                 variant.ty,
                 pat_span,
                 assumptions,

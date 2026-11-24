@@ -1112,6 +1112,14 @@ pub enum BodyDiag<'db> {
         abi_ty: TyId<'db>,
     },
 
+    /// A recv arm reads its message where it lies, but a trait that the read
+    /// relies on is not implemented: the size of the message or of a field,
+    /// or the copy of the input.
+    RecvArmReadBoundNotMet {
+        primary: DynLazySpan<'db>,
+        bound: TraitInstId<'db>,
+    },
+
     /// A pattern naming a constant of type `ty`, which is not an integer or
     /// `bool`.
     ConstPatternType {
@@ -1724,6 +1732,7 @@ impl<'db> BodyDiag<'db> {
             Self::RefutableRecvArmPattern { .. } => 153,
             Self::RecvArmMessageNotFieldwise { .. } => 160,
             Self::RecvArmRefFieldNotReadable { .. } => 161,
+            Self::RecvArmReadBoundNotMet { .. } => 163,
             Self::ConstPatternType { .. } => 154,
             Self::GenericConstPattern { .. } => 155,
             Self::InvalidConstPattern { .. } => 156,
