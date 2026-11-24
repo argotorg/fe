@@ -4238,6 +4238,33 @@ impl S with (P)
 }
 
 #[test]
+fn binders_of_a_tuple_struct_bind_by_position() {
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, binders, field}
+struct Tup {}
+impl DeriveInherent for Tup {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let b = binders(record, 0)
+        let f = field(record, 1)
+        quote { pub const fn second(self) -> u256 { match self { ${b} => ${b.at(f)} } } }
+    }
+}
+struct T2(u256, u256)
+impl T2 with (Tup)
+const fn run() -> u256 { T2(3, 4).second() }
+";
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "run", "4");
+}
+
+#[test]
 fn an_import_opens_a_quoted_expression_block_that_a_provider_splices() {
     let source = "use core::derive::DeriveInherent
 use core::meta::{Code, Item, Expr, Record}

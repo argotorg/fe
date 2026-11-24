@@ -473,6 +473,12 @@ impl<'db> AuthoredRecord<'db> {
         e.variants()?.into_iter().nth(index)
     }
 
+    /// Whether the record is a struct declared with positional fields.
+    pub(super) fn is_tuple_struct(&self) -> bool {
+        matches!(&self.syntax, RecordSyntax::Struct(s)
+            if s.fields().is_some_and(|fields| fields.is_tuple()))
+    }
+
     /// The struct's fields, or variant `variant`'s; `None` when the reference
     /// does not name fields of this record.
     pub(super) fn fields(
