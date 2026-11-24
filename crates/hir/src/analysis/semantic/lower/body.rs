@@ -2655,12 +2655,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Ok(Some(size)) => Some(BigInt::from(size)),
                 Ok(None) | Err(_) => None,
             },
-            ConstIntrinsicKind::StorageSlots if ty.has_param(self.db) || ty.has_var(self.db) => {
-                None
-            }
-            ConstIntrinsicKind::StorageSlots => {
-                storage_slot_span(self.db, ty).ok().map(BigInt::from)
-            }
+            ConstIntrinsicKind::StorageSlots => storage_slot_span(self.db, ty)
+                .ok()
+                .flatten()
+                .map(BigInt::from),
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);

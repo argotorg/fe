@@ -374,10 +374,7 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(BodyDiag::TypeSizeOverflow { primary, ty });
                     return false;
                 }
-                // A type with parameters is laid out at each instance.
-                ConstIntrinsicKind::StorageSlots
-                    if !ty.has_param(self.db) && !ty.has_var(self.db) =>
-                {
+                ConstIntrinsicKind::StorageSlots => {
                     if let Err(error) = storage_slot_span(self.db, ty) {
                         self.push_diag(BodyDiag::NoStorageLayout {
                             primary,
