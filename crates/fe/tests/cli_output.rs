@@ -6154,14 +6154,20 @@ fn named_condition_cannot_change_ordinary_outputs() {
     // With equal outputs the blanket implementation runs.
     let temp = tempdir().unwrap();
     let path = temp.path().join("agree.fe");
-    let agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe"))
-        .unwrap()
-        .replace(
-            "impl Foo for S {\n    type Out = u8\n    fn make() -> u8 { 2 }\n}",
-            "impl Foo for S {\n    type Out = u256\n    fn make() -> u256 { 2 }\n}",
-        )
-        .replace("fn boom() -> u8", "fn boom() -> u256")
-        .replace("assert(boom() == 2)", "assert(boom() == 1)");
+    // The fixture is read as checked out, so its line endings depend on the
+    // platform. Each replaced fragment stays within one line, and each must
+    // match exactly once, so a fragment that no longer matches fails here
+    // instead of leaving the fixture unchanged.
+    let mut agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe")).unwrap();
+    for (from, to) in [
+        ("type Out = u8", "type Out = u256"),
+        ("fn make() -> u8 { 2 }", "fn make() -> u256 { 2 }"),
+        ("fn boom() -> u8", "fn boom() -> u256"),
+        ("assert(boom() == 2)", "assert(boom() == 1)"),
+    ] {
+        assert_eq!(agreeing.matches(from).count(), 1, "`{from}` in {agreeing}");
+        agreeing = agreeing.replace(from, to);
+    }
     fs::write(&path, agreeing).unwrap();
     let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
     assert_eq!(exit, 0, "{output}");
