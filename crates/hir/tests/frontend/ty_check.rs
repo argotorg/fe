@@ -1501,6 +1501,7 @@ pub contract Good {
 }
 "#,
     );
+    crate::prepared_fixture::prepare_generation(&mut db, valid);
     let (top_mod, _) = db.top_mod(valid);
     let diags: Vec<_> = fe_hir::analysis::initialize_analysis_pass()
         .run_on_module(&db, top_mod)
