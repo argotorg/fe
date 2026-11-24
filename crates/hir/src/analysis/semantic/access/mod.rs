@@ -497,7 +497,7 @@ fn collect_semantic_access_with_blocked<'db>(
             untrusted
                 .iter()
                 .copied()
-                .filter(|owner| is_test(db, *owner))
+                .filter(|owner| matches!(owner, BodyOwner::Func(func, _) if func.is_test(db)))
         })
         .collect();
     let (mut trusted, untrusted) = (roots(trusted), roots(untrusted));
@@ -894,12 +894,4 @@ fn unproved_drop_diagnostic<'db>(
         ),
     };
     SemanticDiagnosticId::new(db, diagnostic)
-}
-
-/// Whether `owner` is a function that `fe test` runs: one with `#[test]`.
-fn is_test<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> bool {
-    matches!(owner, BodyOwner::Func(func, _)
-        if ItemKind::from(func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test")))
 }

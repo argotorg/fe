@@ -11,8 +11,8 @@ use parser::ast;
 use super::{
     AttrListId, Body, CompBinOp, EffectParamListId, FuncParamListId, FuncParamName,
     GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, KindBound,
-    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, TupleTypeId, TypeBound, TypeId,
-    UseAlias, WhereClauseId,
+    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, StringId, TupleTypeId, TypeBound,
+    TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -827,13 +827,19 @@ impl<'db> Func<'db> {
             )
     }
 
-    /// A function with an `#[contract_init(..)]` or `#[contract_runtime(..)]`
-    /// attribute that is well formed: the root of a manual contract object.
+    /// The contract name of a function with a well-formed `#[contract_init(..)]`
+    /// or `#[contract_runtime(..)]` attribute: the root of a manual contract
+    /// object.
+    pub fn manual_contract_root_name(self, db: &'db dyn HirDb) -> Option<StringId<'db>> {
+        match self.manual_contract_root_attr(db)? {
+            ManualContractRootAttr::Init { contract_name }
+            | ManualContractRootAttr::Runtime { contract_name } => Some(contract_name),
+            ManualContractRootAttr::Error(_) => None,
+        }
+    }
+
     pub fn is_manual_contract_root(self, db: &'db dyn HirDb) -> bool {
-        matches!(
-            self.manual_contract_root_attr(db),
-            Some(ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. })
-        )
+        self.manual_contract_root_name(db).is_some()
     }
 
     /// A function that runs when a test run or a build enters its program: a

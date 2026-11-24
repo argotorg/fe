@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use common::{indexmap::IndexSet, ingot::Ingot};
-use hir::hir_def::{Contract, Func, HirIngot, ItemKind, ManualContractRootAttr, TopLevelMod};
+use hir::hir_def::{Contract, Func, HirIngot, ItemKind, TopLevelMod};
 use rustc_hash::FxHashSet;
 use salsa::SalsaValue;
 
@@ -187,10 +187,7 @@ pub fn ingot_contracts<'db>(db: &'db dyn MirDb, ingot: Ingot<'db>) -> Vec<IngotC
         let mut manual = IndexSet::new();
         for &func in top_mod.all_funcs(db) {
             if func.top_mod(db) == top_mod
-                && let Some(
-                    ManualContractRootAttr::Init { contract_name }
-                    | ManualContractRootAttr::Runtime { contract_name },
-                ) = func.manual_contract_root_attr(db)
+                && let Some(contract_name) = func.manual_contract_root_name(db)
             {
                 manual.insert(ObjectId::manual(top_mod, contract_name.data(db)));
             }
