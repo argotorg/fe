@@ -274,11 +274,14 @@ fn admission_failure<'db>(
                 || SemanticBodyAdmission::Blocked(BlockedSemanticBody { instance, causes }),
                 SemanticBodyAdmission::Rejected,
             ),
-        SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => internal_failure(
-            db,
-            instance,
-            smir_lowering_admission_diag(db, instance, &causes),
-        ),
+        // An incomplete lowering plan is a failure of the compiler itself and is
+        // not attributed to a callee's disagreement.
+        SemanticBodyAdmissionError::IncompleteLoweringPlan(causes) => {
+            SemanticBodyAdmission::InternalFailure(SemanticDiagnosticId::new(
+                db,
+                smir_lowering_admission_diag(db, instance, &causes),
+            ))
+        }
         SemanticBodyAdmissionError::CallSiteFinalization(diag) => {
             attributed_internal_failure(db, instance, diag)
         }
