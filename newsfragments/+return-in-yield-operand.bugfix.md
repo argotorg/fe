@@ -1,0 +1,1 @@
+A `return` inside a `yield` statement's operand, as in `yield { if c { return mut self.b } mut self.a }`, now finishes the projection when the caller's use of the grant ends. Before, it went on to run the code after the `yield`.

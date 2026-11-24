@@ -1,0 +1,71 @@
+use core::MemBuffer
+use core::ops::Drop
+use core::ptr
+
+// A `return` in a `yield` statement's operand yields and runs no slide.
+// Each event appends a digit to a trace a raw pointer reaches, so
+// destructors log too:
+//
+// 1 the operand reaches its yield     5 the caller uses the grant
+// 2 an operand binding is destroyed   6 the operand leaves early
+// 3 an inner operand binding is too   9 the `yield` statement's slide runs
+// 4 the projection's own binding is
+fn log(_ trace: *u256, _ event: u256) {
+    unsafe { *trace = *trace * 10 + event }
+}
+
+fn new_trace() -> *u256 {
+    let trace = ptr::alloc<u256>()
+    unsafe { *trace = 0 }
+    trace
+}
+
+fn read(_ trace: *u256) -> u256 {
+    unsafe { *trace }
+}
+
+struct Guard {
+    trace: *u256,
+    event: u256,
+}
+
+impl Drop for Guard {
+    fn drop(own self) {
+        log(self.trace, self.event)
+    }
+}
+
+struct Cell {
+    a: u256,
+    b: u256,
+}
+
+fn bump(_ x: mut u256, _ trace: *u256) {
+    log(trace, 5)
+    x += 1
+}
+
+fn returns(_ cell: mut Cell, _ trace: *u256, _ early: bool) -> mut u256 {
+    let _own = Guard { trace, event: 4 }
+    yield {
+        let _operand = Guard { trace, event: 2 }
+        let _bytes = MemBuffer::new(32)
+        if early {
+            let _arm = Guard { trace, event: 3 }
+            log(trace, 6)
+            return mut cell.b
+        }
+        log(trace, 1)
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+#[test]
+fn a_return_in_the_operand_runs_no_slide() {
+    let trace = new_trace()
+    var cell = Cell { a: 0, b: 0 }
+    bump(mut returns(mut cell, trace, true), trace)
+    assert(read(trace) == 65324)
+    assert(cell.a == 0 && cell.b == 1)
+}

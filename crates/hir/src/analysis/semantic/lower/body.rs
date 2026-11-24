@@ -2802,7 +2802,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.destroy_scopes_from(drop_depth, None);
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(break_bb));
             }
+            // A `return` ends the body wherever it is written: in a `yield`
+            // statement's operand, no slide follows its yield either.
             Stmt::Return(expr) => {
+                let slide = self.slide.take();
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
                 if !self.is_terminated(self.current) {
                     self.exit(
@@ -2812,6 +2815,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }),
                     );
                 }
+                self.slide = slide;
             }
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
