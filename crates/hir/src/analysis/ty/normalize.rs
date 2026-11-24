@@ -102,6 +102,11 @@ struct TypeNormalizer<'db> {
     mark_divergent: bool,
     /// How many projections may still be resolved inside each other.
     budget: usize,
+    /// The projections whose assumptions are being matched, which stay as
+    /// they are: an assumption that names the projection it is matched for,
+    /// as `I::Item: Iterator<Item = u8>` does for `I::Item`, says nothing of
+    /// what that projection is.
+    fixed: Vec<TyId<'db>>,
     /// While resolving a projection, the projections resolved for it so far.
     /// A value's projections are normalized each on its own, so the work of
     /// one doesn't count against another.
@@ -142,6 +147,7 @@ impl<'db> TypeNormalizer<'db> {
             resolve_impls,
             mark_divergent: true,
             budget: PROJECTION_DEPTH_LIMIT,
+            fixed: Vec::new(),
             resolved: None,
         }
     }
@@ -185,6 +191,9 @@ struct ProjectionQuery<'db> {
     /// included.
     #[returns(copy)]
     budget: usize,
+    /// The projections that stay as they are (see [`TypeNormalizer`]).
+    #[returns(ref)]
+    fixed: Vec<TyId<'db>>,
 }
 
 /// The normalized form of a projection.
@@ -219,6 +228,7 @@ fn normalize_projection<'db>(
         resolve_impls: query.resolve_impls(db),
         mark_divergent: query.mark_divergent(db),
         budget: budget - 1,
+        fixed: query.fixed(db).clone(),
         resolved: Some(Resolved {
             sizes: IndexMap::from_iter([(ty, size)]),
             work: size,
@@ -417,6 +427,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
             TyData::AssocTy(_) if self.resolved.as_ref().is_some_and(Resolved::exceeded) => {
                 TyId::invalid(db, InvalidCause::TypeNormalizationLimit)
             }
+            TyData::AssocTy(_) if self.fixed.contains(&ty) => ty,
             TyData::AssocTy(_) => {
                 let query = ProjectionQuery::new(
                     db,
@@ -426,6 +437,7 @@ impl<'db> TyFolder<'db> for TypeNormalizer<'db> {
                     self.resolve_impls,
                     self.mark_divergent,
                     self.budget,
+                    self.fixed.clone(),
                 );
                 match normalize_projection(db, query) {
                     NormalizedProjection::Ty { ty, resolved } => {
@@ -485,14 +497,18 @@ impl<'db> TypeNormalizer<'db> {
             name: assoc.name,
             mode: assoc.mode,
         };
-        let bounds = self.assumption_bounds(target, binding);
-        if bounds.len() == 1 && self.equates_back(ty, bounds[0]) {
-            return None;
-        }
-        let matching_bounds: IndexSet<TyId<'db>> = bounds
+        // While its assumptions are matched the projection stays as it is,
+        // so one equated with itself, directly or through others as in `A:
+        // Tr<Out = B::Out>, B: Tr<Out = A::Out>`, is bound to itself and
+        // doesn't resolve: such a cycle says only that its projections are
+        // one type.
+        self.fixed.push(ty);
+        let matching_bounds: IndexSet<TyId<'db>> = self
+            .assumption_bounds(target, binding)
             .into_iter()
             .map(|bound| self.fold_ty(self.db, bound))
             .collect();
+        self.fixed.pop();
         if matching_bounds.len() > 1 {
             return None;
         }
@@ -535,45 +551,6 @@ impl<'db> TypeNormalizer<'db> {
             }
         }
         bounds
-    }
-
-    /// Whether `bound`, the one binding the assumptions give the projection
-    /// `ty`, leads back to `ty` through projections the assumptions each
-    /// equate with the next one, as in `T: Tr<Out = <T as Tr>::Out>` or
-    /// `A: Tr<Out = B::Out>, B: Tr<Out = A::Out>`. Such a cycle says only that
-    /// its projections are one type, so it resolves none of them; following
-    /// it would repeat until the nesting limit. Projections are compared with
-    /// their trait arguments normalized.
-    fn equates_back(&mut self, ty: TyId<'db>, bound: TyId<'db>) -> bool {
-        let db = self.db;
-        let is_projection = |ty: TyId<'db>| matches!(ty.data(db), TyData::AssocTy(_));
-        if !is_projection(bound) {
-            return false;
-        }
-        let start = ty.super_fold_with(db, self);
-        let mut seen = IndexSet::new();
-        let mut next = bound;
-        loop {
-            let projection = next.super_fold_with(db, self);
-            let TyData::AssocTy(assoc) = projection.data(db) else {
-                return false;
-            };
-            if projection == start {
-                return true;
-            }
-            if !seen.insert(projection) {
-                return false;
-            }
-            let binding = AssocBinding {
-                name: assoc.name,
-                mode: assoc.mode,
-            };
-            let bounds = self.assumption_bounds(assoc.trait_, binding);
-            if bounds.len() != 1 || !is_projection(bounds[0]) {
-                return false;
-            }
-            next = bounds[0];
-        }
     }
 
     /// A pure normalization query may observe established equality, but may

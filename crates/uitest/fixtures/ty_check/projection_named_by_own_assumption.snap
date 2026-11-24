@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/projection_named_by_own_assumption.fe
+---
+error[8-0000]: type mismatch
+   ┌─ projection_named_by_own_assumption.fe:57:5
+   │
+57 │     x
+   │     ^ expected `u8`, but `I::Item` is given
