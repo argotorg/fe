@@ -1289,7 +1289,7 @@ pub enum RuntimeBuiltin<'db> {
     },
     /// One SHA-256 compression: the eight state words of `state` after the
     /// 64 rounds of the sixteen message words of `block`, each an array value.
-    /// Native targets only.
+    /// Not on the EVM, which calls a routine instead.
     Sha256Compress {
         state: RValueId,
         block: RValueId,
