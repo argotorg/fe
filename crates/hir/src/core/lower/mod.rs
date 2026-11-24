@@ -553,14 +553,6 @@ impl<'db> AuthoredRecord<'db> {
         }
     }
 
-    /// Whether the record is a struct whose fields are written as a tuple.
-    pub(super) fn is_tuple_struct(&self) -> bool {
-        match &self.syntax {
-            RecordSyntax::Struct(s) => s.fields().is_some_and(|fields| fields.is_tuple()),
-            RecordSyntax::Enum(_) | RecordSyntax::MsgVariant(_) => false,
-        }
-    }
-
     /// Whether field `index` of the struct, or of variant `variant`, declares
     /// a type.
     pub(super) fn field_has_type(&self, variant: Option<usize>, index: usize) -> bool {
