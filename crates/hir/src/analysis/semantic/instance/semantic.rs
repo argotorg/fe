@@ -978,6 +978,10 @@ fn output_agreement_cycle_initial<'db>(
 /// are followed, and the calls of a body with lowering issues are not
 /// (`walk_may_follow_calls`), so the walk ends for recursion that grows its
 /// generic arguments.
+///
+/// Inside a call cycle, which of several real disagreements is reported can
+/// depend on the order in which the queries are asked. A later fix is to take
+/// the one with the smallest source position.
 #[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
 fn callee_output_disagreement_query<'db>(
     db: &'db dyn HirAnalysisDb,

@@ -1008,6 +1008,9 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
 /// implementation of its slot.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum NamedOutputMismatch<'db> {
+    /// No ordinary implementation defines the outputs. This covers an
+    /// ambiguous selection of the ordinary implementation as well as none, so
+    /// the message does not say which of the two it is.
     NoOrdinaryOutputs,
     /// An associated type; `with` is the implementation compared with.
     /// `possible` is set when the headers only may overlap, as an unresolved
@@ -1285,6 +1288,8 @@ pub(crate) fn concrete_goal_output_mismatch<'db>(
                 false,
             )
         }
+        // An ambiguous selection is reported as "no ordinary implementation"
+        // too (see `NamedOutputMismatch::NoOrdinaryOutputs`).
         Selection::Ambiguous(_) | Selection::NotFound => {
             Some(NamedOutputMismatch::NoOrdinaryOutputs)
         }

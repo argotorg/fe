@@ -140,3 +140,12 @@ premise can change when the element becomes packed.
 - Inside a block, a generic function whose own bound fixes a bounded associated
   type to a concrete type (`C: Collection<Cursor = usize>`) is refused, because
   that bound's implied slot is not kept in the function's assumptions.
+- Inside a call cycle, which of several real disagreements in the callees is
+  reported can depend on the order in which they are checked.
+- The message "no ordinary implementation defines its associated outputs" is
+  also given where the ordinary implementation of the goal is ambiguous, in
+  the check at a concrete goal and in the check of a named implementation's
+  header.
+- The runtime lowering error "runtime call requires a selected implementation"
+  is not attributed to a callee whose outputs disagree with ordinary
+  normalization.
