@@ -1736,6 +1736,7 @@ fn typed_body_for_bodyless_func<'db>(
             assumptions,
         ),
         refused_bound: None,
+        instance_bound: None,
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
@@ -5138,6 +5139,10 @@ mod typed_body_tables {
         /// A closed goal the dictionaries an instance of the body received
         /// refuse; see `instance_evidence`.
         pub(super) refused_bound: Option<RefusedGoal<'db>>,
+        /// The proofs an instance of the body runs with, of the assumptions its
+        /// owner declares (`bind_evidence`). Empty for a body that is not an
+        /// instance, or whose instance receives none.
+        pub(super) instance_bound: Option<BoundEvidence<'db>>,
         pub(super) assumptions: PredicateListId<'db>,
         pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
@@ -5750,6 +5755,7 @@ impl<'db> TypedBody<'db> {
             return;
         }
         let tables = self.tables_mut();
+        tables.instance_bound = Some(bound);
         for callable in tables
             .semantic_expr_lowering
             .values_mut()
@@ -6129,6 +6135,14 @@ impl<'db> TypedBody<'db> {
     /// which rejects the instance.
     pub(crate) fn refused_bound(&self) -> Option<RefusedGoal<'db>> {
         self.tables.refused_bound
+    }
+
+    /// The proofs the instance this body belongs to runs with, of the
+    /// assumptions its owner declares: what `bind_evidence` bound into the
+    /// body. `None` when the body is no instance or the instance receives
+    /// none.
+    pub(crate) fn instance_bound_evidence(&self) -> Option<BoundEvidence<'db>> {
+        self.tables.instance_bound
     }
 
     pub(crate) fn with_refused_bound(mut self, refused: RefusedGoal<'db>) -> Self {
@@ -7835,6 +7849,7 @@ impl<'db> TypedBody<'db> {
                 PredicateListId::empty_list(db),
             ),
             refused_bound: None,
+            instance_bound: None,
             signature: PredicateListId::empty_list(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),

@@ -1979,6 +1979,7 @@ impl<'db> TyCheckEnv<'db> {
             signature,
             bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
             refused_bound: None,
+            instance_bound: None,
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,

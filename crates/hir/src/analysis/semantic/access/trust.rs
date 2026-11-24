@@ -43,12 +43,10 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
-        name_resolution::Tier,
         semantic::{SemOrigin, SemanticInstance, diagnostics::SemanticDiagnosticSpan},
         ty::{
-            evidence::{Evidence, EvidenceId, instance_evidence},
+            evidence::{Evidence, EvidenceId},
             trait_def::ImplementorOrigin,
-            trait_resolution::TraitSolveCx,
             ty_check::{BodyOwner, infer_body},
             unsafe_check::UnsafeOpSite,
         },
@@ -150,9 +148,10 @@ impl<'db> UnsafeTrust<'db> {
     /// is checked under, a bound of the function, of its implementation or of
     /// its trait, `Self: Trait` for a member of a trait, and recursively the
     /// implementations selected for the conditions of each. The proofs are
-    /// the instance's own evidence (`instance_evidence`), the ones its body
-    /// runs with, so an implementation that a `with` choice replaced is not
-    /// reached. An assumption of a generic caller proves nothing here: it is
+    /// the ones the instance's body stores (`TypedBody::instance_bound_evidence`,
+    /// bound where the instance is made), the ones it runs with, so an
+    /// implementation that a `with` choice replaced is not reached. They are
+    /// read, not proved again. An assumption of a generic caller proves nothing here: it is
     /// judged at the call that supplies the implementation.
     fn relied_unsafe_impls(
         &self,
@@ -163,17 +162,16 @@ impl<'db> UnsafeTrust<'db> {
         if untrusted.is_empty() {
             return Vec::new();
         }
-        let key = instance.key(db);
-        let impl_env = key.impl_env(db);
-        let solve_cx = TraitSolveCx::new(db, impl_env.normalization_scope(db), Tier::All);
-        let goals = key.typed_body(db).signature();
-        let mut pending: Vec<EvidenceId<'db>> =
-            instance_evidence(db, goals, key.evidence(db), solve_cx)
-                .entries(db)
-                .iter()
-                .flatten()
-                .copied()
-                .collect();
+        let Some(bound) = instance.key(db).typed_body(db).instance_bound_evidence() else {
+            return Vec::new();
+        };
+        let mut pending: Vec<EvidenceId<'db>> = bound
+            .entries
+            .entries(db)
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         let mut relied = Vec::new();
         while let Some(proof) = pending.pop() {
             if let Evidence::Impl {
