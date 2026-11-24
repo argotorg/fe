@@ -4048,24 +4048,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 from,
                 to,
-                hint,
+                lossy,
+                note,
             } => {
-                let notes = if let Some(hint) = hint {
-                    // Use the specific hint instead of the generic downcast suggestion.
-                    vec![hint.clone()]
-                } else if from.is_bool(db) || to.is_bool(db) {
-                    vec!["casts involving `bool` are not supported".to_string()]
-                } else {
-                    vec![concat!(
-                        "try using `.downcast()` for checked narrowing/sign changes, ",
-                        "or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`"
-                    )
-                    .to_string()]
-                };
-
                 CompleteDiagnostic {
                     severity: Severity::Error,
-                    message: "cast is not provably lossless".to_string(),
+                    message: if *lossy {
+                        "cast is not provably lossless"
+                    } else {
+                        "invalid cast"
+                    }
+                    .to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
                         message: format!(
@@ -4075,7 +4068,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         ),
                         span: primary.resolve(db),
                     }],
-                    notes,
+                    notes: vec![note.clone()],
                     error_code,
                 }
             }

@@ -1373,74 +1373,95 @@ impl<'db> TyChecker<'db> {
             return ExprProp::new(to, true);
         }
 
-        if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
+        let from_leaf = self.peel_transparent_newtypes(from);
+        let to_leaf = self.peel_transparent_newtypes(to);
+        let literal = if let Partial::Present(Expr::Lit(LitKind::Int(int_id))) =
             inner_expr.data(self.db, self.body())
         {
             let value = int_id.data(self.db);
-            let leaf = self.peel_transparent_newtypes(to);
             if to.is_string(self.db) && self.int_literal_fits_in_ty(value, TyId::u256(self.db)) {
                 let _ = self.table.unify(from, TyId::u256(self.db));
                 return ExprProp::new(to, true);
             }
 
+            // Unify the literal's type variable with the target leaf type, or
+            // with `u256` for a target no literal converts to, so it doesn't
+            // remain unresolved and report a spurious "type annotation needed".
+            let leaf_or_word = if to_leaf.is_integral(self.db) {
+                to_leaf
+            } else {
+                TyId::u256(self.db)
+            };
+            let _ = self.table.unify(from, leaf_or_word);
             if self.int_literal_fits_in_ty(value, to) {
-                // Unify the literal's type variable with the target leaf type
-                // so it doesn't remain unresolved.
-                let _ = self.table.unify(from, leaf);
                 return ExprProp::new(to, true);
             }
-
-            // Unify to prevent a spurious "type annotation needed" error.
-            let _ = self.table.unify(from, leaf);
-            let diag = BodyDiag::InvalidCast {
-                primary: expr.span(self.body()).into(),
-                from,
-                to,
-                hint: Some(format!(
-                    "integer literal `{}` is not representable in `{}`",
-                    value,
-                    leaf.pretty_print(self.db),
-                )),
-            };
-            self.push_diag(diag);
-            return ExprProp::invalid(self.db);
-        }
-
-        // Fail if the source type is unknown.
-        if from.base_ty(self.db).is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(inner_expr.span(self.body()).into());
-            self.push_diag(diag);
-            return ExprProp::invalid(self.db);
-        }
-
-        if self.is_lossless_cast(from, to)
-            || self.is_provably_lossless_cast_expr(inner_expr, from, to)
-        {
-            return ExprProp::new(to, true);
-        }
-
-        // Check if the cast failed due to invisible struct fields.
-        let hint = if has_invisible_newtype_field(self.db, self.env.scope(), from)
-            || has_invisible_newtype_field(self.db, self.env.scope(), to)
-        {
-            Some("cast is not allowed because the struct field is not `pub`".to_string())
-        } else if from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some() {
-            Some("a pointer cannot change its address space".to_string())
-        } else if from.as_ptr(self.db).is_some() || to.as_ptr(self.db).is_some() {
-            Some(
-                "a memory pointer converts only to and from its `usize` address, and a state \
-                 pointer to and from its `u256` slot or offset"
-                    .to_string(),
-            )
+            Some(value)
         } else {
             None
+        };
+
+        if literal.is_none() {
+            // Fail if the source type is unknown.
+            if from.base_ty(self.db).is_ty_var(self.db) {
+                let diag = BodyDiag::TypeMustBeKnown(inner_expr.span(self.body()).into());
+                self.push_diag(diag);
+                return ExprProp::invalid(self.db);
+            }
+
+            if self.is_lossless_cast(from, to)
+                || self.is_provably_lossless_cast_expr(inner_expr, from, to)
+            {
+                return ExprProp::new(to, true);
+            }
+        }
+
+        // Only a conversion between integers can fail for being lossy; any
+        // other failing cast is one `as` has no rule for.
+        let db = self.db;
+        let lossy = from_leaf.is_integral(db) && to_leaf.is_integral(db);
+        let note = if let Some(value) = literal
+            && to_leaf.is_integral(db)
+        {
+            format!(
+                "integer literal `{value}` is not representable in `{}`",
+                to_leaf.pretty_print(db),
+            )
+        } else if has_invisible_newtype_field(db, self.env.scope(), from)
+            || has_invisible_newtype_field(db, self.env.scope(), to)
+        {
+            "cast is not allowed because the struct field is not `pub`".to_string()
+        } else if lossy {
+            "try using `.downcast()` for checked narrowing/sign changes, or \
+             `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`"
+                .to_string()
+        } else if from_leaf.as_ptr(db).is_some() && to_leaf.as_ptr(db).is_some() {
+            "a pointer cannot change its address space".to_string()
+        } else if from_leaf.as_ptr(db).is_some() || to_leaf.as_ptr(db).is_some() {
+            "a memory pointer converts only to and from its `usize` address, and a state \
+             pointer to and from its `u256` slot or offset"
+                .to_string()
+        } else if from_leaf.is_string(db) || to_leaf.is_string(db) {
+            "a `String` converts only to and from `u256`".to_string()
+        } else if from_leaf.is_unit_variant_only_enum(db) && to_leaf.is_integral(db) {
+            format!(
+                "`as` does not convert `{}`: a fieldless enum has no integer conversion; use a \
+                 `match` to map its variants to values",
+                from_leaf.pretty_print(db),
+            )
+        } else if !(from_leaf.is_integral(db) || from_leaf.is_bool(db)) {
+            format!("`as` does not convert `{}`", from_leaf.pretty_print(db))
+        } else {
+            // An integer or `bool` source converts to any integer.
+            format!("`as` does not convert to `{}`", to_leaf.pretty_print(db))
         };
 
         let diag = BodyDiag::InvalidCast {
             primary: expr.span(self.body()).into(),
             from,
             to,
-            hint,
+            lossy,
+            note,
         };
         self.push_diag(diag);
         ExprProp::invalid(self.db)

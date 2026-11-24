@@ -1,0 +1,124 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/cast_unsupported.fe
+---
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:24:5
+   │
+24 │     field as u64
+   │     ^^^^^^^^^^^^ cannot cast `Field` to `u64` with `as`
+   │
+   = `as` does not convert `Field`: a fieldless enum has no integer conversion; use a `match` to map its variants to values
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:28:5
+   │
+28 │     shape as u64
+   │     ^^^^^^^^^^^^ cannot cast `Shape` to `u64` with `as`
+   │
+   = `as` does not convert `Shape`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:32:5
+   │
+32 │     pair as u8
+   │     ^^^^^^^^^^ cannot cast `Pair` to `u8` with `as`
+   │
+   = `as` does not convert `Pair`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:36:5
+   │
+36 │     x as Field
+   │     ^^^^^^^^^^ cannot cast `u8` to `Field` with `as`
+   │
+   = `as` does not convert to `Field`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:40:5
+   │
+40 │     x as bool
+   │     ^^^^^^^^^ cannot cast `u8` to `bool` with `as`
+   │
+   = `as` does not convert to `bool`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:44:5
+   │
+44 │     1 as bool
+   │     ^^^^^^^^^ cannot cast `{integer}` to `bool` with `as`
+   │
+   = `as` does not convert to `bool`
+
+error[8-0055]: cast is not provably lossless
+   ┌─ cast_unsupported.fe:48:5
+   │
+48 │     w as u8
+   │     ^^^^^^^ cannot cast `Wrapped` to `u8` with `as`
+   │
+   = try using `.downcast()` for checked narrowing/sign changes, or `.downcast_truncate()` / `.downcast_saturate()` / `.downcast_unchecked()`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:55:5
+   │
+55 │     p as u8
+   │     ^^^^^^^ cannot cast `PtrWrap` to `u8` with `as`
+   │
+   = a memory pointer converts only to and from its `usize` address, and a state pointer to and from its `u256` slot or offset
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:59:5
+   │
+59 │     p as StorPtr<u8>
+   │     ^^^^^^^^^^^^^^^^ cannot cast `PtrWrap` to `StorPtr<u8>` with `as`
+   │
+   = a pointer cannot change its address space
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:63:5
+   │
+63 │     b as String<16>
+   │     ^^^^^^^^^^^^^^^ cannot cast `bool` to `String<16>` with `as`
+   │
+   = a `String` converts only to and from `u256`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:67:5
+   │
+67 │     x as String<16>
+   │     ^^^^^^^^^^^^^^^ cannot cast `u8` to `String<16>` with `as`
+   │
+   = a `String` converts only to and from `u256`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:71:5
+   │
+71 │     s as u8
+   │     ^^^^^^^ cannot cast `String<16>` to `u8` with `as`
+   │
+   = a `String` converts only to and from `u256`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:75:5
+   │
+75 │     s as String<31>
+   │     ^^^^^^^^^^^^^^^ cannot cast `String<16>` to `String<31>` with `as`
+   │
+   = a `String` converts only to and from `u256`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:79:5
+   │
+79 │     b as Pair
+   │     ^^^^^^^^^ cannot cast `bool` to `Pair` with `as`
+   │
+   = `as` does not convert to `Pair`
+
+error[8-0055]: invalid cast
+   ┌─ cast_unsupported.fe:83:5
+   │
+83 │     field as Pair
+   │     ^^^^^^^^^^^^^ cannot cast `Field` to `Pair` with `as`
+   │
+   = `as` does not convert `Field`

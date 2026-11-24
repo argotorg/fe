@@ -27,7 +27,7 @@ error[8-0055]: cast is not provably lossless
    │
    = integer literal `256` is not representable in `u8`
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ cast_invalid.fe:25:5
    │
 25 │     x as wrapper::PrivateFieldWrapper
@@ -35,7 +35,7 @@ error[8-0055]: cast is not provably lossless
    │
    = cast is not allowed because the struct field is not `pub`
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ cast_invalid.fe:29:5
    │
 29 │     x as u32

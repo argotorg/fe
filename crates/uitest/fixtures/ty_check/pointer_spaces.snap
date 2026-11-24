@@ -26,7 +26,7 @@ error[8-0018]: left-hand side of assignment is immutable
 28 │         *c = 1
    │         ^^ immutable assignment
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ pointer_spaces.fe:12:13
    │
 12 │     let _ = p as StorPtr<u256>
@@ -34,7 +34,7 @@ error[8-0055]: cast is not provably lossless
    │
    = a pointer cannot change its address space
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ pointer_spaces.fe:13:13
    │
 13 │     let _ = s as *u256
@@ -42,7 +42,7 @@ error[8-0055]: cast is not provably lossless
    │
    = a pointer cannot change its address space
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ pointer_spaces.fe:14:13
    │
 14 │     let _ = t as StorPtr<u256>
@@ -50,7 +50,7 @@ error[8-0055]: cast is not provably lossless
    │
    = a pointer cannot change its address space
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ pointer_spaces.fe:16:13
    │
 16 │     let _ = s as u8
