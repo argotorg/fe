@@ -3663,3 +3663,65 @@ fn f() -> u256 {{
         assert!(found.contains("2-0003"), "{operand}\n{found}");
     }
 }
+
+#[test]
+fn open_provider_does_not_claim_traits_with_outputs() {
+    let evaluated = |source: &str| {
+        let (db, file) = input(source);
+        let db = prepare_file(&db, file)
+            .expect("the program is not refused")
+            .unwrap_or(db);
+        assert_eq!(output_diagnostics(&db), "");
+        db
+    };
+
+    // An associated constant is found through the ordinary implementation,
+    // not offered by the open provider.
+    let constant = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait HasX { const X: u256 }
+impl HasX for u256 { const X: u256 = 5 }
+trait Other { const X: u256 }
+
+struct OpenP {}
+impl<P: * -> Constraint> Derive<P> for OpenP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn nothing(self) {} }
+    }
+}
+const fn f() -> u256 {
+    with (OpenP) { u256::X }
+}
+"#;
+    assert_eq!(eval_const_fn_u256(&evaluated(constant), "f"), "5");
+
+    // A bound with an associated constant uses its ordinary implementation,
+    // while a trait of the package without outputs is still generated.
+    let bound = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait HasX { const X: u256 }
+impl HasX for u256 { const X: u256 = 5 }
+trait Tr { const fn op(self) -> u256 }
+struct R {}
+struct OpenP {}
+impl<P: * -> Constraint> Derive<P> for OpenP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn op(self) -> u256 { 1 } }
+    }
+}
+const fn need_x<T: HasX>() -> u256 { T::X }
+const fn f() -> u256 {
+    with (OpenP) { need_x<u256>() }
+}
+const fn g() -> u256 {
+    with (OpenP) { R {}.op() }
+}
+"#;
+    let db = evaluated(bound);
+    assert_eq!(eval_const_fn_u256(&db, "f"), "5");
+    assert_eq!(eval_const_fn_u256(&db, "g"), "1");
+}

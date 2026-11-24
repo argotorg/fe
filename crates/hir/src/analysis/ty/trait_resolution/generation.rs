@@ -42,11 +42,23 @@ pub struct ProviderHints<'db> {
     pub(crate) open: bool,
 }
 
+/// Whether a scoped derive can implement `trait_`: an implementation it
+/// generates gives a proof and methods, never associated types, constants or
+/// rows.
+pub(crate) fn scoped_derivable<'db>(db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> bool {
+    !trait_.has_assoc_outputs(db) && trait_.assoc_consts(db).next().is_none()
+}
+
 impl<'db> ProviderOpening<'db> {
+    /// An explicitly registered trait is offered whatever it declares, so that
+    /// a goal the provider cannot serve is refused. An open provider offers
+    /// only the traits of its own package that a scoped derive can implement.
     pub(crate) fn may_offer(self, db: &'db dyn HirAnalysisDb, trait_: Trait<'db>) -> bool {
         let hints = self.hints(db);
         hints.traits.contains(&trait_)
-            || (hints.open && trait_.ingot(db) == self.scope(db).ingot(db))
+            || (hints.open
+                && trait_.ingot(db) == self.scope(db).ingot(db)
+                && scoped_derivable(db, trait_))
     }
 
     pub(crate) fn traits_for_lookup(

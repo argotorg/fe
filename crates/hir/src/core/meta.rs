@@ -1961,8 +1961,7 @@ pub fn freeze_generation_request<'db>(
         return Err("scoped derive request does not match its advertised trait".into());
     }
     if !goal.assoc_type_bindings(db).is_empty()
-        || goal.def(db).has_assoc_outputs(db)
-        || !goal.def(db).consts(db).is_empty()
+        || !crate::analysis::ty::trait_resolution::generation::scoped_derivable(db, goal.def(db))
     {
         return Err("scoped derive requires a goal without associated outputs".into());
     }
