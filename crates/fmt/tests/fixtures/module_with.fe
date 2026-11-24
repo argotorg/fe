@@ -1,0 +1,5 @@
+with(A,m::B ,C<u8>,  <S as T>)
+mod inner {
+    with ( D )
+    fn f() {}
+}

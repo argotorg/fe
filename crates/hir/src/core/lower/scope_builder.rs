@@ -352,6 +352,11 @@ impl<'db> ScopeGraphBuilder<'db> {
                 EdgeKind::anon()
             }
 
+            With(_) => {
+                self.graph.add_lex_edge(item_node, parent_node);
+                EdgeKind::anon()
+            }
+
             Use(use_) => {
                 self.graph.unresolved_uses.insert(use_);
 

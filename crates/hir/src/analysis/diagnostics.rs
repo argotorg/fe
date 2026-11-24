@@ -6279,6 +6279,13 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 format!("`{}` requires type normalization through evidence, which is not supported yet", goal.pretty_print(db, true)),
                 primary.resolve(db), error_code,
             ),
+            BodyDiag::ModuleWithUnavailable { primary } => primary_diag(
+                Severity::Error,
+                "module-level `with` is not available yet",
+                "this declaration would not apply to the bodies of the module",
+                primary.resolve(db),
+                error_code,
+            ),
             BodyDiag::QuotedOpenNameUnbound { primary, name } => primary_diag(
                 Severity::Error,
                 format!("quoted open name `{name}` has no enclosing binder"),

@@ -376,6 +376,30 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
     }
 }
 
+/// Refuses a module's `with` declaration until its implementations are applied
+/// to the bodies of the module. The declaration parses and lowers, but a
+/// program that carries one must not compile as if its choices were absent.
+pub struct ModuleWithAnalysisPass {}
+
+impl ModuleAnalysisPass for ModuleWithAnalysisPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        top_mod
+            .all_items(db)
+            .iter()
+            .filter_map(|item| match item {
+                ItemKind::With(with) => Some(Box::new(BodyDiag::ModuleWithUnavailable {
+                    primary: with.span().into(),
+                }) as _),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Checks for name conflicts of item definitions.
 pub struct DefConflictAnalysisPass {}
 
@@ -430,6 +454,7 @@ fn walk<'db>(
 
                 ItemKind::TopMod(_)
                 | ItemKind::StaticAssert(_)
+                | ItemKind::With(_)
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
                 | ItemKind::Body(_) => continue,

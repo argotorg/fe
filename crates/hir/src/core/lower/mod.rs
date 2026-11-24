@@ -445,6 +445,7 @@ pub(super) struct FileLowerCtxt<'db> {
     next_impl_idx: u32,
     next_impl_trait_idx: u32,
     next_static_assert_idx: u32,
+    next_with_idx: u32,
     diagnostics: Vec<LowerDiagnostic>,
     next_quote_frame_id: usize,
     pub(super) quote_frames: Vec<generated::ActiveQuoteFrame<'db>>,
@@ -611,6 +612,7 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_idx: 0,
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
+            next_with_idx: 0,
             diagnostics: Vec::new(),
             next_quote_frame_id: 0,
             quote_frames: Vec::new(),
@@ -624,6 +626,7 @@ impl<'db> FileLowerCtxt<'db> {
             next_impl_idx: 0,
             next_impl_trait_idx: 0,
             next_static_assert_idx: 0,
+            next_with_idx: 0,
             diagnostics: Vec::new(),
             next_quote_frame_id: 0,
             quote_frames: Vec::new(),
@@ -1211,6 +1214,12 @@ impl<'db> FileLowerCtxt<'db> {
     pub(super) fn next_static_assert_idx(&mut self) -> u32 {
         let idx = self.next_static_assert_idx;
         self.next_static_assert_idx += 1;
+        idx
+    }
+
+    pub(super) fn next_with_idx(&mut self) -> u32 {
+        let idx = self.next_with_idx;
+        self.next_with_idx += 1;
         idx
     }
 

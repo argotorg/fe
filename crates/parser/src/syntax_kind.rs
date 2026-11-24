@@ -475,6 +475,11 @@ pub enum SyntaxKind {
     Const,
     /// `static_assert(expr)`
     StaticAssert,
+    /// `with (A, m::B)`: a module's declaration of the implementations its
+    /// bodies are checked under
+    WithItem,
+    /// `(A, m::B)` of a module's `with` declaration
+    WithItemList,
     /// `use foo::{Foo as Foo1, bar::Baz}`
     Use,
     /// `msg Erc20Msg { ... }`
@@ -868,6 +873,8 @@ impl SyntaxKind {
             SyntaxKind::ImplTrait => "`impl` trait block",
             SyntaxKind::Const => "const definition",
             SyntaxKind::StaticAssert => "static assertion",
+            SyntaxKind::WithItem => "`with` declaration",
+            SyntaxKind::WithItemList => "`with` declaration list",
             SyntaxKind::Use => "`use` statement",
             SyntaxKind::UseTree => "`use` tree",
             SyntaxKind::UseTreeList => "`use` tree list",

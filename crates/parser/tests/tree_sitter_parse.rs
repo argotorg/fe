@@ -994,3 +994,52 @@ fn tree_sitter_parses_an_associated_shape_in_a_quotation() {
     let source = "const fn members() -> u256 {\n    let code = quote {\n        shape Step = (own usize, D::Step)\n        fn at(self) -> u256 { 0 }\n    }\n    0\n}\n";
     assert_eq!(parse_errors(&mut parser, source), Vec::<String>::new());
 }
+
+fn node_kinds(parser: &mut Parser, source: &str) -> Vec<String> {
+    let tree = parser.parse(source, None).expect("tree-sitter parses");
+    let mut kinds = Vec::new();
+    let mut stack = vec![tree.root_node()];
+    while let Some(node) = stack.pop() {
+        kinds.push(node.kind().to_string());
+        let mut cursor = node.walk();
+        stack.extend(node.children(&mut cursor));
+    }
+    kinds
+}
+
+#[test]
+fn tree_sitter_parse_module_with_declarations() {
+    let mut parser = new_parser();
+    for source in [
+        "with (A, m::B, C<u8>, <S as T>)\nfn f() {}\n",
+        "mod inner {\n    with (A)\n    fn f() {}\n}\n",
+        "with (A)",
+    ] {
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{source:?}:\n{}", errors.join("\n"));
+        assert!(
+            node_kinds(&mut parser, source)
+                .iter()
+                .any(|kind| kind == "module_with"),
+            "{source:?} has no module_with node"
+        );
+    }
+    // A list followed by a block is a `with` expression, in a body or at the
+    // top level, and never a declaration.
+    for source in [
+        "fn f() {\n    with (A) { g() }\n}\n",
+        "with (Storage = st) { g() }\n",
+    ] {
+        let errors = parse_errors(&mut parser, source);
+        assert!(errors.is_empty(), "{source:?}:\n{}", errors.join("\n"));
+        let kinds = node_kinds(&mut parser, source);
+        assert!(
+            kinds.iter().any(|kind| kind == "with_expression"),
+            "{source:?}"
+        );
+        assert!(
+            !kinds.iter().any(|kind| kind == "module_with"),
+            "{source:?}"
+        );
+    }
+}

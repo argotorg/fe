@@ -580,6 +580,11 @@ pub enum MarkerPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
+    /// A module-level `with` declaration, which names implementations that are
+    /// not yet applied to the bodies of the module.
+    ModuleWithUnavailable {
+        primary: DynLazySpan<'db>,
+    },
     CompileTimePhase {
         primary: DynLazySpan<'db>,
         message: String,
@@ -1793,6 +1798,7 @@ impl<'db> BodyDiag<'db> {
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
             Self::ChosenTypeRead { .. } => 138,
             Self::QuotedOpenNameUnbound { .. } => 140,
+            Self::ModuleWithUnavailable { .. } => 163,
         }
     }
 }

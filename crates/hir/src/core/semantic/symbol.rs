@@ -97,6 +97,7 @@ impl<'db> From<ItemKind<'db>> for SymbolKind {
             ItemKind::Const(_) => SymbolKind::Const,
             ItemKind::Use(_) => SymbolKind::Use,
             ItemKind::StaticAssert(_) => SymbolKind::Const,
+            ItemKind::With(_) => SymbolKind::Use,
             ItemKind::Body(_) => SymbolKind::Func, // Bodies are function-like
         }
     }
@@ -627,7 +628,9 @@ pub fn item_kind_to_url_suffix(db: &dyn SpannedHirDb, item: ItemKind) -> Option<
         ItemKind::Const(_) => Some("const"),
         ItemKind::Impl(_) => Some("impl"),
         ItemKind::ImplTrait(_) => Some("impl"),
-        ItemKind::StaticAssert(_) | ItemKind::Use(_) | ItemKind::Body(_) => None,
+        ItemKind::StaticAssert(_) | ItemKind::With(_) | ItemKind::Use(_) | ItemKind::Body(_) => {
+            None
+        }
     }
 }
 
