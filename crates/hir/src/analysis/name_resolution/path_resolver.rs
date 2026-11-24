@@ -630,7 +630,9 @@ pub(crate) enum ImplNameRes<'db> {
         name: IdentId<'db>,
         definition: Option<DynLazySpan<'db>>,
     },
-    Ambiguous,
+    /// More than one implementation is named so, each with the span of its
+    /// name and whether it came from an implicit import.
+    Ambiguous(Vec<(DynLazySpan<'db>, bool)>),
     NotFound,
 }
 
@@ -674,8 +676,11 @@ pub(crate) fn resolve_impl_name<'db>(
                     }
                     _ => ImplNameRes::NotFound,
                 },
-                Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
-                    ImplNameRes::Ambiguous
+                Err(NameResolutionError::Ambiguous(candidates)) => ImplNameRes::Ambiguous(
+                    super::diagnostics::ambiguity_candidates(db, &candidates),
+                ),
+                Err(NameResolutionError::Conflict(_, spans)) => {
+                    ImplNameRes::Ambiguous(spans.iter().map(|span| (span.clone(), false)).collect())
                 }
                 Err(NameResolutionError::Invisible(definition)) => ImplNameRes::NotVisible {
                     name,

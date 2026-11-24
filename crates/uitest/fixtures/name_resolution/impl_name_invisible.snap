@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/impl_name_invisible.fe
+---
+error[2-0003]: `Hidden` is not visible
+  ┌─ impl_name_invisible.fe:9:14
+  │
+4 │     impl P for Foo as Hidden {}
+  │                       ------ `Hidden` is defined here
+  ·
+9 │     with (m::Hidden) {}
+  │              ^^^^^^ `Hidden` is not visible

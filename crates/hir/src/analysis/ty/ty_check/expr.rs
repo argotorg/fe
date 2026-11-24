@@ -2085,7 +2085,7 @@ impl<'db> TyChecker<'db> {
                     }
                     ImplNameRes::NotVisible { name, definition } => {
                         self.push_diag(PathResDiag::Invisible(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             name,
                             definition,
                         ));
@@ -2094,16 +2094,16 @@ impl<'db> TyChecker<'db> {
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                         continue;
                     }
-                    ImplNameRes::Ambiguous => {
+                    ImplNameRes::Ambiguous(candidates) => {
                         ambiguous_opening = true;
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             path.ident(self.db)
                                 .to_opt()
                                 .expect("implementation path identifier"),
-                            Vec::new(),
+                            candidates,
                         ));
                         self.env.named_impl_operands.insert(binding.value);
                         self.env
@@ -2472,6 +2472,18 @@ impl<'db> TyChecker<'db> {
             }
             _ => true,
         }
+    }
+
+    /// The span of the last segment of the `with` operand `operand`, written
+    /// as the path `path`: the name a diagnostic about the operand points at.
+    fn with_operand_name_span(&self, path: PathId<'db>, operand: ExprId) -> DynLazySpan<'db> {
+        operand
+            .span(self.body())
+            .into_path_expr()
+            .path()
+            .segment(path.segment_index(self.db))
+            .ident()
+            .into()
     }
 
     /// Whether the `with` operand `operand`, written as `path`, names a value

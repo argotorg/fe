@@ -1,0 +1,10 @@
+mod m {
+    pub trait P {}
+    pub struct Foo {}
+    impl P for Foo as Hidden {}
+    pub impl P for Foo as Shown {}
+}
+
+fn go() {
+    with (m::Hidden) {}
+}
