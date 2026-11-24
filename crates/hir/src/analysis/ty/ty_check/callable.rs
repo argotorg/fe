@@ -436,6 +436,7 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 /// proofs in `conditions` are those of the declared bounds that are not on the
 /// provider of an effect, in declaration order: a function item's callable
 /// dictionary. `None` when the call's arguments cannot be substituted.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn supply_direct_effect_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
