@@ -2530,3 +2530,78 @@ const fn ordinary_b() -> u256 {
         ],
     );
 }
+
+#[test]
+fn chosen_header_is_not_a_fact() {
+    for (name, declarations, body, ann) in [
+        (
+            "header",
+            "trait Missing {}\ntrait Sub {}\nimpl<T: Missing> Sub for T as Broken {}\nstruct NeedsSub<T: Sub> {}",
+            "Broken<X>",
+            "NeedsSub<X>",
+        ),
+        (
+            "supertrait",
+            "trait Missing {}\ntrait Super {}\ntrait Sub: Super {}\nimpl<T: Missing + Super> Sub for T as Broken {}\nstruct NeedsSuper<T: Super> {}",
+            "Broken<X>",
+            "NeedsSuper<X>",
+        ),
+    ] {
+        let without = format!("{declarations}\nfn f<X>() {{ let _: {ann} }}\n");
+        let with = format!("{declarations}\nfn f<X>() {{ with ({body}) {{ let _: {ann} }} }}\n");
+        let ordinary = diagnostics(&without);
+        assert!(
+            ordinary.contains(&"6-0003".to_string()),
+            "{name}: {ordinary:?}"
+        );
+        assert_eq!(diagnostics(&with), ordinary, "{name}");
+    }
+    // Where the conditions hold, the annotation is accepted.
+    let source = r#"
+trait Missing {}
+trait Super {}
+trait Sub: Super {}
+impl<T: Missing + Super> Sub for T as Broken {}
+struct NeedsSuper<T: Super> {}
+fn f<X: Missing + Super>() { with (Broken<X>) { let _: NeedsSuper<X> } }
+"#;
+    assert_eq!(diagnostics(source), Vec::<String>::new());
+}
+
+#[test]
+fn unapplied_generic_choice_finds_method() {
+    values(
+        r#"
+struct Box<T> { v: T }
+trait Pick { const fn pick(self) -> u256 }
+struct Item {}
+impl<T> Pick for Box<T> as Alt {
+    const fn pick(self) -> u256 { 7 }
+}
+const fn run() -> u256 {
+    let b = Box<Item> { v: Item {} }
+    with (Alt) { b.pick() }
+}
+const fn run_path() -> u256 {
+    let b = Box<Item> { v: Item {} }
+    with (Alt) { Pick::pick(b) }
+}
+"#,
+        &[("run", 7), ("run_path", 7)],
+    );
+    values(
+        r#"
+struct Box<T> { v: T }
+trait Pick { const fn pick(self) -> u256 }
+struct Item {}
+impl Pick for Box<Item> as Alt {
+    const fn pick(self) -> u256 { 7 }
+}
+const fn run() -> u256 {
+    let b = Box<Item> { v: Item {} }
+    with (Alt) { b.pick() }
+}
+"#,
+        &[("run", 7)],
+    );
+}

@@ -1309,7 +1309,8 @@ fn expression_const_bodies<'db>(
         };
         let definition = match expr.data(db, body).borrowed().to_opt()? {
             Expr::Path(Partial::Present(path)) => {
-                let lowering_cx = LoweringContext::deferred();
+                let lowering_cx =
+                    LoweringContext::deferred().with_choices(typed.expr_choices(expr));
                 match resolve_path_with_minter(
                     db,
                     *path,
@@ -1341,6 +1342,7 @@ fn expression_const_bodies<'db>(
                         *name,
                         body.scope(),
                         typed.assumptions(),
+                        typed.expr_choices(expr),
                         None,
                     )
                     .ok()?,

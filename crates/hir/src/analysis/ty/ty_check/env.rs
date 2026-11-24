@@ -887,18 +887,11 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    /// The facts in scope: the bounds the owner declares. An implementation
+    /// opened by `with` is a candidate for goals, in `solve_cx`, and asserts
+    /// nothing here.
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        let Some(choices) = self.choices else {
-            return self.assumptions;
-        };
-        let mut assumptions = self.assumptions.list(self.db).clone();
-        assumptions.extend(
-            choices
-                .items(self.db)
-                .iter()
-                .map(|choice| choice.implementation().trait_inst(self.db)),
-        );
-        PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db)
+        self.assumptions
     }
 
     pub(super) fn solve_cx(&self) -> TraitSolveCx<'db> {

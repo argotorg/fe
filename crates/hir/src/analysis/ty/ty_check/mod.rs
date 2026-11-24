@@ -1800,7 +1800,9 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 idx,
                 &key,
-                TraitSolveCx::new(self.db, func.scope()).with_assumptions(self.env.assumptions()),
+                TraitSolveCx::new(self.db, func.scope())
+                    .with_assumptions(self.env.assumptions())
+                    .with_choices(self.env.choices),
             ) {
                 self.push_diag(diag);
             } else if let Some(root_ty) = root_ty {

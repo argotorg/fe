@@ -1589,6 +1589,7 @@ fn resolve_segment<'db>(
                     ident,
                     parent_scope,
                     assumptions,
+                    lowering_cx.choices(),
                     None,
                 ) {
                     Ok(cand) => {

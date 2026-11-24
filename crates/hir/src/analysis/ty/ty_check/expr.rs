@@ -1236,8 +1236,7 @@ impl<'db> TyChecker<'db> {
         let mut args = vec![ty];
         args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
         let goal = TraitInstId::new_simple(self.db, trait_def, args);
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let implemented = !matches!(
             is_goal_satisfiable(self.db, solve_cx, goal),
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -2587,6 +2586,7 @@ impl<'db> TyChecker<'db> {
             &canonical,
             self.env.scope(),
             self.env.assumptions(),
+            self.env.choices,
         ) {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
@@ -2670,6 +2670,7 @@ impl<'db> TyChecker<'db> {
                     &Canonicalized::new(self.db, field_ty),
                     self.env.scope(),
                     self.env.assumptions(),
+                    self.env.choices,
                 ),
                 Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
             )
@@ -3250,12 +3251,7 @@ impl<'db> TyChecker<'db> {
                 // A row of an instance no implementation satisfies is the
                 // unsatisfied bound's error, reported once.
                 None if matches!(
-                    is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        row.inst,
-                    ),
+                    is_goal_satisfiable(self.db, self.env.solve_cx(), row.inst),
                     GoalSatisfiability::UnSat(_)
                 ) => {}
                 None => self.push_diag(match self.env.late_closure() {
@@ -4067,6 +4063,7 @@ impl<'db> TyChecker<'db> {
 
         let receiver_tys = self.receiver_candidates(receiver_prop.ty);
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
@@ -4076,6 +4073,7 @@ impl<'db> TyChecker<'db> {
             method_name,
             self.env.scope(),
             method_assumptions,
+            method_choices,
             None,
         );
         if matches!(
@@ -4090,6 +4088,7 @@ impl<'db> TyChecker<'db> {
                     method_name,
                     self.env.scope(),
                     method_assumptions,
+                    method_choices,
                     None,
                 );
 
@@ -5457,6 +5456,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
         let mut checked_rhs_ty = None;
 
         let (method, inst) = if let Some(rhs_expr) = rhs_expr {
@@ -5485,6 +5485,7 @@ impl<'db> TyChecker<'db> {
                     op.trait_method(self.db),
                     self.env.scope(),
                     method_assumptions,
+                    method_choices,
                     trait_def,
                 ) {
                     Ok(methods) => candidates.extend(
@@ -5627,6 +5628,7 @@ impl<'db> TyChecker<'db> {
                 op.trait_method(self.db),
                 self.env.scope(),
                 method_assumptions,
+                method_choices,
                 Some(trait_def),
             );
             if matches!(
@@ -5641,6 +5643,7 @@ impl<'db> TyChecker<'db> {
                         op.trait_method(self.db),
                         self.env.scope(),
                         method_assumptions,
+                        method_choices,
                         Some(trait_def),
                     );
                     if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
