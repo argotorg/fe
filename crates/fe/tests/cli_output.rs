@@ -7695,7 +7695,10 @@ impl DeriveInherent for MakeConst {
 pub struct Target { a: u256 }
 ";
     let header = "use super::{Target, MakeConst}\nimpl Target with (MakeConst)\n";
-    let control = lib.replace("pub const K: usize = with (P2) { 7 }", "pub const K: usize = 7");
+    let control = lib.replace(
+        "pub const K: usize = with (P2) { 7 }",
+        "pub const K: usize = 7",
+    );
     let temp = tempdir().unwrap();
     for (name, lib, expected_exit) in [("opens", lib, 1), ("control", control.as_str(), 0)] {
         let root = temp.path().join(name);

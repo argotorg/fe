@@ -54,8 +54,7 @@ use crate::{
             },
             trait_resolution::{
                 COMPONENT_DEPTH_LIMIT, GoalSatisfiability, PredicateListId, TraitSolveCx,
-                generation::GenerationRequest,
-                is_goal_satisfiable,
+                generation::GenerationRequest, is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,

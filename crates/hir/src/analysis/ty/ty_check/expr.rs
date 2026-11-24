@@ -2483,7 +2483,9 @@ impl<'db> TyChecker<'db> {
                         }
                         // A derive provider type of the same name is a third
                         // meaning of the operand, and none is chosen silently.
-                        if let Some((_, provider_span)) = self.with_operand_provider_type(path, binding.value) {
+                        if let Some((_, provider_span)) =
+                            self.with_operand_provider_type(path, binding.value)
+                        {
                             ambiguous_opening = true;
                             if implementation
                                 .scope()
@@ -2816,7 +2818,9 @@ impl<'db> TyChecker<'db> {
                         .is_some();
                 if !shadowed {
                     if let Some(value_span) = self.with_operand_value(*path, binding.value) {
-                        if let Some((_, provider_span)) = self.with_operand_provider_type(*path, binding.value) {
+                        if let Some((_, provider_span)) =
+                            self.with_operand_provider_type(*path, binding.value)
+                        {
                             ambiguous_opening = true;
                             let name = path
                                 .ident(self.db)

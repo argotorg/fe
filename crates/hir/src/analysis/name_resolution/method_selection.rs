@@ -394,8 +394,8 @@ pub(crate) fn select_trait_method_candidates<'db>(
     // operator names a trait of another package, which a scoped derive does
     // not serve, and the use is refused with the rule (see
     // `ops_trait_not_implemented`).
-    let choices =
-        choices.and_then(|choices| choices.retain(db, |_, entry| matches!(entry, ChoiceEntry::Impl(_))));
+    let choices = choices
+        .and_then(|choices| choices.retain(db, |_, entry| matches!(entry, ChoiceEntry::Impl(_))));
     // The caller names the trait and decides which tier to ask.
     let candidates = assemble_method_candidates(
         db,

@@ -4369,8 +4369,12 @@ impl<G: * -> Constraint, P: Derive<G>, Q: Derive<G>> Derive<G> for Via2<P, Q> {
 /// refused as it is with closed restrictors.
 #[test]
 fn forwarding_provider_with_an_open_restrictor_keeps_its_closed_offer() {
-    for openings in ["Via2<Small, Generic>, Direct", "Direct, Via2<Small, Generic>"] {
-        let source = format!("{FORWARDING_HEAD}\nconst fn idle() -> u256 {{ with ({openings}) {{ 0 }} }}\n");
+    for openings in [
+        "Via2<Small, Generic>, Direct",
+        "Direct, Via2<Small, Generic>",
+    ] {
+        let source =
+            format!("{FORWARDING_HEAD}\nconst fn idle() -> u256 {{ with ({openings}) {{ 0 }} }}\n");
         let failure = prepare_err(&source);
         assert!(
             failure.contains("two derive providers for the same trait application"),
