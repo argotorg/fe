@@ -4322,3 +4322,42 @@ fn empty_takes_only_the_kinds_that_seed_a_fold() {
         assert!(diagnostics.contains("Seed"), "{kind}: {diagnostics}");
     }
 }
+
+/// The diagnostics of a source file after generation, empty when it is valid.
+fn generated_diagnostics(source: &str) -> String {
+    let (db, file) = input(source);
+    match prepare_file(&db, file) {
+        Err(error) => error.cause,
+        Ok(prepared) => {
+            let url = file.url(&db).expect("indexed input file");
+            let view = prepared.as_ref().unwrap_or(&db);
+            let file = view
+                .workspace()
+                .get(view, &url)
+                .expect("file in output view");
+            view.run_on_top_mod(view.top_mod(file)).format_diags(view)
+        }
+    }
+}
+
+#[test]
+fn a_constant_declared_through_an_associated_type_may_be_a_compile_time_carrier() {
+    // `const C: <S as T>::Out = quote { 1 }` with `Out = Code<Expr>` is as
+    // valid as `const C: Code<Expr> = quote { 1 }`.
+    let source = "use core::meta::{Code, Expr}
+
+trait T {
+    type Out
+}
+struct S {}
+impl T for S {
+    type Out = Code<Expr>
+}
+
+const C: <S as T>::Out = quote { 1 }
+";
+    let (db, file) = input(source);
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+

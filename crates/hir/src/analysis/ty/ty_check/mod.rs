@@ -1525,11 +1525,19 @@ fn const_body_ctfe_diags_with_context<'db>(
                     EvidenceList::none(db),
                 );
                 let semantic = SemanticInstance::new(db, key);
+                // A declared type that names a carrier through an associated
+                // type is the carrier, as its direct spelling is.
+                let declared = normalize_ty(
+                    db,
+                    expected,
+                    body.scope(),
+                    const_body_assumptions(db, body.scope()),
+                );
                 let has_meta_carrier =
-                    crate::core::meta::ty_contains_meta_carrier(db, expected).is_some();
+                    crate::core::meta::ty_contains_meta_carrier(db, declared).is_some();
                 let checked_metadata = has_meta_carrier
                     && crate::core::meta::issued_metadata_leaves(db, value)
-                    && crate::analysis::semantic::sem_const_ty(db, value) == expected
+                    && crate::analysis::semantic::sem_const_ty(db, value) == declared
                     && crate::analysis::semantic::consts::verify_sem_const_shape(db, value).is_ok();
                 // A completely verified compile-time token is a known constant;
                 // it is intentionally never reified into a runtime seal value.
