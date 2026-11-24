@@ -5028,3 +5028,40 @@ fn a_field_type_that_is_a_parameter_takes_the_header_argument() {
         "an integer is not a `Marker`, so the call is refused"
     );
 }
+
+/// Every form of reflected type spends the same node limit of a quotation. A
+/// field type of 16384 unshared nodes (14 nested aliases of a pair) is refused
+/// whether it is spliced as `type_ref<..>()` or as `field_type(field(..))`.
+#[test]
+fn a_spliced_field_type_over_the_node_limit_is_refused_like_a_type_reference() {
+    let aliases: String = (1..=14)
+        .map(|n| format!("type A{n} = (A{}, A{})\n", n - 1, n - 1))
+        .collect();
+    for splice in ["type_ref<A14>()", "field_type(field(record, 0))"] {
+        let source = format!(
+            "use core::derive::DeriveInherent
+use core::meta::{{Record, Code, Item, field, field_type, type_ref}}
+type A0 = u8
+{aliases}struct S {{ f: A14 }}
+struct P {{}}
+impl DeriveInherent for P {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        let t = {splice}
+        quote {{ pub fn mk(_ x: ${{t}}) -> usize {{ 1 }} }}
+    }}
+}}
+impl S with (P)
+"
+        );
+        let (db, file) = input(&source);
+        let error = prepare_file(&db, file)
+            .err()
+            .unwrap_or_else(|| panic!("`{splice}` over the limit must be refused"));
+        assert!(
+            error
+                .to_string()
+                .contains("reflected type node limit of 4096"),
+            "`{splice}`: {error}"
+        );
+    }
+}

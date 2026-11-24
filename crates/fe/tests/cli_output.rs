@@ -5432,6 +5432,52 @@ fn broken( {\n",
 }
 
 #[test]
+fn test_cli_check_reports_parse_and_type_errors_beside_a_short_form() {
+    // A file with `#[abi]`, `#[event]` or `msg` and a parse error is checked
+    // like a file without them, as for a derive header: the parse error and
+    // the type error are both reported, and generation is skipped for the
+    // file, so no raw generation line and no report of an unprepared header
+    // appears.
+    let tail = "fn bad() -> u256 { true }\nfn broken( {\n";
+    let sources = [
+        (
+            "abi",
+            format!("#[abi]\npub struct Good {{ pub a: u256 }}\n{tail}"),
+        ),
+        (
+            "event",
+            format!("#[event]\nstruct Ev {{ #[indexed] a: u256, b: bool }}\n{tail}"),
+        ),
+        (
+            "msg",
+            format!("msg M {{\n    #[selector = 1]\n    Run {{ a: u256 }} -> u256,\n}}\n{tail}"),
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, text) in sources {
+        let source = temp.path().join(format!("{name}_with_parse_error.fe"));
+        fs::write(&source, text).expect("write source");
+        let source = source.to_str().expect("UTF-8 source path");
+        for args in [
+            vec!["check", source],
+            vec!["check", "--recovery-mode", source],
+        ] {
+            let (output, exit_code) = run_fe_main(&args);
+            assert_ne!(exit_code, 0, "{name} {args:?}: expected errors:\n{output}");
+            assert!(
+                output.contains("error[1-0001]") && output.contains("error[8-0000]"),
+                "{name} {args:?}: expected the parse error and the type error:\n{output}"
+            );
+            assert!(
+                !output.contains("authored parse errors")
+                    && !output.contains("derive header was not prepared"),
+                "{name} {args:?}: generation reported a cascade:\n{output}"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_cli_lsif_indexes_the_members_a_header_generates() {
     // `S::arity` is written in a quotation and published into `S` by the
     // header. The index covers it and the call that names it, as `fe check`
