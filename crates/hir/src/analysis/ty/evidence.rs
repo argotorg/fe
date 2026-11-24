@@ -387,6 +387,11 @@ pub struct DeferredProofBounds<'db> {
     source_choices: Option<ChosenImpls<'db>>,
     source_slots: PredicateListId<'db>,
     applied_slots: PredicateListId<'db>,
+    /// The goals of the components that follow the slots in `entries`, in
+    /// entry order, as the slots stood at capture. The slots can be rewritten
+    /// afterwards (`source_conditions`), which the table of the rewritten list
+    /// cannot follow, so the entries are addressed by these goals.
+    component_goals: PredicateListId<'db>,
     entries: EvidenceList<'db>,
 }
 
@@ -405,6 +410,7 @@ impl<'db> DeferredProofBounds<'db> {
     ) -> Self {
         let slots = cx.assumptions().extend_all_bounds(db);
         let schema = BoundSchemaId::context(db, slots);
+        let table = concrete_components(db, slots);
         // The components of the slots' dictionaries follow the slots, in the
         // table's order, so a goal a component answers reads the entry the
         // projection of its path gives, after the instance binds them.
@@ -412,7 +418,7 @@ impl<'db> DeferredProofBounds<'db> {
             db,
             (0..slots.list(db).len())
                 .map(|index| Some(schema.assumption(db, index)))
-                .chain(concrete_components(db, slots).components().map(|member| {
+                .chain(table.components().map(|member| {
                     schema.slot(db, member.root as usize).map(|slot| {
                         EvidenceId::new(
                             db,
@@ -430,6 +436,13 @@ impl<'db> DeferredProofBounds<'db> {
             source_choices: cx.choices(),
             source_slots: slots,
             applied_slots: slots,
+            component_goals: PredicateListId::new(
+                db,
+                table
+                    .components()
+                    .map(|member| member.goal)
+                    .collect::<Vec<_>>(),
+            ),
             entries,
         }
     }
@@ -451,9 +464,7 @@ impl<'db> DeferredProofBounds<'db> {
             return Ok(SourceProof::Choice(index, application));
         }
         // A closed goal that a component of the captured dictionaries answers.
-        if is_closed_goal(db, self.source_goal)
-            && let Some(proof) = self.component_proof(db, cx)
-        {
+        if let Some(proof) = self.component_proof(db, cx) {
             return Ok(SourceProof::Bound(proof));
         }
         let exact = self.source_slots.list(db).contains(&self.source_goal);
@@ -486,13 +497,15 @@ impl<'db> DeferredProofBounds<'db> {
         db: &'db dyn HirAnalysisDb,
         cx: TraitSolveCx<'db>,
     ) -> Option<EvidenceId<'db>> {
-        let slots = self.source_slots;
         let scope = cx.normalization_scope_for_trait_inst(db, self.source_goal);
-        let (position, _) = concrete_components(db, slots)
-            .components()
-            .enumerate()
-            .find(|(_, member)| same_identity(db, scope, member.goal, self.source_goal))?;
-        self.entries.get(db, slots.list(db).len() + position)
+        let goal = closed_component_goal(db, self.source_slots, scope, self.source_goal)?;
+        let position = self
+            .component_goals
+            .list(db)
+            .iter()
+            .position(|&component| same_identity(db, scope, component, goal))?;
+        self.entries
+            .get(db, self.source_slots.list(db).len() + position)
     }
 
     fn proof_for(
@@ -1207,24 +1220,33 @@ pub(crate) fn slot_answering<'db>(
     if let Some(index) = slots.list(db).iter().position(|&bound| bound == goal) {
         return schema.slot(db, index);
     }
-    if !has_concrete_components(db, slots) {
-        return None;
-    }
-    // A goal written on a projection that a slot's equality settles,
-    // `<B::A as Show>` under `B: Tr<A = Foo>`, is the closed goal it gives.
-    let goal = if collect_flags(db, goal).contains(TyFlags::HAS_PROJECTION) {
-        normalize_trait_inst_preserving_validity(db, goal, scope, slots)
-    } else {
-        goal
-    };
-    if !is_closed_goal(db, goal) {
-        return None;
-    }
+    let goal = closed_component_goal(db, slots, scope, goal)?;
     let (_, member) = concrete_components(db, slots).answering(db, scope, goal)?;
     Some(BoundSlotRef {
         component: Some(ComponentPath::new(db, member.path.clone())),
         ..schema.slot(db, member.root as usize)?
     })
+}
+
+/// The closed goal that a component of `slots` can answer, which `goal` is or
+/// gives. A goal written on a projection that a slot's equality settles,
+/// `<B::A as Show>` under `B: Tr<A = Foo>`, is the closed goal it gives. Every
+/// reader of a component takes its goal from here.
+fn closed_component_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+    scope: ScopeId<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<TraitInstId<'db>> {
+    if !has_concrete_components(db, slots) {
+        return None;
+    }
+    let goal = if collect_flags(db, goal).contains(TyFlags::HAS_PROJECTION) {
+        normalize_trait_inst_preserving_validity(db, goal, scope, slots)
+    } else {
+        goal
+    };
+    is_closed_goal(db, goal).then_some(goal)
 }
 
 pub(crate) fn prove_outcome<'db>(
@@ -3405,5 +3427,81 @@ fn plain<B: Tr>() {}
             ),
             Projection::Refused
         );
+    }
+
+    /// A component goal of a deferred capture is found in the goals recorded
+    /// when the capture was made. A header that unifies two parameters of the
+    /// source slots collapses them into one, which the walk of the rewritten
+    /// list cannot lay out, so the table it would give is empty.
+    #[test]
+    fn deferred_capture_finds_component_after_aliasing() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "aliased.fe".into(),
+            r#"
+trait Show {}
+struct Foo {}
+impl Show for Foo {}
+struct W<T> {}
+trait Tr { type A: Show }
+impl<T: Show> Tr for W<T> { type A = T }
+struct Pair<T, U> {}
+trait Tx {}
+impl<T: Tr<A = Foo>> Tx for Pair<T, T> {}
+fn ctx<B: Tr<A = Foo>, C: Tr<A = Foo>>() {}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let signature = func_signature(&db, find_func(&db, module, "ctx"), None);
+        let (b, c) = (
+            signature.list(&db)[0].self_ty(&db),
+            signature.list(&db)[1].self_ty(&db),
+        );
+        let cx = TraitSolveCx::new(&db, module.scope()).with_assumptions(signature);
+        let tx = trait_named(&db, module, "Tx");
+        let source = TraitInstId::new_simple(&db, tx, vec![adt_ty(&db, module, "Pair", &[b, c])]);
+        let bounds = DeferredProofBounds::capture(&db, source, cx);
+        // Two slots, then the one component `Foo: Show` they both derive.
+        assert_eq!(bounds.source_slots.list(&db).len(), 2);
+        let foo = adt_ty(&db, module, "Foo", &[]);
+        let show = TraitInstId::new_simple(&db, trait_named(&db, module, "Show"), vec![foo]);
+        let component = bounds
+            .entries
+            .get(&db, 2)
+            .expect("an entry for the component");
+        assert_eq!(bounds.entries.get(&db, 3), None);
+        assert_eq!(
+            bounds.component_proof(&db, cx),
+            None,
+            "a goal that no component answers"
+        );
+        let closed = DeferredProofBounds {
+            source_goal: show,
+            ..bounds
+        };
+        assert_eq!(closed.component_proof(&db, cx), Some(component));
+        // The header of `Pair<T, T>` makes the two parameters one.
+        let w_foo = adt_ty(&db, module, "W", &[foo]);
+        let goal =
+            TraitInstId::new_simple(&db, tx, vec![adt_ty(&db, module, "Pair", &[w_foo, w_foo])]);
+        let Selection::Unique(resolved) =
+            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, module.scope()), goal)
+        else {
+            panic!("Pair<W<Foo>, W<Foo>> implements Tx")
+        };
+        let (_, aliased) = source_conditions(&db, resolved.selected(), bounds)
+            .expect("the header unifies with the source goal");
+        assert_eq!(aliased.source_slots.list(&db).len(), 2);
+        assert_eq!(
+            aliased.source_slots.list(&db)[0],
+            aliased.source_slots.list(&db)[1],
+            "the two parameters are one after the header is applied"
+        );
+        let closed = DeferredProofBounds {
+            source_goal: show,
+            ..aliased
+        };
+        assert_eq!(closed.component_proof(&db, cx), Some(component));
     }
 }
