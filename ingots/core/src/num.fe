@@ -1117,7 +1117,7 @@ const fn mul_div_failure(_ d: u256) -> u256 {
 }
 
 // The result of an overflowing operation, or `None` if it overflowed.
-const fn checked<T>(_ result: own (T, bool)) -> Option<T> {
+const fn checked<T: IntWord>(_ result: (T, bool)) -> Option<T> {
     let (value, overflow) = result
     if overflow { None } else { Some(value) }
 }
