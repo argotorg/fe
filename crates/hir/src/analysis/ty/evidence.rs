@@ -1326,6 +1326,13 @@ pub(crate) enum Refusal<'db> {
         a: TraitInstId<'db>,
         b: TraitInstId<'db>,
     },
+    /// The goal is a component that two conditions of the implementation
+    /// selected for a bound hold from different dictionaries: `a` and `b` are
+    /// the conditions, as the implementation states them at the call's types.
+    ConditionsDiffer {
+        a: TraitInstId<'db>,
+        b: TraitInstId<'db>,
+    },
     /// The goal lies below the limit to which the bounds of associated types
     /// are followed in the dictionary of `root`, and that dictionary holds a
     /// named implementation: no value is given where the walk cannot say
@@ -1501,6 +1508,9 @@ pub(crate) fn declared_bound_evidence_from<'db>(
                 // slot for the goal yet: the instance supplies it.
                 Projection::Pending => {}
                 Projection::Refused => refuse = Some(Refusal::NoComponent { root: parent_goal }),
+                Projection::ConditionsDiffer { a, b } => {
+                    refuse = Some(Refusal::ConditionsDiffer { a, b });
+                }
             }
         }
         let slot = match refuse {
@@ -1539,13 +1549,19 @@ pub(crate) enum Projection<'db> {
     Proof(EvidenceId<'db>),
     Pending,
     Refused,
+    /// Two conditions of a selected implementation hold the component from
+    /// different dictionaries; `a` and `b` are the conditions' goals.
+    ConditionsDiffer {
+        a: TraitInstId<'db>,
+        b: TraitInstId<'db>,
+    },
 }
 
 impl<'db> Projection<'db> {
     pub(crate) fn proof(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proof(proof) => Some(proof),
-            Self::Pending | Self::Refused => None,
+            Self::Pending | Self::Refused | Self::ConditionsDiffer { .. } => None,
         }
     }
 }
@@ -1769,7 +1785,7 @@ pub(crate) fn project_step<'db>(
     }
     match component {
         ImplComponent::Held(held) => {
-            let mut agreed: Option<EvidenceId<'db>> = None;
+            let mut agreed: Option<(EvidenceId<'db>, u32)> = None;
             let mut pending = false;
             for (condition, steps) in held {
                 let Some(&source) = conds.get(*condition as usize) else {
@@ -1784,21 +1800,31 @@ pub(crate) fn project_step<'db>(
                     current = project_step(db, from, next, goal.filter(|_| last), assumptions);
                 }
                 match current {
-                    Projection::Proof(component) => {
-                        if agreed.is_some_and(|other| {
-                            !same_dictionary(db, other, component, assumptions)
-                        }) {
-                            return Projection::Refused;
+                    Projection::Proof(component) => match agreed {
+                        Some((other, first))
+                            if !same_dictionary(db, other, component, assumptions) =>
+                        {
+                            // The conditions, as the selected implementation
+                            // states them at the instantiated arguments.
+                            let conditions = instantiated.constraints(db);
+                            return match (
+                                conditions.list(db).get(first as usize),
+                                conditions.list(db).get(*condition as usize),
+                            ) {
+                                (Some(&a), Some(&b)) => Projection::ConditionsDiffer { a, b },
+                                _ => Projection::Refused,
+                            };
                         }
-                        agreed.get_or_insert(component);
-                    }
+                        Some(_) => {}
+                        None => agreed = Some((component, *condition)),
+                    },
                     Projection::Pending => pending = true,
-                    Projection::Refused => return Projection::Refused,
+                    Projection::Refused | Projection::ConditionsDiffer { .. } => return current,
                 }
             }
             match (pending, agreed) {
                 (true, _) => Projection::Pending,
-                (false, Some(agreed)) => Projection::Proof(agreed),
+                (false, Some((agreed, _))) => Projection::Proof(agreed),
                 (false, None) => Projection::Refused,
             }
         }
@@ -2796,9 +2822,11 @@ fn component_agreement<'db>(
         match project_step(db, source, step, Some(member.goal), assumptions) {
             Projection::Proof(proof) => Ok(Some(proof)),
             Projection::Pending => Ok(None),
-            Projection::Refused => Err(Refusal::NoComponent {
-                root: Some(root_goal(parent)),
-            }),
+            Projection::Refused | Projection::ConditionsDiffer { .. } => {
+                Err(Refusal::NoComponent {
+                    root: Some(root_goal(parent)),
+                })
+            }
         }
     };
     let refuse = |member: &Component<'db>, reason| RefusedGoal {

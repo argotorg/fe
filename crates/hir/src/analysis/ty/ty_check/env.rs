@@ -1757,6 +1757,16 @@ impl<'db> TyCheckEnv<'db> {
                     },
                 ),
             ),
+            Refusal::ConditionsDiffer { a, b } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ConditionsDiffer {
+                        span,
+                        primary_goal: refused.goal,
+                        a,
+                        b,
+                    },
+                ),
+            ),
             Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
                 failed_proof(refused.goal, span)
             }

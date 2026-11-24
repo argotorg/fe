@@ -4804,6 +4804,57 @@ const fn top_plain() -> u256 {{ g<W<Foo>, V<Foo>>() }}
     values(&program(false), &[("top", 70), ("top_plain", 100)]);
 }
 
+// Two conditions of one implementation that hold the component `Item: Pick`
+// from different dictionaries are refused where the call is made, and the
+// refusal names the two conditions rather than reporting that the goal is not
+// implemented.
+#[test]
+fn concrete_component_conditions_that_disagree_are_named() {
+    let source = r#"
+struct Item {}
+trait Pick { fn val() -> u256 }
+impl Pick for Item { fn val() -> u256 { 100 } }
+impl Pick for Item as Named { fn val() -> u256 { 70 } }
+trait Holder {
+    type V: Pick
+    fn hv() -> u256
+}
+struct Wrap<T> {}
+impl<T: Pick> Holder for Wrap<T> {
+    type V = T
+    fn hv() -> u256 { T::val() }
+}
+struct Fixed {}
+impl Holder for Fixed {
+    type V = Item
+    fn hv() -> u256 { Item::val() }
+}
+trait Outer {
+    type M: Pick
+    fn ov() -> u256
+}
+struct Pair<T, U> {}
+impl<T: Holder<V = Item>, U: Holder<V = Item>> Outer for Pair<T, U> {
+    type M = Item
+    fn ov() -> u256 { T::hv() * 1000 + U::hv() }
+}
+fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000000 + B::ov() }
+fn chosen() -> u256 { with (Named) { read<Pair<Wrap<Item>, Fixed>>() } }
+"#;
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("conditions_disagree.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let report = format_diagnostics(&db, &db.run_on_top_mod(module));
+    assert!(report.contains("error[6-0003]"), "{report}");
+    assert!(
+        report.contains(
+            "`Wrap<Item>: Holder<V = Item>` and `Fixed: Holder<V = Item>` supply different implementations"
+        ),
+        "{report}"
+    );
+    assert!(!report.contains("doesn't implement"), "{report}");
+}
+
 // A closure that escapes a `with` block of an unrelated choice and is called
 // outside it keeps the dictionary of the instance that defined it.
 #[test]
