@@ -4826,6 +4826,7 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
         ),
         ("generated_code_visibility_provider_members", "own_method"),
         ("generated_code_visibility_provider_members", "own_field"),
+        ("generated_code_visibility_provider_cast", "cast_own"),
         ("generated_code_visibility_generated_path", "by_call"),
         ("generated_code_visibility_generated_path", "by_path"),
         ("generated_code_visibility_alias_self", "alias_pub"),
@@ -5325,6 +5326,25 @@ fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_i
             );
         }
     }
+}
+
+#[test]
+fn test_cli_test_generated_code_sees_through_a_newtype_by_the_field_that_its_writer_sees() {
+    // A cast sees through a newtype only if the writer of the cast can see its
+    // field. `prov` writes `self.vault as u256`, and the field `balance` of
+    // `Vault` is private to the package that asked, so the cast is refused with
+    // the reason. A cast that `prov` writes of its own newtype `W`, whose field
+    // is `pub(ingot)` in `prov`, is accepted (`generated_code_visibility_provider_cast`).
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_cast_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a cast error:\n{output}");
+    assert!(
+        output.contains("error[8-0055]")
+            && output.contains("cannot cast `Vault` to `u256`")
+            && output.contains("cast is not allowed because the struct field is not `pub`"),
+        "unexpected diagnostics:\n{output}"
+    );
 }
 
 #[test]

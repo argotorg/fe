@@ -16,18 +16,20 @@ use crate::core::{
 use crate::span::{DynLazySpan, types::LazyTySpan};
 
 use super::{
-    BodyOwner, BuiltinOp, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, EffectArg,
-    EffectArgTarget, RecordLike, SemanticExprLowering, SumShapeOp, Typeable, ValuePathRef,
+    BodyOwner, BuiltinOp, CastLayers, CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef,
+    EffectArg, EffectArgTarget, RecordLike, SemanticExprLowering, SumShapeOp, Typeable,
+    ValuePathRef,
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
         ParamSite, PendingEffects, PendingEffectsTarget, PendingNegation, Prober, ProvidedEffect,
         TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
     },
-    has_invisible_newtype_field, merged_borrow_provider,
+    merged_borrow_provider,
     path::ResolvedPathInBody,
+    single_field_newtype_ty,
     stmt::ForLoopCall,
-    transparent_newtype_field_ty, ty_may_be_code_region_token,
+    ty_may_be_code_region_token,
 };
 use crate::analysis::place::{Place, PlaceBase};
 use crate::analysis::semantic::{RuntimeSizeError, runtime_size_bytes};
@@ -1539,7 +1541,7 @@ impl<'db> TyChecker<'db> {
         let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
 
         if from == to {
-            return ExprProp::new(to, true);
+            return self.accept_cast(expr, from, to);
         }
 
         let literal = match inner_expr.data(self.db, self.body()) {
@@ -1560,7 +1562,7 @@ impl<'db> TyChecker<'db> {
                 && self.int_literal_fits_in_ty(value, TyId::u256(self.db))
             {
                 let _ = self.table.unify(from, TyId::u256(self.db));
-                return ExprProp::new(to, true);
+                return self.accept_cast(expr, from, to);
             }
 
             if if negative {
@@ -1571,7 +1573,7 @@ impl<'db> TyChecker<'db> {
                 // Unify the literal's type variable with the target leaf type
                 // so it doesn't remain unresolved.
                 let _ = self.table.unify(from, leaf);
-                return ExprProp::new(to, true);
+                return self.accept_cast(expr, from, to);
             }
 
             // Unify to prevent a spurious "type annotation needed" error.
@@ -1601,13 +1603,11 @@ impl<'db> TyChecker<'db> {
         if self.is_lossless_cast(from, to)
             || self.is_provably_lossless_cast_expr(inner_expr, from, to)
         {
-            return ExprProp::new(to, true);
+            return self.accept_cast(expr, from, to);
         }
 
         // Check if the cast failed due to invisible struct fields.
-        let hint = if has_invisible_newtype_field(self.db, self.env.scope(), from)
-            || has_invisible_newtype_field(self.db, self.env.scope(), to)
-        {
+        let hint = if self.newtype_field_hidden(from) || self.newtype_field_hidden(to) {
             Some("cast is not allowed because the struct field is not `pub`".to_string())
         } else if from.as_ptr(self.db).is_some() && to.as_ptr(self.db).is_some() {
             Some("a pointer cannot change its address space".to_string())
@@ -1752,13 +1752,43 @@ impl<'db> TyChecker<'db> {
         true
     }
 
-    fn peel_transparent_newtypes(&self, mut ty: TyId<'db>) -> TyId<'db> {
-        while let Some(inner) = transparent_newtype_field_ty(self.db, self.env.scope(), ty)
+    fn peel_transparent_newtypes(&self, ty: TyId<'db>) -> TyId<'db> {
+        self.peel_newtypes(ty).0
+    }
+
+    /// `ty` peeled of the newtype layers that the cast being checked sees
+    /// through, and how many there are. A layer is seen through only if its
+    /// field is visible to the writer of the cast (`newtype_field_visible`).
+    /// This is the one place that decides it: the layers of an accepted cast
+    /// are recorded (`accept_cast`), and lowering and the unsafe check read
+    /// them.
+    fn peel_newtypes(&self, mut ty: TyId<'db>) -> (TyId<'db>, usize) {
+        let mut layers = 0;
+        while let Some(inner) = single_field_newtype_ty(self.db, ty)
             && self.newtype_field_visible(ty)
         {
             ty = inner;
+            layers += 1;
         }
-        ty
+        (ty, layers)
+    }
+
+    /// Records the layers of the cast `expr` of a value of type `from` to
+    /// `to`, which the type checker accepts, and types it as `to`.
+    fn accept_cast(&mut self, expr: ExprId, from: TyId<'db>, to: TyId<'db>) -> ExprProp<'db> {
+        let from = from.fold_with(self.db, &mut self.table);
+        let layers = CastLayers {
+            from: self.peel_newtypes(from).1,
+            to: self.peel_newtypes(to).1,
+        };
+        self.env.register_cast_layers(expr, layers);
+        ExprProp::new(to, true)
+    }
+
+    /// Whether `ty` is a one-field struct whose field the writer of the code
+    /// being checked cannot see.
+    fn newtype_field_hidden(&self, ty: TyId<'db>) -> bool {
+        single_field_newtype_ty(self.db, ty).is_some() && !self.newtype_field_visible(ty)
     }
 
     /// Whether the field of the newtype `ty` is visible to the code being

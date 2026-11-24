@@ -1,0 +1,7 @@
+// `prov` writes `mk_w() as u256`, a cast of its own newtype `W` whose only
+// field is `pub(ingot)`. The field is visible to code that `prov` wrote, as
+// a use of the field is, so the cast sees through `W`.
+struct S {}
+impl S with (prov::CastOwn)
+#[test]
+fn cast_own() { assert!(S::cast_own() == 9) }
