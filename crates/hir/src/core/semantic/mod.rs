@@ -4622,12 +4622,18 @@ impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
+        match self.type_ref(db).to_opt() {
+            Some(_) => self.normalize_self_ty(db, self.declared_ty(db), assumptions),
+            None => TyId::invalid(db, InvalidCause::ParseError),
+        }
+    }
+
+    /// The self type as the header writes it, before normalization.
+    pub(crate) fn declared_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let assumptions = constraints_for(db, self.into());
         self.type_ref(db).to_opt().map_or_else(
             || TyId::invalid(db, InvalidCause::ParseError),
-            |hir_ty| {
-                let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-                self.normalize_self_ty(db, ty, assumptions)
-            },
+            |hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions),
         )
     }
 

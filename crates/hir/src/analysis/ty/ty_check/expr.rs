@@ -2272,9 +2272,10 @@ impl<'db> TyChecker<'db> {
                             self.env.assumptions(),
                             true,
                         ) && self.is_with_operand_value(&value)
-                            && value.is_visible_from(
+                            && value.is_visible_as_written(
                                 self.db,
-                                path.hygiene_scope(self.db).unwrap_or(self.env.scope()),
+                                path,
+                                self.viewer(MemberSite::Expr(binding.value)),
                             )
                         {
                             ambiguous_opening = true;
@@ -2758,7 +2759,11 @@ impl<'db> TyChecker<'db> {
                     true,
                 ),
                 Ok(value) if self.is_with_operand_value(&value)
-                    && value.is_visible_from(self.db, self.env.scope())
+                    && value.is_visible_as_written(
+                        self.db,
+                        path,
+                        self.viewer(MemberSite::Expr(operand)),
+                    )
             )
         }
     }
@@ -4405,7 +4410,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             *generic_args,
             call_span.clone().generic_args(),
-            self.env.scope(),
+            self.viewer(MemberSite::Expr(expr)),
             self.env.assumptions(),
         );
         let args_invalid = !arg_diags.is_empty();
@@ -7006,40 +7011,7 @@ impl<'db> TyChecker<'db> {
                 None => body.quote_chain(self.db),
             },
         };
-        let scope = self.env.scope();
-        let requested = if scope.is_in_published_item(self.db) {
-            self.requested_record()
-        } else {
-            None
-        };
-        Viewer::written_by(scope, chain[0].ingot(self.db), requested)
-    }
-
-    /// The record that the derive header around the code being checked asks
-    /// for, if the code is generated for one: the type of the nearest header
-    /// that holds the body's scope.
-    fn requested_record(&self) -> Option<AdtRef<'db>> {
-        let mut scope = Some(self.env.scope());
-        while let Some(current) = scope {
-            let ty = match current {
-                ScopeId::Item(ItemKind::Impl(impl_))
-                    if impl_.derive_provider(self.db).is_some() =>
-                {
-                    Some(impl_.ty(self.db))
-                }
-                ScopeId::Item(ItemKind::ImplTrait(impl_))
-                    if impl_.derive_provider(self.db).is_some() =>
-                {
-                    Some(impl_.ty(self.db))
-                }
-                _ => None,
-            };
-            if let Some(ty) = ty {
-                return ty.adt_ref(self.db);
-            }
-            scope = current.parent(self.db);
-        }
-        None
+        Viewer::written_by(self.db, self.env.scope(), chain[0].ingot(self.db))
     }
 }
 

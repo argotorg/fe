@@ -14,7 +14,7 @@ use crate::{
 use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
-        ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, diagnostics::PathResDiag,
+        ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, Viewer, diagnostics::PathResDiag,
         resolve_path_with_minter, resolve_path_with_observer_and_minter,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
         trait_arg_path_diag,
@@ -64,7 +64,13 @@ pub(crate) fn trait_ref_arg_diags<'db>(
             trait_path_visibility_diag(db, path, span.clone().path(), scope, assumptions)
                 .into_iter()
                 .collect();
-        diags.extend(path_arg_diags(db, path, span.path(), scope, assumptions));
+        diags.extend(path_arg_diags(
+            db,
+            path,
+            span.path(),
+            Viewer::written_in(db, scope),
+            assumptions,
+        ));
         diags
     })
 }
@@ -115,9 +121,10 @@ pub(crate) fn path_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     path_span: LazyPathSpan<'db>,
-    scope: ScopeId<'db>,
+    viewer: Viewer<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
+    let scope = viewer.scope();
     // A bound fixes each associated item, at each mode, once.
     let mut bound: Vec<(_, LazyGenericArgSpan<'db>)> = Vec::new();
     let mut duplicates = Vec::new();
@@ -149,12 +156,8 @@ pub(crate) fn path_arg_diags<'db>(
             }
             match arg {
                 GenericArg::Type(_) => {
-                    let mut vis = HirTyErrVisitor {
-                        db,
-                        assumptions,
-                        diags: Vec::new(),
-                        const_bodies: ConstBodyLowering::Eager,
-                    };
+                    let mut vis =
+                        HirTyErrVisitor::new(db, assumptions, ConstBodyLowering::Eager, viewer);
                     vis.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
                     vis.diags
                 }
@@ -314,17 +317,12 @@ pub(crate) fn path_generic_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     path_span: LazyPathSpan<'db>,
-    scope: ScopeId<'db>,
+    viewer: Viewer<'db>,
     assumptions: PredicateListId<'db>,
     call: bool,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut vis = HirTyErrVisitor {
-        db,
-        assumptions,
-        diags: Vec::new(),
-        const_bodies: ConstBodyLowering::Eager,
-    };
-    vis.visit_path_args(path, path_span, scope, call);
+    let mut vis = HirTyErrVisitor::new(db, assumptions, ConstBodyLowering::Eager, viewer);
+    vis.visit_path_args(path, path_span, viewer.scope(), call);
     vis.diags
 }
 
@@ -335,18 +333,16 @@ pub(crate) fn generic_arg_list_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     args: GenericArgListId<'db>,
     span: LazyGenericArgListSpan<'db>,
-    scope: ScopeId<'db>,
+    viewer: Viewer<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut vis = HirTyErrVisitor {
-        db,
-        assumptions,
-        diags: Vec::new(),
-        const_bodies: ConstBodyLowering::Eager,
-    };
+    let mut vis = HirTyErrVisitor::new(db, assumptions, ConstBodyLowering::Eager, viewer);
     for (idx, arg) in args.data(db).iter().enumerate() {
         if !matches!(arg, GenericArg::Infer) {
-            vis.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span.clone().arg(idx)), arg);
+            vis.visit_generic_arg(
+                &mut VisitorCtxt::new(db, viewer.scope(), span.clone().arg(idx)),
+                arg,
+            );
         }
     }
     vis.diags
@@ -426,8 +422,14 @@ fn collect_hir_ty_diags_in_mode<'db>(
     const_bodies: ConstBodyLowering,
 ) -> Vec<TyDiagCollection<'db>> {
     // Try precise HIR-based errors first
-    let diags =
-        collect_ty_lower_errors_in_mode(db, scope, hir_ty, span.clone(), assumptions, const_bodies);
+    let diags = collect_ty_lower_errors_in_mode(
+        db,
+        Viewer::written_in(db, scope),
+        hir_ty,
+        span.clone(),
+        assumptions,
+        const_bodies,
+    );
     if !diags.is_empty() {
         return diags;
     }
@@ -469,7 +471,26 @@ pub fn collect_ty_lower_errors<'db>(
 ) -> Vec<TyDiagCollection<'db>> {
     collect_ty_lower_errors_in_mode(
         db,
-        scope,
+        Viewer::written_in(db, scope),
+        hir_ty,
+        span,
+        assumptions,
+        ConstBodyLowering::Eager,
+    )
+}
+
+/// `collect_ty_lower_errors` for a type written in code that `viewer` looks at:
+/// the names of the type are judged by the package that wrote the code.
+pub(crate) fn collect_ty_lower_errors_by<'db>(
+    db: &'db dyn HirAnalysisDb,
+    viewer: Viewer<'db>,
+    hir_ty: TypeId<'db>,
+    span: LazyTySpan<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    collect_ty_lower_errors_in_mode(
+        db,
+        viewer,
         hir_ty,
         span,
         assumptions,
@@ -479,19 +500,14 @@ pub fn collect_ty_lower_errors<'db>(
 
 fn collect_ty_lower_errors_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
+    viewer: Viewer<'db>,
     hir_ty: TypeId<'db>,
     span: LazyTySpan<'db>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
 ) -> Vec<TyDiagCollection<'db>> {
-    let mut vis = HirTyErrVisitor {
-        db,
-        assumptions,
-        diags: Vec::new(),
-        const_bodies,
-    };
-    let mut ctxt = VisitorCtxt::new(db, scope, span);
+    let mut vis = HirTyErrVisitor::new(db, assumptions, const_bodies, viewer);
+    let mut ctxt = VisitorCtxt::new(db, viewer.scope(), span);
     vis.visit_ty(&mut ctxt, hir_ty);
     vis.diags
 }
@@ -501,9 +517,32 @@ struct HirTyErrVisitor<'db> {
     diags: Vec<TyDiagCollection<'db>>,
     assumptions: PredicateListId<'db>,
     const_bodies: ConstBodyLowering,
+    /// Who looks at the names of the type: the package that wrote it, which is
+    /// not always the package of its scope.
+    viewer: Viewer<'db>,
 }
 
 impl<'db> HirTyErrVisitor<'db> {
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        assumptions: PredicateListId<'db>,
+        const_bodies: ConstBodyLowering,
+        viewer: Viewer<'db>,
+    ) -> Self {
+        Self {
+            db,
+            diags: Vec::new(),
+            assumptions,
+            const_bodies,
+            viewer,
+        }
+    }
+
+    /// The viewer of a name written at `scope`, a place inside the type.
+    fn viewer_at(&self, scope: ScopeId<'db>) -> Viewer<'db> {
+        self.viewer.moved_to(scope)
+    }
+
     fn path_context(&self) -> LoweringContext<'db> {
         LoweringContext::for_const_bodies(self.const_bodies)
     }
@@ -533,8 +572,13 @@ impl<'db> HirTyErrVisitor<'db> {
             && let Some(NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_)))) =
                 resolve_type_path_definition(db, path, scope)
         {
-            self.diags
-                .extend(path_arg_diags(db, path, path_span, scope, self.assumptions));
+            self.diags.extend(path_arg_diags(
+                db,
+                path,
+                path_span,
+                self.viewer_at(scope),
+                self.assumptions,
+            ));
             return;
         }
         if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
@@ -656,6 +700,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     // "expected type" errors for const-like paths in generic-arg
                     // position.
                     let scope = ctxt.scope();
+                    let (db, viewer) = (self.db, self.viewer_at(scope));
                     let mut invisible = None;
                     let mut check_visibility =
                         |path: PathId<'db>,
@@ -664,9 +709,9 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                             if invisible.is_some() {
                                 return;
                             }
-                            if !quoted_visibility.unwrap_or_else(|| {
-                                reso.is_segment_visible_from(self.db, path, scope)
-                            }) {
+                            if !quoted_visibility
+                                .unwrap_or_else(|| reso.is_segment_visible_to(db, path, viewer))
+                            {
                                 invisible = Some((path, reso.name_span(self.db)));
                             }
                         };
@@ -782,6 +827,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
     fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
         let scope = ctxt.scope();
         let path_span = ctxt.span().unwrap();
+        let (db, viewer) = (self.db, self.viewer_at(scope));
 
         let mut invisible = None;
         let mut check_visibility =
@@ -790,7 +836,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     return;
                 }
                 if !quoted_visibility
-                    .unwrap_or_else(|| reso.is_segment_visible_from(self.db, path, scope))
+                    .unwrap_or_else(|| reso.is_segment_visible_to(db, path, viewer))
                 {
                     invisible = Some((path, reso.name_span(self.db)));
                 }
@@ -884,7 +930,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                         self.db,
                         path,
                         span.clone().path(),
-                        scope,
+                        self.viewer_at(scope),
                         self.assumptions,
                     ));
                 } else {
@@ -926,7 +972,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                         self.db,
                         path,
                         span.clone().path(),
-                        scope,
+                        self.viewer_at(scope),
                         self.assumptions,
                     ));
                 }

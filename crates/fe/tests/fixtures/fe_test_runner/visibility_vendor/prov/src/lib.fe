@@ -74,3 +74,92 @@ impl DeriveInherent for PathLeak {
         }
     }
 }
+// A provider type with a const parameter, to put a constant path in a generic
+// argument, and an alias of the provider that returns its argument.
+pub struct Packed<const N: u256> {}
+impl<const N: u256> Packed<N> {
+    pub fn zero() -> Self { Packed {} }
+    pub fn n(self) -> u256 { N }
+}
+pub type Same<T> = T
+impl Acc {
+    pub(ingot) const LIM: u256 = 7
+    pub(ingot) fn make() -> Acc { Acc { n: 5 } }
+}
+// The requesting package's private constant in a generic argument of a signature.
+pub struct ConstArgSig {}
+impl DeriveInherent for ConstArgSig {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak_sig(_ p: Packed<Self::K>) -> u256 { 0 }
+        }
+    }
+}
+// The same constant in a generic argument of a path in a body, and in an
+// annotation of a local.
+pub struct ConstArgBodyPath {}
+impl DeriveInherent for ConstArgBodyPath {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak_body_path() -> u256 { Packed<Self::K>::zero().n() }
+        }
+    }
+}
+pub struct ConstArgBodyAnnot {}
+impl DeriveInherent for ConstArgBodyAnnot {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak_body_annot() -> u256 {
+                let p: Packed<Self::K> = Packed::zero()
+                p.n()
+            }
+        }
+    }
+}
+// A path rooted at the provider's alias of `Self`.
+pub struct AliasSelf {}
+impl DeriveInherent for AliasSelf {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn via_alias_pub(self) -> u256 { Same<Self>::open(self) }
+        }
+    }
+}
+pub struct AliasSelfHidden {}
+impl DeriveInherent for AliasSelfHidden {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn via_alias_hidden(self) -> u256 { Same<Self>::hidden(self) }
+        }
+    }
+}
+// A method value and a constant pattern that reach private members of the
+// requesting package through `Self`.
+pub struct ValueAndPattern {}
+impl DeriveInherent for ValueAndPattern {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak_value(self) -> u256 {
+                let f = Self::hidden
+                f(self)
+            }
+            pub fn leak_pattern(_ x: u256) -> u256 {
+                match x {
+                    Self::K => 1
+                    _ => 0
+                }
+            }
+        }
+    }
+}
+// The provider's own `pub(ingot)` members reached by a path.
+pub struct OwnPaths {}
+impl DeriveInherent for OwnPaths {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn own_const() -> u256 { Acc::LIM }
+            pub fn own_fn_path() -> u256 { Acc::get(Acc::make()) }
+            pub fn own_field() -> u256 { Acc::make().n }
+        }
+    }
+}

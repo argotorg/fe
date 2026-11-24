@@ -322,6 +322,30 @@ pub(crate) fn lower_opt_const_body<'db>(
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
 }
 
+/// The self type of the derive header that holds `scope`: the type that an
+/// explicit derive request (`impl T for S with (P)`) asks the provider to write
+/// members for. The nearest enclosing header decides. The type is lowered as
+/// the header writes it, before any normalization.
+pub(crate) fn derive_header_self_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<TyId<'db>> {
+    let mut current = Some(scope);
+    while let Some(scope) = current {
+        match scope {
+            ScopeId::Item(ItemKind::Impl(impl_)) if impl_.derive_provider(db).is_some() => {
+                return Some(impl_.ty(db));
+            }
+            ScopeId::Item(ItemKind::ImplTrait(impl_)) if impl_.derive_provider(db).is_some() => {
+                return Some(impl_.declared_ty(db));
+            }
+            _ => {}
+        }
+        current = scope.parent(db);
+    }
+    None
+}
+
 /// An anonymous constant of a spliced field type: an array length or constant
 /// argument written in the field's record. The splice names the type's other
 /// names in the record and leaves the record's parameters to the use site

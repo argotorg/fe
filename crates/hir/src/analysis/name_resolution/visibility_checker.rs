@@ -8,6 +8,7 @@ use crate::analysis::{
         adt_def::AdtRef,
         const_ty::ConstTyData,
         ty_def::{TyBase, TyData, TyId},
+        ty_lower::derive_header_self_ty,
     },
 };
 
@@ -156,7 +157,9 @@ pub struct Viewer<'db> {
 }
 
 impl<'db> Viewer<'db> {
-    /// Code that runs at `scope` and was written in the package of `scope`.
+    /// Hand-written code that runs at `scope`: it was written in the package
+    /// of `scope`. Code that may have been generated asks `written_in` or
+    /// `written_by`.
     pub fn at(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
         Self {
             scope,
@@ -165,18 +168,33 @@ impl<'db> Viewer<'db> {
         }
     }
 
-    /// Code that runs at `scope` and was written by the package `writer`, for
-    /// the header that requests `requested`.
-    pub fn written_by(
-        scope: ScopeId<'db>,
-        writer: Ingot<'db>,
-        requested: Option<AdtRef<'db>>,
-    ) -> Self {
+    /// Code that runs at `scope` and was written where the syntax of `scope`
+    /// is: the package of the module that holds the item's text. That is the
+    /// package of `scope` for hand-written code and the provider's package for
+    /// an item that a provider generated.
+    pub fn written_in(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
+        Self::written_by(db, scope, scope.syntax_top_mod(db).ingot(db))
+    }
+
+    /// Code that runs at `scope` and was written by the package `writer`. The
+    /// record that the header around it requests is found from `scope`.
+    pub fn written_by(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>, writer: Ingot<'db>) -> Self {
+        let requested = if scope.is_in_published_item(db) {
+            derive_header_self_ty(db, scope).and_then(|ty| ty.adt_ref(db))
+        } else {
+            None
+        };
         Self {
             scope,
             writer,
             requested,
         }
+    }
+
+    /// The same writer and request, looking from `scope`, a place inside the
+    /// code that this viewer looks from.
+    pub fn moved_to(self, scope: ScopeId<'db>) -> Self {
+        Self { scope, ..self }
     }
 
     /// The place the code runs.

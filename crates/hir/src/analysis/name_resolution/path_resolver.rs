@@ -923,18 +923,8 @@ impl<'db> PathRes<'db> {
     /// Checks a segment whose subject type and explicit trait reference are
     /// visited separately. The trait path owns the visibility check of the
     /// qualification and its associated constant, including quotation origin.
-    pub(crate) fn is_segment_visible_from(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        segment: PathId<'db>,
-        scope: ScopeId<'db>,
-    ) -> bool {
-        self.is_segment_visible_to(db, segment, Viewer::at(db, scope))
-    }
-
-    /// `is_segment_visible_from` for code that another package may have
-    /// written. A name that the quotation's producer resolves is judged where
-    /// the producer wrote it; a member reached through a type, such as
+    /// A name that the quotation's producer resolves is judged where the
+    /// producer wrote it; a member reached through a type, such as
     /// `Self::hidden`, is judged by `viewer`.
     pub(crate) fn is_segment_visible_to(
         &self,
@@ -950,7 +940,19 @@ impl<'db> PathRes<'db> {
         {
             return true;
         }
-        match segment.hygiene_scope(db) {
+        self.is_visible_as_written(db, segment, viewer)
+    }
+
+    /// Whether the code may use what `path` resolves to, as `path` was
+    /// written: a path that a quotation produced is judged where its producer
+    /// wrote it, any other by `viewer`.
+    pub(crate) fn is_visible_as_written(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        viewer: Viewer<'db>,
+    ) -> bool {
+        match path.hygiene_scope(db) {
             Some(producer) => self.is_visible_from(db, producer),
             None => self.is_visible_to(db, viewer),
         }

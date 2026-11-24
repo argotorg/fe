@@ -1,0 +1,8 @@
+struct S {}
+impl S {
+    fn hidden(self) -> u256 { 3 }
+    const K: u256 = 5
+}
+impl S with (prov::ValueAndPattern)
+#[test]
+fn value_and_pattern() { assert!(S {}.leak_value() + S::leak_pattern(5) == 4) }

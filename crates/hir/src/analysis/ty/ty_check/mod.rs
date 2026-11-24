@@ -33,7 +33,7 @@ pub(crate) use self::contract::{contract_field_slot, eval_msg_variant_selector};
 pub(crate) use self::env::{func_declared_bounds, func_signature};
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::Tier;
-use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
+use crate::analysis::name_resolution::{ResolvedVariant, Viewer, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::const_check::const_body_language_failure;
@@ -143,7 +143,7 @@ use crate::analysis::ty::{
     },
     registered_root_providers,
     ty_error::{
-        collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
+        collect_hir_ty_diags, collect_ty_lower_errors_by, diag_from_invalid_cause,
         emit_invalid_ty_error, normalization_limit_diag, path_arg_diags, path_generic_arg_diags,
         qualified_path_wf_diags_under_choices,
     },
@@ -830,7 +830,15 @@ pub(crate) fn invalid_effect_key_diags<'db>(
     let written = match key.data(db) {
         TypeKind::Path(Partial::Present(path)) => {
             let path_span = span.clone().into_path_type().path();
-            let arg_diags = || path_arg_diags(db, *path, path_span.clone(), scope, assumptions);
+            let arg_diags = || {
+                path_arg_diags(
+                    db,
+                    *path,
+                    path_span.clone(),
+                    Viewer::written_in(db, scope),
+                    assumptions,
+                )
+            };
             match resolve_path(db, *path, scope, assumptions, false) {
                 Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => {
                     collect_hir_ty_diags(db, scope, key, span, assumptions)
@@ -3674,9 +3682,9 @@ impl<'db> TyChecker<'db> {
 
         // The written type reports its own errors (path resolution, visibility,
         // associated bindings), whether or not lowering produced an invalid type.
-        let diags = collect_ty_lower_errors(
+        let diags = collect_ty_lower_errors_by(
             self.db,
-            self.env.scope(),
+            self.viewer(MemberSite::Current),
             hir_ty,
             span.clone(),
             self.env.assumptions(),
@@ -4595,7 +4603,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             span.clone(),
-            scope,
+            viewer,
             self.env.assumptions(),
             call,
         );

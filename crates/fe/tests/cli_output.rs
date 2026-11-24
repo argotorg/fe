@@ -4824,6 +4824,8 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
         ("generated_code_visibility_provider_members", "own_field"),
         ("generated_code_visibility_generated_path", "by_call"),
         ("generated_code_visibility_generated_path", "by_path"),
+        ("generated_code_visibility_alias_self", "alias_pub"),
+        ("generated_code_visibility_own_paths", "own_paths"),
         ("unsafe_trust_const_allowed", "via_const"),
         ("unsafe_trust_const_allowed", "assoc"),
         ("unsafe_trust_const_allowed", "pat"),
@@ -5172,6 +5174,39 @@ fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_b
             output.contains(&format!("`{name}` is not visible")),
             "expected `{name}` to be refused:\n{output}"
         );
+    }
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_in_types() {
+    // A name in a type position is judged by the package that wrote it, as a
+    // name in a value position is: the constant `K` belongs to the package that
+    // asked, so a generic argument `Packed<Self::K>` written by the provider
+    // is refused in a signature, in a path of a body and in an annotation. The
+    // alias `Same<Self>` and a method value or pattern reach the same members.
+    for (fixture, names) in [
+        ("generated_code_visibility_type_sig_leak", &["K"][..]),
+        ("generated_code_visibility_type_body_path_leak", &["K"][..]),
+        ("generated_code_visibility_type_body_annot_leak", &["K"][..]),
+        ("generated_code_visibility_alias_self_leak", &["hidden"][..]),
+        (
+            "generated_code_visibility_value_and_pattern_leak",
+            &["hidden", "K"][..],
+        ),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(
+            exit_code, 0,
+            "{fixture}: expected visibility errors:\n{output}"
+        );
+        for name in names {
+            assert!(
+                output.contains(&format!("`{name}` is not visible")),
+                "{fixture}: expected `{name}` to be refused:\n{output}"
+            );
+        }
     }
 }
 
