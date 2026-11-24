@@ -6190,6 +6190,27 @@ fn named_storage_local_generic_choice() {
 }
 
 #[test]
+fn concrete_component_runtime() {
+    // A goal on a concrete type that the dictionary of a pinned bound holds
+    // reads that dictionary: in a function, an implementation's method, a
+    // closure and a function item. A named implementation with a generic
+    // condition opens in a function whose bound pins the condition's
+    // associated type.
+    for fixture in [
+        "concrete_component_call_bound.fe",
+        "concrete_component_impl_method.fe",
+        "concrete_component_pinned_named_condition.fe",
+        "concrete_component_closure_item.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
 fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
     // Two implementations of a foreign trait overlap through an implementation
     // of a foreign bound that the checking ingot declares, which the trait's

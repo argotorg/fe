@@ -1,0 +1,31 @@
+// A closure, a late function item and a function item passed to a callable
+// bound read the dictionary of the pinned bound of the function that makes them.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct W<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+fn one<S: Show>() -> u256 { S::show() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn closure<B: Tr<A = Foo>>() -> u256 {
+    let c = || one<B::A>()
+    c() * 1000 + B::via()
+}
+fn late_item<B: Tr<A = Foo>>() -> u256 {
+    let f = one<B::A>
+    f() * 1000 + B::via()
+}
+fn passed_item<B: Tr<A = Foo>>() -> u256 { run(one<B::A>) * 1000 + B::via() }
+fn in_closure() -> u256 { with (Loud) { closure<W<Foo>>() } }
+fn in_late_item() -> u256 { with (Loud) { late_item<W<Foo>>() } }
+fn in_passed_item() -> u256 { with (Loud) { passed_item<W<Foo>>() } }
+#[test]
+fn closure_reads_component() { assert(in_closure() == 70070) }
+#[test]
+fn late_item_reads_component() { assert(in_late_item() == 70070) }
+#[test]
+fn passed_item_reads_component() { assert(in_passed_item() == 70070) }
