@@ -3904,6 +3904,95 @@ fn caller<T: Assoc>(v: EmptyEffect<T::Item>) {
             diagnostics.format_diags(&db)
         );
     }
+
+    // An effect key is compared after it is normalized under the assumptions
+    // of the body, whichever way it is written; what stays unreduced is as
+    // rigid as a parameter.
+    let prelude = r#"
+trait Assoc {
+    type Item
+}
+struct W {}
+impl Assoc for W { type Item = u8 }
+struct EmptyEffect<T> { n: u256 }
+fn needs_eff_u8() -> u256 uses (e: EmptyEffect<u8>) { e.n }
+fn needs_eff_item<T: Assoc>() -> u256 uses (e: EmptyEffect<T::Item>) { e.n }
+"#;
+    // The diagnostics of a program that needs no generation, and its codes.
+    let check = |source: &str| {
+        let source = format!("{prelude}{source}");
+        let (db, file) = input(&source);
+        assert!(prepare_file(&db, file).unwrap().is_none());
+        let text = {
+            let diagnostics = db.run_on_top_mod(db.top_mod(file));
+            if diagnostics.has_errors(&db) {
+                diagnostics.format_diags(&db)
+            } else {
+                String::new()
+            }
+        };
+        (db, text)
+    };
+    let codes = |text: &str| {
+        let mut codes: Vec<_> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("error[")?.split(']').next())
+            .map(str::to_owned)
+            .collect();
+        codes.sort();
+        codes
+    };
+
+    // (a) The bound makes `T::Item` the key `u8`. No other provider is in
+    // scope, so the bound value is the one the callee reads.
+    let (_, text) = check(
+        r#"
+fn f<T: Assoc<Item = u8>>(v: EmptyEffect<T::Item>) -> u256 {
+    with (EmptyEffect<T::Item> = v) { needs_eff_u8() }
+}
+"#,
+    );
+    assert_eq!(text, "", "(a)");
+
+    // (b) The reverse: a key written `u8` serves a requirement `T::Item`.
+    let (_, text) = check(
+        r#"
+fn g<T: Assoc<Item = u8>>(v: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<u8> = v) { needs_eff_item<T>() }
+}
+"#,
+    );
+    assert_eq!(text, "", "(b)");
+
+    // (c) Two bindings of one key behave alike in both spellings.
+    let (_, plain) = check(
+        r#"
+fn two(a: EmptyEffect<u8>, b: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<u8> = a, EmptyEffect<u8> = b) { needs_eff_u8() }
+}
+"#,
+    );
+    let (_, projected) = check(
+        r#"
+fn two<T: Assoc<Item = u8>>(a: EmptyEffect<T::Item>, b: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<T::Item> = a, EmptyEffect<u8> = b) { needs_eff_u8() }
+}
+"#,
+    );
+    assert_eq!(codes(&plain), codes(&projected), "(c) {plain}\n{projected}");
+
+    // (d) Without the equality bound the key is not known to be `u8`.
+    let (_, text) = check(
+        r#"
+fn h<T: Assoc>(v: EmptyEffect<T::Item>) -> u256 {
+    with (EmptyEffect<T::Item> = v) { needs_eff_u8() }
+}
+"#,
+    );
+    assert!(
+        text.contains("missing effect `EmptyEffect<u8>`"),
+        "(d) {text}"
+    );
 }
 
 const CHAINED_SIBLINGS: &str = r#"
