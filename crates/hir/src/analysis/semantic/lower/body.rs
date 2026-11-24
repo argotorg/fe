@@ -28,10 +28,11 @@ use crate::{
             normalize::normalize_ty,
             shape::{Shape, SumKind, sum_kind},
             ty_check::{
-                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CodeRegionIntrinsicKind,
-                ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding, PathReadSemantics,
-                RecordInitLowering, RecordLike, SemanticExprLowering, SumShapeOp, TypedBody,
-                ValuePathRef, constructed_variant, infer_body, transparent_newtype_field_ty,
+                BindingAccess, BodyOwner, BuiltinOp, CallParam, Callable, CastLayers,
+                CodeRegionIntrinsicKind, ConstIntrinsicKind, ConstRef, ForLoopStep, LocalBinding,
+                PathReadSemantics, RecordInitLowering, RecordLike, SemanticExprLowering,
+                SumShapeOp, TypedBody, ValuePathRef, constructed_variant, infer_body,
+                single_field_newtype_ty,
             },
             ty_def::{BorrowKind, TyData, TyId},
             ty_is_copy, ty_is_snapshot,
@@ -245,6 +246,18 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
 pub(super) struct BlockState<'db> {
     pub(super) stmts: Vec<SStmt<'db>>,
     pub(super) terminator: Option<STerminator<'db>>,
+    reach: BlockReach,
+}
+
+/// Whether lowering has reached a block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockReach {
+    /// No edge lowered so far leads here.
+    Unreached,
+    /// The entry, or a terminator lowered so far, leads here.
+    Reached,
+    /// Entered unreached, and closed as dead code.
+    Dead,
 }
 
 struct SmirLowerInputs<'a, 'db> {
@@ -577,12 +590,41 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.blocks.push(BlockState {
             stmts: Vec::new(),
             terminator: None,
+            reach: if self.blocks.is_empty() {
+                BlockReach::Reached
+            } else {
+                BlockReach::Unreached
+            },
         });
         id
     }
 
+    /// Continues lowering in `block`. A block no edge leads to, such as the
+    /// arms of an `if` whose condition ended its block, is dead: it is closed
+    /// as unreachable, so nothing is lowered into it, as nothing is after a
+    /// statement that ends its block.
+    ///
+    /// The caller installs the terminator that leads to a live block before
+    /// entering it, or calls [`Self::mark_reached`] when that edge comes
+    /// after. An edge to a block already closed as dead panics: it would
+    /// have dropped live code.
     pub(super) fn switch_to(&mut self, block: SBlockId) {
         self.current = block;
+        if self.blocks[block.index()].reach == BlockReach::Unreached {
+            self.blocks[block.index()].reach = BlockReach::Dead;
+            self.set_synthetic_terminator(block, STerminatorKind::Unreachable);
+        }
+    }
+
+    /// Records that an edge leads to `block`, for an edge lowered after the
+    /// block is entered.
+    pub(super) fn mark_reached(&mut self, block: SBlockId) {
+        let reach = &mut self.blocks[block.index()].reach;
+        assert!(
+            *reach != BlockReach::Dead,
+            "an edge leads to {block:?}, which lowering entered unreached and closed as dead"
+        );
+        *reach = BlockReach::Reached;
     }
 
     pub(super) fn is_terminated(&self, block: SBlockId) -> bool {
@@ -611,6 +653,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         kind: STerminatorKind<'db>,
     ) {
         if self.blocks[block.index()].terminator.is_none() {
+            for successor in kind.successors() {
+                self.mark_reached(successor);
+            }
             self.blocks[block.index()].terminator = Some(STerminator { origin, kind });
         }
     }
@@ -630,17 +675,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.emit_expr_with_origin(SemOrigin::Synthetic, ty, expr)
     }
 
-    /// The field type of `ty` when it is a transparent newtype.
+    /// The field type of `ty` when it is a newtype. Which newtypes a cast sees
+    /// through is the type checker's decision for the writer of the cast
+    /// (`CastLayers`), so this asks only for the structure.
     fn newtype_field(&self, ty: TyId<'db>) -> Option<TyId<'db>> {
         let scope = self.body.scope();
-        transparent_newtype_field_ty(
-            self.db,
-            scope,
-            normalize_ty(self.db, ty, scope, self.assumptions),
-        )
+        single_field_newtype_ty(self.db, normalize_ty(self.db, ty, scope, self.assumptions))
     }
 
-    /// A cast of the value of `value`, of type `from`, to `to`. One that
+    /// A cast of the value of `value`, of type `from`, to `to`, through the
+    /// newtype `layers` that the type checker found it sees through. One that
     /// unwraps a newtype projects its operand's place, as a field access
     /// does: it reads the leaf it reaches, not the whole value.
     fn lower_cast_expr(
@@ -649,40 +693,53 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         value: ExprId,
         from: TyId<'db>,
         to: TyId<'db>,
+        layers: CastLayers,
     ) -> SValueId {
-        if self.newtype_field(from).is_some()
+        if layers.from > 0
             && let Some(mut place) = self.try_lower_place(value)
         {
             let mut leaf = from;
-            while let Some(field_ty) = self.newtype_field(leaf) {
+            for _ in 0..layers.from {
+                let Some(field_ty) = self.newtype_field(leaf) else {
+                    break;
+                };
                 place.push_field(FieldIndex(0));
                 leaf = field_ty;
             }
             let read = self.emit_expr_with_origin(origin, leaf, SExpr::ReadPlace { place });
-            return self.lower_cast(origin, SOperand::expr(read, value), leaf, to);
+            let layers = CastLayers { from: 0, ..layers };
+            return self.lower_cast(origin, SOperand::expr(read, value), leaf, to, layers);
         }
         let operand = self.lower_expr_operand(value);
-        self.lower_cast(origin, operand, from, to)
+        self.lower_cast(origin, operand, from, to, layers)
     }
 
-    /// A cast sees through transparent newtypes (`check_cast`): it unwraps
-    /// the source's, converts the leaf and wraps the result in the target's.
+    /// A cast sees through the newtype `layers` that the type checker found
+    /// (`check_cast`): it unwraps the source's, converts the leaf and wraps
+    /// the result in the target's.
     fn lower_cast(
         &mut self,
         origin: SemOrigin<'db>,
         mut value: SOperand,
         from: TyId<'db>,
         to: TyId<'db>,
+        cast_layers: CastLayers,
     ) -> SValueId {
         let mut layers = Vec::new();
         let mut leaf = to;
-        while let Some(field_ty) = self.newtype_field(leaf) {
+        for _ in 0..cast_layers.to {
+            let Some(field_ty) = self.newtype_field(leaf) else {
+                break;
+            };
             layers.push(leaf);
             leaf = field_ty;
         }
         let mut from = from;
         let mut unwrapped = false;
-        while let Some(field_ty) = self.newtype_field(from) {
+        for _ in 0..cast_layers.from {
+            let Some(field_ty) = self.newtype_field(from) else {
+                break;
+            };
             let field = SExpr::Field {
                 base: value,
                 field: FieldIndex(0),
@@ -777,7 +834,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             origin,
             STerminatorKind::Yield { value, resume },
         );
-        self.current = resume;
+        self.switch_to(resume);
         match self.slide {
             Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
             None => {
@@ -795,22 +852,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// carry their grants. A leaf yielding an access to a value is lowered
     /// as that value, of its own type: the grant of the frame temporary
     /// holding it is typed by the shape (`lower_yield_leaf`). A call that
-    /// never returns yields nothing, and joins the other leaves' grants.
+    /// never returns yields nothing, and joins the other leaves' grants. A
+    /// `!` expression typed as its context's type is lowered as the `!` it
+    /// is (`lower_expr`).
     pub(super) fn expr_ty(&self, expr: ExprId) -> TyId<'db> {
         match self.typed_body.yield_shape(expr) {
             Some(Shape::Access(..)) if self.is_yield_leaf(expr) && !self.never_returns(expr) => {
                 self.typed_body.expr_ty(self.db, expr)
             }
             Some(shape) => shape.carrier_ty(self.db),
+            None if self.typed_body.is_never_coerced(expr) => TyId::never(self.db),
             None => self.typed_body.expr_ty(self.db, expr),
         }
     }
 
     /// Whether `expr` calls something that never returns.
     fn never_returns(&self, expr: ExprId) -> bool {
-        self.typed_body
-            .callable_expr(expr)
-            .is_some_and(|callable| callable.ret_ty(self.db).is_never(self.db))
+        self.typed_body.callable_expr(expr).is_some_and(|callable| {
+            normalize_ty(
+                self.db,
+                callable.ret_ty(self.db),
+                self.body.scope(),
+                self.assumptions,
+            )
+            .is_never(self.db)
+        })
     }
 
     /// Whether the yield site `expr` yields itself, rather than through the
@@ -1069,15 +1135,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // every scope.
         self.push_drop_scope(false);
         let error = (kind == SumKind::Result).then(|| {
-            SOperand::synthetic(self.emit_expr_with_origin(
+            let error_ty = sum_ty.generic_args(self.db)[0];
+            let error = self.emit_expr_with_origin(
                 origin,
-                sum_ty.generic_args(self.db)[0],
+                error_ty,
                 SExpr::ExtractEnumField {
                     value: SOperand::synthetic(value),
                     variant: VariantIndex(failure),
                     field: FieldIndex(0),
                 },
-            ))
+            );
+            // An error of type `!` ends the path that would carry it out.
+            if normalize_ty(self.db, error_ty, self.body.scope(), self.assumptions)
+                .is_never(self.db)
+            {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            }
+            SOperand::synthetic(error)
         });
         let exit_ty = self.instance.normalized_result_ty(self.db);
         let exit = self.emit_expr_with_origin(
@@ -1174,6 +1248,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .typed_body
             .yield_shape(expr)
             .filter(|_| self.is_yield_leaf(expr));
+        // A `!` expression typed as its context's type ends its block where it
+        // would produce its value, which no path defines. A place of type `!`
+        // is not read: lowering it evaluates what locates it.
+        if yield_leaf.is_none() && self.typed_body.is_never_coerced(expr) {
+            if self.try_lower_place(expr).is_none() {
+                self.lower_expr_inner(expr);
+            }
+            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            return self.alloc_temp(self.typed_body.expr_ty(self.db, expr));
+        }
         let value = match yield_leaf {
             Some(shape) => {
                 self.yield_depth += 1;
@@ -1183,7 +1267,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             None => self.lower_expr_inner(expr),
         };
-        if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
+        let expr_ty = normalize_ty(
+            self.db,
+            self.expr_ty(expr),
+            self.body.scope(),
+            self.assumptions,
+        );
+        if expr_ty.is_never(self.db) && !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         }
         if let Some(shape) = yield_leaf
@@ -1397,7 +1487,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             Expr::Cast(value, _) => {
                 let from = self.expr_ty(*value);
-                self.lower_cast_expr(origin, *value, from, ty)
+                let layers = self.typed_body.cast_layers(expr);
+                self.lower_cast_expr(origin, *value, from, ty, layers)
             }
             Expr::Call(_, args) => {
                 self.lower_call(expr, self.typed_body.call_receiver(self.db, expr), args)
@@ -1593,9 +1684,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 use_: use_.with_env(use_.origin_scope(), self.assumptions),
                 evidence,
             },
-            ConstRef::InherentConst(use_) => {
-                ConstRef::InherentConst(use_.with_env(use_.origin_scope(), self.assumptions))
-            }
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.with_env(use_.origin_scope(), self.assumptions),
+                evidence,
+            },
             ConstRef::Const(_) => const_ref,
         };
         let policy = self.instance.key(self.db).evidence_policy(self.db);
@@ -1619,7 +1711,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ConstRef::TraitConst { use_: assoc, .. } => {
                 const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
             }
-            ConstRef::InherentConst(use_) => {
+            ConstRef::InherentConst { use_, .. } => {
                 const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
             }
             ConstRef::Const(_) => None,
@@ -2662,12 +2754,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Ok(Some(size)) => Some(BigInt::from(size)),
                 Ok(None) | Err(_) => None,
             },
-            ConstIntrinsicKind::StorageSlots if ty.has_param(self.db) || ty.has_var(self.db) => {
-                None
-            }
-            ConstIntrinsicKind::StorageSlots => {
-                storage_slot_span(self.db, ty).ok().map(BigInt::from)
-            }
+            ConstIntrinsicKind::StorageSlots => storage_slot_span(self.db, ty)
+                .ok()
+                .flatten()
+                .map(BigInt::from),
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);
@@ -2827,7 +2917,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let outer = self.slide.replace(slide);
                 let _ = self.lower_expr(*expr);
                 self.slide = outer;
-                self.current = slide;
+                self.switch_to(slide);
             }
             Stmt::Expr(expr) => {
                 let _ = self.lower_expr(*expr);

@@ -1,0 +1,4 @@
+// A trait-keyed effect whose provider's `PodM` is `u`'s unsafe impl; no
+// method of it is called. Expected: refused at `t::charge2()`.
+#[test]
+fn provider() { with (t::PodM = u::X {}) { assert!(t::charge2() == 7) } }

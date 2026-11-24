@@ -6,10 +6,10 @@ use crate::{
 };
 use rustc_hash::FxHashMap;
 
-use super::{TyChecker, env::LocalBinding};
+use super::{TyChecker, env::LocalBinding, expr::MemberSite};
 use crate::analysis::{
     HirAnalysisDb,
-    name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag, is_scope_visible_from},
+    name_resolution::{PathRes, ResolvedVariant, diagnostics::PathResDiag},
     ty::{
         adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape},
         diagnostics::{BodyDiag, FuncBodyDiag},
@@ -45,6 +45,8 @@ pub(super) struct RecordInitChecker<'tc, 'db, 'a> {
     data: &'a RecordLike<'db>,
     already_given: FxHashMap<IdentId<'db>, DynLazySpan<'db>>,
     invalid_field_given: bool,
+    /// The expression or pattern that initializes or destructures the record.
+    site: MemberSite,
 }
 
 impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
@@ -52,7 +54,11 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
     ///
     /// ## Panics
     /// Panics if the given `data` is not a record.
-    pub(super) fn new(tc: &'tc mut TyChecker<'db>, data: &'a RecordLike<'db>) -> Self {
+    pub(super) fn new(
+        tc: &'tc mut TyChecker<'db>,
+        data: &'a RecordLike<'db>,
+        site: MemberSite,
+    ) -> Self {
         assert!(data.is_record(tc.db));
 
         Self {
@@ -60,6 +66,7 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
             data,
             already_given: FxHashMap::default(),
             invalid_field_given: false,
+            site,
         }
     }
 
@@ -110,7 +117,7 @@ impl<'tc, 'db, 'a> RecordInitChecker<'tc, 'db, 'a> {
         };
 
         let field_scope = self.data.record_field_scope(self.tc.db, label).unwrap();
-        if is_scope_visible_from(self.tc.db, field_scope, self.tc.env.scope()) {
+        if self.tc.member_visible(field_scope, self.site) {
             Ok(ty)
         } else {
             let diag = PathResDiag::Invisible(field_span, label, field_scope.name_span(self.tc.db));

@@ -336,9 +336,10 @@ pub enum Command {
         #[arg(long, value_name = "NAME")]
         link_lib: Vec<String>,
         /// Size in bytes of the stack of a WebAssembly module, which holds the
-        /// frames of its calls (default: 1048576, 1 MiB). It is rounded up so
-        /// that the stack ends on a 64 KiB page boundary. Requires `--backend
-        /// wasm`.
+        /// frames of the calls in progress (default: 1048576, 1 MiB). A call
+        /// whose frame does not fit traps, so deep recursion that does not end
+        /// in tail calls may need more. It is rounded up so that the stack ends
+        /// on a 64 KiB page boundary. Requires `--backend wasm`.
         #[arg(long, value_name = "BYTES", value_parser = value_parser!(u32).range(1..))]
         wasm_stack_size: Option<u32>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
@@ -1350,6 +1351,14 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
     let had_init_diagnostics = driver::init_ingot(&mut db, &ingot_url);
     if had_init_diagnostics {
         eprintln!("Warning: ingot had initialization diagnostics");
+    }
+    // Index the program that generation produces, so that the members a header
+    // publishes and their references are covered, as in `fe check`.
+    if let Err(error) =
+        driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
+    {
+        eprintln!("Error preparing generated code: {}", error.located(&db));
+        std::process::exit(1);
     }
 
     let result = if let Some(output_path) = output {

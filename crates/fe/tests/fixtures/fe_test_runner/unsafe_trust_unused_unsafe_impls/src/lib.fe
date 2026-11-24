@@ -1,0 +1,5 @@
+#[test]
+fn builds_values() {
+    let _ = u0::Evil0 {}
+    let _ = u1::Evil {}
+}

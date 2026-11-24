@@ -48,6 +48,29 @@ impl std::fmt::Display for GenerationError {
     }
 }
 
+impl GenerationError {
+    /// The error with its place as `file:line:column`, the start of its range
+    /// in the text of the file in `db`, as other diagnostics print it. Without
+    /// the text the place is the byte range of `Display`.
+    pub fn located(&self, db: &DriverDataBase) -> String {
+        let position = db.workspace().get(db, &self.file).and_then(|file| {
+            let text = file.text(db);
+            let before = text.get(..usize::from(self.range.start()))?;
+            let line = before.matches('\n').count() + 1;
+            let column = before
+                .rsplit('\n')
+                .next()
+                .map_or(0, |last| last.chars().count())
+                + 1;
+            Some(format!("{}:{line}:{column}", self.file))
+        });
+        match position {
+            Some(position) => format!("{position}: {}", self.cause),
+            None => self.to_string(),
+        }
+    }
+}
+
 /// The one view every provider runs in, whatever channel requested it.
 const PROVIDER_VIEW_RULE: &str = "a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it. Share an ordinary helper function between the two providers instead";
 
@@ -379,7 +402,7 @@ fn prepare_file_within(
             "generation requires the authored input view; output is checked once".into(),
         ));
     }
-    let Some(syntax) = scan_syntax(db, file)? else {
+    let Some(syntax) = scan_syntax(db, file) else {
         return Ok(None);
     };
     // A standalone file has no dependencies whose output could be read, so the
@@ -440,10 +463,11 @@ fn plan_ingots(db: &DriverDataBase, roots: &[url::Url]) -> Vec<IngotPlan> {
         in_progress: &mut std::collections::HashSet<url::Url>,
         plans: &mut Vec<IngotPlan>,
     ) -> Option<usize> {
-        if matches!(
-            ingot.kind(db),
-            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) {
+        // The embedded libraries carry no requests. A package is not one
+        // because its manifest says it is named `core` or `std`.
+        if ingot.kind(db) == IngotKind::StandAlone
+            || common::stdlib::is_embedded_builtin(ingot.base(db))
+        {
             return None;
         }
         let base = ingot.base(db).clone();
@@ -537,7 +561,7 @@ pub fn prepare_ingots(
                 .workspace()
                 .get(db, url)
                 .expect("a planned ingot file is in the database");
-            if let Some(syntax) = scan_syntax(db, file)? {
+            if let Some(syntax) = scan_syntax(db, file) {
                 syntaxes.push((url.clone(), syntax));
             }
         }
@@ -773,16 +797,16 @@ struct FileScan {
 }
 
 /// Look for generation syntax in the text of one authored file, before any
-/// view is built. `None` means the file contains none outside quotations, so
-/// nothing needs preparing.
-fn scan_syntax(db: &DriverDataBase, file: File) -> Result<Option<FileSyntax>, GenerationError> {
+/// view is built. `None` means the file contains none outside quotations, or
+/// has parse errors, so nothing is prepared for it.
+fn scan_syntax(db: &DriverDataBase, file: File) -> Option<FileSyntax> {
     let text = file.text(db);
     // Skip the parse when none of the request forms can occur in this file.
     if !["with", "abi", "event", "msg"]
         .into_iter()
         .any(|spelling| text.contains(spelling))
     {
-        return Ok(None);
+        return None;
     }
     let parsed = hir::lower::parse_file_impl(db, db.top_mod(file));
     let root = ast::Root::cast(parser::SyntaxNode::new_root(parsed.root.clone())).unwrap();
@@ -821,34 +845,23 @@ fn scan_syntax(db: &DriverDataBase, file: File) -> Result<Option<FileSyntax>, Ge
     });
     if !has_requests && !has_short_forms {
         // A file with parse errors is not searched for provider openings.
-        return Ok(
-            (has_scoped_syntax && parse_errors.is_empty()).then_some(FileSyntax {
-                root,
-                has_requests,
-                may_open_provider: true,
-            }),
-        );
+        return (has_scoped_syntax && parse_errors.is_empty()).then_some(FileSyntax {
+            root,
+            has_requests,
+            may_open_provider: true,
+        });
     }
+    // A file with parse errors is not prepared: its requests are not known, and
+    // the ordinary pipeline reports the parse errors with the file's other
+    // diagnostics, as it does for a file without requests.
     if !parse_errors.is_empty() {
-        let diagnostics: Vec<_> = parse_errors
-            .iter()
-            .map(|error| error.to_complete(db))
-            .collect();
-        return Err(diagnostic_error(
-            db,
-            &diagnostics,
-            GenerationError {
-                file: file.url(db).expect("indexed generation input"),
-                range: parser::TextRange::empty(0.into()),
-                cause: "authored parse errors".into(),
-            },
-        ));
+        return None;
     }
-    Ok(Some(FileSyntax {
+    Some(FileSyntax {
         root,
         has_requests: has_requests || has_short_forms,
         may_open_provider: has_scoped_syntax,
-    }))
+    })
 }
 
 /// Starts the analysis of `module` in `db` with the growing-cycle search of
@@ -1176,10 +1189,19 @@ fn scoped_request_error(demand: &ScopedDeriveDemand, cause: impl Into<String>) -
     }
 }
 
-fn evaluate_scoped_request(
-    db: &DriverDataBase,
+/// A scoped request whose provider was admitted and has not run.
+struct CheckedScopedRequest<'db> {
     demand: ScopedDeriveDemand,
-) -> Result<FrozenGenerationRequest, GenerationError> {
+    provider: CheckedProvider<'db>,
+}
+
+/// Admit the provider of a scoped demand: rebinding, the demands of the bodies
+/// that decide whether it applies, target admission and the refusals of
+/// `check_provider_instance`. No provider runs.
+fn check_scoped_request<'db>(
+    db: &'db DriverDataBase,
+    demand: ScopedDeriveDemand,
+) -> Result<CheckedScopedRequest<'db>, GenerationError> {
     let request = hir::core::meta::rebind_generation_request(db, &demand)
         .map_err(|cause| scoped_request_error(&demand, cause))?;
     let requirements =
@@ -1222,13 +1244,28 @@ fn evaluate_scoped_request(
         .workspace()
         .get(db, &demand.opening.file)
         .expect("the authored view keeps every authored file");
-    let mut output =
-        evaluate_provider_instance(db, file, key, input, demand.opening.binding_range)?;
+    let provider = check_provider_instance(db, file, key, input, demand.opening.binding_range)?;
+    Ok(CheckedScopedRequest { demand, provider })
+}
+
+fn run_scoped_request<'db>(
+    db: &'db DriverDataBase,
+    checked: CheckedScopedRequest<'db>,
+) -> Result<FrozenGenerationRequest, GenerationError> {
+    let CheckedScopedRequest { demand, provider } = checked;
+    let mut output = run_provider_instance(db, provider)?;
     output.scoped_impl = Some(common::generation::FrozenScopedImpl {
         selection_name: scoped_selection_name(&demand),
         demand,
     });
     Ok(output)
+}
+
+fn evaluate_scoped_request(
+    db: &DriverDataBase,
+    demand: ScopedDeriveDemand,
+) -> Result<FrozenGenerationRequest, GenerationError> {
+    run_scoped_request(db, check_scoped_request(db, demand)?)
 }
 
 fn check_preparation_module(db: &DriverDataBase, url: &url::Url) -> Result<(), GenerationError> {
@@ -1333,19 +1370,25 @@ fn admit_requests(
     // a written implementation is.
     // `own` holds the places of the modules' own derive headers in `requests`,
     // and `sites` where each one was written, in the same order.
+    // Every provider is checked before any runs, so a refusal does not depend
+    // on which provider is written first.
     let mut sites = Vec::new();
+    let mut checked = Vec::new();
     for request in &admitted {
-        let mut plan = evaluate_provider_instance(
+        checked.push(check_provider_instance(
             db,
             request.file,
             request.provider,
             request.input,
             request.site.range,
-        )?;
+        )?);
+        sites.push(request.site.clone());
+    }
+    for (provider, request) in checked.into_iter().zip(&admitted) {
+        let mut plan = run_provider_instance(db, provider)?;
         plan.request_impl = Some(request.site.range);
         plan.request_slot = request.slot;
         requests.push(plan);
-        sites.push(request.site.clone());
     }
     debug_assert_eq!(
         requests.len() - sealed_len,
@@ -1380,6 +1423,7 @@ fn admit_requests(
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
             let mut examined = Vec::new();
+            let mut checked = Vec::new();
             // Reject every invalid opening before any provider can run; the
             // order in which demands were found must never grant authority to
             // an earlier entry.
@@ -1424,7 +1468,11 @@ fn admit_requests(
                     ));
                 }
                 completed.insert(demand.clone());
-                new_requests.push(evaluate_scoped_request(db, demand)?);
+                checked.push(check_scoped_request(db, demand)?);
+            }
+            // Every provider of the round is admitted before any runs.
+            for request in checked {
+                new_requests.push(run_scoped_request(db, request)?);
             }
             last_round_first = examined
                 .first()
@@ -2070,21 +2118,13 @@ fn prepared_view(
     requests: &[common::generation::FrozenGenerationRequest],
 ) -> DriverDataBase {
     let mut output = match basis {
+        // The file over the builtin sources of the database it is prepared in,
+        // which may differ from the embedded ones (`fe doc --stdlib-path`).
         ViewBasis::Standalone(file) => {
             let url = file.url(db).expect("indexed generation input");
-            let mut output = DriverDataBase::default();
-            output
-                .workspace()
-                .touch(&mut output, url.clone(), Some(file.text(db).clone()));
-            output
-                .compiler_options()
-                .set_recovery_mode(&mut output)
-                .to(db.compiler_options().recovery_mode(db));
-            output
-                .compilation_settings()
-                .set_profile(&mut output)
-                .to(db.compilation_settings().profile(db).clone());
-            output
+            db.fork_inputs_selecting(|candidate| {
+                *candidate == url || common::stdlib::is_embedded_builtin(candidate)
+            })
         }
         ViewBasis::Package => db.fork_inputs(),
         ViewBasis::DependencyOwner(sources) => db.fork_inputs_selecting(|url| {
@@ -2109,13 +2149,24 @@ fn prepared_view(
     output
 }
 
-fn evaluate_provider_instance<'db>(
+/// A provider instance that admission accepted and that has not run: every
+/// refusal that does not need its output has been made.
+struct CheckedProvider<'db> {
+    file: File,
+    key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+    input: RecordInput<'db>,
+    range: parser::TextRange,
+}
+
+/// Refuse a provider instance that cannot run, before any provider of its
+/// batch runs. Runs no compile-time code of the provider.
+fn check_provider_instance<'db>(
     db: &'db DriverDataBase,
     file: File,
     provider_key: hir::analysis::semantic::SemanticInstanceKey<'db>,
     input: RecordInput<'db>,
     range: parser::TextRange,
-) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+) -> Result<CheckedProvider<'db>, GenerationError> {
     let BodyOwner::Func(provider, _) = provider_key.owner(db) else {
         return Err(GenerationError {
             file: file.url(db).unwrap(),
@@ -2252,7 +2303,6 @@ fn evaluate_provider_instance<'db>(
             ),
         ));
     }
-    let owner = provider_key.owner(db);
     let instance = hir::analysis::semantic::SemanticInstance::new(db, provider_key);
     let mut helper_diagnostics = Vec::new();
     let mut validation_diagnostics = Vec::new();
@@ -2329,6 +2379,32 @@ fn evaluate_provider_instance<'db>(
             ),
         ));
     }
+    Ok(CheckedProvider {
+        file,
+        key: provider_key,
+        input,
+        range,
+    })
+}
+
+/// Run an admitted provider and freeze the code it returns.
+fn run_provider_instance<'db>(
+    db: &'db DriverDataBase,
+    checked: CheckedProvider<'db>,
+) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+    let CheckedProvider {
+        file,
+        key: provider_key,
+        input,
+        range,
+    } = checked;
+    let url = file.url(db).expect("indexed generation input");
+    let error = |range, cause| GenerationError {
+        file: url.clone(),
+        range,
+        cause,
+    };
+    let owner = provider_key.owner(db);
     let value = match hir::analysis::semantic::ctfe::force_const_computation(
         db,
         hir::analysis::semantic::ctfe::const_computation_for_instance(

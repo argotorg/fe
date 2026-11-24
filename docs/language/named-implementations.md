@@ -62,6 +62,10 @@ implementation appear in one `with` or either enclosing block, and when
 another function forwards the same effect. An unbounded helper that supplies
 its own provider still uses its ordinary dictionary.
 
+A function passed as a value to a callable bound, as in `run(helper<u256>)`,
+carries proofs of its own bounds made where it is passed, as the closure
+`|| helper<u256>()` would.
+
 ## Supertraits: one dictionary per bound
 
 An implied supertrait dictionary comes from its subtrait's proof. An unrelated
@@ -137,10 +141,17 @@ A named implementation of a trait with associated types, associated effect
 rows or associated constants requires a unique, source-declared ordinary
 implementation covering its header under its declared conditions. Named
 implementations must agree with other source-declared implementations, ordinary
-and named, on these outputs wherever their headers overlap. Output agreement
-does not depend on which implementation conditions happen to hold at an
-opening. Constants compare using the compiler's existing constant normalization;
+and named, on these outputs wherever their headers overlap, including where
+an unresolved associated type or constant leaves open whether they do. Output
+agreement does not depend on which implementation conditions happen to hold at
+an opening. Constants compare using the compiler's existing constant normalization;
 for example, `10` agrees with `5 + 5`, but not with `11`.
+
+Agreement is also checked where a choice answers a concrete goal, including an
+ordinary implementation whose conditions hold only through a choice and
+implementations in other ingots: the implementation that answers must give the
+outputs that ordinary normalization gives the goal, and a goal with outputs
+needs an ordinary implementation there. A use that breaks this is rejected.
 
 ```fe
 trait Size { const N: usize }
@@ -198,4 +209,14 @@ The access checker conservatively treats such entries as potentially overlapping
 even when their literal keys differ.
 
 Implementation names are compile-time operands of `with`. This feature does
-not add public evidence values, a `prove` expression, or a `Constraint` kind.
+not add public evidence values or a `prove` expression.
+
+A trait family is written `trait Name` or `trait Name<Args>`, where the
+arguments are those of the trait after its subject. It names the trait with its
+subject left open and has kind `* -> Constraint`. Applying it to a type `T`, as
+`P<T>` for a parameter `P: * -> Constraint`, gives a type of kind `Constraint`:
+the goal that `T` implements the trait. A parameter of that kind is declared
+`G: (Constraint)`. These types describe goals and have no values, so no
+constant or function parameter can have one. A default that does not depend on
+the subject is part of the family, so `trait Fixed` and `trait Fixed<4>` are
+the same family when `4` is the default of `trait Fixed<const N: usize = 4>`.

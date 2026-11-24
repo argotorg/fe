@@ -1,0 +1,69 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/state_zero_invalid_uninhabited.fe
+---
+error[3-0069]: contract state cannot hold `Empty`
+   ┌─ state_zero_invalid_uninhabited.fe:29:12
+   │
+29 │     mut a: Empty,
+   │            ^^^^^ `Empty` is uninhabited
+   │
+   = state starts zeroed, and an uninhabited type has no valid values
+
+error[3-0069]: contract state cannot hold `Mixed`
+   ┌─ state_zero_invalid_uninhabited.fe:30:12
+   │
+30 │     mut b: Mixed,
+   │            ^^^^^ `Mixed` is uninhabited
+   │
+   = state starts zeroed, and an uninhabited type has no valid values
+
+error[3-0069]: contract state cannot hold `[Empty; 2]`
+   ┌─ state_zero_invalid_uninhabited.fe:31:12
+   │
+31 │     mut c: [Empty; 2],
+   │            ^^^^^^^^^^ `[Empty; 2]` is uninhabited
+   │
+   = state starts zeroed, and an uninhabited type has no valid values
+
+error[3-0069]: contract state cannot hold `Flipped`
+   ┌─ state_zero_invalid_uninhabited.fe:32:12
+   │
+32 │     mut d: Flipped,
+   │            ^^^^^^^ `Flipped` has an uninhabited first variant
+   │
+   = state starts zeroed, and tag 0 selects an uninhabited variant
+
+error[3-0069]: contract state cannot hold `Empty`
+   ┌─ state_zero_invalid_uninhabited.fe:33:12
+   │
+33 │     mut e: StorageMap<u256, Empty>,
+   │            ^^^^^^^^^^^^^^^^^^^^^^^ `StorageMap<u256, Empty>` holds `Empty`, which is uninhabited
+   │
+   = state starts zeroed, and an uninhabited type has no valid values
+
+error[3-0069]: contract state cannot hold `Flipped`
+   ┌─ state_zero_invalid_uninhabited.fe:34:12
+   │
+34 │     mut f: TSlot<Flipped>,
+   │            ^^^^^^^^^^^^^^ `TSlot<Flipped>` holds `Flipped`, which has an uninhabited first variant
+   │
+   = state starts zeroed, and tag 0 selects an uninhabited variant
+
+error[3-0069]: contract state cannot hold `Flipped`
+   ┌─ state_zero_invalid_uninhabited.fe:35:12
+   │
+35 │     mut g: (u256, Flipped),
+   │            ^^^^^^^^^^^^^^^ `(u256, Flipped)` holds `Flipped`, which has an uninhabited first variant
+   │
+   = state starts zeroed, and tag 0 selects an uninhabited variant
+
+error[3-0069]: contract state cannot hold `Guarded`
+   ┌─ state_zero_invalid_uninhabited.fe:36:12
+   │
+36 │     mut h: Guarded,
+   │            ^^^^^^^ `Guarded` has `unsafe` fields
+   │
+   = state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant

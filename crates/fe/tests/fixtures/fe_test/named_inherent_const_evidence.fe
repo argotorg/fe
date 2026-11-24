@@ -1,0 +1,16 @@
+trait Foo { const fn value() -> u256 }
+impl Foo for u256 { const fn value() -> u256 { 1 } }
+impl Foo for u256 as AltFoo { const fn value() -> u256 { 2 } }
+struct Wrapper<T> {}
+impl<T: Foo> Wrapper<T> {
+    const X: u256 = T::value()
+}
+fn read() -> u256 { with (AltFoo) { Wrapper<u256>::X } }
+const fn cread() -> u256 { with (AltFoo) { Wrapper<u256>::X } }
+fn read_ordinary() -> u256 { Wrapper<u256>::X }
+#[test]
+fn chosen() { assert(read() == 2) }
+#[test]
+fn chosen_const() { assert(cread() == 2) }
+#[test]
+fn ordinary() { assert(read_ordinary() == 1) }

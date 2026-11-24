@@ -173,8 +173,18 @@ fn debug_ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerErr
     }
 }
 
+/// Fe's declared EVM fixed scratch memory region is `[0x00, 0x40)` (covering
+/// the `[0x00, 0x20)` `init_abi -> init_root` immutable-pointer handoff and
+/// `[0x00, 0x24)` panic revert payloads, strictly below Sonatina's
+/// backend-owned `0x40..0x60` and `0x80..0xa0` slots).
+const FE_EVM_FIXED_MEMORY_LIMIT: u32 = 0x40;
+
 fn ensure_module_sonatina_ir_valid(module: &Module) -> Result<(), LowerError> {
-    let report = verify_module(module, &VerifierConfig::for_level(VerificationLevel::Full));
+    let mut cfg = VerifierConfig::for_level(VerificationLevel::Full);
+    if matches!(module.ctx.triple.architecture, Architecture::Evm) {
+        cfg = cfg.with_evm_fixed_memory_limit(FE_EVM_FIXED_MEMORY_LIMIT);
+    }
+    let report = verify_module(module, &cfg);
     if report.has_errors() {
         return Err(LowerError::Internal(format_verification_report(
             module, &report,

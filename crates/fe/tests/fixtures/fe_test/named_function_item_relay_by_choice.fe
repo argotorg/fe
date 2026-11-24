@@ -1,0 +1,27 @@
+// A function item whose bound holds only through
+// a choice (an ordinary blanket implementation whose condition a named
+// implementation answers), relayed through a generic body. The item's
+// bound trait has no outputs; the callable trait Fn has outputs (Out, E).
+// Expected: go_item 2, go_closure 2 (the closure and the
+// item agree). Pick has no outputs, so the guard has nothing to compare.
+trait Marker {}
+trait Pick { fn pick() -> u256 }
+impl<T: Marker> Pick for T { fn pick() -> u256 { 2 } }
+struct S {}
+impl Marker for S as FakeMarker {}
+
+fn helper<T: Pick>() -> u256 { T::pick() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn via<T: Pick>() -> u256 { run(helper<T>) }
+fn via_closure<T: Pick>() -> u256 { run(|| helper<T>()) }
+fn via_direct<T: Pick>() -> u256 { helper<T>() }
+
+fn go_item() -> u256 { with (FakeMarker) { via<S>() } }
+fn go_closure() -> u256 { with (FakeMarker) { via_closure<S>() } }
+fn go_direct() -> u256 { with (FakeMarker) { via_direct<S>() } }
+#[test]
+fn item() { assert(go_item() == 2) }
+#[test]
+fn closure() { assert(go_closure() == 2) }
+#[test]
+fn direct() { assert(go_direct() == 2) }

@@ -1,0 +1,4 @@
+// `peek_w` is checked under `T: Wide`, which implies `T: PodM`, proved by
+// `u`'s unsafe impl. Expected: refused at `t::peek_w(u::Sup {})`.
+#[test]
+fn supertrait() { assert!(t::peek_w(u::Sup {}) == 7) }

@@ -1,0 +1,7 @@
+trait Eq {}
+struct Family<P: * -> Constraint> {}
+
+fn line(_ x: Family<trait // line comment
+Eq>) {}
+
+fn plain(_ x: Family<trait   Eq>) {}

@@ -160,6 +160,8 @@ pub(super) struct BodyCtxt<'ctxt, 'db> {
     /// The quotations around each expression lowered inside a fragment that
     /// the body splices, which the body's own quotations do not describe.
     spliced: Vec<(ExprId, Vec<TopLevelMod<'db>>)>,
+    /// The same for each pattern lowered inside such a fragment.
+    spliced_pats: Vec<(PatId, Vec<TopLevelMod<'db>>)>,
 }
 
 /// A name in scope, for checking the open names of the quotes spliced there.
@@ -339,6 +341,13 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         }
     }
 
+    /// Notes the quotations around `pat` if they are not the body's own.
+    fn note_pat_quote_chain(&mut self, pat: PatId) {
+        if self.f_ctxt.quote_frames.len() > self.base_frames {
+            self.spliced_pats.push((pat, self.f_ctxt.quote_chain()));
+        }
+    }
+
     pub(super) fn push_expr(&mut self, expr: Expr<'db>, origin: HirOrigin<ast::Expr>) -> ExprId {
         let expr_id = self.exprs.push(Partial::Present(expr));
         let quote_mod = self.current_quote_mod_idx();
@@ -391,6 +400,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
         self.source_map
             .pat_map
             .insert_with_quote_mod(pat_id, origin, quote_mod);
+        self.note_pat_quote_chain(pat_id);
         pat_id
     }
 
@@ -502,6 +512,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             syntax_top_mod: self.f_ctxt.syntax_top_mod(),
             frames: self.f_ctxt.quote_chain(),
             spliced: std::mem::take(&mut self.spliced),
+            spliced_pats: std::mem::take(&mut self.spliced_pats),
         }
     }
 
@@ -520,6 +531,7 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
             local_binders: Vec::new(),
             base_frames,
             spliced: Vec::new(),
+            spliced_pats: Vec::new(),
         }
     }
 

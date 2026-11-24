@@ -2361,7 +2361,16 @@ pub const fn run() -> u256 {
     if xs[0] { 4 } else { 0 }
 }
 "#;
-    let output = prepare(expr_anon_source)
+    // The method is the visible `VisibleTrait::val`. `HiddenTrait` is not in
+    // scope and is not selected, so probing it asks nothing of the provider:
+    // nothing is generated.
+    let (db, file) = input(expr_anon_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "4");
+
+    // A call that the provider supplies is a demand of the anon const body.
+    let output = prepare(&expr_anon_source.replace("(Pair {}).val()", "Pair::score()"))
         .expect("expression-position anon const body should rebind provider opening");
     assert_eq!(eval_const_fn_u256(&output, "run"), "4");
 
@@ -2412,7 +2421,13 @@ pub const fn run() -> u256 {
     xs[0] as u256
 }
 "#;
-    let output = prepare(type_anon_rebind_source)
+    // As above, the visible method is selected and nothing is generated.
+    let (db, file) = input(type_anon_rebind_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "7");
+
+    let output = prepare(&type_anon_rebind_source.replace("(Pair {}).val()", "Pair::score()"))
         .expect("written-type anon const bodies should prepare and rebind provider opening");
     assert_eq!(eval_const_fn_u256(&output, "run"), "7");
 
@@ -2496,7 +2511,15 @@ pub struct Buffer {
     pub bytes: [u8; { with (MyScore) { (Pair {}).val() } }],
 }
 "#;
-    let cause = prepare_err(dropped_demand_source);
+    // The visible method is selected, so the provider is not asked and its
+    // fault is not reached.
+    let (db, file) = input(dropped_demand_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+
+    // A demand of the written type's anon const body is not dropped: the
+    // provider it names runs, and its fault is reported.
+    let cause = prepare_err(&dropped_demand_source.replace("(Pair {}).val()", "Pair::score()"));
     assert!(cause.contains("division by zero"), "{cause}");
 }
 
@@ -3403,4 +3426,1010 @@ const fn run() -> usize {
             "<Packet as Read<trait Mark>>::read()",
         );
     assert_eq!(eval_const_fn_u256(&prepare(&written).unwrap(), "run"), "9");
+}
+
+#[test]
+fn runtime_effect_with_projection_is_not_a_provider() {
+    let source = r#"
+trait Assoc { type Item }
+struct RuntimeEffect<T> { val: u256 }
+struct W {}
+impl Assoc for W { type Item = u8 }
+
+fn broken<T: Assoc>() {
+    with (RuntimeEffect<T::Item> { val: 1 }) {}
+}
+
+fn caller() { broken<W>() }
+"#;
+    // No generation is involved, so preparation produces no output database.
+    let (db, file) = input(source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "{}",
+        diagnostics.format_diags(&db)
+    );
+
+    // A `Derive` implementation whose receiver can match the operand makes it
+    // a provider whose offers cannot be determined: it is refused where it is
+    // written, not accepted as a value.
+    let provider = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, empty}
+
+trait Assoc { type Item }
+trait Tr {}
+struct Wrap<X> {}
+impl<X> Derive<trait Tr> for Wrap<X> {
+    const fn derive(_ record: Record) -> Code<Item> { empty<Item>() }
+}
+struct W {}
+impl Assoc for W { type Item = u8 }
+
+fn broken<T: Assoc>() {
+    with (Wrap<T::Item> {}) {}
+}
+
+fn caller() { broken<W>() }
+"#;
+    let cause = prepare_err(provider);
+    assert!(
+        cause.contains("derive could not determine the type of a provider"),
+        "{cause}"
+    );
+}
+
+#[test]
+fn declared_bound_answers_before_a_blanket_impl_needs_a_provider() {
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tag { fn tag(self) -> u256 }
+trait Need { fn need(self) -> u256 }
+impl<U: Tag> Need for U { fn need(self) -> u256 { self.tag() } }
+struct ProviderForTag {}
+impl Derive<trait Tag> for ProviderForTag {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn tag(self) -> u256 { 1 } }
+    }
+}
+fn helper<T: Need>(x: T) -> u256 { x.need() }
+"#;
+    // The call's goal is the caller's declared bound, so the provider that
+    // could supply the blanket implementation's prerequisite is not asked.
+    for body in [
+        "fn use_need<T: Need>(x: T) -> u256 { with (ProviderForTag) { helper(x) } }",
+        "fn use_need<T: Need>(x: T) -> u256 { with (ProviderForTag) { x.need() } }",
+    ] {
+        let source = format!("{prelude}{body}\n");
+        let (db, file) = input(&source);
+        let db = prepare_file(&db, file)
+            .expect("the program is not refused")
+            .unwrap_or(db);
+        assert_eq!(output_diagnostics(&db), "", "{body}");
+    }
+
+    // The dictionary the caller received is the one used.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tag { const fn tag(self) -> u256 }
+trait Need { const fn need(self) -> u256 }
+impl<U: Tag> Need for U { const fn need(self) -> u256 { self.tag() } }
+struct ProviderForTag {}
+impl Derive<trait Tag> for ProviderForTag {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn tag(self) -> u256 { 1 } }
+    }
+}
+struct R {}
+impl Tag for R { const fn tag(self) -> u256 { 9 } }
+const fn helper<T: Need>(x: T) -> u256 { x.need() }
+const fn use_need<T: Need>(_ x: T) -> u256 { with (ProviderForTag) { helper(x) } }
+const fn run() -> u256 { use_need(R {}) }
+"#;
+    let (db, file) = input(source);
+    let db = prepare_file(&db, file)
+        .expect("the program is not refused")
+        .unwrap_or(db);
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "9");
+}
+
+#[test]
+fn unresolved_receiver_inside_with_reports_annotation_needed() {
+    let header = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+trait Bar { fn bar(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn bar(self) -> u256 { 2 } }
+    }
+}
+struct G<T> { t: T }
+impl<T> Foo for G<T> { fn val(self) -> u256 { 3 } }
+"#;
+    // The receiver's element type is never settled, so the call is reported
+    // for its annotation; preparation must not select an implementation for
+    // the unsettled use.
+    for body in [
+        "fn f() -> u256 {\n    let g = G { t: 1 }\n    with (P) { g.val() }\n}\n",
+        // The same body without a `with` block is the control.
+        "fn f() -> u256 {\n    let g = G { t: 1 }\n    g.val()\n}\n",
+    ] {
+        let source = format!("{header}{body}");
+        let (db, file) = input(&source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        let diagnostics = output_diagnostics(&db);
+        assert!(diagnostics.contains("8-0031"), "{body}\n{diagnostics}");
+    }
+
+    // The offered trait of the block also has a method of that name.
+    let offered = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+impl Foo for u256 { fn val(self) -> u256 { 1 } }
+trait Bar { fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+struct G<T> { t: T }
+impl<T> Foo for G<T> { fn val(self) -> u256 { 3 } }
+fn f() -> u256 {
+    let g = G { t: 1 }
+    with (P) { g.val() }
+}
+"#;
+    let (db, file) = input(offered);
+    let db = match prepare_file(&db, file) {
+        Ok(Some(output)) => output,
+        _ => db,
+    };
+    let diagnostics = output_diagnostics(&db);
+    assert!(diagnostics.contains("8-0031"), "{diagnostics}");
+}
+
+#[test]
+fn with_operand_with_two_meanings_is_ambiguous() {
+    let diagnostics_of = |source: &str| {
+        let (db, file) = input(source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        output_diagnostics(&db)
+    };
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tr { fn op(self) -> u256 }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+"#;
+    // A provider type and a named implementation of one name.
+    let named = format!(
+        "{prelude}impl Tr for R {{ fn op(self) -> u256 {{ 5 }} }}\nimpl Tr for R as P {{ fn op(self) -> u256 {{ 6 }} }}\nfn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    let found = diagnostics_of(&named);
+    assert!(
+        found.contains("ambiguous") && found.contains('P'),
+        "{found}"
+    );
+
+    // A provider type and a value of one name.
+    let value = format!(
+        "{prelude}struct Eff {{ v: u256 }}\nconst P: Eff = Eff {{ v: 9 }}\nfn use_eff() -> u256 uses (e: Eff) {{ e.v }}\nfn f() -> u256 {{ with (P) {{ use_eff() }} }}\n"
+    );
+    let found = diagnostics_of(&value);
+    assert!(
+        found.contains("ambiguous") && found.contains('P'),
+        "{found}"
+    );
+
+    // Control: a provider type alone still opens.
+    let control = format!(
+        "{prelude}impl Tr for R {{ fn op(self) -> u256 {{ 5 }} }}\nfn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    assert_eq!(diagnostics_of(&control), "");
+
+    // A private type written as an argument of the provider's path is
+    // refused as it is in a signature, for a path and for a literal.
+    let argument = |operand: &str| {
+        format!(
+            r#"
+use core::derive::Derive
+use core::meta::{{Record, Code, Item}}
+
+trait Tr {{ fn op(self) -> u256 }}
+mod m {{
+    use core::derive::Derive
+    use core::meta::{{Record, Code, Item}}
+    struct Secret {{}}
+    pub struct PubProvider<T> {{}}
+    impl<T> Derive<trait super::Tr> for PubProvider<T> {{
+        const fn derive(_ record: Record) -> Code<Item> {{
+            quote {{ fn op(self) -> u256 {{ 1 }} }}
+        }}
+    }}
+}}
+struct R {{}}
+fn f() -> u256 {{
+    with ({operand}) {{ R {{}}.op() }}
+}}
+"#
+        )
+    };
+    for operand in ["m::PubProvider<m::Secret>", "m::PubProvider<m::Secret> {}"] {
+        let found = diagnostics_of(&argument(operand));
+        assert!(found.contains("2-0003"), "{operand}\n{found}");
+    }
+}
+
+#[test]
+fn open_provider_does_not_claim_traits_with_outputs() {
+    let evaluated = |source: &str| {
+        let (db, file) = input(source);
+        let db = prepare_file(&db, file)
+            .expect("the program is not refused")
+            .unwrap_or(db);
+        assert_eq!(output_diagnostics(&db), "");
+        db
+    };
+
+    // An associated constant is found through the ordinary implementation,
+    // not offered by the open provider.
+    let constant = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait HasX { const X: u256 }
+impl HasX for u256 { const X: u256 = 5 }
+trait Other { const X: u256 }
+
+struct OpenP {}
+impl<P: * -> Constraint> Derive<P> for OpenP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn nothing(self) {} }
+    }
+}
+const fn f() -> u256 {
+    with (OpenP) { u256::X }
+}
+"#;
+    assert_eq!(eval_const_fn_u256(&evaluated(constant), "f"), "5");
+
+    // A bound with an associated constant uses its ordinary implementation,
+    // while a trait of the package without outputs is still generated.
+    let bound = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait HasX { const X: u256 }
+impl HasX for u256 { const X: u256 = 5 }
+trait Tr { const fn op(self) -> u256 }
+struct R {}
+struct OpenP {}
+impl<P: * -> Constraint> Derive<P> for OpenP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn op(self) -> u256 { 1 } }
+    }
+}
+const fn need_x<T: HasX>() -> u256 { T::X }
+const fn f() -> u256 {
+    with (OpenP) { need_x<u256>() }
+}
+const fn g() -> u256 {
+    with (OpenP) { R {}.op() }
+}
+"#;
+    let db = evaluated(bound);
+    assert_eq!(eval_const_fn_u256(&db, "f"), "5");
+    assert_eq!(eval_const_fn_u256(&db, "g"), "1");
+}
+
+#[test]
+fn unselected_offered_probes_do_not_become_demands() {
+    // The diagnostics of a program, or the cause when preparation refuses it.
+    let outcome = |source: &str| {
+        let (db, file) = input(source);
+        match prepare_file(&db, file) {
+            Err(error) => format!("refused: {}", error.cause),
+            Ok(Some(output)) => output_diagnostics(&output),
+            Ok(None) => output_diagnostics(&db),
+        }
+    };
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+impl Foo for u256 { fn val(self) -> u256 { 1 } }
+trait Bar { fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+"#;
+
+    // A primitive receiver that the provider cannot serve: the written method
+    // applies, and the provider's trait is not probed into a demand.
+    let primitive = format!(
+        "{prelude}fn f() -> u256 {{\n    let x: u256 = 5\n    with (P) {{ x.val() }}\n}}\n"
+    );
+    assert_eq!(outcome(&primitive), "");
+
+    // The same through a declared bound on a type parameter.
+    let parameter =
+        format!("{prelude}fn g<T: Foo>(x: T) -> u256 {{\n    with (P) {{ x.val() }}\n}}\n");
+    assert_eq!(outcome(&parameter), "");
+
+    // A receiver whose private field only the admission of a generated
+    // implementation would refuse: both methods apply, and no provider runs.
+    let foreign = format!(
+        "{prelude}mod m {{\n    pub struct S {{ x: u256 }}\n    pub fn mk() -> S {{ S {{ x: 1 }} }}\n}}\nimpl Foo for m::S {{ fn val(self) -> u256 {{ 4 }} }}\nfn f() -> u256 {{\n    with (P) {{ m::mk().val() }}\n}}\n"
+    );
+    let found = outcome(&foreign);
+    assert!(
+        found.contains("8-0026") && !found.contains("refused:"),
+        "{found}"
+    );
+
+    // A receiver whose supertrait bound of the offered trait fails.
+    let unsatisfied = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Marker {}
+trait Foo { fn val(self) -> u256 }
+trait Bar: Marker { fn val(self) -> u256 }
+struct S { a: u256 }
+impl Foo for S { fn val(self) -> u256 { 1 } }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+fn f() -> u256 {
+    let s = S { a: 1 }
+    with (P) { s.val() }
+}
+"#;
+    let found = outcome(unsatisfied);
+    assert!(
+        found.contains("8-0026") && !found.contains("generated implementation admission failed"),
+        "{found}"
+    );
+
+    // An authored record can receive `Bar` from the provider, so both methods
+    // are candidates and the ambiguity stays.
+    let generic = format!(
+        "{prelude}struct G<T> {{ t: T }}\nimpl<T> Foo for G<T> {{ fn val(self) -> u256 {{ 3 }} }}\nfn f() -> u256 {{\n    let g = G<u8> {{ t: 1 }}\n    with (P) {{ g.val() }}\n}}\n"
+    );
+    let found = outcome(&generic);
+    assert!(
+        found.contains("8-0026") && !found.contains("refused:"),
+        "{found}"
+    );
+
+    // The written method is the one that runs.
+    let evaluated = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { const fn val(self) -> u256 }
+impl Foo for u256 { const fn val(self) -> u256 { 1 } }
+trait Bar { const fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn val(self) -> u256 { 2 } }
+    }
+}
+const fn f() -> u256 {
+    let x: u256 = 5
+    with (P) { x.val() }
+}
+"#;
+    let (db, file) = input(evaluated);
+    let db = prepare_file(&db, file)
+        .expect("the program is not refused")
+        .unwrap_or(db);
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "f"), "1");
+}
+
+#[test]
+fn effect_literal_with_unnormalized_projection_is_not_a_derive_provider() {
+    // No `Derive` implementation exists, so each operand is an ordinary
+    // effect value whose type mentions an associated type: a literal, and a
+    // value bound under its key.
+    let literal = r#"
+trait Assoc {
+    type Item
+}
+struct EmptyEffect<T> {}
+fn needs_eff<T: Assoc>() uses (e: EmptyEffect<T::Item>) {}
+
+fn caller<T: Assoc>() {
+    with (EmptyEffect<T::Item> {}) { needs_eff<T>() }
+}
+"#;
+    let keyed = r#"
+trait Assoc {
+    type Item
+}
+struct EmptyEffect<T> {}
+fn needs_eff<T: Assoc>() uses (e: EmptyEffect<T::Item>) {}
+
+fn caller<T: Assoc>(v: EmptyEffect<T::Item>) {
+    with (EmptyEffect<T::Item> = v) { needs_eff<T>() }
+}
+"#;
+    for (name, source) in [("literal", literal), ("keyed value", keyed)] {
+        // No generation is involved, so preparation produces no output database.
+        let (db, file) = input(source);
+        assert!(
+            prepare_file(&db, file).unwrap().is_none(),
+            "{name}: expected no generation"
+        );
+        let diagnostics = db.run_on_top_mod(db.top_mod(file));
+        assert!(
+            !diagnostics.has_errors(&db),
+            "{name}: {}",
+            diagnostics.format_diags(&db)
+        );
+    }
+
+    // An effect key is compared after it is normalized under the assumptions
+    // of the body, whichever way it is written; what stays unreduced is as
+    // rigid as a parameter.
+    let prelude = r#"
+trait Assoc {
+    type Item
+}
+struct W {}
+impl Assoc for W { type Item = u8 }
+struct EmptyEffect<T> { n: u256 }
+fn needs_eff_u8() -> u256 uses (e: EmptyEffect<u8>) { e.n }
+fn needs_eff_item<T: Assoc>() -> u256 uses (e: EmptyEffect<T::Item>) { e.n }
+"#;
+    // The diagnostics of a program that needs no generation, and its codes.
+    let check = |source: &str| {
+        let source = format!("{prelude}{source}");
+        let (db, file) = input(&source);
+        assert!(prepare_file(&db, file).unwrap().is_none());
+        let text = {
+            let diagnostics = db.run_on_top_mod(db.top_mod(file));
+            if diagnostics.has_errors(&db) {
+                diagnostics.format_diags(&db)
+            } else {
+                String::new()
+            }
+        };
+        (db, text)
+    };
+    let codes = |text: &str| {
+        let mut codes: Vec<_> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("error[")?.split(']').next())
+            .map(str::to_owned)
+            .collect();
+        codes.sort();
+        codes
+    };
+
+    // (a) The bound makes `T::Item` the key `u8`. No other provider is in
+    // scope, so the bound value is the one the callee reads.
+    let (_, text) = check(
+        r#"
+fn f<T: Assoc<Item = u8>>(v: EmptyEffect<T::Item>) -> u256 {
+    with (EmptyEffect<T::Item> = v) { needs_eff_u8() }
+}
+"#,
+    );
+    assert_eq!(text, "", "(a)");
+
+    // (b) The reverse: a key written `u8` serves a requirement `T::Item`.
+    let (_, text) = check(
+        r#"
+fn g<T: Assoc<Item = u8>>(v: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<u8> = v) { needs_eff_item<T>() }
+}
+"#,
+    );
+    assert_eq!(text, "", "(b)");
+
+    // (c) Two bindings of one key behave alike in both spellings.
+    let (_, plain) = check(
+        r#"
+fn two(a: EmptyEffect<u8>, b: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<u8> = a, EmptyEffect<u8> = b) { needs_eff_u8() }
+}
+"#,
+    );
+    let (_, projected) = check(
+        r#"
+fn two<T: Assoc<Item = u8>>(a: EmptyEffect<T::Item>, b: EmptyEffect<u8>) -> u256 {
+    with (EmptyEffect<T::Item> = a, EmptyEffect<u8> = b) { needs_eff_u8() }
+}
+"#,
+    );
+    assert_eq!(codes(&plain), codes(&projected), "(c) {plain}\n{projected}");
+
+    // (d) Without the equality bound the key is not known to be `u8`.
+    let (_, text) = check(
+        r#"
+fn h<T: Assoc>(v: EmptyEffect<T::Item>) -> u256 {
+    with (EmptyEffect<T::Item> = v) { needs_eff_u8() }
+}
+"#,
+    );
+    assert!(
+        text.contains("missing effect `EmptyEffect<u8>`"),
+        "(d) {text}"
+    );
+}
+
+const CHAINED_SIBLINGS: &str = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Tr { fn op(self) -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct A { a: u256 }
+struct B { a: u256 }
+struct Slow {}
+impl Derive<trait Tr> for Slow {
+    const fn derive(_ record: Record) -> Code<Item> {
+        var i: u256 = 0
+        while true { i += 1 }
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+struct Other {}
+impl Derive<trait Seed> for Other {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 3 } }
+    }
+}
+const fn helper() -> u256 { with (Other) { B::seed() } }
+struct Chain {}
+impl Derive<trait Tr> for Chain {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let x: u256 = helper()
+        quote { fn op(self) -> u256 { 2 } }
+    }
+}
+BODY
+"#;
+
+#[test]
+fn chained_provider_refusal_precedes_earlier_sibling_provider() {
+    // The batch of one round holds a provider that never ends and a provider
+    // that opens another provider. The refusal comes before either runs,
+    // whichever block is written first, and whether the requests are scoped
+    // blocks or written headers.
+    let bodies = [
+        "fn f() -> u256 { with (Slow) { A { a: 0 }.op() } + with (Chain) { B { a: 0 }.op() } }",
+        "fn f() -> u256 { with (Chain) { B { a: 0 }.op() } + with (Slow) { A { a: 0 }.op() } }",
+        "impl Tr for A with (Slow)\nimpl Tr for B with (Chain)",
+        "impl Tr for B with (Chain)\nimpl Tr for A with (Slow)",
+    ];
+    for body in bodies {
+        let cause = prepare_err(&CHAINED_SIBLINGS.replace("BODY", body));
+        assert!(cause.contains(RULE), "{body}: {cause}");
+        assert!(!cause.contains("step limit"), "{body}: {cause}");
+    }
+}
+
+#[test]
+fn generated_method_chosen_by_its_arguments_keeps_its_pending_request() {
+    // `Foo::m` is written and does not take the `u16` argument. `Bar::m` comes
+    // from a header and applies to `W<Rec>` only when `Rec: Need`, which the
+    // provider of the block supplies. The call runs `Bar::m`, so the request
+    // for `Need` is a demand of the body.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Need { const fn need() -> u256 }
+struct Rec {}
+struct Gate {}
+impl Derive<trait Need> for Gate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn need() -> u256 { 0 } }
+    }
+}
+
+trait Foo { const fn m(self, _ a: u8) -> u256 }
+trait Bar { const fn m(self, _ a: u16) -> u256 }
+struct W<T> { t: T }
+impl<T> Foo for W<T> { const fn m(self, _ a: u8) -> u256 { 1 } }
+struct BarP {}
+impl Derive<trait Bar> for BarP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn m(self, _ a: u16) -> u256 { 2 } }
+    }
+}
+impl<T: Need> Bar for W<T> with (BarP)
+
+const fn run() -> u256 {
+    let w = W<Rec> { t: Rec {} }
+    let a: u16 = 1
+    with (Gate) { w.m(a) }
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "2");
+}
+
+#[test]
+fn deferred_codec_goal_in_a_root_function_is_served_by_its_scoped_provider() {
+    // The element type of the array is generic in `write`, so the codec proof
+    // is deferred until the call `write<u8>`. The goal needs `Elem<u8, Arg>:
+    // SolPacked`, which needs `Arg: Gate`, answered by the provider of the
+    // block inside `write`.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::{SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+
+pub struct Arg { value: u8 }
+impl Gate for Arg {
+    fn code(_ value: u8) -> u8 { value }
+}
+
+struct ProvideGate {}
+impl Derive<trait Gate> for ProvideGate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn code(_ value: u8) -> u8 { value ^ 1 } }
+    }
+}
+
+pub struct Elem<K, T> { pub value: u8 }
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+pub fn write<K>(array: mut SolArray<Elem<K, Arg>>) {
+    with (ProvideGate) { array[0] = Elem { value: 7 } }
+}
+
+pub fn root(array: mut SolArray<Elem<u8, Arg>>) {
+    write<u8>(array: mut array)
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+}
+
+#[test]
+fn forwarded_provider_condition_is_refused_before_any_provider_runs() {
+    // The condition of `Gated` opens another provider, which a condition may
+    // not do. `Via<Gated>` forwards to it, so the program is refused as well,
+    // and `derive` does not run in either case.
+    let template = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct B {}
+impl Derive<trait Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+struct Gated {}
+impl Derive<trait Score> for Gated where { with (B) { Pair::seed() == 42 } } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+struct Via<P> {}
+impl<G: * -> Constraint, P: Derive<G>> Derive<G> for Via<P> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+const fn run() -> u256 { with (OPENING) { Pair::score() } }
+"#;
+    for opening in ["Gated", "Via<Gated>"] {
+        let cause = prepare_err(&template.replace("OPENING", opening));
+        assert!(
+            cause.contains("prepared generated implementation")
+                || (cause.contains("decides whether the provider applies") && cause.contains(RULE)),
+            "{opening}: {cause}"
+        );
+        assert!(!cause.contains("division by zero"), "{opening}: {cause}");
+    }
+}
+
+/// A provider offers the family it names when the goal omits a defaulted
+/// parameter: the method of an offered trait is looked up at that family, not
+/// at holes that nothing in the call fixes.
+#[test]
+fn scoped_lookup_uses_the_unique_offered_family() {
+    let sources = [
+        (
+            "const default",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Sized2<const N: usize = 3> { const fn n(self) -> usize }
+struct P {}
+impl Derive<trait Sized2> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn n(self) -> usize { 3 } }
+    }
+}
+struct R { a: u256 }
+const fn run() -> usize {
+    with (P) { R { a: 0 }.n() }
+}
+"#,
+            "3",
+        ),
+        (
+            "type default",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Sized2<T = u8> { const fn n(self) -> usize }
+struct P {}
+impl Derive<trait Sized2> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn n(self) -> usize { 3 } }
+    }
+}
+struct R { a: u256 }
+const fn run() -> usize {
+    with (P) { R { a: 0 }.n() }
+}
+"#,
+            "3",
+        ),
+        (
+            "path call",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Scale<T = u8> { const fn scale() -> usize }
+struct Pair { a: u256 }
+struct P {}
+impl Derive<trait Scale> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn scale() -> usize { 5 } }
+    }
+}
+const fn run() -> usize {
+    with (P) { Pair::scale() }
+}
+"#,
+            "5",
+        ),
+        (
+            "two closed families keep the type of the use",
+            r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Conv<T> { const fn conv(self) -> T }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Conv<u8>> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn conv(self) -> u8 { 1 } }
+    }
+}
+impl Derive<trait Conv<u16>> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn conv(self) -> u16 { 2 } }
+    }
+}
+const fn run() -> u16 {
+    let x: u8 = with (P) { R { a: 0 }.conv() }
+    x as u16
+}
+"#,
+            "1",
+        ),
+    ];
+    for (name, source, expected) in sources {
+        let output = prepare(source).unwrap_or_else(|cause| panic!("{name}: {cause}"));
+        assert_eq!(output_diagnostics(&output), "", "{name}");
+        assert_eq!(eval_const_fn_u256(&output, "run"), expected, "{name}");
+    }
+}
+
+/// The omitted default and the written default are one family, so two
+/// providers that offer them overlap, whether or not the block uses the trait.
+#[test]
+fn scoped_providers_that_spell_one_family_two_ways_overlap() {
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Fixed<const N: usize = 4> { const fn fixed() -> usize }
+struct Target {}
+struct Omitted {}
+struct Written {}
+impl Derive<trait Fixed> for Omitted {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn fixed() -> usize { 1 } }
+    }
+}
+impl Derive<trait Fixed<4>> for Written {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn fixed() -> usize { 2 } }
+    }
+}
+impl Fixed for Target { const fn fixed() -> usize { 0 } }
+const fn idle() -> usize {
+    with (OPENINGS) { 0 }
+}
+"#;
+    for openings in ["Omitted, Written", "Written, Omitted"] {
+        let failure = prepare_err(&source.replace("OPENINGS", openings));
+        assert!(
+            failure.contains("two derive providers for the same trait application"),
+            "{openings}: {failure}"
+        );
+    }
+    // The same program that uses the trait stays refused, and one provider
+    // alone is used.
+    let used = source.replace("{ 0 }\n}", "{ <Target as Fixed>::fixed() }\n}");
+    let used = used.replace("const fn idle()", "const fn run()");
+    for openings in ["Omitted, Written", "Written, Omitted"] {
+        let failure = prepare_err(&used.replace("OPENINGS", openings));
+        assert!(
+            failure.contains("two derive providers for"),
+            "{openings}: {failure}"
+        );
+    }
+    let output =
+        prepare(&used.replace("OPENINGS", "Omitted")).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(eval_const_fn_u256(&output, "run"), "1");
+}
+
+const FORWARDING_HEAD: &str = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Read<A> { const fn read() -> u256 }
+struct Packet {}
+struct Small {}
+struct Large {}
+struct Generic {}
+struct Direct {}
+struct Via2<P, Q> {}
+
+impl Read<u8> for Packet { const fn read() -> u256 { 1 } }
+impl Read<u16> for Packet { const fn read() -> u256 { 2 } }
+
+impl Derive<trait Read<u8>> for Small {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 10 } } }
+}
+impl Derive<trait Read<u16>> for Large {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 30 } } }
+}
+impl<A> Derive<trait Read<A>> for Generic {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 50 } } }
+}
+impl Derive<trait Read<u8>> for Direct {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 70 } } }
+}
+impl<G: * -> Constraint, P: Derive<G>, Q: Derive<G>> Derive<G> for Via2<P, Q> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+"#;
+
+/// A forwarding provider with an open restrictor still offers the closed
+/// family of its other operand, so an idle header that overlaps through it is
+/// refused as it is with closed restrictors.
+#[test]
+fn forwarding_provider_with_an_open_restrictor_keeps_its_closed_offer() {
+    for openings in [
+        "Via2<Small, Generic>, Direct",
+        "Direct, Via2<Small, Generic>",
+    ] {
+        let source =
+            format!("{FORWARDING_HEAD}\nconst fn idle() -> u256 {{ with ({openings}) {{ 0 }} }}\n");
+        let failure = prepare_err(&source);
+        assert!(
+            failure.contains("two derive providers for the same trait application"),
+            "{openings}: {failure}"
+        );
+    }
+    // The families that do not overlap are accepted and evaluate.
+    let source = format!(
+        "{FORWARDING_HEAD}
+const fn run() -> u256 {{
+    with (Via2<Small, Generic>, Large) {{
+        <Packet as Read<u8>>::read() + <Packet as Read<u16>>::read()
+    }}
+}}
+"
+    );
+    let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "40");
+}
+
+/// The work limit counts the provider's implementations once per search, not
+/// once per family of the goal.
+#[test]
+fn provider_work_limit_is_independent_of_the_families_of_the_goal() {
+    use std::fmt::Write;
+
+    let mut source = String::from(
+        "use core::derive::Derive
+use core::meta::{Record, Code, Item}
+struct P {}
+struct S {}
+trait Big<A = u8, B = u16> { const fn big() -> usize }
+impl Derive<trait Big> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn big() -> usize { 42 } }
+    }
+}
+",
+    );
+    for index in 1..=100 {
+        write!(
+            source,
+            "trait T{index} {{ const fn f{index}() -> usize }}
+impl Derive<trait T{index}> for P {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn f{index}() -> usize {{ {index} }} }}
+    }}
+}}
+"
+        )
+        .unwrap();
+    }
+    source.push_str("const fn run() -> usize { with (P) { <S as Big>::big() } }\n");
+    let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
 }

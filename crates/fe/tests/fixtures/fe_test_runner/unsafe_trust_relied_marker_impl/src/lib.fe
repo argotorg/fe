@@ -1,0 +1,2 @@
+#[test]
+fn control_no_method() { assert!(t::peek_e(u0::Evil0 {}) == 7) }

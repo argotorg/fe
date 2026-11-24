@@ -45,6 +45,17 @@ fn token_piece_basic<'a>(
         }
         ImplKw => TokenPiece::new(text),
         ForKw => TokenPiece::new(text).space_before(),
+        // `as` names an implementation and `with` opens a derive header's
+        // provider list; both are separate words.
+        AsKw => TokenPiece::new(text).spaces(),
+        Ident
+            if token.text() == "with"
+                && token
+                    .parent()
+                    .is_some_and(|parent| matches!(parent.kind(), Impl | ImplTrait)) =>
+        {
+            TokenPiece::new(text).spaces()
+        }
         Eq | Arrow => TokenPiece::new(text).spaces(),
         _ => return None,
     })

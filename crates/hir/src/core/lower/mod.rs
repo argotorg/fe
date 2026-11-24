@@ -231,9 +231,9 @@ pub(crate) fn resolve_authored_scope<'db>(
     }
 }
 
-/// The declared type of an authored record's field, bound as a type splice
-/// copies it: names in the record's scope, its generic parameters left to the
-/// use site.
+/// The declared type of an authored record's field as written: names bound in
+/// the record's scope, its generic parameters left as bare names. Type lowering
+/// does not read this type; it answers questions about the written syntax.
 #[salsa::tracked(returns(copy))]
 pub(crate) fn authored_field_type<'db>(
     db: &'db dyn HirDb,
@@ -499,6 +499,12 @@ impl<'db> AuthoredRecord<'db> {
             return None;
         };
         e.variants()?.into_iter().nth(index)
+    }
+
+    /// Whether the record is a struct declared with positional fields.
+    pub(super) fn is_tuple_struct(&self) -> bool {
+        matches!(&self.syntax, RecordSyntax::Struct(s)
+            if s.fields().is_some_and(|fields| fields.is_tuple()))
     }
 
     /// The struct's fields, or variant `variant`'s; `None` when the reference

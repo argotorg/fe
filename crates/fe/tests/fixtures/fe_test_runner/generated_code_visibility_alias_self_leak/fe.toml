@@ -1,0 +1,6 @@
+[ingot]
+name = "generated_code_visibility_alias_self_leak"
+version = "0.1.0"
+
+[dependencies]
+prov = { path = "../visibility_vendor/prov" }

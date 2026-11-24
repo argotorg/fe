@@ -1,0 +1,5 @@
+[ingot]
+name = "u"
+version = "0.1.0"
+[dependencies]
+t = { path = "../t" }

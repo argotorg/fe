@@ -1,0 +1,21 @@
+// A trait method with its own bound, passed as a function item.
+// The item's callable dictionary holds proofs of `Self: Tr` and `U: Pick`;
+// the call runs the implementation's method, so the mapping goes through
+// impl_method_bound_evidence. Expected: item 2, direct 2, plain 1.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+trait Tr { fn f<U: Pick>() -> u256 }
+struct S {}
+impl Tr for S { fn f<U: Pick>() -> u256 { U::pick() } }
+
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn item() -> u256 { with (Alt) { run(<S as Tr>::f<u256>) } }
+fn direct() -> u256 { with (Alt) { <S as Tr>::f<u256>() } }
+fn plain() -> u256 { run(<S as Tr>::f<u256>) }
+#[test]
+fn t_item() { assert(item() == 2) }
+#[test]
+fn t_direct() { assert(direct() == 2) }
+#[test]
+fn t_plain() { assert(plain() == 1) }

@@ -1,0 +1,4 @@
+struct Pair { a: u256 }
+impl Pair with (prov::Own)
+#[test]
+fn reads_its_own_record_and_helpers() { assert!(Pair { a: 1 }.total() == 7) }

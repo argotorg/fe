@@ -1,10 +1,79 @@
 use dir_test::{Fixture, dir_test};
-use fe_parser::SyntaxKind;
+use fe_parser::{RecoveryMode, SyntaxKind, SyntaxNode, parse_source_file};
 
 use test_utils::{normalize::normalize_newlines, snap_test};
 
 mod test_runner;
 use test_runner::*;
+
+#[test]
+fn trait_items_and_trait_family_bounds_after_where_predicates() {
+    for (source, traits, families) in [
+        ("struct Wrapper<T>(T) where T: Copy\ntrait Next {}", 1, 0),
+        (
+            "struct Wrapper<T>(T) where T: Copy,\ntrait Next: Parent {}",
+            1,
+            0,
+        ),
+        (
+            "struct Wrapper<T>(T) where T: Copy,\ntrait Family: Bound",
+            0,
+            1,
+        ),
+        (
+            "struct Wrapper<T> where T: Copy,\ntrait Family: Bound {}",
+            0,
+            1,
+        ),
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}\n{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(root.to_string(), source);
+        for (kind, count) in [
+            (SyntaxKind::Trait, traits),
+            (SyntaxKind::TraitFamilyType, families),
+        ] {
+            assert_eq!(
+                root.descendants()
+                    .filter(|node| node.kind() == kind)
+                    .count(),
+                count,
+                "{source}",
+            );
+        }
+    }
+}
+
+#[test]
+fn constraint_kind_parses_with_and_without_parentheses() {
+    for (source, kind_arrows, trait_refs) in [
+        ("struct A<F: Constraint -> *> {}", 1, 0),
+        ("struct A<F: (Constraint) -> *> {}", 1, 0),
+        ("struct A<F: * -> Constraint> {}", 1, 0),
+        ("fn f<F: Constraint -> *>() {}", 1, 0),
+        ("struct A<F> where F: Constraint -> * {}", 1, 0),
+        // Alone, `Constraint` names a trait.
+        ("struct A<F: Constraint> {}", 0, 1),
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}\n{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(root.to_string(), source);
+        for (kind, count) in [
+            (SyntaxKind::KindBoundAbs, kind_arrows),
+            (SyntaxKind::TraitRef, trait_refs),
+        ] {
+            assert_eq!(
+                root.descendants()
+                    .filter(|node| node.kind() == kind)
+                    .count(),
+                count,
+                "{source}",
+            );
+        }
+    }
+}
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/syntax_node/items",
@@ -230,5 +299,29 @@ mod wasm {
     fn test_attributed_quotation(fixture: dir_test::Fixture<&str>) {
         let (cst, _) = TestRunner::item_list(true).run(fixture.content());
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
+    }
+}
+
+#[test]
+fn a_qualified_path_in_a_quoted_pattern_keeps_it_a_pattern() {
+    // A quote body that holds pattern-only syntax is a pattern, for every path
+    // form that patterns accept. The `as` of a qualified path is not a cast.
+    for (body, is_pattern) in [
+        ("Self::Out { x: _ }", true),
+        ("<S as T>::Out { x: _ }", true),
+        ("<S<u8> as T>::Out { x: _ }", true),
+        ("<S as T>::f()", false),
+        ("x as u8", false),
+    ] {
+        let source = format!("const C: Code<Pat> = quote {{ {body} }}\n");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(
+            root.descendants()
+                .any(|node| node.kind() == SyntaxKind::QuotePat),
+            is_pattern,
+            "{source}"
+        );
     }
 }

@@ -815,3 +815,461 @@ pub contract C {
         }
     }
 }
+
+#[test]
+fn uninhabited_types_emit_no_empty_enums_and_satisfy_sonatina_v4() {
+    use rustc_hash::FxHashSet;
+    use sonatina_ir::{Type, types::CompoundType};
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    const SOURCE: &str = r#"
+use core::intrinsic::clear
+use core::option::Option
+use core::result::Result
+
+enum Empty {}
+enum AllEmpty {
+    A(!),
+    B(Empty),
+}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+
+#[inline(never)]
+fn eliminate(_ e: Empty) -> u8 {
+    match e {}
+}
+
+#[inline(never)]
+fn coerce_never(_ x: !) -> u256 {
+    x
+}
+
+#[inline(never)]
+fn dead_proj(_ m: Mixed) -> u256 {
+    m.a
+}
+
+#[inline(never)]
+fn ref_empty(_ r: ref Empty) -> u256 {
+    1
+}
+
+#[inline(never)]
+fn dead_variant_proj(_ r: own Result<Mixed, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(m) => m.a
+    }
+}
+
+#[inline(never)]
+fn unwrap_flipped(_ f: own Flipped) -> u256 {
+    match f {
+        Flipped::Ok(v) => v
+    }
+}
+
+msg UninhabitedMsg {
+    #[selector = 0x01]
+    ReadResult -> u256,
+    #[selector = 0x02]
+    SetResult { v: u256 } -> u256,
+    #[selector = 0x03]
+    ClearResult -> u256,
+    #[selector = 0x04]
+    ReadOption -> u256,
+    #[selector = 0x05]
+    CheckSizes -> u256,
+    #[selector = 0x06]
+    CheckFlipped { v: u256 } -> u256,
+    #[selector = 0x07]
+    CheckDeadVariant { v: u256 } -> u256,
+}
+
+pub contract UninhabitedContract {
+    mut res: Result<Empty, u256>,
+    mut opt: Option<Empty>,
+    mut zero_arr: [Empty; 0],
+
+    recv UninhabitedMsg {
+        ReadResult -> u256 uses (res) {
+            match res {
+                Result::Ok(v) => v
+            }
+        }
+        SetResult { v } -> u256 uses (mut res) {
+            res = Result::Ok(v)
+            match res {
+                Result::Ok(cur) => cur
+                Result::Err(ref e) => match e {}
+            }
+        }
+        ClearResult -> u256 uses (mut res, mut zero_arr) {
+            unsafe {
+                clear(mut res)
+                clear(mut zero_arr)
+            }
+            match res {
+                Result::Ok(v) => v
+            }
+        }
+        ReadOption -> u256 uses (opt) {
+            match opt {
+                Option::None => 11
+                Option::Some(ref e) => match e {}
+            }
+        }
+        CheckSizes -> u256 {
+            let s0 = core::size_of<!>() as u256
+            let s1 = core::size_of<Empty>() as u256
+            let s2 = core::size_of<AllEmpty>() as u256
+            let s3 = core::size_of<Mixed>() as u256
+            let s4 = core::size_of<[Empty; 3]>() as u256
+            let s5 = core::size_of<[Empty; 0]>() as u256
+            let s6 = core::size_of<*Empty>() as u256
+            s0 + s1 + s2 + s3 + s4 + s5 + s6
+        }
+        CheckFlipped { v } -> u256 {
+            unwrap_flipped(Flipped::Ok(v))
+        }
+        CheckDeadVariant { v } -> u256 {
+            dead_variant_proj(Result::Ok(v))
+        }
+    }
+}
+"#;
+
+    fn sonatina_ty_inhabited(
+        ctx: &ModuleCtx,
+        ty: Type,
+        visiting: &mut FxHashSet<sonatina_ir::types::CompoundTypeRef>,
+    ) -> bool {
+        match ty {
+            Type::Unit
+            | Type::I1
+            | Type::I8
+            | Type::I16
+            | Type::I32
+            | Type::I64
+            | Type::I128
+            | Type::I256 => true,
+            Type::EnumTag(enum_ref) => ctx.with_ty_store(|store| {
+                store
+                    .enum_data(enum_ref)
+                    .is_some_and(|d| !d.variants.is_empty())
+            }),
+            Type::Compound(cmpd) => {
+                if !visiting.insert(cmpd) {
+                    return true;
+                }
+                let data = ctx.with_ty_store(|store| store.resolve_compound(cmpd).clone());
+                let inhabited = match data {
+                    CompoundType::Ptr(_)
+                    | CompoundType::ObjRef(_)
+                    | CompoundType::ConstRef(_)
+                    | CompoundType::Func { .. } => true,
+                    CompoundType::Array { elem, len } => {
+                        len == 0 || sonatina_ty_inhabited(ctx, elem, visiting)
+                    }
+                    CompoundType::Struct(s) => s
+                        .fields
+                        .iter()
+                        .all(|&f| sonatina_ty_inhabited(ctx, f, visiting)),
+                    CompoundType::Enum(e) => e.variants.iter().any(|v| {
+                        v.fields
+                            .iter()
+                            .all(|&f| sonatina_ty_inhabited(ctx, f, visiting))
+                    }),
+                };
+                visiting.remove(&cmpd);
+                inhabited
+            }
+        }
+    }
+
+    let mut db = DriverDataBase::default();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///uninhabited_v4.fe").unwrap(),
+        Some(SOURCE.into()),
+    );
+    let top_mod = db.top_mod(file);
+    let diagnostics = db.run_on_top_mod(top_mod);
+    assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    mir::verify_runtime_package(&db, package).expect("MIR verification");
+
+    let isa = create_evm_isa();
+    let mut lowerer = ModuleLowerer::new(
+        &db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        &[],
+        &[],
+        NativePanics::Trap,
+    )
+    .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_bodies().unwrap();
+    lowerer.declare_objects().unwrap();
+    let (module, _) = lowerer.finish();
+
+    let report = verify_module(&module, &VerifierConfig::for_level(VerificationLevel::Full));
+    assert!(report.is_ok(), "Sonatina verification failed:\n{report:?}");
+
+    // Check V4 across every declared type, function signature, and SSA value.
+    for func_ref in module.funcs() {
+        let (name, args, rets) = module.ctx.func_sig(func_ref, |sig| {
+            (
+                sig.name().to_owned(),
+                sig.args().to_vec(),
+                sig.ret_tys().to_vec(),
+            )
+        });
+        for arg in args {
+            assert!(
+                sonatina_ty_inhabited(&module.ctx, arg, &mut FxHashSet::default()),
+                "function `{name}` has uninhabited parameter type {arg:?}",
+            );
+        }
+        for ret in rets {
+            assert!(
+                sonatina_ty_inhabited(&module.ctx, ret, &mut FxHashSet::default()),
+                "function `{name}` has uninhabited return type {ret:?}",
+            );
+        }
+        module.func_store.view(func_ref, |func| {
+            for value_id in func.dfg.values.keys() {
+                if !func.dfg.has_value(value_id) {
+                    continue;
+                }
+                let ty = func.dfg.value_ty(value_id);
+                assert!(
+                    sonatina_ty_inhabited(&module.ctx, ty, &mut FxHashSet::default()),
+                    "function `{name}` has uninhabited SSA value {value_id:?} of type {ty:?}",
+                );
+            }
+        });
+    }
+
+    // Compile and execute on EVM at both O0 and O2.
+    let word = |n: u64| {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&n.to_be_bytes());
+        out
+    };
+    let call = |rt: &mut EvmRuntime, selector: u8, args: &[[u8; 32]]| {
+        let mut calldata = vec![0, 0, 0, selector];
+        calldata.extend(args.iter().flatten());
+        rt.call_raw(&calldata, ExecutionOptions::default())
+            .expect("EVM call should succeed")
+            .return_data
+    };
+
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        let mut lowerer = ModuleLowerer::new(
+            &db,
+            ModuleBuilder::new(ModuleCtx::new(&isa)),
+            isa.inst_set(),
+            &package,
+            &[],
+            &[],
+            NativePanics::Trap,
+        )
+        .unwrap();
+        lowerer.declare_functions().unwrap();
+        lowerer.lower_bodies().unwrap();
+        lowerer.declare_objects().unwrap();
+        let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
+            &db,
+            &package,
+            lowerer.finish().0,
+            opt,
+            false,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("compile at {opt:?}: {e}"));
+        let artifact = artifacts.remove("UninhabitedContract").unwrap();
+        let mut rt = EvmRuntime::deploy(&hex::encode(artifact.deploy)).unwrap();
+
+        assert_eq!(
+            call(&mut rt, 1, &[]),
+            word(0),
+            "{opt:?} default Result::Ok(0)"
+        );
+        assert_eq!(
+            call(&mut rt, 2, &[word(42)]),
+            word(42),
+            "{opt:?} set Result::Ok(42)"
+        );
+        assert_eq!(
+            call(&mut rt, 1, &[]),
+            word(42),
+            "{opt:?} read Result::Ok(42)"
+        );
+        assert_eq!(
+            call(&mut rt, 3, &[]),
+            word(0),
+            "{opt:?} clear Result::Ok(0)"
+        );
+        assert_eq!(
+            call(&mut rt, 4, &[]),
+            word(11),
+            "{opt:?} default Option::None"
+        );
+        assert_eq!(
+            call(&mut rt, 5, &[]),
+            word(32),
+            "{opt:?} size_of sum (*Empty == 32)"
+        );
+        assert_eq!(
+            call(&mut rt, 6, &[word(99)]),
+            word(99),
+            "{opt:?} Flipped::Ok(99)"
+        );
+        assert_eq!(
+            call(&mut rt, 7, &[word(77)]),
+            word(77),
+            "{opt:?} Result<Mixed, u256>::Ok(77)"
+        );
+    }
+}
+
+#[test]
+fn evm_handover_ir_uses_return_code_and_mload_bytes() {
+    use contract_harness::{ExecutionOptions, RuntimeInstance as EvmRuntime};
+    use sonatina_ir::inst::evm::{EvmCodeCopy, EvmMloadBytes, EvmReturn, EvmReturnCode};
+    use sonatina_verifier::{VerificationLevel, VerifierConfig, verify_module};
+
+    const SOURCE: &str = r#"
+use core::ptr::MemBuffer
+
+msg Q {
+    #[selector = 1]
+    ReadNarrow -> u256,
+}
+
+pub contract Contract {
+    recv Q {
+        ReadNarrow -> u256 {
+            var buf = MemBuffer::new(16)
+            buf.write_be<u8>(offset: 0, value: 0x12)
+            buf.write_be<u16>(offset: 1, value: 0x3456)
+            let a: u256 = buf.read_be<u8>(0) as u256
+            let b: u256 = buf.read_be<u16>(1) as u256
+            (a << 16) | b
+        }
+    }
+}
+"#;
+
+    let mut db = DriverDataBase::default();
+    let file = db.workspace().touch(
+        &mut db,
+        Url::parse("file:///evm_part_a_ops.fe").unwrap(),
+        Some(SOURCE.into()),
+    );
+    let top_mod = db.top_mod(file);
+    let diagnostics = db.run_on_top_mod(top_mod);
+    assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
+    let package = build_runtime_package(&db, top_mod).expect("runtime package");
+    mir::verify_runtime_package(&db, package).expect("MIR verification");
+
+    let isa = create_evm_isa();
+    let mut lowerer = ModuleLowerer::new(
+        &db,
+        ModuleBuilder::new(ModuleCtx::new(&isa)),
+        isa.inst_set(),
+        &package,
+        &[],
+        &[],
+        NativePanics::Trap,
+    )
+    .unwrap();
+    lowerer.declare_functions().unwrap();
+    lowerer.lower_bodies().unwrap();
+    lowerer.declare_objects().unwrap();
+    let (module, _) = lowerer.finish();
+
+    let report = verify_module(
+        &module,
+        &VerifierConfig::for_level(VerificationLevel::Full).with_evm_fixed_memory_limit(0x40),
+    );
+    assert!(report.is_ok(), "Sonatina verification failed:\n{report:?}");
+
+    let mut saw_return_code = false;
+    let mut saw_mload_bytes = false;
+    for func_ref in module.funcs() {
+        let name = module.ctx.func_sig(func_ref, |sig| sig.name().to_owned());
+        module.func_store.view(func_ref, |func| {
+            let is_init_root = name.contains("init_root") || name.ends_with("__init");
+            for block in func.layout.iter_block() {
+                for inst in func.layout.iter_inst(block) {
+                    if func.dfg.downcast::<&EvmReturnCode>(inst).is_some() {
+                        saw_return_code = true;
+                    }
+                    if func.dfg.downcast::<&EvmMloadBytes>(inst).is_some() {
+                        saw_mload_bytes = true;
+                    }
+                    if is_init_root {
+                        assert!(
+                            func.dfg.downcast::<&EvmCodeCopy>(inst).is_none()
+                                && func.dfg.downcast::<&EvmReturn>(inst).is_none(),
+                            "immut_slots == 0 init root `{name}` should use evm_return_code"
+                        );
+                    }
+                }
+            }
+        });
+    }
+    assert!(
+        saw_return_code,
+        "expected evm_return_code in contract init root"
+    );
+    assert!(
+        saw_mload_bytes,
+        "expected evm_mload_bytes for narrow memory loads"
+    );
+
+    for opt in [OptLevel::O0, OptLevel::O2] {
+        let mut lowerer = ModuleLowerer::new(
+            &db,
+            ModuleBuilder::new(ModuleCtx::new(&isa)),
+            isa.inst_set(),
+            &package,
+            &[],
+            &[],
+            NativePanics::Trap,
+        )
+        .unwrap();
+        lowerer.declare_functions().unwrap();
+        lowerer.lower_bodies().unwrap();
+        lowerer.declare_objects().unwrap();
+        let (mut artifacts, _) = emit_runtime_module_sonatina_bytecode_with_options(
+            &db,
+            &package,
+            lowerer.finish().0,
+            opt,
+            false,
+            None,
+        )
+        .unwrap_or_else(|e| panic!("compile at {opt:?}: {e}"));
+        let artifact = artifacts.remove("Contract").unwrap();
+        let mut rt = EvmRuntime::deploy(&hex::encode(artifact.deploy)).unwrap();
+        let out = rt
+            .call_raw(&[0, 0, 0, 1], ExecutionOptions::default())
+            .expect("call should succeed")
+            .return_data;
+        let mut expected = [0u8; 32];
+        expected[29..].copy_from_slice(&[0x12, 0x34, 0x56]);
+        assert_eq!(out, expected, "{opt:?} narrow read");
+    }
+}

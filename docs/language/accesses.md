@@ -429,9 +429,11 @@ implementations keep without checking it, and each implementation is an
 `core::ops::StateIndex` is one: the access checker trusts its `locate` to keep
 entries inside the collection's region. The methods of an `unsafe impl` are
 ordinary safe code, and calling them is safe. A dependency's `unsafe impl`
-counts as unsafe code where it is used, as its `unsafe` blocks do, so it needs
-`allow_unsafe = true`. An `unsafe impl` with no function has nothing for a call to reach, so it
-counts where it is declared.
+counts as unsafe code where it is relied on: where code that runs is checked
+under a bound that the implementation proves, calls a method or reads a
+constant of it, or calls a default method of its trait for its type. So it
+needs `allow_unsafe = true` where it is relied on, as its `unsafe` blocks do
+where they run.
 
 ```fe
 unsafe impl<K: StorageKey + Copy, V> StateIndex for StorageMap<K, V> {

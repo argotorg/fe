@@ -24,7 +24,7 @@ use super::{
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query, resolve_query_in,
     traits_in_scope::traits_available_for_selection,
-    visibility_checker::{is_authored_module, is_ty_visible_from},
+    visibility_checker::{Viewer, is_authored_module, is_ty_visible_from},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -662,7 +662,9 @@ pub(crate) enum ImplNameRes<'db> {
         name: IdentId<'db>,
         definition: Option<DynLazySpan<'db>>,
     },
-    Ambiguous,
+    /// More than one implementation is named so, each with the span of its
+    /// name and whether it came from an implicit import.
+    Ambiguous(Vec<(DynLazySpan<'db>, bool)>),
     NotFound,
 }
 
@@ -716,8 +718,11 @@ pub(crate) fn resolve_impl_name<'db>(
                     }
                     _ => ImplNameRes::NotFound,
                 },
-                Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
-                    ImplNameRes::Ambiguous
+                Err(NameResolutionError::Ambiguous(candidates)) => {
+                    ImplNameRes::Ambiguous(super::diagnostics::ambiguity_candidates(db, candidates))
+                }
+                Err(NameResolutionError::Conflict(_, spans)) => {
+                    ImplNameRes::Ambiguous(spans.iter().map(|span| (span.clone(), false)).collect())
                 }
                 Err(NameResolutionError::Invisible(definition)) => ImplNameRes::NotVisible {
                     name,
@@ -884,6 +889,25 @@ impl<'db> PathRes<'db> {
     }
 
     pub fn is_visible_from(&self, db: &'db dyn HirAnalysisDb, from_scope: ScopeId<'db>) -> bool {
+        self.is_visible_to(db, Viewer::at(db, from_scope))
+    }
+
+    /// The member that this path reaches through a type: an inherent method,
+    /// an inherent constant or an enum variant. What generated code may use of
+    /// them is decided by the package that wrote the code (see `Viewer`).
+    fn member_scope(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+        match self {
+            PathRes::Method(_, MethodCandidate::InherentMethod(cand)) => Some(cand.def.scope()),
+            PathRes::InherentConst(..) | PathRes::EnumVariant(_) => self.as_scope(db),
+            _ => None,
+        }
+    }
+
+    pub fn is_visible_to(&self, db: &'db dyn HirAnalysisDb, viewer: Viewer<'db>) -> bool {
+        if let Some(member) = self.member_scope(db) {
+            return viewer.sees(db, member);
+        }
+        let from_scope = viewer.scope();
         match self {
             PathRes::Ty(ty) | PathRes::Func(ty) => is_ty_visible_from(db, *ty, from_scope),
             PathRes::Const(const_, _) => is_scope_visible_from(db, const_.scope(), from_scope),
@@ -904,11 +928,14 @@ impl<'db> PathRes<'db> {
     /// Checks a segment whose subject type and explicit trait reference are
     /// visited separately. The trait path owns the visibility check of the
     /// qualification and its associated constant, including quotation origin.
-    pub(crate) fn is_segment_visible_from(
+    /// A name that the quotation's producer resolves is judged where the
+    /// producer wrote it; a member reached through a type, such as
+    /// `Self::hidden`, is judged by `viewer`.
+    pub(crate) fn is_segment_visible_to(
         &self,
         db: &'db dyn HirAnalysisDb,
         segment: PathId<'db>,
-        scope: ScopeId<'db>,
+        viewer: Viewer<'db>,
     ) -> bool {
         let is_qualifier =
             |path: PathId<'db>| matches!(path.kind(db), PathKind::QualifiedType { .. });
@@ -918,7 +945,22 @@ impl<'db> PathRes<'db> {
         {
             return true;
         }
-        self.is_visible_from(db, segment.hygiene_scope(db).unwrap_or(scope))
+        self.is_visible_as_written(db, segment, viewer)
+    }
+
+    /// Whether the code may use what `path` resolves to, as `path` was
+    /// written: a path that a quotation produced is judged where its producer
+    /// wrote it, any other by `viewer`.
+    pub(crate) fn is_visible_as_written(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        viewer: Viewer<'db>,
+    ) -> bool {
+        match path.hygiene_scope(db) {
+            Some(producer) => self.is_visible_from(db, producer),
+            None => self.is_visible_to(db, viewer),
+        }
     }
 
     pub fn name_span(&self, db: &'db dyn HirAnalysisDb) -> Option<DynLazySpan<'db>> {

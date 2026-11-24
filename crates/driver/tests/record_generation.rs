@@ -355,6 +355,8 @@ fn runtime_metadata_refuses_and_compile_time_quotes_stay_valid() {
         "use core::meta::{Code, Item}\nfn runtime_quote() -> Code<Item> { quote { fn generated() -> usize { 1 } } }\n",
         "use core::meta::Record\nfn runtime_tuple(_ value: (Record, usize)) -> (Record, usize) { value }\n",
         "use core::meta::Record\nstruct Wrapped { value: Record }\nfn runtime_wrapper(_ value: Wrapped) -> Wrapped { value }\n",
+        // The carrier is known only when the binding's type is inferred.
+        "use core::meta::{Code, Expr}\nfn runtime_inferred_carrier() { let _x: Option<Code<Expr>> = Option::None }\n",
     ] {
         let (db, file) = input(source);
         let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
@@ -383,6 +385,7 @@ fn test_helper() {
 "#,
         "use core::meta::{Code, Item, Record}\nconst fn compile_time_tuple(_ value: (Record, usize)) -> usize { let _q: Code<Item> = quote { fn generated() -> usize { 1 } }\n value.1 }\n",
         "use core::meta::{Code, Item}\nconst Q: Code<Item> = quote { fn generated() -> usize { 1 } }\n",
+        "use core::meta::{Code, Expr}\nconst fn compile_time_inferred_carrier() { let _x: Option<Code<Expr>> = Option::None }\n",
     ] {
         let (db, file) = input(source);
         let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
@@ -4739,4 +4742,289 @@ const fn check_maybe() -> u256 {
     let module = output.top_mod(output_file);
     assert!(!output.run_on_top_mod(module).has_errors(&output));
     assert_generated_integer(&output, output_file, "check_maybe", "1");
+}
+
+#[test]
+fn binders_of_a_tuple_struct_bind_by_position() {
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, binders, field}
+struct Tup {}
+impl DeriveInherent for Tup {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let b = binders(record, 0)
+        let f = field(record, 1)
+        quote { pub const fn second(self) -> u256 { match self { ${b} => ${b.at(f)} } } }
+    }
+}
+struct T2(u256, u256)
+impl T2 with (Tup)
+const fn run() -> u256 { T2(3, 4).second() }
+";
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "run", "4");
+}
+
+#[test]
+fn an_import_opens_a_quoted_expression_block_that_a_provider_splices() {
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Expr, Record}
+mod m {
+    pub const fn a() -> u256 { 1 }
+    pub const fn b() -> u256 { 2 }
+}
+const fn body() -> Code<Expr> {
+    quote {
+        use m::{a, b}
+        a() + b()
+    }
+}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e = body()
+        quote { pub const fn f() -> u256 { ${e} } }
+    }
+}
+struct S {}
+impl S with (P)
+const fn run() -> u256 { S::f() }
+";
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "run", "3");
+}
+
+#[test]
+fn empty_takes_only_the_kinds_that_seed_a_fold() {
+    for kind in ["Item", "Arm", "Where"] {
+        let source = format!(
+            "use core::meta::{{Arm, Code, Item, Where, empty}}\nconst fn seed() -> Code<{kind}> {{ empty<{kind}>() }}\n"
+        );
+        let (db, file) = input(&source);
+        let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+        assert!(diagnostics.is_empty(), "{kind}: {diagnostics}");
+    }
+    for kind in ["Expr", "Pat", "u256", "bool"] {
+        let source = format!(
+            "use core::meta::{{Code, Expr, Pat, empty}}\nconst fn seed() -> Code<{kind}> {{ empty<{kind}>() }}\n"
+        );
+        let (db, file) = input(&source);
+        let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+        assert!(diagnostics.contains("Seed"), "{kind}: {diagnostics}");
+    }
+}
+
+/// The diagnostics of a source file after generation, empty when it is valid.
+fn generated_diagnostics(source: &str) -> String {
+    let (db, file) = input(source);
+    match prepare_file(&db, file) {
+        Err(error) => error.cause,
+        Ok(prepared) => {
+            let url = file.url(&db).expect("indexed input file");
+            let view = prepared.as_ref().unwrap_or(&db);
+            let file = view
+                .workspace()
+                .get(view, &url)
+                .expect("file in output view");
+            view.run_on_top_mod(view.top_mod(file)).format_diags(view)
+        }
+    }
+}
+
+#[test]
+fn a_constant_declared_through_an_associated_type_may_be_a_compile_time_carrier() {
+    // `const C: <S as T>::Out = quote { 1 }` with `Out = Code<Expr>` is as
+    // valid as `const C: Code<Expr> = quote { 1 }`.
+    let source = "use core::meta::{Code, Expr}
+
+trait T {
+    type Out
+}
+struct S {}
+impl T for S {
+    type Out = Code<Expr>
+}
+
+const C: <S as T>::Out = quote { 1 }
+";
+    let (db, file) = input(source);
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(diagnostics.is_empty(), "{diagnostics}");
+}
+
+#[test]
+fn a_generated_trait_constant_meets_the_attribute_rules_of_a_written_one() {
+    let source = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Tr { const X: u256 }
+struct S { a: u256 }
+
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            #[payable]
+            const X: u256 = 1
+        }
+    }
+}
+
+impl Tr for S with (P)
+";
+    let errors = generated_diagnostics(source);
+    assert!(
+        errors.contains("unsupported `#[payable]` attribute on const `X`"),
+        "{errors}"
+    );
+}
+
+#[test]
+fn a_standalone_file_is_prepared_against_the_builtin_sources_of_its_database() {
+    // `fe doc --stdlib-path` loads other builtin sources into the database and
+    // prepares the file in it, so a provider has to run against them.
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, edited_marker}
+
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = edited_marker()
+        quote { pub const fn generated() -> usize { ${n} } }
+    }
+}
+
+struct S { a: u256 }
+impl S with (P)
+";
+    let (mut db, file) = input(source);
+    let meta = Url::parse("builtin-core:/src/meta.fe").unwrap();
+    let original = db
+        .workspace()
+        .get(&db, &meta)
+        .expect("the embedded meta module")
+        .text(&db)
+        .clone();
+    db.workspace().update(
+        &mut db,
+        meta,
+        format!("{original}\npub const fn edited_marker() -> usize {{ 41 }}\n"),
+    );
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "generated", "41");
+}
+
+/// A provider splices the type of the first field of the record into a
+/// `const fn mk` that it generates for the header. The record's declarations
+/// and the header differ between the tests; `run` calls `mk`.
+fn field_type_splice(declarations: &str, header: &str, call: &str) -> String {
+    format!(
+        "use core::derive::DeriveInherent
+use core::meta::{{Code, Item, Record, field, field_type}}
+struct Marker {{}}
+{declarations}
+struct P {{}}
+impl DeriveInherent for P {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        let t = field_type(field(record, 0))
+        quote {{ pub const fn mk(_ x: ${{t}}) -> usize {{ 1 }} }}
+    }}
+}}
+{header}
+const fn run() -> usize {{ {call} }}
+"
+    )
+}
+
+fn assert_field_type_splice_runs(declarations: &str, header: &str, call: &str) {
+    let (db, file) = input(&field_type_splice(declarations, header, call));
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let diags = output.run_on_top_mod(output.top_mod(output_file));
+    assert!(diags.is_empty(), "{}", diags.format_diags(&output));
+    assert_generated_integer(&output, output_file, "run", "1");
+}
+
+#[test]
+fn a_field_type_through_an_alias_that_ignores_its_parameter_can_be_spliced() {
+    // `Id<T>` is `u256` whatever `T` is.
+    assert_field_type_splice_runs(
+        "type Id<T> = u256\nstruct S<T> { f: Id<T> }",
+        "impl<T> S<T> with (P)",
+        "S<Marker>::mk(5)",
+    );
+}
+
+#[test]
+fn a_field_type_that_is_a_parameter_can_be_spliced() {
+    assert_field_type_splice_runs(
+        "struct S<T> { f: T }",
+        "impl<T> S<T> with (P)",
+        "S<u256>::mk(5)",
+    );
+}
+
+#[test]
+fn a_field_type_through_an_alias_that_ignores_a_constant_parameter_can_be_spliced() {
+    assert_field_type_splice_runs(
+        "type Id<const N: u256> = u256\nstruct S<const N: u256> { f: Id<N> }",
+        "impl<const N: u256> S<N> with (P)",
+        "S<3>::mk(5)",
+    );
+}
+
+#[test]
+fn a_field_type_is_spliced_under_the_header_parameter_names() {
+    // The header names the record's parameter `X`; the alias names its own `U`.
+    assert_field_type_splice_runs(
+        "type Id<U> = u256\nstruct S<T> { f: Id<T> }",
+        "impl<X> S<X> with (P)",
+        "S<Marker>::mk(5)",
+    );
+}
+
+#[test]
+fn a_field_type_that_is_a_parameter_takes_the_header_argument() {
+    // `f: T` is `X` under `impl<X> S<X>`, so `S<Marker>::mk` takes a `Marker`.
+    let (db, file) = input(&field_type_splice(
+        "struct S<T> { f: T }",
+        "impl<X> S<X> with (P)",
+        "S<Marker>::mk(5)",
+    ));
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    let diags = output.run_on_top_mod(output.top_mod(output_file));
+    assert!(
+        !diags.is_empty(),
+        "an integer is not a `Marker`, so the call is refused"
+    );
 }

@@ -1,0 +1,5 @@
+pub struct NonZero { val: u256 }
+impl NonZero {
+    pub const fn val(self) -> u256 { self.val }
+}
+pub unsafe const fn forge(_ v: u256) -> NonZero { NonZero { val: v } }

@@ -1,0 +1,27 @@
+trait Source { type Out }
+trait Extra {}
+struct Wrap<T> {}
+trait Output<A, B> {
+    type Result
+    fn make() -> Self::Result
+}
+impl<T> Output<u8, T> for Wrap<T> {
+    type Result = u256
+    fn make() -> u256 { 1 }
+}
+impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> {
+    type Result = u256
+    fn make() -> u256 { 2 }
+}
+impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> as Named {
+    type Result = u256
+    fn make() -> u256 { 3 }
+}
+struct Item {}
+impl Source for Item { type Out = u8 }
+impl Extra for Item as FakeExtra {}
+
+fn call<T: Output<u8, Item>>() -> T::Result { T::make() }
+fn agreeing() -> u256 { with (Named, FakeExtra) { call<Wrap<Item>>() } }
+#[test]
+fn agree() { assert(agreeing() == 3) }

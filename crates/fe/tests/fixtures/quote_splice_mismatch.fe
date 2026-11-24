@@ -1,0 +1,5 @@
+use core::meta::{Code, Pat}
+const fn bad() -> Code<Pat> {
+    let t: (u256, u256) = (1, 2)
+    quote { fn not_a_pat(x: u256) { ${t} } }
+}

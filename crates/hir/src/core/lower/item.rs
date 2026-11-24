@@ -1023,18 +1023,11 @@ impl<'db> Impl<'db> {
         }
 
         let db = ctxt.db();
-        let file_url = ctxt.top_mod().file(db).url(db);
+        let file = ctxt.top_mod().file(db);
         let header_range = ast.syntax().text_range();
-        let plan = db
-            .generation_inputs()
-            .requests(db)
-            .iter()
-            .find(|plan| {
-                Some(&plan.target_file) == file_url.as_ref()
-                    && plan.request_impl == Some(header_range)
-                    && plan.request_slot.is_none()
-            })
-            .cloned();
+        let plan = common::generation::file_generation(db, file)
+            .as_ref()
+            .and_then(|generation| generation.members.get(&header_range));
         if let Some(plan) = plan {
             // The members of an inherent header: functions and constants of the
             // header's type, under its binders and requirements, as for the
@@ -1393,25 +1386,13 @@ impl<'db> ImplTrait<'db> {
         // supplies every member, admitted by the same conformance checks as a
         // handwritten body.
         let db = ctxt.db();
-        let file_url = ctxt.top_mod().file(db).url(db);
-        let plan = db
-            .generation_inputs()
-            .requests(db)
-            .iter()
-            .find(|plan| {
-                Some(&plan.target_file) == file_url.as_ref()
-                    && plan.request_impl == Some(ast.syntax().text_range())
-                    && plan.request_slot.is_none()
-            })
-            .cloned();
+        let file = ctxt.top_mod().file(db);
+        let header = ast.syntax().text_range();
+        let plan = common::generation::file_generation(db, file)
+            .as_ref()
+            .and_then(|generation| generation.members.get(&header));
         if let Some(plan) = plan {
-            lower_trait_derive_members(
-                ctxt,
-                &plan.code,
-                ast.syntax().text_range(),
-                &mut types,
-                &mut consts,
-            );
+            lower_trait_derive_members(ctxt, &plan.code, header, &mut types, &mut consts);
         }
 
         out_types.retain(|out_type: &AssocTyDef| {
@@ -1484,6 +1465,7 @@ pub(super) fn lower_trait_derive_members<'db>(
                 ctxt.defer_generated_member_origin(generated.into());
             }
             Some(ast::ItemKind::Const(c)) => {
+                validate_spliced_const(ctxt, &c);
                 consts.push(AssocConstDef::lower_quoted_const(ctxt, c));
             }
             Some(ast::ItemKind::TypeAlias(alias)) => {

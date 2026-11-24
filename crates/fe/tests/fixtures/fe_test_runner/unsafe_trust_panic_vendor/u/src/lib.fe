@@ -1,0 +1,18 @@
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode, store_word}
+use std::abi::Sol
+use core::ptr
+pub struct WR { pub v: u256 }
+impl AbiSize for WR {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for WR {
+    fn encode(self, _ out: AbiFrame) {
+        let p = ptr::alloc_bytes(32)
+        unsafe { store_word(ptr: p, value: 7) }
+        let _ = out
+    }
+}
+impl Decode<Sol> for WR {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { WR { v: 0 } }
+}

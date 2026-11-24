@@ -1,0 +1,7 @@
+static_assert(u::SA == 0)
+#[test]
+fn via_const() { assert!(u::get().val() == 0) }
+#[test]
+fn assoc() { assert!(u::get_assoc().val() == 0) }
+#[test]
+fn pat() { assert!(u::pat(0)) }

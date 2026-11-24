@@ -47,14 +47,16 @@ use crate::{
                 NStatementKind, NormalizedBody, SemanticBodyAdmission, normalize_semantic_body,
                 runtime_semantic_body_admission, semantic_body_admission,
             },
-            root_semantic_instance_key,
+            panic_revert_edges, root_semantic_instance_key,
         },
         ty::{
             provider::AddressSpace,
-            ty_check::{BodyOwner, ReturnProjectionStep},
+            ty_check::{AssocConstBody, BodyOwner, ReturnProjectionStep, assoc_const_bodies_of},
+            ty_def::TyId,
         },
     },
-    hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
+    hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
+    span::HirOrigin,
 };
 
 use self::{
@@ -424,10 +426,35 @@ fn collect_semantic_access_with_blocked<'db>(
         .filter(|item| item.top_mod(db) == top_mod)
     {
         owners.extend(BodyOwner::const_predicates_of(db, *item));
+        // The initializer of a constant that an implementation or a trait holds
+        // is a body like a module constant's. It is checked where it is
+        // written, whether or not anything reads it, by the enumeration that
+        // the type checker's own pass over these bodies uses. Implementations
+        // and traits that the compiler generates (`#[event]`, `#[error]`,
+        // `#[abi]`) are the compiler's: the type checker reports no body
+        // errors for them either, and a read of one is followed as before.
+        let written = match item {
+            ItemKind::ImplTrait(impl_trait) => matches!(impl_trait.origin(db), HirOrigin::Raw(_)),
+            ItemKind::Trait(trait_) => matches!(trait_.origin(db), HirOrigin::Raw(_)),
+            _ => true,
+        };
+        if written {
+            owners.extend(
+                assoc_const_bodies_of(db, *item)
+                    .into_iter()
+                    .filter(|constant| !constant.expected.has_invalid(db))
+                    .map(AssocConstBody::owner),
+            );
+        }
         match item {
             ItemKind::Func(func) => owners.extend(BodyOwner::func_bodies(db, *func)),
             ItemKind::Const(const_) => owners.push(BodyOwner::Const(*const_)),
             ItemKind::Contract(contract) => owners.extend(contract_bodies(db, *contract)),
+            // A static assertion is evaluated when its package is checked.
+            ItemKind::StaticAssert(assert_) => owners.push(BodyOwner::AnonConstBody {
+                body: assert_.condition(db),
+                expected: TyId::bool(db),
+            }),
             ItemKind::Mod(_)
             | ItemKind::Struct(_)
             | ItemKind::Enum(_)
@@ -435,7 +462,6 @@ fn collect_semantic_access_with_blocked<'db>(
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
             | ItemKind::TypeAlias(_)
-            | ItemKind::StaticAssert(_)
             | ItemKind::Use(_)
             | ItemKind::TopMod(_)
             | ItemKind::Body(_) => {}
@@ -467,16 +493,17 @@ fn collect_semantic_access_with_blocked<'db>(
             })
             .collect()
     };
-    // A `#[test]` function runs when `fe test` runs, though no call names it.
-    // One with an untrusted contributor, a generated one, is a use of that
-    // contributor's code, judged at the function.
-    let test_uses: Vec<_> = trust
+    // A body that runs without a call (see `entry_kind`) runs when `fe test`
+    // or a build runs it, though no call names it. One with an untrusted
+    // contributor, a generated one, is a use of that contributor's code,
+    // judged at the body.
+    let entry_uses: Vec<_> = trust
         .iter()
         .flat_map(|_| {
             untrusted
                 .iter()
                 .copied()
-                .filter(|owner| is_test(db, *owner))
+                .filter_map(|owner| Some((owner, entry_kind(db, owner)?)))
         })
         .collect();
     let (mut trusted, untrusted) = (roots(trusted), roots(untrusted));
@@ -486,13 +513,13 @@ fn collect_semantic_access_with_blocked<'db>(
         .chain(&untrusted)
         .map(|(instance, _)| *instance)
         .collect();
-    let mut test_calls = FxHashSet::default();
-    for owner in test_uses {
+    let mut entry_calls = FxHashMap::default();
+    for (owner, kind) in entry_uses {
         let call = SemanticDiagnosticSpan::Origin {
             owner,
             origin: SemOrigin::Body(owner),
         };
-        test_calls.insert(call.clone());
+        entry_calls.insert(call.clone(), kind);
         let key = identity_semantic_instance_key(db, owner);
         trusted.push_back((SemanticInstance::new(db, key), Some(call)));
     }
@@ -507,13 +534,13 @@ fn collect_semantic_access_with_blocked<'db>(
             }
             let owner = instance.key(db).owner(db);
             if let (Some(trust), Some(call)) = (judge, &call)
-                && let Some((site, author)) = trust.untrusted_site(db, owner)
+                && let Some((site, author)) = trust.untrusted_site(db, instance)
                 && seen_untrusted.insert((author, call.clone()))
             {
                 diags.push(Box::new(UntrustedUnsafeUse {
                     root: top_mod.ingot(db),
                     call: call.clone(),
-                    runs_as_test: test_calls.contains(call),
+                    entry: entry_calls.get(call).copied(),
                     user: owner,
                     site,
                     author,
@@ -533,11 +560,7 @@ fn collect_semantic_access_with_blocked<'db>(
                             .callees(db)
                             .iter()
                             .map(|callee| callee.key)
-                            .chain(
-                                generated_callees(db, instance)
-                                    .into_iter()
-                                    .map(|(key, _)| key),
-                            )
+                            .chain(run_edges(db, instance).into_iter().map(|(key, _)| key))
                             .map(|key| (key, call.clone()))
                             .collect(),
                         None => {
@@ -564,10 +587,10 @@ fn collect_semantic_access_with_blocked<'db>(
                                         })
                                     })
                                 });
-                            let generated = generated_callees(db, instance)
+                            let implicit = run_edges(db, instance)
                                 .into_iter()
                                 .map(|(key, origin)| (key, at(origin)));
-                            calls.chain(loops).chain(generated).collect()
+                            calls.chain(loops).chain(implicit).collect()
                         }
                     };
                     pending.extend(
@@ -584,18 +607,6 @@ fn collect_semantic_access_with_blocked<'db>(
                 }
             }
         }
-    }
-    // An `unsafe impl` without a function has nothing for a call to reach, so it
-    // is judged where it is declared, once for the program of a trust root.
-    if let Some(trust) = &trust
-        && top_mod == top_mod.ingot(db).root_mod(db)
-    {
-        diags.extend(
-            trust
-                .untrusted_unsafe_impls(db, top_mod.ingot(db))
-                .into_iter()
-                .map(|unsafe_impl| Box::new(unsafe_impl) as Box<dyn DiagnosticVoucher + 'db>),
-        );
     }
     diags
 }
@@ -621,7 +632,13 @@ fn contract_bodies<'db>(
 }
 
 /// The instances the compiler runs for `instance` that no semantic call site
-/// records, each with the statement or body that makes it run:
+/// records, each with the statement, expression, pattern or body that makes it
+/// run. This is the one list of such edges; the trust walk follows only it and
+/// the call sites:
+/// - for each constant the body reads, in an expression or a pattern, the
+///   constant's initializer, which evaluating the constant runs;
+/// - for each call of `panic_with_value`, the `Encode` implementation that
+///   builds the revert data of the value (`panic_payload_revert_key`);
 /// - for a contract's `init` and each `recv` arm, the dispatcher's decode of
 ///   the arguments and encode of the return value (`implicit`);
 /// - for each drop, the `Drop::drop` implementations that drop elaboration
@@ -632,7 +649,7 @@ fn contract_bodies<'db>(
 /// - the bodies of a contract whose code it embeds to create it: a
 ///   high-level contract's, named by a `Contract` metadata builtin's type
 ///   argument, or a manual contract root named by a code region.
-fn generated_callees<'db>(
+fn run_edges<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
@@ -649,6 +666,8 @@ fn generated_callees<'db>(
         .into_iter()
         .map(|key| (key, SemOrigin::Body(owner)))
         .collect();
+    callees.extend(instance.implicit_dependencies_with_origins(db));
+    callees.extend(panic_revert_edges(db, instance));
     let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
         return callees;
     };
@@ -719,10 +738,32 @@ fn generated_callees<'db>(
     callees
 }
 
-/// Whether `owner` is a function that `fe test` runs: one with `#[test]`.
-fn is_test<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> bool {
-    matches!(owner, BodyOwner::Func(func, _)
-        if ItemKind::from(func)
-            .attrs(db)
-            .is_some_and(|attrs| attrs.has_attr(db, "test")))
+/// Why a body runs without a call written in the package being checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum EntryKind {
+    /// A `#[test]` function, which `fe test` runs.
+    Test,
+    /// An `#[unsafe(export)]` function, which a native object or a
+    /// WebAssembly module defines for its caller.
+    Export,
+    /// The package's `main` entry.
+    Main,
+    /// A contract's `init` or one of its `recv` arms.
+    Contract,
+}
+
+/// The reason `owner` runs without a call written in its package, if it does:
+/// a test, an export, the `main` entry, or a contract body. Provider output
+/// may only fill these in where the answer is the same predicate that code
+/// generation uses, so a generated one is judged at the body like a call.
+fn entry_kind<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Option<EntryKind> {
+    match owner {
+        BodyOwner::Func(func, _) if func.is_test(db) => Some(EntryKind::Test),
+        BodyOwner::Func(func, _) if func.is_exported(db) => Some(EntryKind::Export),
+        BodyOwner::Func(func, _) if func.is_main_entry(db) => Some(EntryKind::Main),
+        BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
+            Some(EntryKind::Contract)
+        }
+        _ => None,
+    }
 }

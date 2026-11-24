@@ -1,0 +1,26 @@
+// A goal written in an implementation's method on a type that the
+// implementation's pinned condition holds is answered by the dictionary the
+// condition received: `via` reads the chosen `Pick` for `Item`, as `read` does.
+struct Item {}
+trait Pick { fn val() -> u256 }
+impl Pick for Item { fn val() -> u256 { 100 } }
+impl Pick for Item as Named { fn val() -> u256 { 70 } }
+struct Wrap<T> {}
+trait Holder { type V: Pick }
+impl<T: Pick> Holder for Wrap<T> { type V = T }
+struct Slot<T> {}
+trait Outer {
+    type M: Pick
+    fn via() -> u256
+}
+impl<T: Holder<V = Item>> Outer for Slot<T> {
+    type M = <T as Holder>::V
+    fn via() -> u256 { <<T as Holder>::V as Pick>::val() }
+}
+fn read<B: Outer>() -> u256 { <B::M as Pick>::val() * 1000 + B::via() }
+fn top() -> u256 { with (Named) { read<Slot<Wrap<Item>>>() } }
+fn plain() -> u256 { read<Slot<Wrap<Item>>>() }
+#[test]
+fn chosen_component() { assert(top() == 70070) }
+#[test]
+fn ordinary_component() { assert(plain() == 100100) }

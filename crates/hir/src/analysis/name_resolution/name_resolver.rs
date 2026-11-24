@@ -206,10 +206,10 @@ pub fn ingot_has_generated_items<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'
     if functions.is_empty() && requests.is_empty() {
         return false;
     }
-    ingot.files(db).iter().any(|(url, _)| {
-        functions.iter().any(|plan| plan.target_file == url)
-            || requests.iter().any(|request| request.target_file == url)
-    })
+    ingot
+        .files(db)
+        .iter()
+        .any(|(_, file)| common::generation::file_generation(db, file).is_some())
 }
 
 /// Whether generation published an item into a module of `ingot`: a
@@ -217,14 +217,12 @@ pub fn ingot_has_generated_items<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'
 /// derive. The members of a derive header are not such items.
 #[salsa::tracked]
 pub fn ingot_publishes_items<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> bool {
-    let inputs = db.generation_inputs();
-    let functions = inputs.functions(db);
-    let requests = inputs.requests(db);
-    ingot.files(db).iter().any(|(url, _)| {
-        functions.iter().any(|plan| plan.target_file == url)
-            || requests
-                .iter()
-                .any(|request| request.request_impl.is_none() && request.target_file == url)
+    ingot.files(db).iter().any(|(_, file)| {
+        common::generation::file_generation(db, file)
+            .as_ref()
+            .is_some_and(|generation| {
+                !generation.functions.is_empty() || !generation.items.is_empty()
+            })
     })
 }
 

@@ -6,6 +6,15 @@ use crate::{
     verify::VerifyError,
 };
 
+#[cfg(test)]
+pub fn verify_class_layouts_for_test<'db>(
+    db: &'db dyn MirDb,
+    program: &impl RuntimeProgramView<'db>,
+    class: &RuntimeClass<'db>,
+) -> Result<(), VerifyError<'db>> {
+    verify_class_layouts(db, program, class, &mut FxHashSet::default())
+}
+
 pub(super) fn verify_class_layouts<'db>(
     db: &'db dyn MirDb,
     program: &impl RuntimeProgramView<'db>,
@@ -45,6 +54,9 @@ pub(super) fn verify_layout<'db>(
             .try_for_each(|field| verify_stored_class(db, program, field, visited)),
         Layout::Array(layout) => verify_stored_class(db, program, &layout.elem, visited),
         Layout::Enum(layout) => {
+            if layout.variants.is_empty() {
+                return Err(VerifyError::InvalidEnumTag(layout_id));
+            }
             if !matches!(
                 layout.tag.role,
                 ScalarRole::EnumTag {

@@ -389,10 +389,15 @@ impl super::Parse for TypeBoundScope {
     type Error = Recovery<ErrProof>;
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
-        let is_type_kind = matches!(
-            parser.current_kind(),
-            Some(SyntaxKind::LParen | SyntaxKind::Star)
-        );
+        // `Constraint` starts a kind only as the argument of an arrow;
+        // alone it names a trait.
+        let is_constraint_arrow = parser.is_ident("Constraint")
+            && parser.peek_n_non_trivia(2).get(1) == Some(&SyntaxKind::Arrow);
+        let is_type_kind = is_constraint_arrow
+            || matches!(
+                parser.current_kind(),
+                Some(SyntaxKind::LParen | SyntaxKind::Star)
+            );
 
         if is_type_kind {
             parse_kind_bound(parser)
@@ -725,9 +730,26 @@ impl super::Parse for WhereClauseScope {
                 Some(kind) if starts_predicate(kind) => {
                     let type_bound = is_type_start(kind)
                         && parser.dry_run(|p| {
-                            parse_type(p, None).is_ok()
-                                && p.current_kind() == Some(SyntaxKind::Colon)
+                            if parse_type(p, None).is_err()
+                                || p.current_kind() != Some(SyntaxKind::Colon)
+                            {
+                                return false;
+                            }
+                            if kind != SyntaxKind::TraitKw || self.item_block != ItemBlock::Absent {
+                                return true;
+                            }
+                            // A trait item can share the prefix of a family
+                            // bound. A body or where-clause after its bounds
+                            // belongs to the trait item here.
+                            p.parse(TypeBoundListScope::default()).is_ok()
+                                && !matches!(
+                                    p.current_kind(),
+                                    Some(SyntaxKind::LBrace | SyntaxKind::WhereKw)
+                                )
                         });
+                    if pred_count > 0 && kind == SyntaxKind::TraitKw && !type_bound {
+                        break;
+                    }
                     if type_bound {
                         parser.parse(WherePredicateScope::default())?;
                     } else {
@@ -749,6 +771,12 @@ impl super::Parse for WhereClauseScope {
             let newline = parser.current_kind() == Some(SyntaxKind::Newline);
             parser.set_newline_as_trivia(true);
             if newline {
+                // A clause with no block after it ends at the end of its line:
+                // the next line starts another item, such as a trait, a
+                // shape member or a splice of items.
+                if self.item_block == ItemBlock::Absent {
+                    break;
+                }
                 parser.add_error(ParseError::expected(
                     &[SyntaxKind::Comma],
                     None,

@@ -18,6 +18,9 @@ use super::{
     table_solver::match_header_type,
 };
 
+/// The provider implementations one search may examine for one family.
+const WORK_LIMIT: usize = 128;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderSearchBudget {
     Written,
@@ -99,8 +102,13 @@ impl<'db> OfferHead<'db> {
             (Self::Any, other) | (other, Self::Any) => Some(other),
             (lhs, rhs) if lhs == rhs => Some(lhs),
             (Self::Family(_), Self::Family(_)) => None,
-            (lhs, rhs) if lhs.trait_hint(db) == rhs.trait_hint(db) => {
-                lhs.trait_hint(db).map(Self::Trait)
+            // A closed family inside an open offer of its trait is the closed
+            // family.
+            (Self::Family(family), Self::Trait(trait_))
+            | (Self::Trait(trait_), Self::Family(family))
+                if Self::Family(family).trait_hint(db) == Some(trait_) =>
+            {
+                Some(Self::Family(family))
             }
             _ => None,
         }
@@ -138,7 +146,7 @@ impl<'db> ProviderSearch<'db> {
             assumptions,
             wanted: None,
             active: Vec::new(),
-            remaining: 128,
+            remaining: WORK_LIMIT,
             budget,
         }
     }
@@ -158,6 +166,9 @@ impl<'db> ProviderSearch<'db> {
     ) -> Result<Vec<(TyId<'db>, ImplementorOrigin<'db>)>, &'static str> {
         let mut offers = Vec::new();
         for &family in families {
+            // The limit counts implementations once per family searched, not
+            // across the families a defaulted goal can be written as.
+            self.remaining = WORK_LIMIT;
             self.wanted = Some(Canonical::new(self.db, family));
             offers.extend(
                 self.headers(receiver)?
@@ -178,27 +189,49 @@ impl<'db> ProviderSearch<'db> {
         } else {
             receiver
         };
-        if receiver
-            .flags(db)
-            .intersects(TyFlags::HAS_INVALID | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION)
-        {
-            return Err(
+        let flags = receiver.flags(db);
+        let undetermined = || {
+            Err(
                 "derive could not determine the type of a provider required by its forwarding bounds",
-            );
+            )
+        };
+        if flags.contains(TyFlags::HAS_INVALID) {
+            return undetermined();
         }
         // The index uses only the Derive declaration and the receiver's ingot.
         let inventory = TraitInstId::new_simple(db, self.derive, vec![receiver, TyId::unit(db)]);
         let (primary, secondary) = super::TraitSolveCx::new(db, self.scope, Tier::All)
             .search_ingots_for_trait_inst(db, inventory);
-        let mut headers = Vec::new();
-        for &header in impls_for_trait_in_ingots(
+        let inventory_headers = impls_for_trait_in_ingots(
             db,
             primary,
             secondary,
             Canonical::new(db, inventory),
             Tier::All,
             self.scope.ingot(db),
-        ) {
+        );
+        if flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION) {
+            // A receiver that is not settled is a provider only if some
+            // header's receiver could match it once settled. When none can,
+            // the receiver is no provider and offers nothing.
+            let may_match = inventory_headers.iter().any(|&header| {
+                let mut table = UnificationTable::new(db);
+                let candidate = table.instantiate_with_fresh_vars(header);
+                let header_base = candidate.trait_inst(db).self_ty(db).base_ty(db);
+                let receiver_base = receiver.base_ty(db);
+                header_base.is_ty_var(db)
+                    || receiver_base.is_ty_var(db)
+                    || receiver_base.has_projection(db)
+                    || header_base == receiver_base
+            });
+            return if may_match {
+                undetermined()
+            } else {
+                Ok(Vec::new())
+            };
+        }
+        let mut headers = Vec::new();
+        for &header in inventory_headers {
             let mut table = UnificationTable::new(db);
             let mut candidate = table.instantiate_with_fresh_vars(header);
             let candidate_receiver = candidate.trait_inst(db).self_ty(db);
@@ -270,6 +303,10 @@ impl<'db> ProviderSearch<'db> {
             } else {
                 family
             };
+            // A deferred default and the literal that equals it are one family:
+            // the head is closed when it is closed once its constants are
+            // evaluated.
+            let family = crate::core::meta::family_identity(db, family);
             let head = match family.data(db) {
                 TyData::TraitFamily(family_id)
                     if family.has_var(db) || family.has_param(db) || family.has_projection(db) =>

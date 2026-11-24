@@ -1,0 +1,4 @@
+use core::meta::{Code, Item}
+const fn ok() -> Code<Item> {
+    quote { fn is_an_item(x: u256) { } }
+}

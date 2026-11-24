@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: "diagnostics(db, fixture.path(), fixture.content())"
+input_file: fixtures/semantic_access/mutually_implied_bounds_fixed_component.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ mutually_implied_bounds_fixed_component.fe:14:36
+   │
+14 │ fn chosen() -> u256 { with (Alt) { call<L, R>() } }
+   │                                    ^^^^^^^^^^^^ `R: Right<Back = L>` is implemented; the implementation chosen here differs from the one in the dictionary of `L: Left<Out = R>`

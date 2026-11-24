@@ -1,0 +1,9 @@
+use core::abi::{load_word, store_word}
+use core::ptr
+pub fn raw() -> u256 {
+    let p = ptr::alloc_bytes(32)
+    unsafe {
+        store_word(ptr: p, value: 7)
+        load_word(p)
+    }
+}
