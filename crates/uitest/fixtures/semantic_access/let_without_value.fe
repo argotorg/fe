@@ -1,0 +1,64 @@
+fn read() -> u8 {
+    let x: u8
+    x
+}
+
+fn read_in_branch(_ c: bool) -> u8 {
+    let x: u8
+    if c {
+        return x
+    }
+    0
+}
+
+fn read_after_loop(_ n: u8) -> u8 {
+    let x: u8
+    var i: u8 = 0
+    while i < n {
+        i += 1
+    }
+    x
+}
+
+fn never_read() -> u8 {
+    let x: u8
+    0
+}
+
+fn diverge() -> ! {
+    loop {}
+}
+
+fn read_after_diverging() -> u8 {
+    let x: u8
+    diverge()
+    x
+}
+
+fn uninhabited_array() -> [!; 1] {
+    loop {}
+}
+
+fn read_after_uninhabited_array() -> u8 {
+    let x: u8
+    let _n = uninhabited_array()
+    x
+}
+
+fn read_after_uninhabited_statement() -> u8 {
+    let x: u8
+    uninhabited_array()
+    x
+}
+
+enum Void {}
+
+fn void() -> Void {
+    loop {}
+}
+
+fn read_after_void() -> u8 {
+    let x: u8
+    let _v = void()
+    x
+}

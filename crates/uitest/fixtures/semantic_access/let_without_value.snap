@@ -1,0 +1,33 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: "diagnostics(db, fixture.path(), fixture.content())"
+input_file: fixtures/semantic_access/let_without_value.fe
+---
+error[16-0002]: move conflict in `fn read`
+  ┌─ let_without_value.fe:1:17
+  │
+1 │   fn read() -> u8 {
+  │ ╭─────────────────^
+2 │ │     let x: u8
+3 │ │     x
+4 │ │ }
+  │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_in_branch`
+  ┌─ let_without_value.fe:9:16
+  │
+9 │         return x
+  │                ^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_after_loop`
+   ┌─ let_without_value.fe:14:35
+   │
+14 │   fn read_after_loop(_ n: u8) -> u8 {
+   │ ╭───────────────────────────────────^
+15 │ │     let x: u8
+16 │ │     var i: u8 = 0
+17 │ │     while i < n {
+   · │
+20 │ │     x
+21 │ │ }
+   │ ╰─^ cannot use a value before it is initialized

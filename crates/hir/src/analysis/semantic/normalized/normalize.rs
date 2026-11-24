@@ -129,8 +129,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             return self.normalize_empty_body();
         }
 
-        self.classify_roots()?;
         let cfg = RawCfg::new(self.raw);
+        self.classify_roots(&cfg.reachable)?;
         self.phi_locals = cfg.phi_locals(self.raw, &self.root_for_local);
         self.blocks = (0..self.raw.blocks.len())
             .map(|_| NBlock {
@@ -191,7 +191,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     }
 
     fn normalize_empty_body(mut self) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
-        self.classify_roots()?;
+        self.classify_roots(&[])?;
         self.blocks.push(NBlock {
             params: Box::default(),
             statements: Vec::new(),
@@ -219,12 +219,33 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
-    fn classify_roots(&mut self) -> Result<(), NormalizeError<'db>> {
+    /// `reachable` holds whether each raw block is reachable from the entry.
+    fn classify_roots(&mut self, reachable: &[bool]) -> Result<(), NormalizeError<'db>> {
+        // A binding that a reachable block reads and nothing defines, a `let`
+        // without a value, is read from a slot, as a `var` is, which the
+        // access checker sees uninitialized.
+        let (uses, defs) = block_uses_and_defs(self.raw);
+        let defined: FxHashSet<_> = defs
+            .iter()
+            .flatten()
+            .chain(&self.raw.entry_locals)
+            .copied()
+            .collect();
+        let read_undefined: FxHashSet<_> = uses
+            .iter()
+            .zip(reachable)
+            .filter(|(_, reachable)| **reachable)
+            .flat_map(|(uses, _)| uses)
+            .filter(|local| !defined.contains(local))
+            .copied()
+            .collect();
         let mut needs_slot = vec![false; self.raw.locals.len()];
         for (index, local) in self.raw.locals.iter().enumerate() {
             let direct_capability = local.ty.as_capability(self.db).is_some();
-            needs_slot[index] =
-                !direct_capability && local.source.is_some_and(|binding| binding.is_mut());
+            needs_slot[index] = !direct_capability
+                && local.source.is_some_and(|binding| {
+                    binding.is_mut() || read_undefined.contains(&SLocalId::new(index))
+                });
         }
         for block in &self.raw.blocks {
             for statement in &block.stmts {
