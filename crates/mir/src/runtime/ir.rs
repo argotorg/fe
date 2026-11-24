@@ -1336,10 +1336,19 @@ pub enum RuntimeBuiltin<'db> {
         class: ScalarClass<'db>,
     },
     Saturating {
-        op: SaturatingBinOp,
+        op: OverflowBinOp,
         lhs: RValueId,
         rhs: RValueId,
         class: ScalarClass<'db>,
+    },
+    /// The wrapped result of `op` and whether it overflowed, as a value of
+    /// `layout`, the tuple `(T, bool)`.
+    Overflowing {
+        op: OverflowBinOp,
+        lhs: RValueId,
+        rhs: RValueId,
+        class: ScalarClass<'db>,
+        layout: LayoutId<'db>,
     },
     Address,
     Caller,
@@ -1475,8 +1484,10 @@ pub enum RuntimeBuiltin<'db> {
     },
 }
 
+/// An arithmetic operation whose result a saturating builtin clamps and an
+/// overflowing one wraps and reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, SalsaValue)]
-pub enum SaturatingBinOp {
+pub enum OverflowBinOp {
     Add,
     Sub,
     Mul,
@@ -1769,6 +1780,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::Byte { .. }
             | Self::SignExtend { .. }
             | Self::Saturating { .. }
+            | Self::Overflowing { .. }
             | Self::Address
             | Self::Caller
             | Self::Origin
@@ -1825,6 +1837,7 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::SignExtend { byte: a, value: b }
             | Self::IntrinsicArith { lhs: a, rhs: b, .. }
             | Self::Saturating { lhs: a, rhs: b, .. }
+            | Self::Overflowing { lhs: a, rhs: b, .. }
             | Self::PtrOffsetBytes { ptr: a, offset: b }
             | Self::Log0 { offset: a, len: b } => vec![a, b],
             Self::Mcopy {

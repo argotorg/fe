@@ -3289,8 +3289,27 @@ impl<'db> RmirEmitter<'db> {
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
         let scalar = match &ret_class {
             RuntimeClass::Scalar(scalar) => scalar.clone(),
-            RuntimeClass::Ref { .. } => return None,
-            RuntimeClass::AggregateValue { .. } | RuntimeClass::RawAddr { .. } => return None,
+            RuntimeClass::AggregateValue { layout } => {
+                let (Some(GenericNumericIntrinsicKind::Overflowing(op)), [lhs, rhs]) =
+                    (kind, args.as_slice())
+                else {
+                    return None;
+                };
+                let RuntimeClass::Scalar(class) = self.value_class(*lhs)?.clone() else {
+                    return None;
+                };
+                let expr = RExpr::Builtin(crate::runtime::RuntimeBuiltin::Overflowing {
+                    op,
+                    lhs: *lhs,
+                    rhs: *rhs,
+                    class,
+                    layout: *layout,
+                });
+                let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
+                self.push_stmt(bb, RStmt::Assign { dst: ret, expr });
+                return Some(ret);
+            }
+            RuntimeClass::Ref { .. } | RuntimeClass::RawAddr { .. } => return None,
         };
         let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
         let expr = match kind {

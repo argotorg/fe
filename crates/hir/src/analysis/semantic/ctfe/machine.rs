@@ -33,7 +33,7 @@ use crate::{
             const_check::const_effects_supported,
             const_ty::{ConstTyData, ConstTyId},
             corelib::{
-                CtfeExternIntrinsic, NumericExternIntrinsic, SaturatingArithmetic, concrete_usize,
+                CtfeExternIntrinsic, NumericExternIntrinsic, OverflowArithmetic, concrete_usize,
                 ctfe_extern_intrinsic_kind,
             },
             evidence::EvidenceList,
@@ -1863,8 +1863,30 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 self.eval_wrapping_numeric_binary(result_ty, op, lhs.clone(), rhs.clone(), origin)
             }
             NumericExternIntrinsic::SaturatingBinary(op) => {
-                let (lhs, rhs) = expect_binary_args(args, origin)?;
-                self.eval_saturating_numeric_binary(result_ty, op, lhs.clone(), rhs.clone(), origin)
+                let Some((bits, signed)) = int_ty_shape(self.db, result_ty) else {
+                    return Err(CtfeError::NotConstEvaluable { origin });
+                };
+                let (min, max) = int_bounds(bits, signed);
+                let value = self.eval_overflow_arithmetic(op, args, origin)?;
+                Ok(CtfeConstValue::int(
+                    self.db,
+                    result_ty,
+                    value.clamp(min, max),
+                ))
+            }
+            NumericExternIntrinsic::OverflowingBinary(op) => {
+                let Some(&value_ty) = result_ty.field_types(self.db).first() else {
+                    return Err(CtfeError::NotConstEvaluable { origin });
+                };
+                let value = self.eval_overflow_arithmetic(op, args, origin)?;
+                let overflow = !self.int_in_range(value_ty, &value);
+                Ok(CtfeConstValue::tuple(
+                    result_ty,
+                    vec![
+                        CtfeConstValue::int(self.db, value_ty, value),
+                        CtfeConstValue::bool(overflow),
+                    ],
+                ))
             }
             NumericExternIntrinsic::Comparison(op) => {
                 let (lhs, rhs) = expect_binary_args(args, origin)?;
@@ -2038,30 +2060,22 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         Ok(Some(CtfeConstValue::int_word(self.db, result_ty, value)))
     }
 
-    fn eval_saturating_numeric_binary(
+    /// The exact result of `op` on a saturating or overflowing intrinsic's
+    /// operands, before it is clamped or wrapped to their type's range.
+    fn eval_overflow_arithmetic(
         &self,
-        result_ty: TyId<'db>,
-        op: SaturatingArithmetic,
-        lhs: CtfeConstValue<'db>,
-        rhs: CtfeConstValue<'db>,
+        op: OverflowArithmetic,
+        args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
-        let lhs = self.expect_int(lhs, origin)?;
-        let rhs = self.expect_int(rhs, origin)?;
-        let value = match op {
-            SaturatingArithmetic::Add => lhs + rhs,
-            SaturatingArithmetic::Sub => lhs - rhs,
-            SaturatingArithmetic::Mul => lhs * rhs,
-        };
-        let Some((bits, signed)) = int_ty_shape(self.db, result_ty) else {
-            return Err(CtfeError::NotConstEvaluable { origin });
-        };
-        let (min, max) = int_bounds(bits, signed);
-        Ok(CtfeConstValue::int(
-            self.db,
-            result_ty,
-            value.clamp(min, max),
-        ))
+    ) -> Result<BigInt, CtfeError<'db>> {
+        let (lhs, rhs) = expect_binary_args(args, origin)?;
+        let lhs = self.expect_int(lhs.clone(), origin)?;
+        let rhs = self.expect_int(rhs.clone(), origin)?;
+        Ok(match op {
+            OverflowArithmetic::Add => lhs + rhs,
+            OverflowArithmetic::Sub => lhs - rhs,
+            OverflowArithmetic::Mul => lhs * rhs,
+        })
     }
 
     fn eval_evm_modular_arithmetic(

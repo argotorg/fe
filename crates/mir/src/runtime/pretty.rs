@@ -819,6 +819,11 @@ fn format_builtin<'db>(db: &'db dyn MirDb, builtin: &RuntimeBuiltin<'db>) -> Str
             format_local_id(*lhs),
             format_local_id(*rhs)
         ),
+        RuntimeBuiltin::Overflowing { op, lhs, rhs, .. } => format!(
+            "overflowing_{op:?} {}, {}",
+            format_local_id(*lhs),
+            format_local_id(*rhs)
+        ),
         RuntimeBuiltin::Address => "address".to_string(),
         RuntimeBuiltin::Caller => "caller".to_string(),
         RuntimeBuiltin::Origin => "origin".to_string(),

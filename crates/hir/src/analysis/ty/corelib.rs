@@ -278,7 +278,8 @@ define_runtime_intrinsics! {
 pub(crate) enum NumericExternIntrinsic {
     CheckedBinary(ArithBinOp),
     WrappingBinary(ArithBinOp),
-    SaturatingBinary(SaturatingArithmetic),
+    SaturatingBinary(OverflowArithmetic),
+    OverflowingBinary(OverflowArithmetic),
     Comparison(CompBinOp),
     BoolBinary(ArithBinOp),
     CheckedNeg,
@@ -335,8 +336,10 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
     }
 }
 
+/// An operation whose exact result can leave its type's range, which the
+/// saturating intrinsics clamp and the overflowing ones wrap and report.
 #[derive(Clone, Copy)]
-pub(crate) enum SaturatingArithmetic {
+pub(crate) enum OverflowArithmetic {
     Add,
     Sub,
     Mul,
@@ -351,9 +354,12 @@ pub(crate) fn numeric_extern_intrinsic(name: &str) -> Option<NumericExternIntrin
         "__checked_rem" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Rem),
         "__checked_pow" => NumericExternIntrinsic::CheckedBinary(ArithBinOp::Pow),
         "__checked_neg" => NumericExternIntrinsic::CheckedNeg,
-        "__saturating_add" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Add),
-        "__saturating_sub" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Sub),
-        "__saturating_mul" => NumericExternIntrinsic::SaturatingBinary(SaturatingArithmetic::Mul),
+        "__saturating_add" => NumericExternIntrinsic::SaturatingBinary(OverflowArithmetic::Add),
+        "__saturating_sub" => NumericExternIntrinsic::SaturatingBinary(OverflowArithmetic::Sub),
+        "__saturating_mul" => NumericExternIntrinsic::SaturatingBinary(OverflowArithmetic::Mul),
+        "__overflowing_add" => NumericExternIntrinsic::OverflowingBinary(OverflowArithmetic::Add),
+        "__overflowing_sub" => NumericExternIntrinsic::OverflowingBinary(OverflowArithmetic::Sub),
+        "__overflowing_mul" => NumericExternIntrinsic::OverflowingBinary(OverflowArithmetic::Mul),
         "__not_bool" => NumericExternIntrinsic::BoolNot,
         "__bitand_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitAnd),
         "__bitor_bool" => NumericExternIntrinsic::BoolBinary(ArithBinOp::BitOr),

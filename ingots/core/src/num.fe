@@ -27,6 +27,14 @@ extern {
     const fn __saturating_mul<T: IntWord>(_: T, _: T) -> T
 }
 
+// Generic overflowing arithmetic intrinsics for primitive integer types: the
+// wrapped result and whether the operation overflowed.
+extern {
+    const fn __overflowing_add<T: IntWord>(_: T, _: T) -> (T, bool)
+    const fn __overflowing_sub<T: IntWord>(_: T, _: T) -> (T, bool)
+    const fn __overflowing_mul<T: IntWord>(_: T, _: T) -> (T, bool)
+}
+
 // Extern intrinsics for u8
 extern {
     const fn __add_u8(_: u8, _: u8) -> u8
@@ -1108,6 +1116,12 @@ const fn mul_div_failure(_ d: u256) -> u256 {
     d + u256::max()
 }
 
+// The result of an overflowing operation, or `None` if it overflowed.
+const fn checked<T: IntWord>(_ result: own (T, bool)) -> Option<T> {
+    let (value, overflow) = result
+    if overflow { None } else { Some(value) }
+}
+
 const fn pow_checked<T>(_ base: own T, _ exp: own T) -> T
     where T: IntWord, T: Mul<Output = T>
 {
@@ -1150,6 +1164,14 @@ impl WrappingPow for u8 { const fn wrapping_pow(own self, _ other: own u8) -> u8
 impl SaturatingAdd for u8 { const fn saturating_add(self, _ other: u8) -> u8 { __saturating_add(self, other) } }
 impl SaturatingSub for u8 { const fn saturating_sub(self, _ other: u8) -> u8 { __saturating_sub(self, other) } }
 impl SaturatingMul for u8 { const fn saturating_mul(self, _ other: u8) -> u8 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u8 { const fn overflowing_add(self, _ other: u8) -> (u8, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u8 { const fn overflowing_sub(self, _ other: u8) -> (u8, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u8 { const fn overflowing_mul(self, _ other: u8) -> (u8, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u8 { const fn checked_add(self, _ other: u8) -> Option<u8> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u8 { const fn checked_sub(self, _ other: u8) -> Option<u8> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u8 { const fn checked_mul(self, _ other: u8) -> Option<u8> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u8 { const fn checked_div(self, _ other: u8) -> Option<u8> { if other == 0 { None } else { Some(__div_u8(self, other)) } } }
+impl CheckedRem for u8 { const fn checked_rem(self, _ other: u8) -> Option<u8> { if other == 0 { None } else { Some(__rem_u8(self, other)) } } }
 impl Shl for u8 { const fn shl(own self, _ other: own u8) -> u8 { __shl_u8(self, other) } }
 impl Shr for u8 { const fn shr(own self, _ other: own u8) -> u8 { __shr_u8(self, other) } }
 impl BitAnd for u8 { const fn bitand(own self, _ other: own u8) -> u8 { __bitand_u8(self, other) } }
@@ -1220,6 +1242,18 @@ impl WrappingNeg for i8 { const fn wrapping_neg(own self) -> i8 { __sub_i8(0, se
 impl SaturatingAdd for i8 { const fn saturating_add(self, _ other: i8) -> i8 { __saturating_add(self, other) } }
 impl SaturatingSub for i8 { const fn saturating_sub(self, _ other: i8) -> i8 { __saturating_sub(self, other) } }
 impl SaturatingMul for i8 { const fn saturating_mul(self, _ other: i8) -> i8 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i8 { const fn overflowing_add(self, _ other: i8) -> (i8, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i8 { const fn overflowing_sub(self, _ other: i8) -> (i8, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i8 { const fn overflowing_mul(self, _ other: i8) -> (i8, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i8 { const fn checked_add(self, _ other: i8) -> Option<i8> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i8 { const fn checked_sub(self, _ other: i8) -> Option<i8> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i8 { const fn checked_mul(self, _ other: i8) -> Option<i8> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i8 {
+    const fn checked_div(self, _ other: i8) -> Option<i8> {
+        if other == 0 || (self == i8::min() && other == -1) { None } else { Some(__div_i8(self, other)) }
+    }
+}
+impl CheckedRem for i8 { const fn checked_rem(self, _ other: i8) -> Option<i8> { if other == 0 { None } else { Some(__rem_i8(self, other)) } } }
 impl Shl for i8 { const fn shl(own self, _ other: own i8) -> i8 { __shl_i8(self, other) } }
 impl Shr for i8 { const fn shr(own self, _ other: own i8) -> i8 { __shr_i8(self, other) } }
 impl BitAnd for i8 { const fn bitand(own self, _ other: own i8) -> i8 { __bitand_i8(self, other) } }
@@ -1290,6 +1324,18 @@ impl WrappingNeg for i16 { const fn wrapping_neg(own self) -> i16 { __sub_i16(0,
 impl SaturatingAdd for i16 { const fn saturating_add(self, _ other: i16) -> i16 { __saturating_add(self, other) } }
 impl SaturatingSub for i16 { const fn saturating_sub(self, _ other: i16) -> i16 { __saturating_sub(self, other) } }
 impl SaturatingMul for i16 { const fn saturating_mul(self, _ other: i16) -> i16 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i16 { const fn overflowing_add(self, _ other: i16) -> (i16, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i16 { const fn overflowing_sub(self, _ other: i16) -> (i16, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i16 { const fn overflowing_mul(self, _ other: i16) -> (i16, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i16 { const fn checked_add(self, _ other: i16) -> Option<i16> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i16 { const fn checked_sub(self, _ other: i16) -> Option<i16> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i16 { const fn checked_mul(self, _ other: i16) -> Option<i16> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i16 {
+    const fn checked_div(self, _ other: i16) -> Option<i16> {
+        if other == 0 || (self == i16::min() && other == -1) { None } else { Some(__div_i16(self, other)) }
+    }
+}
+impl CheckedRem for i16 { const fn checked_rem(self, _ other: i16) -> Option<i16> { if other == 0 { None } else { Some(__rem_i16(self, other)) } } }
 impl Shl for i16 { const fn shl(own self, _ other: own i16) -> i16 { __shl_i16(self, other) } }
 impl Shr for i16 { const fn shr(own self, _ other: own i16) -> i16 { __shr_i16(self, other) } }
 impl BitAnd for i16 { const fn bitand(own self, _ other: own i16) -> i16 { __bitand_i16(self, other) } }
@@ -1354,6 +1400,14 @@ impl WrappingPow for u16 { const fn wrapping_pow(own self, _ other: own u16) -> 
 impl SaturatingAdd for u16 { const fn saturating_add(self, _ other: u16) -> u16 { __saturating_add(self, other) } }
 impl SaturatingSub for u16 { const fn saturating_sub(self, _ other: u16) -> u16 { __saturating_sub(self, other) } }
 impl SaturatingMul for u16 { const fn saturating_mul(self, _ other: u16) -> u16 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u16 { const fn overflowing_add(self, _ other: u16) -> (u16, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u16 { const fn overflowing_sub(self, _ other: u16) -> (u16, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u16 { const fn overflowing_mul(self, _ other: u16) -> (u16, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u16 { const fn checked_add(self, _ other: u16) -> Option<u16> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u16 { const fn checked_sub(self, _ other: u16) -> Option<u16> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u16 { const fn checked_mul(self, _ other: u16) -> Option<u16> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u16 { const fn checked_div(self, _ other: u16) -> Option<u16> { if other == 0 { None } else { Some(__div_u16(self, other)) } } }
+impl CheckedRem for u16 { const fn checked_rem(self, _ other: u16) -> Option<u16> { if other == 0 { None } else { Some(__rem_u16(self, other)) } } }
 impl Shl for u16 { const fn shl(own self, _ other: own u16) -> u16 { __shl_u16(self, other) } }
 impl Shr for u16 { const fn shr(own self, _ other: own u16) -> u16 { __shr_u16(self, other) } }
 impl BitAnd for u16 { const fn bitand(own self, _ other: own u16) -> u16 { __bitand_u16(self, other) } }
@@ -1425,6 +1479,18 @@ impl WrappingNeg for i32 { const fn wrapping_neg(own self) -> i32 { __sub_i32(0,
 impl SaturatingAdd for i32 { const fn saturating_add(self, _ other: i32) -> i32 { __saturating_add(self, other) } }
 impl SaturatingSub for i32 { const fn saturating_sub(self, _ other: i32) -> i32 { __saturating_sub(self, other) } }
 impl SaturatingMul for i32 { const fn saturating_mul(self, _ other: i32) -> i32 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i32 { const fn overflowing_add(self, _ other: i32) -> (i32, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i32 { const fn overflowing_sub(self, _ other: i32) -> (i32, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i32 { const fn overflowing_mul(self, _ other: i32) -> (i32, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i32 { const fn checked_add(self, _ other: i32) -> Option<i32> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i32 { const fn checked_sub(self, _ other: i32) -> Option<i32> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i32 { const fn checked_mul(self, _ other: i32) -> Option<i32> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i32 {
+    const fn checked_div(self, _ other: i32) -> Option<i32> {
+        if other == 0 || (self == i32::min() && other == -1) { None } else { Some(__div_i32(self, other)) }
+    }
+}
+impl CheckedRem for i32 { const fn checked_rem(self, _ other: i32) -> Option<i32> { if other == 0 { None } else { Some(__rem_i32(self, other)) } } }
 impl Shl for i32 { const fn shl(own self, _ other: own i32) -> i32 { __shl_i32(self, other) } }
 impl Shr for i32 { const fn shr(own self, _ other: own i32) -> i32 { __shr_i32(self, other) } }
 impl BitAnd for i32 { const fn bitand(own self, _ other: own i32) -> i32 { __bitand_i32(self, other) } }
@@ -1489,6 +1555,14 @@ impl WrappingPow for u32 { const fn wrapping_pow(own self, _ other: own u32) -> 
 impl SaturatingAdd for u32 { const fn saturating_add(self, _ other: u32) -> u32 { __saturating_add(self, other) } }
 impl SaturatingSub for u32 { const fn saturating_sub(self, _ other: u32) -> u32 { __saturating_sub(self, other) } }
 impl SaturatingMul for u32 { const fn saturating_mul(self, _ other: u32) -> u32 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u32 { const fn overflowing_add(self, _ other: u32) -> (u32, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u32 { const fn overflowing_sub(self, _ other: u32) -> (u32, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u32 { const fn overflowing_mul(self, _ other: u32) -> (u32, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u32 { const fn checked_add(self, _ other: u32) -> Option<u32> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u32 { const fn checked_sub(self, _ other: u32) -> Option<u32> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u32 { const fn checked_mul(self, _ other: u32) -> Option<u32> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u32 { const fn checked_div(self, _ other: u32) -> Option<u32> { if other == 0 { None } else { Some(__div_u32(self, other)) } } }
+impl CheckedRem for u32 { const fn checked_rem(self, _ other: u32) -> Option<u32> { if other == 0 { None } else { Some(__rem_u32(self, other)) } } }
 impl Shl for u32 { const fn shl(own self, _ other: own u32) -> u32 { __shl_u32(self, other) } }
 impl Shr for u32 { const fn shr(own self, _ other: own u32) -> u32 { __shr_u32(self, other) } }
 impl BitAnd for u32 { const fn bitand(own self, _ other: own u32) -> u32 { __bitand_u32(self, other) } }
@@ -1559,6 +1633,18 @@ impl WrappingNeg for i64 { const fn wrapping_neg(own self) -> i64 { __sub_i64(0,
 impl SaturatingAdd for i64 { const fn saturating_add(self, _ other: i64) -> i64 { __saturating_add(self, other) } }
 impl SaturatingSub for i64 { const fn saturating_sub(self, _ other: i64) -> i64 { __saturating_sub(self, other) } }
 impl SaturatingMul for i64 { const fn saturating_mul(self, _ other: i64) -> i64 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i64 { const fn overflowing_add(self, _ other: i64) -> (i64, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i64 { const fn overflowing_sub(self, _ other: i64) -> (i64, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i64 { const fn overflowing_mul(self, _ other: i64) -> (i64, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i64 { const fn checked_add(self, _ other: i64) -> Option<i64> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i64 { const fn checked_sub(self, _ other: i64) -> Option<i64> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i64 { const fn checked_mul(self, _ other: i64) -> Option<i64> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i64 {
+    const fn checked_div(self, _ other: i64) -> Option<i64> {
+        if other == 0 || (self == i64::min() && other == -1) { None } else { Some(__div_i64(self, other)) }
+    }
+}
+impl CheckedRem for i64 { const fn checked_rem(self, _ other: i64) -> Option<i64> { if other == 0 { None } else { Some(__rem_i64(self, other)) } } }
 impl Shl for i64 { const fn shl(own self, _ other: own i64) -> i64 { __shl_i64(self, other) } }
 impl Shr for i64 { const fn shr(own self, _ other: own i64) -> i64 { __shr_i64(self, other) } }
 impl BitAnd for i64 { const fn bitand(own self, _ other: own i64) -> i64 { __bitand_i64(self, other) } }
@@ -1629,6 +1715,18 @@ impl WrappingNeg for i128 { const fn wrapping_neg(own self) -> i128 { __sub_i128
 impl SaturatingAdd for i128 { const fn saturating_add(self, _ other: i128) -> i128 { __saturating_add(self, other) } }
 impl SaturatingSub for i128 { const fn saturating_sub(self, _ other: i128) -> i128 { __saturating_sub(self, other) } }
 impl SaturatingMul for i128 { const fn saturating_mul(self, _ other: i128) -> i128 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i128 { const fn overflowing_add(self, _ other: i128) -> (i128, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i128 { const fn overflowing_sub(self, _ other: i128) -> (i128, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i128 { const fn overflowing_mul(self, _ other: i128) -> (i128, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i128 { const fn checked_add(self, _ other: i128) -> Option<i128> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i128 { const fn checked_sub(self, _ other: i128) -> Option<i128> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i128 { const fn checked_mul(self, _ other: i128) -> Option<i128> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i128 {
+    const fn checked_div(self, _ other: i128) -> Option<i128> {
+        if other == 0 || (self == i128::min() && other == -1) { None } else { Some(__div_i128(self, other)) }
+    }
+}
+impl CheckedRem for i128 { const fn checked_rem(self, _ other: i128) -> Option<i128> { if other == 0 { None } else { Some(__rem_i128(self, other)) } } }
 impl Shl for i128 { const fn shl(own self, _ other: own i128) -> i128 { __shl_i128(self, other) } }
 impl Shr for i128 { const fn shr(own self, _ other: own i128) -> i128 { __shr_i128(self, other) } }
 impl BitAnd for i128 { const fn bitand(own self, _ other: own i128) -> i128 { __bitand_i128(self, other) } }
@@ -1693,6 +1791,14 @@ impl WrappingPow for u64 { const fn wrapping_pow(own self, _ other: own u64) -> 
 impl SaturatingAdd for u64 { const fn saturating_add(self, _ other: u64) -> u64 { __saturating_add(self, other) } }
 impl SaturatingSub for u64 { const fn saturating_sub(self, _ other: u64) -> u64 { __saturating_sub(self, other) } }
 impl SaturatingMul for u64 { const fn saturating_mul(self, _ other: u64) -> u64 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u64 { const fn overflowing_add(self, _ other: u64) -> (u64, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u64 { const fn overflowing_sub(self, _ other: u64) -> (u64, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u64 { const fn overflowing_mul(self, _ other: u64) -> (u64, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u64 { const fn checked_add(self, _ other: u64) -> Option<u64> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u64 { const fn checked_sub(self, _ other: u64) -> Option<u64> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u64 { const fn checked_mul(self, _ other: u64) -> Option<u64> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u64 { const fn checked_div(self, _ other: u64) -> Option<u64> { if other == 0 { None } else { Some(__div_u64(self, other)) } } }
+impl CheckedRem for u64 { const fn checked_rem(self, _ other: u64) -> Option<u64> { if other == 0 { None } else { Some(__rem_u64(self, other)) } } }
 impl Shl for u64 { const fn shl(own self, _ other: own u64) -> u64 { __shl_u64(self, other) } }
 impl Shr for u64 { const fn shr(own self, _ other: own u64) -> u64 { __shr_u64(self, other) } }
 impl BitAnd for u64 { const fn bitand(own self, _ other: own u64) -> u64 { __bitand_u64(self, other) } }
@@ -1757,6 +1863,14 @@ impl WrappingPow for u128 { const fn wrapping_pow(own self, _ other: own u128) -
 impl SaturatingAdd for u128 { const fn saturating_add(self, _ other: u128) -> u128 { __saturating_add(self, other) } }
 impl SaturatingSub for u128 { const fn saturating_sub(self, _ other: u128) -> u128 { __saturating_sub(self, other) } }
 impl SaturatingMul for u128 { const fn saturating_mul(self, _ other: u128) -> u128 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u128 { const fn overflowing_add(self, _ other: u128) -> (u128, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u128 { const fn overflowing_sub(self, _ other: u128) -> (u128, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u128 { const fn overflowing_mul(self, _ other: u128) -> (u128, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u128 { const fn checked_add(self, _ other: u128) -> Option<u128> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u128 { const fn checked_sub(self, _ other: u128) -> Option<u128> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u128 { const fn checked_mul(self, _ other: u128) -> Option<u128> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u128 { const fn checked_div(self, _ other: u128) -> Option<u128> { if other == 0 { None } else { Some(__div_u128(self, other)) } } }
+impl CheckedRem for u128 { const fn checked_rem(self, _ other: u128) -> Option<u128> { if other == 0 { None } else { Some(__rem_u128(self, other)) } } }
 impl Shl for u128 { const fn shl(own self, _ other: own u128) -> u128 { __shl_u128(self, other) } }
 impl Shr for u128 { const fn shr(own self, _ other: own u128) -> u128 { __shr_u128(self, other) } }
 impl BitAnd for u128 { const fn bitand(own self, _ other: own u128) -> u128 { __bitand_u128(self, other) } }
@@ -1821,6 +1935,14 @@ impl WrappingPow for usize { const fn wrapping_pow(own self, _ other: own usize)
 impl SaturatingAdd for usize { const fn saturating_add(self, _ other: usize) -> usize { __saturating_add(self, other) } }
 impl SaturatingSub for usize { const fn saturating_sub(self, _ other: usize) -> usize { __saturating_sub(self, other) } }
 impl SaturatingMul for usize { const fn saturating_mul(self, _ other: usize) -> usize { __saturating_mul(self, other) } }
+impl OverflowingAdd for usize { const fn overflowing_add(self, _ other: usize) -> (usize, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for usize { const fn overflowing_sub(self, _ other: usize) -> (usize, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for usize { const fn overflowing_mul(self, _ other: usize) -> (usize, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for usize { const fn checked_add(self, _ other: usize) -> Option<usize> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for usize { const fn checked_sub(self, _ other: usize) -> Option<usize> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for usize { const fn checked_mul(self, _ other: usize) -> Option<usize> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for usize { const fn checked_div(self, _ other: usize) -> Option<usize> { if other == 0 { None } else { Some(__div_usize(self, other)) } } }
+impl CheckedRem for usize { const fn checked_rem(self, _ other: usize) -> Option<usize> { if other == 0 { None } else { Some(__rem_usize(self, other)) } } }
 impl Shl for usize { const fn shl(own self, _ other: own usize) -> usize { __shl_usize(self, other) } }
 impl Shr for usize { const fn shr(own self, _ other: own usize) -> usize { __shr_usize(self, other) } }
 impl BitAnd for usize { const fn bitand(own self, _ other: own usize) -> usize { __bitand_usize(self, other) } }
@@ -1891,6 +2013,18 @@ impl WrappingNeg for i256 { const fn wrapping_neg(own self) -> i256 { __sub_i256
 impl SaturatingAdd for i256 { const fn saturating_add(self, _ other: i256) -> i256 { __saturating_add(self, other) } }
 impl SaturatingSub for i256 { const fn saturating_sub(self, _ other: i256) -> i256 { __saturating_sub(self, other) } }
 impl SaturatingMul for i256 { const fn saturating_mul(self, _ other: i256) -> i256 { __saturating_mul(self, other) } }
+impl OverflowingAdd for i256 { const fn overflowing_add(self, _ other: i256) -> (i256, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for i256 { const fn overflowing_sub(self, _ other: i256) -> (i256, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for i256 { const fn overflowing_mul(self, _ other: i256) -> (i256, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for i256 { const fn checked_add(self, _ other: i256) -> Option<i256> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for i256 { const fn checked_sub(self, _ other: i256) -> Option<i256> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for i256 { const fn checked_mul(self, _ other: i256) -> Option<i256> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for i256 {
+    const fn checked_div(self, _ other: i256) -> Option<i256> {
+        if other == 0 || (self == i256::min() && other == -1) { None } else { Some(__div_i256(self, other)) }
+    }
+}
+impl CheckedRem for i256 { const fn checked_rem(self, _ other: i256) -> Option<i256> { if other == 0 { None } else { Some(__rem_i256(self, other)) } } }
 impl Shl for i256 { const fn shl(own self, _ other: own i256) -> i256 { __shl_i256(self, other) } }
 impl Shr for i256 { const fn shr(own self, _ other: own i256) -> i256 { __shr_i256(self, other) } }
 impl BitAnd for i256 { const fn bitand(own self, _ other: own i256) -> i256 { __bitand_i256(self, other) } }
@@ -1955,6 +2089,14 @@ impl WrappingPow for u256 { const fn wrapping_pow(own self, _ other: own u256) -
 impl SaturatingAdd for u256 { const fn saturating_add(self, _ other: u256) -> u256 { __saturating_add(self, other) } }
 impl SaturatingSub for u256 { const fn saturating_sub(self, _ other: u256) -> u256 { __saturating_sub(self, other) } }
 impl SaturatingMul for u256 { const fn saturating_mul(self, _ other: u256) -> u256 { __saturating_mul(self, other) } }
+impl OverflowingAdd for u256 { const fn overflowing_add(self, _ other: u256) -> (u256, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for u256 { const fn overflowing_sub(self, _ other: u256) -> (u256, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for u256 { const fn overflowing_mul(self, _ other: u256) -> (u256, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for u256 { const fn checked_add(self, _ other: u256) -> Option<u256> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for u256 { const fn checked_sub(self, _ other: u256) -> Option<u256> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for u256 { const fn checked_mul(self, _ other: u256) -> Option<u256> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for u256 { const fn checked_div(self, _ other: u256) -> Option<u256> { if other == 0 { None } else { Some(__div_u256(self, other)) } } }
+impl CheckedRem for u256 { const fn checked_rem(self, _ other: u256) -> Option<u256> { if other == 0 { None } else { Some(__rem_u256(self, other)) } } }
 impl Shl for u256 { const fn shl(own self, _ other: own u256) -> u256 { __shl_u256(self, other) } }
 impl Shr for u256 { const fn shr(own self, _ other: own u256) -> u256 { __shr_u256(self, other) } }
 impl BitAnd for u256 { const fn bitand(own self, _ other: own u256) -> u256 { __bitand_u256(self, other) } }
@@ -2025,6 +2167,18 @@ impl WrappingNeg for isize { const fn wrapping_neg(own self) -> isize { __sub_is
 impl SaturatingAdd for isize { const fn saturating_add(self, _ other: isize) -> isize { __saturating_add(self, other) } }
 impl SaturatingSub for isize { const fn saturating_sub(self, _ other: isize) -> isize { __saturating_sub(self, other) } }
 impl SaturatingMul for isize { const fn saturating_mul(self, _ other: isize) -> isize { __saturating_mul(self, other) } }
+impl OverflowingAdd for isize { const fn overflowing_add(self, _ other: isize) -> (isize, bool) { __overflowing_add(self, other) } }
+impl OverflowingSub for isize { const fn overflowing_sub(self, _ other: isize) -> (isize, bool) { __overflowing_sub(self, other) } }
+impl OverflowingMul for isize { const fn overflowing_mul(self, _ other: isize) -> (isize, bool) { __overflowing_mul(self, other) } }
+impl CheckedAdd for isize { const fn checked_add(self, _ other: isize) -> Option<isize> { checked(__overflowing_add(self, other)) } }
+impl CheckedSub for isize { const fn checked_sub(self, _ other: isize) -> Option<isize> { checked(__overflowing_sub(self, other)) } }
+impl CheckedMul for isize { const fn checked_mul(self, _ other: isize) -> Option<isize> { checked(__overflowing_mul(self, other)) } }
+impl CheckedDiv for isize {
+    const fn checked_div(self, _ other: isize) -> Option<isize> {
+        if other == 0 || (self == isize::min() && other == -1) { None } else { Some(__div_isize(self, other)) }
+    }
+}
+impl CheckedRem for isize { const fn checked_rem(self, _ other: isize) -> Option<isize> { if other == 0 { None } else { Some(__rem_isize(self, other)) } } }
 impl Shl for isize { const fn shl(own self, _ other: own isize) -> isize { __shl_isize(self, other) } }
 impl Shr for isize { const fn shr(own self, _ other: own isize) -> isize { __shr_isize(self, other) } }
 impl BitAnd for isize { const fn bitand(own self, _ other: own isize) -> isize { __bitand_isize(self, other) } }

@@ -10,9 +10,9 @@ error[8-0062]: non-const call in `const fn`
 16 │     (RuntimeCounter { value: 1 }) + (RuntimeCounter { value: 2 })
    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `add` is not a `const fn`
    │
-   ┌─ src/ops.fe:6:8
+   ┌─ src/ops.fe:7:8
    │
- 6 │     fn add(own self, _ other: own T) -> Self::Output
+ 7 │     fn add(own self, _ other: own T) -> Self::Output
    │        --- callee defined here
 
 error[8-0062]: non-const call in `const fn`
@@ -21,7 +21,7 @@ error[8-0062]: non-const call in `const fn`
 22 │     lhs + rhs
    │     ^^^^^^^^^ `add` is not a `const fn`
    │
-   ┌─ src/ops.fe:6:8
+   ┌─ src/ops.fe:7:8
    │
- 6 │     fn add(own self, _ other: own T) -> Self::Output
+ 7 │     fn add(own self, _ other: own T) -> Self::Output
    │        --- callee defined here
