@@ -4330,3 +4330,65 @@ const fn idle() -> usize {
     assert_eq!(eval_const_fn_u256(&output, "run"), "1");
 }
 
+const FORWARDING_HEAD: &str = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Read<A> { const fn read() -> u256 }
+struct Packet {}
+struct Small {}
+struct Large {}
+struct Generic {}
+struct Direct {}
+struct Via2<P, Q> {}
+
+impl Read<u8> for Packet { const fn read() -> u256 { 1 } }
+impl Read<u16> for Packet { const fn read() -> u256 { 2 } }
+
+impl Derive<trait Read<u8>> for Small {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 10 } } }
+}
+impl Derive<trait Read<u16>> for Large {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 30 } } }
+}
+impl<A> Derive<trait Read<A>> for Generic {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 50 } } }
+}
+impl Derive<trait Read<u8>> for Direct {
+    const fn derive(_ record: Record) -> Code<Item> { quote { const fn read() -> u256 { 70 } } }
+}
+impl<G: * -> Constraint, P: Derive<G>, Q: Derive<G>> Derive<G> for Via2<P, Q> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+"#;
+
+/// A forwarding provider with an open restrictor still offers the closed
+/// family of its other operand, so an idle header that overlaps through it is
+/// refused as it is with closed restrictors.
+#[test]
+fn forwarding_provider_with_an_open_restrictor_keeps_its_closed_offer() {
+    for openings in ["Via2<Small, Generic>, Direct", "Direct, Via2<Small, Generic>"] {
+        let source = format!("{FORWARDING_HEAD}\nconst fn idle() -> u256 {{ with ({openings}) {{ 0 }} }}\n");
+        let failure = prepare_err(&source);
+        assert!(
+            failure.contains("two derive providers for the same trait application"),
+            "{openings}: {failure}"
+        );
+    }
+    // The families that do not overlap are accepted and evaluate.
+    let source = format!(
+        "{FORWARDING_HEAD}
+const fn run() -> u256 {{
+    with (Via2<Small, Generic>, Large) {{
+        <Packet as Read<u8>>::read() + <Packet as Read<u16>>::read()
+    }}
+}}
+"
+    );
+    let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "40");
+}
+

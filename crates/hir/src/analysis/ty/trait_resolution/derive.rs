@@ -99,8 +99,13 @@ impl<'db> OfferHead<'db> {
             (Self::Any, other) | (other, Self::Any) => Some(other),
             (lhs, rhs) if lhs == rhs => Some(lhs),
             (Self::Family(_), Self::Family(_)) => None,
-            (lhs, rhs) if lhs.trait_hint(db) == rhs.trait_hint(db) => {
-                lhs.trait_hint(db).map(Self::Trait)
+            // A closed family inside an open offer of its trait is the closed
+            // family.
+            (Self::Family(family), Self::Trait(trait_))
+            | (Self::Trait(trait_), Self::Family(family))
+                if Self::Family(family).trait_hint(db) == Some(trait_) =>
+            {
+                Some(Self::Family(family))
             }
             _ => None,
         }
