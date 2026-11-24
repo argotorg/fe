@@ -4631,3 +4631,20 @@ const fn chosen() -> u256 { with (Loud) { read<C0<C1<C2<C3<C4<C5<Foo>>>>>>>() } 
     values(program, &[("plain", 100)]);
     refused(program, "chosen", "C5<Foo>: H5<V = Foo>");
 }
+
+// A closure that escapes a `with` block of an unrelated choice and is called
+// outside it keeps the dictionary of the instance that defined it.
+#[test]
+fn concrete_component_escaping_closure() {
+    let source = format!(
+        r#"{SHOWS}
+fn caller<B: Tr<A = Foo>>() -> u256 {{
+    let c = with (Aside) {{ || one<B::A>() }}
+    c() * 1000 + B::via()
+}}
+fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
+"#
+    )
+    .replace("const fn", "fn");
+    assert_eq!(reached_shows(&source, "top"), vec![true]);
+}
