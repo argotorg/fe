@@ -770,6 +770,33 @@ const fn read() -> u256 { K }
 }
 
 #[test]
+fn named_import_reports_implementation_ambiguity() {
+    let source = r#"
+pub trait Pick {}
+mod a {
+    use super::Pick
+    pub impl Pick for u8 as K {}
+}
+mod b {
+    use super::Pick
+    pub impl Pick for u16 as K {}
+}
+mod choices {
+    pub use super::a::*
+    pub use super::b::*
+}
+use choices::K as Selected
+"#;
+    assert_eq!(diagnostics(source), vec!["2-0004"]);
+
+    let source = source.replace("pub use super::b::*", "pub const K: u256 = 7");
+    values(
+        &format!("{source}\nconst fn read() -> u256 {{ Selected }}"),
+        &[("read", 7)],
+    );
+}
+
+#[test]
 fn associated_output_errors_blame_only_the_nonconforming_declaration() {
     for declarations in [
         "impl Output for Item as Good { type Out = u256 }\nimpl Output for Item as Bad { type Out = bool }",
