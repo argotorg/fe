@@ -4394,7 +4394,6 @@ const fn top() -> u256 {{ caller<W<Foo>>() }}
 // bound pins the condition's associated type, is accepted (as with an unpinned
 // bound).
 #[test]
-#[ignore = "fixed by the address and resolution cut"]
 fn concrete_component_pinned_caller_named_condition() {
     values(
         &format!(

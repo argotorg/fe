@@ -30,7 +30,7 @@ use super::{
     trait_lower::lower_impl_trait,
     trait_resolution::{
         BoundStep, ChosenImpls, PredicateListId, Selection, TraitSolveCx, answering_assumption,
-        assumption_matcher, constraint::collect_candidate_constraints,
+        assumption_matcher, concrete_components, constraint::collect_candidate_constraints,
         normalize_trait_inst_preserving_validity, step_bound,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
@@ -134,6 +134,7 @@ impl<'db> BoundSchemaId<'db> {
             schema: self,
             index: u32::try_from(index).ok()?,
             applied: self.slots(db),
+            component: None,
         })
     }
 
@@ -145,22 +146,76 @@ impl<'db> BoundSchemaId<'db> {
     }
 }
 
+/// The derivation steps from a slot to a concrete bound that the slot's
+/// dictionary holds but that is not a slot itself (`Foo: Show` from
+/// `B: Tr<A = Foo>`): the bounds of the first associated type, then the first
+/// supertrait, and so on. The path holds no type, so substitution leaves it.
+#[salsa::interned]
+#[derive(Debug)]
+pub(crate) struct ComponentPath<'db> {
+    #[returns(ref)]
+    pub(crate) steps: Vec<BoundStep<'db>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct BoundSlotRef<'db> {
     pub schema: BoundSchemaId<'db>,
+    /// A slot of `schema`'s basis. A component reference names the slot its
+    /// derivation starts from.
     pub index: u32,
     /// Applied goals in declaration order, including equal entries. Extending
     /// a substituted list deduplicates it and cannot be used as a slot address.
     pub applied: PredicateListId<'db>,
+    /// The derivation from the slot to the bound this reference names, when
+    /// that bound is a component of the slot's dictionary and no slot.
+    pub(crate) component: Option<ComponentPath<'db>>,
 }
 
 impl<'db> BoundSlotRef<'db> {
     pub fn nominal(self, db: &'db dyn HirAnalysisDb) -> Self {
         Self {
             schema: self.schema.nominal(db),
-            index: self.index,
             applied: PredicateListId::empty_list(db),
+            ..self
         }
+    }
+
+    /// The steps after the slot's index, as a stable name: `.A0.S1` for the
+    /// first bound of associated type `A`, then the second supertrait.
+    pub fn component_label(self, db: &'db dyn HirAnalysisDb) -> String {
+        let Some(path) = self.component else {
+            return String::new();
+        };
+        path.steps(db)
+            .iter()
+            .map(|step| match step {
+                BoundStep::Super(index) => format!(".S{index}"),
+                BoundStep::AssocBound { assoc, index } => {
+                    format!(".{}{index}", assoc.data(db))
+                }
+            })
+            .collect()
+    }
+}
+
+/// The bound a reference names: the goal of its slot, followed along its
+/// path. In the coordinates of the schema's declaration, where a component is
+/// concrete.
+fn component_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slot: BoundSlotRef<'db>,
+) -> Option<TraitInstId<'db>> {
+    let root = *slot
+        .schema
+        .basis_slots(db)
+        .list(db)
+        .get(slot.index as usize)?;
+    match slot.component {
+        None => Some(root),
+        Some(path) => path
+            .steps(db)
+            .iter()
+            .try_fold(root, |goal, &step| step_bound(db, goal, step)),
     }
 }
 
@@ -189,9 +244,26 @@ impl<'db> BoundEvidence<'db> {
                     .basis_slots(db)
                     .list(db)
                     .starts_with(slot.schema.basis_slots(db).list(db)));
-        same_basis
+        let root = same_basis
             .then(|| self.entries.get(db, slot.index as usize))
-            .flatten()
+            .flatten()?;
+        // A component is the field of the slot's dictionary at the end of its
+        // path. No step reads an assumption of the caller.
+        let Some(path) = slot.component else {
+            return Some(root);
+        };
+        let mut goal = *slot
+            .schema
+            .basis_slots(db)
+            .list(db)
+            .get(slot.index as usize)?;
+        let mut proof = root;
+        for &step in path.steps(db) {
+            goal = step_bound(db, goal, step)?;
+            proof = project_step(db, proof, step, Some(goal), PredicateListId::empty_list(db))
+                .proof()?;
+        }
+        Some(proof)
     }
 }
 
@@ -1471,15 +1543,38 @@ pub(crate) fn project_step<'db>(
 ) -> Projection<'db> {
     let (selected, instantiated, conds) = match proof.data(db) {
         Evidence::Assumption(slot) => {
-            let edges = slot.schema.basis_slots(db).implied_edges(db);
-            return edges
-                .iter()
-                .find(|edge| edge.parent == slot.index && edge.step == step)
-                .map_or(Projection::Pending, |edge| {
+            let slots = slot.schema.basis_slots(db);
+            // The child is a slot the walk derived, or a concrete component
+            // of the slot's dictionary, which is addressed by its path.
+            // Otherwise the walk filtered it: a generic bound it did not keep.
+            if slot.component.is_none()
+                && let Some(edge) = slots
+                    .implied_edges(db)
+                    .iter()
+                    .find(|edge| edge.parent == slot.index && edge.step == step)
+            {
+                return Projection::Proof(EvidenceId::new(
+                    db,
+                    Evidence::Assumption(BoundSlotRef {
+                        index: edge.child,
+                        component: None,
+                        ..*slot
+                    }),
+                ));
+            }
+            let Some(child) = component_goal(db, *slot).and_then(|goal| step_bound(db, goal, step))
+            else {
+                return Projection::Pending;
+            };
+            let table = concrete_components(db, slots);
+            return table
+                .find(db, child)
+                .map_or(Projection::Pending, |(_, member)| {
                     Projection::Proof(EvidenceId::new(
                         db,
                         Evidence::Assumption(BoundSlotRef {
-                            index: edge.child,
+                            index: member.root,
+                            component: Some(ComponentPath::new(db, member.path.clone())),
                             ..*slot
                         }),
                     ))
@@ -2474,7 +2569,7 @@ fn prove_cycle_initial<'db>(
 mod schema_tests {
     use super::super::ty_def::TyId;
     use super::*;
-    use crate::analysis::ty::trait_resolution::step_bound;
+    use crate::analysis::ty::trait_resolution::{has_concrete_components, step_bound};
     use crate::test_db::{HirAnalysisTestDb, find_func};
 
     #[test]
@@ -2632,5 +2727,180 @@ fn holds<H: Holds>() {}
             }
             assert!(checked > 0, "{source}");
         }
+    }
+
+    const PINNED: &str = r#"
+trait Show { fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+struct W<T> {}
+trait Tr { type A: Show }
+impl<T: Show> Tr for W<T> { type A = T }
+fn caller<B: Tr<A = Foo>>() {}
+fn plain<B: Tr>() {}
+"#;
+
+    /// The type `name` applied to `args`, and the trait `name`, of a module.
+    fn adt_ty<'db>(
+        db: &'db HirAnalysisTestDb,
+        module: crate::hir_def::TopLevelMod<'db>,
+        name: &str,
+        args: &[TyId<'db>],
+    ) -> TyId<'db> {
+        let adt = module
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Struct(item)
+                    if item
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|found| found.data(db) == name) =>
+                {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("a struct");
+        let adt = super::super::adt_def::AdtRef::Struct(adt).as_adt(db);
+        TyId::foldl(db, TyId::adt(db, adt), args)
+    }
+
+    fn trait_named<'db>(
+        db: &'db HirAnalysisTestDb,
+        module: crate::hir_def::TopLevelMod<'db>,
+        name: &str,
+    ) -> crate::hir_def::Trait<'db> {
+        module
+            .children_non_nested(db)
+            .find_map(|item| match item {
+                ItemKind::Trait(item)
+                    if item
+                        .name(db)
+                        .to_opt()
+                        .is_some_and(|found| found.data(db) == name) =>
+                {
+                    Some(item)
+                }
+                _ => None,
+            })
+            .expect("a trait")
+    }
+
+    #[test]
+    fn component_table_of_pinned_caller() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("pinned.fe".into(), PINNED);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let func = find_func(&db, module, "caller");
+        let signature = func_signature(&db, func, None);
+        assert_eq!(signature.list(&db).len(), 1);
+        let table = concrete_components(&db, signature);
+        assert_eq!(table.members.len(), 1);
+        let member = &table.members[0];
+        assert_eq!(member.goal.pretty_print(&db, true), "Foo: Show");
+        assert!(member.concrete);
+        assert_eq!(member.root, 0);
+        assert!(matches!(
+            member.path.as_slice(),
+            [BoundStep::AssocBound { index: 0, .. }]
+        ));
+        // The dictionary of the slot projects it as a reference to that path.
+        let schema =
+            BoundSchemaId::new(&db, BoundOwner::Body(BodyOwner::func(&db, func)), signature);
+        let projected = project_step(
+            &db,
+            schema.assumption(&db, 0),
+            member.path[0],
+            Some(member.goal),
+            PredicateListId::empty_list(&db),
+        )
+        .proof()
+        .expect("a component of the slot");
+        let Evidence::Assumption(slot) = projected.data(&db) else {
+            panic!("a reference")
+        };
+        assert_eq!((slot.schema, slot.index), (schema, 0));
+        assert_eq!(slot.component_label(&db), ".A0");
+    }
+
+    /// A reference moved between schemas keeps its path and resolves to the
+    /// component of the dictionary the last schema supplies.
+    #[test]
+    fn component_round_trip() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("pinned.fe".into(), PINNED);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let func = find_func(&db, module, "caller");
+        let signature = func_signature(&db, func, None);
+        let schema =
+            BoundSchemaId::new(&db, BoundOwner::Body(BodyOwner::func(&db, func)), signature);
+        let member = concrete_components(&db, signature).members[0].clone();
+        let path = ComponentPath::new(&db, member.path.clone());
+        let component = EvidenceId::new(
+            &db,
+            Evidence::Assumption(BoundSlotRef {
+                schema,
+                index: 0,
+                applied: signature,
+                component: Some(path),
+            }),
+        );
+        let foo = adt_ty(&db, module, "Foo", &[]);
+        let goal = TraitInstId::new_simple(
+            &db,
+            trait_named(&db, module, "Tr"),
+            vec![adt_ty(&db, module, "W", &[foo])],
+        );
+        let dictionary =
+            prove(&db, TraitSolveCx::new(&db, module.scope()), goal).expect("W<Foo> implements Tr");
+        let expected = dictionary.conds(&db)[0];
+        let supplied = BoundEvidence {
+            schema,
+            entries: EvidenceList::of(&db, vec![Some(dictionary)]),
+        };
+        assert_eq!(component.bind(&db, supplied), expected);
+        assert_eq!(
+            component.nominal(&db).bind(&db, supplied.nominal(&db)),
+            expected
+        );
+        // A supply for a longer list that starts with the reference's list.
+        let longer = PredicateListId::new(&db, vec![signature.list(&db)[0], member.goal]);
+        let prefix = BoundEvidence {
+            schema: BoundSchemaId::new(&db, schema.owner(&db), longer),
+            entries: EvidenceList::of(&db, vec![Some(dictionary), None]),
+        };
+        assert_eq!(component.bind(&db, prefix), expected);
+        // A supply that is itself a slot of another schema: the reference
+        // moves there, with its path, and resolves when that schema is bound.
+        let basis = BoundSchemaId::context(&db, signature);
+        let middle = BoundEvidence {
+            schema,
+            entries: EvidenceList::of(&db, vec![Some(basis.assumption(&db, 0))]),
+        };
+        let moved = component.rebase(&db, middle).expect("a reference");
+        let Evidence::Assumption(slot) = moved.data(&db) else {
+            panic!("a reference")
+        };
+        assert_eq!((slot.schema, slot.index), (basis, 0));
+        assert_eq!(slot.component, Some(path));
+        let last = BoundEvidence {
+            schema: basis,
+            entries: EvidenceList::of(&db, vec![Some(dictionary)]),
+        };
+        assert_eq!(moved.rebase(&db, last), Some(expected));
+    }
+
+    #[test]
+    fn component_table_empty_without_equalities() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("pinned.fe".into(), PINNED);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let signature = func_signature(&db, find_func(&db, module, "plain"), None);
+        assert!(!has_concrete_components(&db, signature));
+        assert!(concrete_components(&db, signature).members.is_empty());
     }
 }

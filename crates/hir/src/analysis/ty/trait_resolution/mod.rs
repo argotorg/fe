@@ -1324,11 +1324,7 @@ impl<'db> PredicateListId<'db> {
                     // would be a second candidate for every method of the impl.
                     // A bound still generic in an argument or a binding,
                     // `Reader: Read<T>`, is evidence no implementation gives.
-                    let concrete = |ty: &TyId<'db>| {
-                        !ty.has_invalid(db) && !ty.has_param(db) && !ty.has_projection(db)
-                    };
-                    let concrete = trait_inst.args(db).iter().all(concrete)
-                        && trait_inst.assoc_type_bindings(db).values().all(concrete);
+                    let concrete = is_concrete_bound(db, trait_inst);
                     if (concrete && !keep_concrete)
                         || predicate_has_recursive_assoc_projection(db, trait_inst)
                     {
@@ -1352,6 +1348,170 @@ impl<'db> PredicateListId<'db> {
             edges,
         }
     }
+}
+
+/// Whether `bound` names no type parameter, projection or invalid type, in an
+/// argument or an associated-type binding. An equality can make a bound that
+/// an associated type declares concrete: `Foo: Show` from `B: Tr<A = Foo>`.
+fn is_concrete_bound<'db>(db: &'db dyn HirAnalysisDb, bound: TraitInstId<'db>) -> bool {
+    let concrete =
+        |ty: &TyId<'db>| !ty.has_invalid(db) && !ty.has_param(db) && !ty.has_projection(db);
+    bound.args(db).iter().all(concrete) && bound.assoc_type_bindings(db).values().all(concrete)
+}
+
+/// Whether the bounds in `slots` can derive a concrete bound. A concrete
+/// child of a slot needs an associated type that the parent's own equalities
+/// make concrete, so a list in which no bound states an equality has none.
+pub(crate) fn has_concrete_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+) -> bool {
+    slots
+        .list(db)
+        .iter()
+        .any(|pred| !pred.assoc_type_bindings(db).is_empty())
+}
+
+/// A member of the walk of a list of slots that is not one of the slots.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct Component<'db> {
+    pub(crate) goal: TraitInstId<'db>,
+    /// Whether the goal is concrete. Other members only carry a derivation
+    /// that continues through them.
+    pub(crate) concrete: bool,
+    /// The position of the slot the member's first derivation starts from,
+    /// and the steps from that slot's dictionary to the member's.
+    pub(crate) root: u32,
+    pub(crate) path: Vec<BoundStep<'db>>,
+    /// Every derivation that enters the member, as the position in the walk
+    /// of the bound it is read from and the step that reads it.
+    pub(crate) entering: Vec<(u32, BoundStep<'db>)>,
+}
+
+/// The concrete bounds a list of slots derives and are not slots, with where
+/// each is read from. A body proves a goal on a concrete type that one of its
+/// bounds implies by the component of that bound's dictionary (the
+/// projection commit's rule, applied through the steps that name it), never
+/// by selecting an implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct ComponentTable<'db> {
+    /// The number of slots; the walk position of `members[0]`.
+    pub(crate) slots: u32,
+    /// The members of the walk of the slots after the slots, in walk order.
+    pub(crate) members: Vec<Component<'db>>,
+    /// The concrete members of each trait, as positions in `members`.
+    by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)>,
+}
+
+impl<'db> ComponentTable<'db> {
+    fn empty() -> Self {
+        Self {
+            slots: 0,
+            members: Vec::new(),
+            by_trait: Vec::new(),
+        }
+    }
+
+    /// The concrete members of `trait_`, in walk order.
+    pub(crate) fn of_trait(
+        &self,
+        trait_: crate::hir_def::Trait<'db>,
+    ) -> impl Iterator<Item = (usize, &Component<'db>)> {
+        self.by_trait
+            .iter()
+            .find(|(candidate, _)| *candidate == trait_)
+            .into_iter()
+            .flat_map(|(_, members)| members.iter())
+            .map(|&member| (member as usize, &self.members[member as usize]))
+    }
+
+    /// The concrete member that is exactly `goal`.
+    pub(crate) fn find(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        goal: TraitInstId<'db>,
+    ) -> Option<(usize, &Component<'db>)> {
+        self.of_trait(goal.def(db))
+            .find(|(_, member)| member.goal == goal)
+    }
+}
+
+/// The components of the extended list of slots `slots`: one walk of the whole
+/// list that keeps the concrete bounds the plain walk drops (`Foo: Show` from
+/// `B: Tr<A = Foo>`), with each member's canonical address, the slot and steps
+/// of its first derivation. Empty unless a slot states an equality.
+#[salsa::tracked(returns(ref), cycle_initial = component_table_cycle_initial)]
+pub(crate) fn concrete_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+) -> ComponentTable<'db> {
+    if !has_concrete_components(db, slots) {
+        return ComponentTable::empty();
+    }
+    let walk = slots.bound_walk_keeping_concrete(db);
+    let (slot_list, list) = (slots.list(db), walk.list.list(db));
+    // The walk's list starts with the list it was given, so a position below
+    // the number of slots is that slot.
+    if !list.starts_with(slot_list) {
+        return ComponentTable::empty();
+    }
+    let n = slot_list.len();
+    let mut entering: Vec<Vec<(u32, BoundStep<'db>)>> = vec![Vec::new(); list.len()];
+    for edge in &walk.edges {
+        if let Some(into) = entering.get_mut(edge.child as usize) {
+            into.push((edge.parent, edge.step));
+        }
+    }
+    let mut members: Vec<Component<'db>> = Vec::with_capacity(list.len() - n);
+    for (position, &goal) in list.iter().enumerate().skip(n) {
+        let entering = std::mem::take(&mut entering[position]);
+        // The first derivation is the one that found the member, so its
+        // parent comes earlier in the walk.
+        let (root, path) = match entering.first() {
+            Some(&(parent, step)) if (parent as usize) < n => (parent, vec![step]),
+            Some(&(parent, step)) if (parent as usize) < position => {
+                let from = &members[parent as usize - n];
+                let mut path = from.path.clone();
+                path.push(step);
+                (from.root, path)
+            }
+            _ => (0, Vec::new()),
+        };
+        members.push(Component {
+            goal,
+            concrete: is_concrete_bound(db, goal),
+            root,
+            path,
+            entering,
+        });
+    }
+    let mut by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)> = Vec::new();
+    for (position, member) in members.iter().enumerate() {
+        if !member.concrete || member.path.is_empty() {
+            continue;
+        }
+        let trait_ = member.goal.def(db);
+        match by_trait
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == trait_)
+        {
+            Some((_, positions)) => positions.push(position as u32),
+            None => by_trait.push((trait_, vec![position as u32])),
+        }
+    }
+    ComponentTable {
+        slots: n as u32,
+        members,
+        by_trait,
+    }
+}
+
+fn component_table_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _slots: PredicateListId<'db>,
+) -> ComponentTable<'db> {
+    ComponentTable::empty()
 }
 
 /// One derivation step of the bound walk: how a bound is read from the
