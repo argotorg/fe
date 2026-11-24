@@ -4711,6 +4711,56 @@ const fn chosen() -> u256 { with (Loud) { read<@ARGUMENTS@>() } }
     }
 }
 
+// One identity written two ways, `Foo: Read` and `Foo: Read<Out = u8>`, is one
+// component however it is spelled. The call that holds both under an unrelated
+// choice reads the one dictionary each condition supplies; it is not refused
+// for having two references to it.
+#[test]
+fn concrete_component_identity_held_two_spellings() {
+    let program = |unrelated: bool| {
+        let call = if unrelated {
+            "with (Aside) { h<Pair<B, C>>() }"
+        } else {
+            "h<Pair<B, C>>()"
+        };
+        format!(
+            r#"
+trait Read {{
+    type Out
+    const fn r() -> u256
+}}
+struct Foo {{}}
+impl Read for Foo {{
+    type Out = u8
+    const fn r() -> u256 {{ 100 }}
+}}
+impl Read for Foo as Loud {{
+    type Out = u8
+    const fn r() -> u256 {{ 70 }}
+}}
+struct W<T> {{}}
+struct V<T> {{}}
+trait Tr {{ type A: Read }}
+trait Tr2 {{ type A: Read<Out = u8> }}
+impl<T: Read> Tr for W<T> {{ type A = T }}
+impl<T: Read<Out = u8>> Tr2 for V<T> {{ type A = T }}
+struct Pair<T, U> {{}}
+trait Both {{ type X: Read }}
+impl<T: Tr<A = Foo>, U: Tr2<A = Foo>> Both for Pair<T, U> {{ type X = Foo }}
+trait Other {{ const fn o() -> u256 }}
+impl Other for Foo {{ const fn o() -> u256 {{ 1 }} }}
+impl Other for Foo as Aside {{ const fn o() -> u256 {{ 2 }} }}
+const fn h<P: Both>() -> u256 {{ <P::X as Read>::r() }}
+const fn g<B: Tr<A = Foo>, C: Tr2<A = Foo>>() -> u256 {{ {call} }}
+const fn top() -> u256 {{ with (Loud) {{ g<W<Foo>, V<Foo>>() }} }}
+const fn top_plain() -> u256 {{ g<W<Foo>, V<Foo>>() }}
+"#
+        )
+    };
+    values(&program(true), &[("top", 70), ("top_plain", 100)]);
+    values(&program(false), &[("top", 70), ("top_plain", 100)]);
+}
+
 // A closure that escapes a `with` block of an unrelated choice and is called
 // outside it keeps the dictionary of the instance that defined it.
 #[test]

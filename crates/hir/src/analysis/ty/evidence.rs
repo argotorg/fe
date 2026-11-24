@@ -32,7 +32,7 @@ use super::{
         BoundStep, ChosenImpls, Component, PredicateListId, Selection, TraitSolveCx,
         answering_assumption, assumption_matcher, concrete_components,
         constraint::collect_candidate_constraints, has_concrete_components,
-        normalize_trait_inst_preserving_validity, step_bound,
+        normalize_trait_inst_preserving_validity, same_identity, step_bound,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
     ty_def::{BorrowKind, TyFlags, TyId},
@@ -1220,10 +1220,7 @@ pub(crate) fn slot_answering<'db>(
     if !is_closed_goal(db, goal) {
         return None;
     }
-    let table = concrete_components(db, slots);
-    let (_, member) = table
-        .of_trait(goal.def(db))
-        .find(|(_, member)| same_identity(db, scope, member.goal, goal))?;
+    let (_, member) = concrete_components(db, slots).answering(db, scope, goal)?;
     Some(BoundSlotRef {
         component: Some(ComponentPath::new(db, member.path.clone())),
         ..schema.slot(db, member.root as usize)?
@@ -1701,9 +1698,15 @@ pub(crate) fn project_step<'db>(
             else {
                 return Projection::Pending;
             };
-            let table = concrete_components(db, slots);
-            return table
-                .find(db, child)
+            // The child is the canonical member of its identity, the one every
+            // other reader of that identity finds.
+            let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+                db,
+                child.def(db).scope().top_mod(db).ingot(db),
+                child,
+            );
+            return concrete_components(db, slots)
+                .answering(db, scope, child)
                 .map_or(Projection::Pending, |(_, member)| {
                     Projection::Proof(EvidenceId::new(
                         db,
@@ -2715,24 +2718,6 @@ pub(crate) fn instance_evidence<'db>(
         proofs: EvidenceList::of(db, entries).with_rows(db, supplied.rows(db).clone()),
         refused,
     }
-}
-
-/// Whether two goals are one implementation's: the same trait at the same
-/// arguments, after normalizing them in `scope`. Associated-type equalities and
-/// the mode are not part of it, since a proof names no goal (`Evidence::Impl`).
-fn same_identity<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    a: TraitInstId<'db>,
-    b: TraitInstId<'db>,
-) -> bool {
-    a == b
-        || (a.def(db) == b.def(db)
-            && a.args(db).len() == b.args(db).len()
-            && a.args(db).iter().zip(b.args(db)).all(|(&x, &y)| {
-                let empty = PredicateListId::empty_list(db);
-                x == y || normalize_ty(db, x, scope, empty) == normalize_ty(db, y, scope, empty)
-            }))
 }
 
 /// The first concrete component of `layout`'s dictionaries, held in an

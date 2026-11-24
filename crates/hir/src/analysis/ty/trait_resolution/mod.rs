@@ -4,7 +4,7 @@ use super::{
     const_expr::ConstExpr,
     const_ty::ConstTyData,
     fold::TyFoldable,
-    normalize::normalize_from_assumptions,
+    normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{BorrowKind, TyData, TyFlags, TyId},
     visitor::{TyVisitable, TyVisitor, walk_ty},
@@ -1484,15 +1484,38 @@ impl<'db> ComponentTable<'db> {
             .map(|&member| (member as usize, &self.members[member as usize]))
     }
 
-    /// The concrete member that is exactly `goal`.
-    pub(crate) fn find(
+    /// The canonical member that is the same implementation as `goal`: the
+    /// first, in walk order, of the concrete members of its trait that
+    /// `same_identity` equates with it, however the associated-type equalities
+    /// of the two are spelled. Every reader of a component finds it here, so
+    /// that one identity has one reference.
+    pub(crate) fn answering(
         &self,
         db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
         goal: TraitInstId<'db>,
     ) -> Option<(usize, &Component<'db>)> {
         self.of_trait(goal.def(db))
-            .find(|(_, member)| member.goal == goal)
+            .find(|(_, member)| same_identity(db, scope, member.goal, goal))
     }
+}
+
+/// Whether two goals are one implementation's: the same trait at the same
+/// arguments, after normalizing them in `scope`. Associated-type equalities and
+/// the mode are not part of it, since a proof names no goal (`Evidence::Impl`).
+pub(crate) fn same_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    a: TraitInstId<'db>,
+    b: TraitInstId<'db>,
+) -> bool {
+    a == b
+        || (a.def(db) == b.def(db)
+            && a.args(db).len() == b.args(db).len()
+            && a.args(db).iter().zip(b.args(db)).all(|(&x, &y)| {
+                let empty = PredicateListId::empty_list(db);
+                x == y || normalize_ty(db, x, scope, empty) == normalize_ty(db, y, scope, empty)
+            }))
 }
 
 /// The components of the extended list of slots `slots`: one walk of the whole
