@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/alias_invalid_param_inferred.fe
+---
+error[1-0001]: expected name for constant generic parameter
+  ┌─ alias_invalid_param_inferred.fe:6:19
+  │
+6 │ type Unnamed<const : usize> = Flag
+  │                   ^ expected identifier
+
+error[1-0001]: missing type bound for constant generic parameter
+  ┌─ alias_invalid_param_inferred.fe:9:21
+  │
+9 │ type Untyped<const N> = Flag
+  │                     ^ expected `:`
+
+error[2-0002]: `Missing` is not found
+   ┌─ alias_invalid_param_inferred.fe:12:24
+   │
+12 │ type Mistyped<const N: Missing> = Flag
+   │                        ^^^^^^^ `Missing` is not found

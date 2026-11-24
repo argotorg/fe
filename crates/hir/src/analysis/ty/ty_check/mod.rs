@@ -4193,8 +4193,13 @@ impl<'db> TyChecker<'db> {
                     assumptions,
                     lowering_cx,
                 );
+                // A parameter whose declaration is invalid stands for itself.
                 *ty = alias.instantiate(db, &args, lowering_cx, |param| {
-                    Some(table.new_var_from_param(param))
+                    Some(if param.invalid_cause(db).is_some() {
+                        param
+                    } else {
+                        table.new_var_from_param(param)
+                    })
                 });
             }
             applications.extend(const_requirements::constrained_applications(self.db, reso));
