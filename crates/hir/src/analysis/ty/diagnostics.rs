@@ -1780,8 +1780,8 @@ impl<'db> BodyDiag<'db> {
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
             Self::ChosenTypeRead { .. } => 138,
             Self::QuotedOpenNameUnbound { .. } => 140,
-            Self::QuoteKindMismatch { .. } => 163,
-            Self::QuoteSpliceMismatch { .. } => 164,
+            Self::QuoteKindMismatch { .. } => 164,
+            Self::QuoteSpliceMismatch { .. } => 165,
         }
     }
 }

@@ -5192,13 +5192,22 @@ fn test_cli_check_types_a_quotation_by_its_syntax() {
     let (output, exit_code) = check("quote_kind_mismatch.fe");
     assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
     assert!(
-        output.contains("but `Code<Item>` is expected"),
+        output.contains("but `Code<Item>` is expected") && output.contains("error[8-0164]"),
         "unexpected diagnostics:\n{output}"
     );
     let (output, exit_code) = check("quote_splice_mismatch.fe");
     assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
     assert!(
-        output.contains("but `Code<Pat>` is expected") && !output.contains("16-0004"),
+        output.contains("but `Code<Pat>` is expected")
+            && output.contains("error[8-0164]")
+            && !output.contains("16-0004"),
+        "unexpected diagnostics:\n{output}"
+    );
+    // A splice that cannot fill its hole is a different error.
+    let (output, exit_code) = check("quote_splice_hole_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a splice error:\n{output}");
+    assert!(
+        output.contains("error[8-0165]") && output.contains("cannot fill its position"),
         "unexpected diagnostics:\n{output}"
     );
 }
