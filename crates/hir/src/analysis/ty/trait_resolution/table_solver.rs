@@ -24,7 +24,7 @@ use crate::analysis::{
     HirAnalysisDb,
     ty::{
         canonical::{Canonical, Solution},
-        clearable::{clearable_implementor, clearable_needs_impl_projection},
+        clearable::{clearable_implementor, clearable_needs_impls},
         closure::{CallableValue, callable_implementor},
         fold::{TyFoldable, TyFolder},
         normalize::{normalize_from_assumptions, normalize_ty},
@@ -119,7 +119,7 @@ enum Mismatch {
 /// Whether `value` names a projection that an impl could resolve: one whose
 /// trait reference the header of some impl matches, or whose self type is a
 /// callable value. Any other projection resolves only through an assumption.
-pub(crate) fn names_resolvable_projection<'db>(
+fn names_resolvable_projection<'db>(
     db: &'db dyn HirAnalysisDb,
     origin_ingot: crate::Ingot<'db>,
     value: impl TyVisitable<'db>,
@@ -617,8 +617,8 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
         let assumption_clauses = (0..assumptions).map(Clause::Assumption);
         // Without impl normalization, only an assumption answers a goal that
         // names a projection an impl could resolve, as the goal is. Past
-        // that it is undecided: which impls apply depends on the projection,
-        // as whether a type is clearable depends on one in its fields.
+        // that it is undecided: which impls apply depends on the projection.
+        // So is whether a struct or an enum is clearable.
         if !self.resolve_impls
             && ((goal
                 .args(self.db)
@@ -629,7 +629,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                     .values()
                     .any(|ty| ty.has_projection(self.db)))
                 && names_resolvable_projection(self.db, self.origin_ingot, goal)
-                || clearable_needs_impl_projection(self.db, self.origin_ingot, goal))
+                || clearable_needs_impls(self.db, goal))
         {
             self.undecided = true;
             return Ok(CallbackOutcome::Continue(assumption_clauses.collect()));
@@ -662,6 +662,7 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             prepared.normalized_goal,
             prepared.scope,
             prepared.query.assumptions,
+            self.resolve_impls,
         )
         .is_some()
         {
@@ -793,9 +794,13 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
                 return Ok(self.continue_branch(key, branch, query.assumptions));
             }
             Clause::SolCodec => {
-                let Some(implementor) =
-                    sol_codec_implementor(self.db, normalized_goal, scope, query.assumptions)
-                else {
+                let Some(implementor) = sol_codec_implementor(
+                    self.db,
+                    normalized_goal,
+                    scope,
+                    query.assumptions,
+                    self.resolve_impls,
+                ) else {
                     return Ok(Transition::Reject);
                 };
                 implementor

@@ -11,17 +11,17 @@
 //! solver proves a goal through the components named here.
 
 use common::indexmap::IndexMap;
-use rustc_hash::FxHashSet;
 
 use super::{
-    adt_def::AdtRef,
+    adt_def::{AdtDef, AdtRef},
     corelib::resolve_core_trait,
     normalize::normalize_ty,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
-    trait_resolution::{PredicateListId, names_resolvable_projection},
-    ty_def::{PrimTy, TyBase, TyData, TyId, UNINHABITED_SEARCH_DEPTH},
+    trait_resolution::PredicateListId,
+    ty_def::{PrimTy, TyBase, TyData, TyId},
+    visitor::{TyVisitable, TyVisitor},
 };
-use crate::{Ingot, analysis::HirAnalysisDb};
+use crate::analysis::HirAnalysisDb;
 
 /// The implementation proving `goal` when it is a `Clearable` goal on a
 /// type the compiler decomposes, with the goals proving it in turn: one per
@@ -48,47 +48,38 @@ pub(crate) fn clearable_implementor<'db>(
     Some((implementor, components))
 }
 
-/// Whether `goal` is a `Clearable` goal on a type with a field, at any depth
-/// [`TyId::is_uninhabited`] searches, that names a projection an impl visible
-/// from `ingot` could resolve. What the projection resolves to decides the
-/// goal: an uninhabited field makes the type uninhabited, and so not
-/// clearable. A search that doesn't resolve projections through impls can't
-/// decide such a goal, and deciding it from a resolved field would let an
-/// impl's where clause refute itself, as `impl Tr for X where S<X>:
-/// Clearable { type Out = ! }` does for `struct S<T: Tr> { f: T::Out }`.
-pub(crate) fn clearable_needs_impl_projection<'db>(
+/// Whether `goal` is a `Clearable` goal on a type that names a struct or an
+/// enum. Impls decide such a goal: one may pin the type, and what its
+/// fields' projections resolve to decides whether it is uninhabited, either
+/// of which makes it not clearable. A search that doesn't resolve
+/// projections through impls can't decide it, and deciding it from what
+/// they resolve to would let an impl's where clause refute itself, as `impl
+/// Tr for X where S<X>: Clearable { type Out = ! }` does for `struct S<T:
+/// Tr> { f: T::Out }`.
+pub(crate) fn clearable_needs_impls<'db>(
     db: &'db dyn HirAnalysisDb,
-    ingot: Ingot<'db>,
     goal: TraitInstId<'db>,
 ) -> bool {
-    fn in_fields<'db>(
+    struct NamesAdt<'db> {
         db: &'db dyn HirAnalysisDb,
-        ingot: Ingot<'db>,
-        ty: TyId<'db>,
-        depth: usize,
-        seen: &mut FxHashSet<TyId<'db>>,
-    ) -> bool {
-        if ty.has_projection(db) && names_resolvable_projection(db, ingot, ty) {
-            return true;
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for NamesAdt<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
         }
-        if depth > UNINHABITED_SEARCH_DEPTH || !seen.insert(ty) {
-            return false;
-        }
-        let (base, args) = ty.decompose_ty_app(db);
-        match base.data(db) {
-            TyData::TyBase(TyBase::Adt(adt)) if args.len() == adt.params(db).len() => adt
-                .fields(db)
-                .iter()
-                .flat_map(|variant| variant.iter_types(db))
-                .any(|field| in_fields(db, ingot, field.instantiate(db, args), depth + 1, seen)),
-            _ => args
-                .iter()
-                .any(|&arg| in_fields(db, ingot, arg, depth + 1, seen)),
+
+        fn visit_adt(&mut self, _: AdtDef<'db>) {
+            self.found = true;
         }
     }
 
-    resolve_core_trait(db, goal.def(db).scope(), &["marker", "Clearable"]) == Some(goal.def(db))
-        && in_fields(db, ingot, goal.self_ty(db), 0, &mut FxHashSet::default())
+    let mut visitor = NamesAdt { db, found: false };
+    if resolve_core_trait(db, goal.def(db).scope(), &["marker", "Clearable"]) == Some(goal.def(db))
+    {
+        goal.self_ty(db).visit_with(&mut visitor);
+    }
+    visitor.found
 }
 
 /// The types `ty` is clearable through, or `None` when it is not: a pinned

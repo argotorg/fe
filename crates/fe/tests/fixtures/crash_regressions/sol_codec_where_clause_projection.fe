@@ -1,0 +1,35 @@
+// A `SolPacked` impl whose where clause names a projection that the where
+// clause `SolLanes: LaneCodec<S<T>>` of the projection's impl decides.
+use core::ops::LaneCodec
+use std::evm::{SolLanes, SolPacked}
+
+trait Mark {}
+trait Tr {
+    type Out
+}
+
+struct S<T> { x: T }
+struct W<T> { x: T }
+
+impl Mark for u8 {}
+
+impl<T> SolPacked for S<T>
+where
+    <W<T> as Tr>::Out: Mark
+{
+    const BITS: u256 = 8
+    fn to_packed(own self) -> u256 { 0 }
+    fn from_packed(_ bits: u256) -> Self { unsafe { core::todo() } }
+}
+
+impl<T> Tr for W<T>
+where
+    SolLanes: LaneCodec<S<T>>
+{
+    type Out = u8
+}
+
+fn check_me<T>(_ x: <W<T> as Tr>::Out)
+where
+    W<T>: Tr
+{}

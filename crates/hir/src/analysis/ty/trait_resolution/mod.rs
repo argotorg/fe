@@ -32,7 +32,7 @@ use salsa::SalsaValue;
 pub(crate) mod constraint;
 mod table_solver;
 
-pub(crate) use table_solver::{answering_assumption, names_resolvable_projection};
+pub(crate) use table_solver::answering_assumption;
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 

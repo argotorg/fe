@@ -24,12 +24,16 @@ use crate::{
 
 /// The implementation proving `goal` when it is `SolLanes: LaneCodec<T>`
 /// for a `T` that is not `SolPacked` under `assumptions`. A `T` still to be
-/// inferred, or one whose encoding is undecided, has none.
+/// inferred, or one whose encoding is undecided, has none. Whether `T` is
+/// `SolPacked` is solved as the goal is, with or without resolving
+/// projections through impls (`resolve_impls`): a search that resolves none
+/// would otherwise depend on what they resolve to.
 pub(crate) fn sol_codec_implementor<'db>(
     db: &'db dyn HirAnalysisDb,
     goal: TraitInstId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    resolve_impls: bool,
 ) -> Option<ImplementorId<'db>> {
     let (std_scope, elem) = sol_codec_elem(db, goal)?;
     if elem.has_var(db) || elem.has_invalid(db) {
@@ -38,6 +42,11 @@ pub(crate) fn sol_codec_implementor<'db>(
     let sol_packed = resolve_lib_trait_path(db, std_scope, "std::evm::SolPacked")?;
     let packed = TraitInstId::new_simple(db, sol_packed, vec![elem]);
     let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let solve_cx = if resolve_impls {
+        solve_cx
+    } else {
+        solve_cx.without_impl_normalization()
+    };
     matches!(
         is_goal_satisfiable(db, solve_cx, packed),
         GoalSatisfiability::UnSat(_)
