@@ -51,11 +51,12 @@ use crate::{
         },
         ty::{
             provider::AddressSpace,
-            ty_check::{BodyOwner, ReturnProjectionStep},
+            ty_check::{AssocConstBody, BodyOwner, ReturnProjectionStep, assoc_const_bodies_of},
             ty_def::TyId,
         },
     },
     hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
+    span::HirOrigin,
 };
 
 use self::{
@@ -425,6 +426,26 @@ fn collect_semantic_access_with_blocked<'db>(
         .filter(|item| item.top_mod(db) == top_mod)
     {
         owners.extend(BodyOwner::const_predicates_of(db, *item));
+        // The initializer of a constant that an implementation or a trait holds
+        // is a body like a module constant's. It is checked where it is
+        // written, whether or not anything reads it, by the enumeration that
+        // the type checker's own pass over these bodies uses. Implementations
+        // and traits that the compiler generates (`#[event]`, `#[error]`,
+        // `#[abi]`) are the compiler's: the type checker reports no body
+        // errors for them either, and a read of one is followed as before.
+        let written = match item {
+            ItemKind::ImplTrait(impl_trait) => matches!(impl_trait.origin(db), HirOrigin::Raw(_)),
+            ItemKind::Trait(trait_) => matches!(trait_.origin(db), HirOrigin::Raw(_)),
+            _ => true,
+        };
+        if written {
+            owners.extend(
+                assoc_const_bodies_of(db, *item)
+                    .into_iter()
+                    .filter(|constant| !constant.expected.has_invalid(db))
+                    .map(AssocConstBody::owner),
+            );
+        }
         match item {
             ItemKind::Func(func) => owners.extend(BodyOwner::func_bodies(db, *func)),
             ItemKind::Const(const_) => owners.push(BodyOwner::Const(*const_)),
@@ -580,19 +601,6 @@ fn collect_semantic_access_with_blocked<'db>(
                 }
                 SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
                 SemanticAccessCheckResult::Err(diag) => {
-                    // The compile-time evaluator runs the initializer of a
-                    // constant, and accepts one that runtime lowering would
-                    // not: a trait's default whose declared type depends on
-                    // `Self` is typed per use, so `const C: Self::X = -3 as i8`
-                    // keeps an expression of type `i8` that the generic body
-                    // reports as a mismatch against the rigid `Self::X`. The
-                    // constant is checked where it is written, so a constant
-                    // that a body reads is followed as far as it is admitted.
-                    if matches!(owner, BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. })
-                        && !own.contains(&instance)
-                    {
-                        continue;
-                    }
                     if seen_diags.insert(*diag) {
                         diags.push(Box::new(*diag));
                     }

@@ -755,10 +755,12 @@ impl ModuleAnalysisPass for BodyAnalysisPass {
             } else {
                 ConstUsePolicy::AllowDependent
             };
-            for c in impl_.assoc_consts(db) {
-                let (Some(body), Some(expected_ty)) = (c.value_body(db), c.ty(db)) else {
-                    continue;
-                };
+            for ty_check::AssocConstBody {
+                body,
+                expected: expected_ty,
+                ..
+            } in ty_check::inherent_const_bodies(db, impl_)
+            {
                 let (body_diags, _) = ty_check::check_anon_const_body(db, body, expected_ty);
                 diags.extend(body_diags.iter().map(|diag| diag.to_voucher()));
                 // CTFE-validate the value, but only when it type-checks cleanly

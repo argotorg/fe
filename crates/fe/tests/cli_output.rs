@@ -4904,6 +4904,21 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
             "evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
+        (
+            // The default of a trait constant whose declared type is `Self::X`
+            // calls code of `dep` that runs unsafe code. The package wrote the
+            // default, so the call is judged where it is written.
+            "unsafe_trust_default_constant_own",
+            "dep::peek()",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
+        (
+            // The default of a trait of `dep` whose declared type is `Self::X`
+            // runs unsafe code of `dep`, which a read of the constant reaches.
+            "unsafe_trust_default_constant_read",
+            "A::K",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
     ] {
         let fixture_dir = fe_test_runner_fixture_dir(fixture);
         let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
@@ -4917,6 +4932,104 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
             "{fixture}: unexpected diagnostics:\n{output}"
         );
     }
+}
+
+#[test]
+fn test_cli_test_checks_moves_in_the_initializer_of_every_constant() {
+    // The initializer of a constant is a body that moves values like any
+    // other. A module constant, an inherent constant, an override in an
+    // `impl Trait` and a default in a trait are each refused when the
+    // initializer moves a value twice, whether or not the constant is read.
+    let prelude = "struct B { v: u256 }\nconst fn take(_ b: own B) -> u256 { b.v }\n";
+    let twice =
+        "{ let b = B { v: 1 }\n        let x = take(b)\n        let y = take(b)\n        x + y }";
+    let cases = [
+        (
+            "module_constant",
+            format!("{prelude}const D: u256 = {twice}\n#[test]\nfn t() {{ assert!(D == 2) }}\n"),
+        ),
+        (
+            "nested_module_constant",
+            format!(
+                "mod m {{\n    pub struct B {{ v: u256 }}\n    pub const fn take(_ b: own B) -> u256 {{ b.v }}\n    pub const D: u256 = {{ let b = B {{ v: 1 }}\n        let x = take(b)\n        let y = take(b)\n        x + y }}\n}}\n#[test]\nfn t() {{ assert!(m::D == 2) }}\n"
+            ),
+        ),
+        (
+            "trait_default_read",
+            format!(
+                "{prelude}trait Tr {{\n    const D: u256 = {twice}\n}}\nstruct S {{}}\nimpl Tr for S {{}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "trait_default_unread",
+            format!(
+                "{prelude}trait Tr {{\n    const D: u256 = {twice}\n}}\nstruct S {{}}\nimpl Tr for S {{}}\n#[test]\nfn t() {{ assert!(true) }}\n"
+            ),
+        ),
+        (
+            "inherent_constant_read",
+            format!(
+                "{prelude}struct S {{}}\nimpl S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "impl_override_read",
+            format!(
+                "{prelude}trait Tr {{ const D: u256 }}\nstruct S {{}}\nimpl Tr for S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "inherent_constant_unread",
+            format!(
+                "{prelude}struct S {{}}\nimpl S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(true) }}\n"
+            ),
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, source) in cases {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let (output, exit_code) = run_fe_main(&["test", path.to_str().expect("utf-8 path")]);
+        assert_ne!(exit_code, 0, "{name}: expected a move error:\n{output}");
+        assert!(
+            output.contains("error[16-0002]")
+                && output.contains("cannot use a value after it was moved"),
+            "{name}: expected a move conflict, got:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_checks_a_trait_default_against_the_type_of_each_use() {
+    // `const NEG: Self::X = -3 as i8` has type `i8` and is read as `Self::X`.
+    // It is accepted where `X` is `i8`, and refused at the read where `X` is
+    // `u256`, with an ordinary type error.
+    let source = |x: &str, check: &str| {
+        format!(
+            "trait Narrow {{\n    type X\n    const NEG: Self::X = -3 as i8\n}}\nstruct A {{}}\nimpl Narrow for A {{\n    type X = {x}\n}}\n#[test]\nfn t() {{ {check} }}\n"
+        )
+    };
+    let temp = tempdir().expect("tempdir");
+    let run = |name: &str, source: String| {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        run_fe_main(&["test", path.to_str().expect("utf-8 path")])
+    };
+    let (output, exit_code) = run("agreeing", source("i8", "assert!(A::NEG == -3)"));
+    assert_eq!(exit_code, 0, "expected the read to be accepted:\n{output}");
+    let (output, exit_code) = run("unread", source("u256", "assert!(true)"));
+    assert_eq!(
+        exit_code, 0,
+        "an unread default is checked once, generically:\n{output}"
+    );
+    let (output, exit_code) = run("differing", source("u256", "assert!(A::NEG == 0)"));
+    assert_ne!(exit_code, 0, "expected a type error at the read:\n{output}");
+    assert!(
+        output.contains("error[8-0000]")
+            && output.contains("A::NEG")
+            && !output.contains("16-0004"),
+        "expected an ordinary type error at the read, got:\n{output}"
+    );
 }
 
 #[test]
