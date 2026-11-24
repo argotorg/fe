@@ -1113,6 +1113,9 @@ impl ModuleAnalysisPass for ImplAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        // A file with parse errors is not prepared; its headers are not
+        // reported as unprepared beside the parse errors.
+        let parse_errors = !crate::lower::parse_file_impl(db, top_mod).errors.is_empty();
         top_mod
             .all_impls(db)
             .iter()
@@ -1121,7 +1124,9 @@ impl ModuleAnalysisPass for ImplAnalysisPass {
                 // trait to conform to, so its own diagnostics (its target,
                 // binders and bounds) stand beside the missing members.
                 let mut diags = impl_.diags(db);
-                if crate::core::meta::is_unfulfilled_inherent_derive_request(db, *impl_) {
+                if !parse_errors
+                    && crate::core::meta::is_unfulfilled_inherent_derive_request(db, *impl_)
+                {
                     diags.push(diagnostics::TyDiagCollection::Impl(
                         diagnostics::ImplDiag::UnfulfilledDeriveRequest {
                             primary: impl_.span().into(),
@@ -1145,6 +1150,9 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let reported_at_source = generated_abi_reported_at_source(db, top_mod);
+        // A file with parse errors is not prepared; its headers are not
+        // reported as unprepared beside the parse errors.
+        let parse_errors = !crate::lower::parse_file_impl(db, top_mod).errors.is_empty();
         top_mod
             .all_impl_traits(db)
             .iter()
@@ -1158,6 +1166,9 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
             })
             .flat_map(|impl_trait| {
                 if crate::core::meta::is_unfulfilled_derive_request(db, *impl_trait) {
+                    if parse_errors {
+                        return Vec::new();
+                    }
                     vec![diagnostics::TyDiagCollection::Impl(
                         diagnostics::ImplDiag::UnfulfilledDeriveRequest {
                             primary: impl_trait.span().into(),

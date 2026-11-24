@@ -5213,6 +5213,49 @@ fn test_cli_check_types_a_quotation_by_its_syntax() {
 }
 
 #[test]
+fn test_cli_check_reports_parse_and_type_errors_beside_a_derive_header() {
+    // A file with a derive header and a parse error is checked like a file
+    // without a header: the parse error and the type error are both reported,
+    // and generation is skipped for it, so no raw generation line and no
+    // report of an unprepared header appears.
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("header_with_parse_error.fe");
+    fs::write(
+        &source,
+        "use core::derive::DeriveInherent\n\
+use core::meta::{Code, Item, Record}\n\
+struct Make {}\n\
+impl DeriveInherent for Make {\n\
+    const fn derive(_ record: Record) -> Code<Item> {\n\
+        quote { pub fn generated() -> u256 { 1 } }\n\
+    }\n\
+}\n\
+struct S { a: u256 }\n\
+impl S with (Make)\n\
+fn bad() -> u256 { true }\n\
+fn broken( {\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    for args in [
+        vec!["check", source],
+        vec!["check", "--recovery-mode", source],
+    ] {
+        let (output, exit_code) = run_fe_main(&args);
+        assert_ne!(exit_code, 0, "{args:?}: expected errors:\n{output}");
+        assert!(
+            output.contains("error[1-0001]") && output.contains("error[8-0000]"),
+            "{args:?}: expected the parse error and the type error:\n{output}"
+        );
+        assert!(
+            !output.contains("authored parse errors")
+                && !output.contains("derive header was not prepared"),
+            "{args:?}: generation reported a cascade:\n{output}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_does_not_trust_a_package_by_its_name() {
     // The package `evil` calls itself `std` in its fe.toml. A package is
     // trusted as `core` or `std` only if it is the embedded library or is

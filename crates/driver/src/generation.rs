@@ -345,7 +345,7 @@ pub fn prepare_file(
             "generation requires the authored input view; output is checked once".into(),
         ));
     }
-    let Some(root) = scan_syntax(&url, file.text(db))? else {
+    let Some(root) = scan_syntax(file.text(db)) else {
         return Ok(None);
     };
     if file
@@ -492,7 +492,7 @@ pub fn prepare_ingots(
                 .workspace()
                 .get(db, url)
                 .expect("a planned ingot file is in the database");
-            if let Some(root) = scan_syntax(url, file.text(db))? {
+            if let Some(root) = scan_syntax(file.text(db)) {
                 syntaxes.push((url.clone(), root));
             }
         }
@@ -548,12 +548,12 @@ pub fn prepare_ingots_in_place(
 
 /// What a first look at the text of an authored file finds.
 /// Look for generation syntax in the text of one authored file, before any
-/// view is built. `None` means the file contains none outside quotations, so
-/// nothing needs preparing.
-fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<ast::Root>, GenerationError> {
+/// view is built. `None` means the file contains none outside quotations, or
+/// has parse errors, so nothing is prepared for it.
+fn scan_syntax(text: &str) -> Option<ast::Root> {
     // Every request form spells `with`; other files need no parse.
     if !text.contains("with") {
-        return Ok(None);
+        return None;
     }
     let (green, parse_errors) = parser::parse_source_file(text, parser::RecoveryMode::Recover);
     let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
@@ -575,16 +575,15 @@ fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<ast::Root>, Generati
                 request.derive_provider().is_some() && outside_quotation(request.syntax())
             });
     if !has_requests {
-        return Ok(None);
+        return None;
     }
+    // A file with parse errors is not prepared: its requests are not known, and
+    // the ordinary pipeline reports the parse errors with the file's other
+    // diagnostics, as it does for a file without requests.
     if !parse_errors.is_empty() {
-        return Err(GenerationError {
-            file: url.clone(),
-            range: parser::TextRange::empty(0.into()),
-            cause: format!("authored parse errors: {parse_errors:?}"),
-        });
+        return None;
     }
-    Ok(Some(root))
+    Some(root)
 }
 
 /// Starts the analysis of `module` in `db` with the growing-cycle search of
