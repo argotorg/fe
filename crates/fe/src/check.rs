@@ -357,6 +357,20 @@ fn check_workspace(
         .filter(|member| selected_member_paths.contains(&dir_path.join(member.path.as_str())))
         .collect::<Vec<_>>();
 
+    // A dependency of another target is reported before any provider runs, as
+    // for a single ingot; the member is not prepared or checked.
+    let mut has_errors = false;
+    let mut members_to_check = Vec::new();
+    for member in members {
+        if let Some(mismatch) = dependency_target_mismatch(db, &member.url) {
+            eprintln!("Error: {mismatch}");
+            has_errors = true;
+        } else {
+            members_to_check.push(member);
+        }
+    }
+    let members = members_to_check;
+
     // One prepared view serves every selected member; a prepared view refuses
     // a second preparation.
     let roots = members
@@ -368,14 +382,8 @@ fn check_workspace(
     }
 
     let mut seen = HashSet::new();
-    let mut has_errors = false;
     for member in members {
         let member_url = member.url;
-        if let Some(mismatch) = dependency_target_mismatch(db, &member_url) {
-            eprintln!("Error: {mismatch}");
-            has_errors = true;
-            continue;
-        }
         let member_has_errors =
             check_ingot_and_dependencies(db, &member_url, dump_mir, report, &mut seen);
         has_errors |= member_has_errors;

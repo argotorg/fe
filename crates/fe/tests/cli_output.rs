@@ -7009,3 +7009,55 @@ fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
         );
     }
 }
+
+/// A workspace whose member `tool` has a derive header naming a type that is
+/// not a provider and depends on `lib`, which sets another target.
+fn write_header_error_workspace(root: &Path) {
+    fs::create_dir_all(root.join("lib/src")).unwrap();
+    fs::create_dir_all(root.join("tool/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"ws\"\nversion = \"0.1.0\"\nmembers = [\"tool\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib/fe.toml"),
+        "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\ntarget = \"native\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib/src/lib.fe"),
+        "pub fn answer() -> u256 { 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tool/fe.toml"),
+        "[ingot]\nname = \"tool\"\nversion = \"0.1.0\"\n[dependencies]\nlib = { path = \"../lib\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tool/src/lib.fe"),
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_cli_workspace_reports_a_dependency_target_mismatch_before_any_provider_runs() {
+    // For a single ingot the mismatch is reported first. In a workspace the
+    // header of the member was prepared first, so a provider ran against a
+    // dependency that this command does not compile, and its error hid the
+    // mismatch.
+    let temp = tempdir().unwrap();
+    write_header_error_workspace(temp.path());
+    for command in ["check", "build"] {
+        let (output, exit) = run_fe_main_in_dir(&[command], temp.path());
+        assert_eq!(exit, 1, "{command}: {output}");
+        assert!(
+            output.contains("targets `native`, but this command compiles for"),
+            "{command}: {output}"
+        );
+        assert!(!output.contains("NotAProvider"), "{command}: {output}");
+    }
+}
+

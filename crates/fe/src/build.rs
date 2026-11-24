@@ -898,6 +898,17 @@ fn build_workspace(
     };
     let selected_member_paths: HashSet<Utf8PathBuf> = selected_member_paths.into_iter().collect();
 
+    // A dependency of another target is reported before any provider runs, as
+    // for a single ingot.
+    for member in &members {
+        if selected_member_paths.contains(&workspace_root.join(member.path.as_str()))
+            && let Some(mismatch) = dependency_target_mismatch(db, &member.url)
+        {
+            eprintln!("Error: {mismatch}");
+            return true;
+        }
+    }
+
     // One prepared view serves every selected member.
     let roots = members
         .iter()
