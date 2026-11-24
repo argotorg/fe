@@ -3901,6 +3901,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "mutex_lock_slot_no_transient_collision",
     "named_storage_codecs",
     "named_storage_deferred_codec",
+    "named_storage_entry_codec_identity",
     "named_storage_evidence",
     "nested_index_assignment",
     "never_returning_recv_returns",
@@ -6154,6 +6155,17 @@ fn named_condition_cannot_change_ordinary_outputs() {
         .replace("fn boom() -> u8", "fn boom() -> u256")
         .replace("assert(boom() == 2)", "assert(boom() == 1)");
     fs::write(&path, agreeing).unwrap();
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_entry_codec_identity() {
+    // Two reads of one entry of a generic collection, one under a codec
+    // choice and one without, run their own codecs. Two reads under the same
+    // choice share a dispatch.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_storage_entry_codec_identity.fe");
     let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
     assert_eq!(exit, 0, "{output}");
 }
