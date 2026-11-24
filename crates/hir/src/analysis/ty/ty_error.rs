@@ -877,9 +877,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     );
                 }
 
-                if let Some((_p, deriv_span)) = invisible {
-                    let seg_span = span.name();
-                    let ident = path.ident(self.db).unwrap();
+                // The segment that is not visible is the one named, as for a
+                // bound: `hidden` in `outer::hidden::T`, not `T`.
+                if let Some((p, deriv_span)) = invisible
+                    && let Some(ident) = p.ident(self.db).to_opt()
+                {
+                    let seg_span = span.path().segment(p.segment_index(self.db)).ident();
                     let diag =
                         crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(
                             seg_span.into(),

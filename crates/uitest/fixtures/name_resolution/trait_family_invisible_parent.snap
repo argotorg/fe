@@ -1,0 +1,22 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/trait_family_invisible_parent.fe
+---
+error[2-0003]: `hidden` is not visible
+   ┌─ trait_family_invisible_parent.fe:11:36
+   │
+ 2 │     mod hidden {
+   │         ------ `hidden` is defined here
+   ·
+11 │ type Written = Family<trait outer::hidden::T>
+   │                                    ^^^^^^ `hidden` is not visible
+
+error[2-0003]: `hidden` is not visible
+   ┌─ trait_family_invisible_parent.fe:13:20
+   │
+ 2 │     mod hidden {
+   │         ------ `hidden` is defined here
+   ·
+13 │ fn plain<X: outer::hidden::T>() {}
+   │                    ^^^^^^ `hidden` is not visible
