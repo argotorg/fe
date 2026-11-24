@@ -41,6 +41,29 @@ impl std::fmt::Display for GenerationError {
     }
 }
 
+impl GenerationError {
+    /// The error with its place as `file:line:column`, the start of its range
+    /// in the text of the file in `db`, as other diagnostics print it. Without
+    /// the text the place is the byte range of `Display`.
+    pub fn located(&self, db: &DriverDataBase) -> String {
+        let position = db.workspace().get(db, &self.file).and_then(|file| {
+            let text = file.text(db);
+            let before = text.get(..usize::from(self.range.start()))?;
+            let line = before.matches('\n').count() + 1;
+            let column = before
+                .rsplit('\n')
+                .next()
+                .map_or(0, |last| last.chars().count())
+                + 1;
+            Some(format!("{}:{line}:{column}", self.file))
+        });
+        match position {
+            Some(position) => format!("{position}: {}", self.cause),
+            None => self.to_string(),
+        }
+    }
+}
+
 /// The one view every provider runs in, whatever channel requested it.
 const PROVIDER_VIEW_RULE: &str = "a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it. Share an ordinary helper function between the two providers instead";
 

@@ -285,9 +285,10 @@ fn prepare_generation(
     match driver::generation::prepare_ingots_in_place(db, roots) {
         Ok(()) => false,
         Err(error) => {
-            eprintln!("{error}");
+            let text = error.located(db);
+            eprintln!("{text}");
             if let Some(report) = report {
-                write_report_file(report, "errors/generation.txt", &format!("{error}\n"));
+                write_report_file(report, "errors/generation.txt", &format!("{text}\n"));
             }
             true
         }
@@ -494,7 +495,7 @@ fn check_single_file(
             }
             Ok(None) => {}
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", error.located(db));
                 return true;
             }
         }

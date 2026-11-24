@@ -461,7 +461,10 @@ fn extract_single_file(
         Ok(Some(prepared)) => *db = prepared,
         Ok(None) => {}
         Err(error) => {
-            eprintln!("Warning: File generation failed, documentation may be incomplete\n{error}");
+            eprintln!(
+                "Warning: File generation failed, documentation may be incomplete\n{}",
+                error.located(db)
+            );
         }
     }
     let file = db.workspace().get(db, &file_url)?;
@@ -611,7 +614,10 @@ fn extract_ingot(
 
 fn prepare_doc_ingots(db: &mut DriverDataBase, roots: &[Url]) {
     if let Err(error) = driver::generation::prepare_ingots_in_place(db, roots) {
-        eprintln!("Warning: Package generation failed, documentation may be incomplete\n{error}");
+        eprintln!(
+            "Warning: Package generation failed, documentation may be incomplete\n{}",
+            error.located(db)
+        );
     }
 }
 

@@ -1356,7 +1356,7 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
     if let Err(error) =
         driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
     {
-        eprintln!("Error preparing generated code: {error}");
+        eprintln!("Error preparing generated code: {}", error.located(&db));
         std::process::exit(1);
     }
 

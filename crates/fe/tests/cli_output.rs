@@ -7061,3 +7061,18 @@ fn test_cli_workspace_reports_a_dependency_target_mismatch_before_any_provider_r
     }
 }
 
+#[test]
+fn test_cli_check_locates_a_generation_error_by_line_and_column() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("bad_header.fe");
+    fs::write(
+        &path,
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("bad_header.fe:3:1: "), "{output}");
+    assert!(!output.contains(".fe:44..70"), "{output}");
+}
+

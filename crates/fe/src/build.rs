@@ -684,7 +684,7 @@ fn build_file(
         }
         Ok(None) => {}
         Err(error) => {
-            eprintln!("{error}");
+            eprintln!("{}", error.located(db));
             return true;
         }
     }
@@ -820,7 +820,7 @@ fn build_directory(
             if let Err(error) =
                 driver::generation::prepare_ingots_in_place(db, std::slice::from_ref(&url))
             {
-                eprintln!("{error}");
+                eprintln!("{}", error.located(db));
                 return true;
             }
             let default_out_dir = canonical.join("out");
@@ -916,7 +916,7 @@ fn build_workspace(
         .map(|member| member.url.clone())
         .collect::<Vec<_>>();
     if let Err(error) = driver::generation::prepare_ingots_in_place(db, &roots) {
-        eprintln!("{error}");
+        eprintln!("{}", error.located(db));
         return true;
     }
 
