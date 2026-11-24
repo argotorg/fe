@@ -3516,3 +3516,68 @@ const fn run() -> u256 { use_need(R {}) }
     assert_eq!(output_diagnostics(&db), "");
     assert_eq!(eval_const_fn_u256(&db, "run"), "9");
 }
+
+#[test]
+fn unresolved_receiver_inside_with_reports_annotation_needed() {
+    let header = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+trait Bar { fn bar(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn bar(self) -> u256 { 2 } }
+    }
+}
+struct G<T> { t: T }
+impl<T> Foo for G<T> { fn val(self) -> u256 { 3 } }
+"#;
+    // The receiver's element type is never settled, so the call is reported
+    // for its annotation; preparation must not select an implementation for
+    // the unsettled use.
+    for body in [
+        "fn f() -> u256 {\n    let g = G { t: 1 }\n    with (P) { g.val() }\n}\n",
+        // The same body without a `with` block is the control.
+        "fn f() -> u256 {\n    let g = G { t: 1 }\n    g.val()\n}\n",
+    ] {
+        let source = format!("{header}{body}");
+        let (db, file) = input(&source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        let diagnostics = output_diagnostics(&db);
+        assert!(diagnostics.contains("8-0031"), "{body}\n{diagnostics}");
+    }
+
+    // The offered trait of the block also has a method of that name.
+    let offered = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+impl Foo for u256 { fn val(self) -> u256 { 1 } }
+trait Bar { fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+struct G<T> { t: T }
+impl<T> Foo for G<T> { fn val(self) -> u256 { 3 } }
+fn f() -> u256 {
+    let g = G { t: 1 }
+    with (P) { g.val() }
+}
+"#;
+    let (db, file) = input(offered);
+    let db = match prepare_file(&db, file) {
+        Ok(Some(output)) => output,
+        _ => db,
+    };
+    let diagnostics = output_diagnostics(&db);
+    assert!(diagnostics.contains("8-0031"), "{diagnostics}");
+}

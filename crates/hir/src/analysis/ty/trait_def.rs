@@ -716,6 +716,10 @@ fn resolve_trait_impl_instance_query<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> ImplSelection<'db> {
+    debug_assert!(
+        !super::visitor::collect_flags(db, inst).intersects(super::ty_def::TyFlags::HAS_VAR),
+        "selection received a goal with inference variables"
+    );
     let assumptions = solve_cx.assumptions();
     let norm_scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let inst = normalize_trait_inst_preserving_validity(db, inst, norm_scope, assumptions);

@@ -1692,6 +1692,12 @@ pub(crate) fn instantiated_selection<'db>(
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
 ) -> Option<ResolvedImplInstance<'db>> {
+    // Inference variables belong to the checker's table of the body, which
+    // has not settled this use (an ill-typed body leaves them behind). The
+    // selection below uses its own table and can only receive settled inputs.
+    if collect_flags(db, inst).intersects(TyFlags::HAS_VAR) {
+        return None;
+    }
     let scope = solve_cx.normalization_scope_for_trait_inst(db, inst);
     let goal = || normalize_trait_inst_preserving_validity(db, inst, scope, solve_cx.assumptions());
     match evidence.map(|evidence| evidence.data(db)) {
