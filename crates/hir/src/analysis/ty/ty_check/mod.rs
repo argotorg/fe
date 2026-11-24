@@ -12,6 +12,8 @@ mod contract;
 mod effect_env;
 pub(crate) mod env;
 mod expr;
+mod inherited_const;
+pub(crate) use inherited_const::inherited_const_setup;
 mod owner;
 mod pat;
 mod path;
@@ -446,6 +448,11 @@ pub fn check_impl_trait_const_bodies<'db>(
                     }),
             );
         }
+    }
+    // The defaults the implementation inherits whose declared type mentions a
+    // parameter of the trait are checked as the implementation's own.
+    if generated_origin.is_none() {
+        diags.extend(inherited_const::check_inherited_defaults(db, impl_trait));
     }
     diags
 }
@@ -1266,6 +1273,7 @@ pub(crate) fn checked_body_diags<'db>(
         BodyOwner::AnonConstBody { body, expected } => {
             check_anon_const_body(db, body, expected).0.clone()
         }
+        BodyOwner::InheritedConst { .. } => check_body(db, owner).0,
         BodyOwner::ContractInit { contract } => {
             contract::check_contract_init_body(db, contract).0.clone()
         }
@@ -1369,6 +1377,7 @@ fn infer_body_query<'db>(
                 BodyOwner::Func(func, mode) => typed_body_for_bodyless_func(db, func, mode),
                 BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
                 | BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }
                 | BodyOwner::Closure { .. } => TypedBody::empty(db),
@@ -2174,6 +2183,7 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => {}
         }
@@ -2184,7 +2194,10 @@ impl<'db> TyChecker<'db> {
             BodyOwner::Func(func, _) => {
                 self.check_free_func_effect_list(func, func.effects(self.db))
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -2288,7 +2301,10 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 EffectParamSite::Func(func, mode),
             ),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {
                 unreachable!()
             }
             BodyOwner::ContractInit { contract } => (
@@ -3803,36 +3819,46 @@ impl<'db> TyChecker<'db> {
         span: LazyTySpan<'db>,
         star_kind_required: bool,
     ) -> TyId<'db> {
-        let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
+        let ty = lower_hir_ty(
+            self.db,
+            hir_ty,
+            self.env.scope(),
+            self.env.written_assumptions(),
+        );
+        let ty = self.env.instantiate_scope_ty(ty);
 
         // The written type reports its own errors (path resolution, visibility,
         // associated bindings), whether or not lowering produced an invalid type.
-        let diags = collect_ty_lower_errors_by(
-            self.db,
-            self.viewer(MemberSite::Current),
-            hir_ty,
-            span.clone(),
-            self.env.assumptions(),
-        );
-        if !diags.is_empty() {
-            for d in diags {
-                self.push_diag(d);
+        // A default checked for an implementation reports them where the trait
+        // wrote it: they do not depend on the implementation.
+        if !self.env.is_instantiated_for_implementation() {
+            let diags = collect_ty_lower_errors_by(
+                self.db,
+                self.viewer(MemberSite::Current),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+            );
+            if !diags.is_empty() {
+                for d in diags {
+                    self.push_diag(d);
+                }
+                // Avoid cascading kind errors for already-invalid types
+                return TyId::invalid(self.db, InvalidCause::Other);
             }
-            // Avoid cascading kind errors for already-invalid types
-            return TyId::invalid(self.db, InvalidCause::Other);
-        }
 
-        // A qualified path resolves to a type that no longer mentions the
-        // types written inside it, so check those where they are written.
-        for diag in qualified_path_wf_diags_under_choices(
-            self.db,
-            self.env.scope(),
-            hir_ty,
-            span.clone(),
-            self.env.assumptions(),
-            self.env.solve_cx(),
-        ) {
-            self.push_diag(diag);
+            // A qualified path resolves to a type that no longer mentions the
+            // types written inside it, so check those where they are written.
+            for diag in qualified_path_wf_diags_under_choices(
+                self.db,
+                self.env.scope(),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+                self.env.solve_cx(),
+            ) {
+                self.push_diag(diag);
+            }
         }
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()).or_else(|| {
@@ -4704,7 +4730,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             scope,
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
@@ -4737,7 +4763,7 @@ impl<'db> TyChecker<'db> {
             path,
             span.clone(),
             viewer,
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             call,
         );
         if arg_diags.is_empty()
@@ -4752,7 +4778,7 @@ impl<'db> TyChecker<'db> {
             return Err(PathResError::new(PathResErrorKind::InvalidGenericArg, path));
         }
 
-        let res = res?;
+        let res = self.env.instantiate_scope_res(res?);
         self.env.register_path_applications(site, applications);
         Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }

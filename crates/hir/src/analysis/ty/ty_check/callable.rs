@@ -306,8 +306,16 @@ pub(super) fn unify_explicit_call_generic_args<'db>(
     // stays the inference variable the callee was instantiated with, as does
     // an omitted parameter without a default; one with a default takes it.
     let inferred = &callable.generic_args[offset..];
-    let lowered_args =
-        lower_generic_arg_list(db, args, tc.env.scope(), tc.env.assumptions(), &lowering_cx);
+    let lowered_args: Vec<_> = lower_generic_arg_list(
+        db,
+        args,
+        tc.env.scope(),
+        tc.env.written_assumptions(),
+        &lowering_cx,
+    )
+    .into_iter()
+    .map(|ty| tc.env.instantiate_scope_ty(ty))
+    .collect();
     let mut provided: Vec<_> = lowered_args
         .into_iter()
         .zip(given)

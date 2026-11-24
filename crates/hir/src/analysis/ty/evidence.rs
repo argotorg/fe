@@ -73,6 +73,13 @@ impl<'db> BoundOwner<'db> {
             Self::Body(BodyOwner::Const(const_)) => {
                 const_body_assumptions(db, const_.scope()).extend_all_bounds(db)
             }
+            Self::Body(BodyOwner::InheritedConst {
+                implementation,
+                body,
+            }) => super::ty_check::inherited_const_setup(db, implementation, body).map_or_else(
+                || PredicateListId::empty_list(db),
+                |setup| setup.assumptions.extend_all_bounds(db),
+            ),
             Self::Body(
                 owner @ (BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }

@@ -496,7 +496,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             self.env.scope(),
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             true,
             &LoweringContext::new(),
         );

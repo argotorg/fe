@@ -894,7 +894,9 @@ impl<'db> TyChecker<'db> {
         let span: DynLazySpan<'db> = expr.span(self.body()).into();
         if matches!(
             self.env.owner(),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. }
+            BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
         ) {
             self.push_diag(BodyDiag::ClosureInConstContext {
                 primary: span.clone(),
@@ -2297,9 +2299,11 @@ impl<'db> TyChecker<'db> {
                             self.db,
                             path,
                             self.env.scope(),
-                            self.env.assumptions(),
+                            self.env.written_assumptions(),
                             true,
-                        ) && self.is_with_operand_value(&value)
+                        )
+                        .map(|value| self.env.instantiate_scope_res(value))
+                            && self.is_with_operand_value(&value)
                             && value.is_visible_as_written(
                                 self.db,
                                 path,
@@ -2432,13 +2436,16 @@ impl<'db> TyChecker<'db> {
                         implementation,
                     )
                 } else {
-                    let args = super::super::ty_lower::lower_generic_arg_list(
+                    let args: Vec<_> = super::super::ty_lower::lower_generic_arg_list(
                         self.db,
                         written_args,
                         self.env.scope(),
-                        self.env.assumptions(),
+                        self.env.written_assumptions(),
                         &LoweringContext::new(),
-                    );
+                    )
+                    .into_iter()
+                    .map(|ty| self.env.instantiate_scope_ty(ty))
+                    .collect();
                     let owner = implementation.hir_impl_trait(self.db);
                     let inherited = crate::hir_def::GenericParamOwner::from(owner)
                         .parent(self.db)
@@ -2544,9 +2551,10 @@ impl<'db> TyChecker<'db> {
                         self.db,
                         *path,
                         self.env.scope(),
-                        self.env.assumptions(),
+                        self.env.written_assumptions(),
                         false,
                     )
+                    .map(|reso| self.env.instantiate_scope_res(reso))
                 && let TyData::QualifiedTy(goal) = ty.data(self.db)
             {
                 match super::super::trait_def::resolve_ordinary_trait_impl_instance(
@@ -4891,7 +4899,12 @@ impl<'db> TyChecker<'db> {
 
         let res = if path.is_bare_ident(self.db) {
             let ident_span: DynLazySpan<'db> = path_expr_span.clone().into();
-            resolve_ident_expr(self.db, &self.env, path, ident_span, &lowering_cx)
+            match resolve_ident_expr(self.db, &self.env, path, ident_span, &lowering_cx) {
+                ResolvedPathInBody::Reso(reso) => {
+                    ResolvedPathInBody::Reso(self.env.instantiate_scope_res(reso))
+                }
+                resolved => resolved,
+            }
         } else {
             match self.resolve_path(
                 path,
@@ -6786,9 +6799,14 @@ fn resolve_ident_expr<'db>(
         let Ok(res) = bucket.pick_any(&[NameDomain::VALUE, NameDomain::TYPE]) else {
             return ResolvedPathInBody::Invalid;
         };
-        let Ok(reso) =
-            resolve_name_res_with_minter(db, res, path, scope, env.assumptions(), lowering_cx)
-        else {
+        let Ok(reso) = resolve_name_res_with_minter(
+            db,
+            res,
+            path,
+            scope,
+            env.written_assumptions(),
+            lowering_cx,
+        ) else {
             return ResolvedPathInBody::Invalid;
         };
         ResolvedPathInBody::Reso(reso)
@@ -7114,7 +7132,9 @@ impl<'db> TyChecker<'db> {
     pub(super) fn is_compile_time_body(&self) -> bool {
         match self.env.owner() {
             BodyOwner::Func(function, _) => function.is_const(self.db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. } => true,
             _ => false,
         }
     }

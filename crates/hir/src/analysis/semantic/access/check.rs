@@ -2252,7 +2252,9 @@ impl<'a, 'db> Analysis<'a, 'db> {
         if !parts.is_empty()
             && match self.instance.key(self.db).owner(self.db) {
                 BodyOwner::Func(func, _) => func.is_const(self.db),
-                BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => true,
+                BodyOwner::Const(_)
+                | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. } => true,
                 BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }
                 | BodyOwner::Closure { .. } => false,

@@ -13,7 +13,7 @@ use crate::analysis::{
     ty::{
         canonical::{Canonical, Canonicalized, Solution},
         closure::{CallableTrait, callable_insts},
-        fold::TyFoldable as _,
+        fold::{TyFoldable, TyFolder},
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
@@ -22,6 +22,7 @@ use crate::analysis::{
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
+        visitor::{TyVisitable, TyVisitor},
     },
 };
 use crate::hir_def::{CallableDef, Func};
@@ -31,6 +32,35 @@ pub enum MethodCandidate<'db> {
     InherentMethod(ProbedMethod<'db>),
     TraitMethod(TraitMethodCand<'db>),
     NeedsConfirmation(TraitMethodCand<'db>),
+}
+
+impl<'db> TyVisitable<'db> for MethodCandidate<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        match self {
+            MethodCandidate::InherentMethod(cand) => cand.visit_with(visitor),
+            MethodCandidate::TraitMethod(cand) | MethodCandidate::NeedsConfirmation(cand) => {
+                cand.inst.visit_with(visitor)
+            }
+        }
+    }
+}
+
+impl<'db> TyFoldable<'db> for MethodCandidate<'db> {
+    fn super_fold_with<F: TyFolder<'db>>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self {
+        let fold = |cand: TraitMethodCand<'db>, folder: &mut F| TraitMethodCand {
+            inst: cand.inst.fold_with(db, folder),
+            method: cand.method,
+        };
+        match self {
+            MethodCandidate::InherentMethod(cand) => {
+                MethodCandidate::InherentMethod(cand.fold_with(db, folder))
+            }
+            MethodCandidate::TraitMethod(cand) => MethodCandidate::TraitMethod(fold(cand, folder)),
+            MethodCandidate::NeedsConfirmation(cand) => {
+                MethodCandidate::NeedsConfirmation(fold(cand, folder))
+            }
+        }
+    }
 }
 
 impl<'db> MethodCandidate<'db> {

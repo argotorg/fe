@@ -6347,6 +6347,62 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+            BodyDiag::InheritedConstDefault {
+                primary,
+                const_name,
+                assoc_types,
+                inner,
+            } => {
+                let name = const_name.data(db);
+                let with = if assoc_types.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        ", with {}",
+                        assoc_types
+                            .iter()
+                            .map(|(assoc, ty)| format!(
+                                "`{} = {}`",
+                                assoc.data(db),
+                                ty.pretty_print(db)
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                let mut sub_diagnostics = vec![SubDiagnostic {
+                    style: LabelStyle::Primary,
+                    message: format!("`{name}` is inherited here{with}"),
+                    span: primary.resolve(db),
+                }];
+                // The default is written in the trait, which may be in another
+                // package: its own diagnostic is a secondary label there.
+                let inner = inner.to_complete(db);
+                if let Some(label) = inner
+                    .sub_diagnostics
+                    .iter()
+                    .find(|sub| sub.is_primary())
+                    .or_else(|| inner.sub_diagnostics.first())
+                {
+                    sub_diagnostics.push(SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: label.message.clone(),
+                        span: label.span.clone(),
+                    });
+                }
+                CompleteDiagnostic {
+                    severity,
+                    message: format!(
+                        "the default value of `{name}` does not type-check for this implementation"
+                    ),
+                    sub_diagnostics,
+                    notes: vec![format!(
+                        "the default is checked for each implementation that inherits it, with the types of that implementation: {}",
+                        inner.message
+                    )],
+                    error_code,
+                }
+            }
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)

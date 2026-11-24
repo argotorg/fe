@@ -5033,6 +5033,116 @@ fn test_cli_test_checks_a_trait_default_against_the_type_of_each_use() {
 }
 
 #[test]
+fn test_cli_checks_an_inherited_default_for_each_implementation() {
+    // A default whose declared type mentions `Self`, an associated type of
+    // `Self` or a parameter of the trait is checked again for each
+    // implementation that inherits it, as if the implementation had written
+    // the same text with its own types. A mismatch is an error at that
+    // implementation, whether or not the constant is read.
+    const NEG: &str =
+        "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct A {}\n";
+    let cases: Vec<(&str, String, bool)> = vec![
+        (
+            "inner_mismatch",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = {\n        let x: Self::X = 200 as u8\n        (-3 as i8)\n    }\n}\nstruct A {}\nimpl Narrow for A {\n    type X = i8\n}\n#[test]\nfn t() { assert!(A::NEG == -3) }\n"
+                .to_string(),
+            true,
+        ),
+        (
+            "pattern_read",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = u256\n}}\nfn f(_ v: u256) -> bool {{\n    match v {{\n        A::NEG => true\n        _ => false\n    }}\n}}\n#[test]\nfn t() {{ assert!(f(0) == false) }}\n"
+            ),
+            true,
+        ),
+        (
+            "unread_mismatch",
+            format!("{NEG}impl Narrow for A {{\n    type X = u256\n}}\n#[test]\nfn t() {{ assert!(true) }}\n"),
+            true,
+        ),
+        (
+            "generic_reader",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = i16\n}}\nfn get<T: Narrow>() -> T::X {{ T::NEG }}\n#[test]\nfn t() {{ assert!(get<A>() == -3) }}\n"
+            ),
+            true,
+        ),
+        (
+            "generic_impl_open",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct W<T> {}\nimpl<T> Narrow for W<T> {\n    type X = T\n}\n#[test]\nfn t() { assert!(W<i8>::NEG == -3) }\n"
+                .to_string(),
+            true,
+        ),
+        (
+            "const_patterns_shape",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = i8\n}}\nfn f(_ x: i8, _ y: u256) -> u256 {{\n    match (x, y) {{\n        (A::NEG, 1) => 1\n        _ => 0\n    }}\n}}\n#[test]\nfn t() {{ assert!(f(-3, 1) == 1) }}\n"
+            ),
+            false,
+        ),
+        (
+            "generic_impl_closed",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct W<T> {}\nimpl<T> Narrow for W<T> {\n    type X = i8\n}\n#[test]\nfn t() { assert!(W<u8>::NEG == -3) }\n"
+                .to_string(),
+            false,
+        ),
+        (
+            "override_never_checks_the_default",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = u8\n    const NEG: u8 = 3\n}}\n#[test]\nfn t() {{ assert!(A::NEG == 3) }}\n"
+            ),
+            false,
+        ),
+        (
+            "literal_default_u32",
+            "trait Tr {\n    type X\n    const C: Self::X = 1\n}\nstruct A {}\nimpl Tr for A {\n    type X = u32\n}\nfn reader<T: Tr<X = u32>>() -> u32 { T::C }\n#[test]\nfn t() { assert!(A::C == 1 && reader<A>() == 1) }\n"
+                .to_string(),
+            false,
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, source, refused) in cases {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let (output, exit_code) = run_fe_main(&["test", path.to_str().expect("utf-8 path")]);
+        if refused {
+            assert_ne!(exit_code, 0, "{name}: expected a refusal:\n{output}");
+            assert!(
+                output.contains("error[8-0167]")
+                    && output.contains("the default value of `NEG` does not type-check"),
+                "{name}: expected the default to be refused at the implementation, got:\n{output}"
+            );
+            if name == "generic_reader" {
+                assert!(
+                    !output.contains("16-0004"),
+                    "{name}: expected no internal error, got:\n{output}"
+                );
+            }
+        } else {
+            assert_eq!(exit_code, 0, "{name}: expected acceptance:\n{output}");
+        }
+    }
+
+    // The default of a dependency's trait is checked for an implementation in
+    // the package that checks: the error is at the implementation, with the
+    // default as a secondary label in the dependency.
+    let fixture_dir = fe_test_runner_fixture_dir("inherited_default_dep");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(
+        exit_code, 0,
+        "dependency_default: expected a refusal:\n{output}"
+    );
+    assert!(
+        output.contains("error[8-0167]")
+            && output.contains("the default value of `NEG` does not type-check")
+            && output.contains("impl dep::Narrow for A")
+            && output.contains("-3 as i8"),
+        "dependency_default: expected the error at the implementation, got:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_judges_generated_code_by_the_package_that_wrote_it() {
     // A provider of `dep` writes unsafe code in a quotation. A trait header and
     // an inherent header publish that code into the ingot that asks, but

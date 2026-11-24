@@ -229,7 +229,7 @@ impl SemanticDiagnosticKind {
         let name = checker_name(db, instance);
         let item = match instance.key(db).owner(db) {
             BodyOwner::Const(_) => format!("const {name}"),
-            BodyOwner::AnonConstBody { .. } => name,
+            BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => name,
             _ => format!("fn {name}"),
         };
         match self {
@@ -339,7 +339,9 @@ pub(crate) fn checker_name<'db>(
             Partial::Present(name) => name.data(db).to_string(),
             Partial::Absent => "<const>".to_string(),
         },
-        BodyOwner::AnonConstBody { .. } => "<anon const>".to_string(),
+        BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => {
+            "<anon const>".to_string()
+        }
         BodyOwner::Closure { .. } => "<closure>".to_string(),
         BodyOwner::ContractInit { contract } => format!(
             "{}::__init__",
