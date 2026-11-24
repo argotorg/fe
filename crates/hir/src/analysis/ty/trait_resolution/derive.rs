@@ -18,6 +18,9 @@ use super::{
     table_solver::match_header_type,
 };
 
+/// The provider implementations one search may examine for one family.
+const WORK_LIMIT: usize = 128;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderSearchBudget {
     Written,
@@ -143,7 +146,7 @@ impl<'db> ProviderSearch<'db> {
             assumptions,
             wanted: None,
             active: Vec::new(),
-            remaining: 128,
+            remaining: WORK_LIMIT,
             budget,
         }
     }
@@ -163,6 +166,9 @@ impl<'db> ProviderSearch<'db> {
     ) -> Result<Vec<(TyId<'db>, ImplementorOrigin<'db>)>, &'static str> {
         let mut offers = Vec::new();
         for &family in families {
+            // The limit counts implementations once per family searched, not
+            // across the families a defaulted goal can be written as.
+            self.remaining = WORK_LIMIT;
             self.wanted = Some(Canonical::new(self.db, family));
             offers.extend(
                 self.headers(receiver)?

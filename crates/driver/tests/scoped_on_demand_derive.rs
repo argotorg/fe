@@ -4392,3 +4392,40 @@ const fn run() -> u256 {{
     assert_eq!(eval_const_fn_u256(&output, "run"), "40");
 }
 
+/// The work limit counts the provider's implementations once per search, not
+/// once per family of the goal.
+#[test]
+fn provider_work_limit_is_independent_of_the_families_of_the_goal() {
+    use std::fmt::Write;
+
+    let mut source = String::from(
+        "use core::derive::Derive
+use core::meta::{Record, Code, Item}
+struct P {}
+struct S {}
+trait Big<A = u8, B = u16> { const fn big() -> usize }
+impl Derive<trait Big> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn big() -> usize { 42 } }
+    }
+}
+",
+    );
+    for index in 1..=100 {
+        write!(
+            source,
+            "trait T{index} {{ const fn f{index}() -> usize }}
+impl Derive<trait T{index}> for P {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn f{index}() -> usize {{ {index} }} }}
+    }}
+}}
+"
+        )
+        .unwrap();
+    }
+    source.push_str("const fn run() -> usize { with (P) { <S as Big>::big() } }\n");
+    let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+}
