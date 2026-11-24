@@ -1,0 +1,12 @@
+// A nested item's written types are checked under the item's own bounds, once,
+// not again under the bounds of the function enclosing it.
+trait Marker {}
+struct Foo<T: Marker> { t: T }
+
+fn outer<U>() {
+    fn bounded<T: Marker>(_ x: Foo<T>) {
+        let _y: Option<Foo<T>> = Option::None
+    }
+    fn unbounded<T>(_ x: Foo<T>) {}
+    let _z: Option<Foo<U>> = Option::None
+}

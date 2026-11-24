@@ -13,12 +13,13 @@
 use common::indexmap::IndexMap;
 
 use super::{
-    adt_def::AdtRef,
+    adt_def::{AdtDef, AdtRef},
     corelib::resolve_core_trait,
     normalize::normalize_ty,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
     trait_resolution::PredicateListId,
     ty_def::{PrimTy, TyBase, TyData, TyId},
+    visitor::{TyVisitable, TyVisitor},
 };
 use crate::analysis::HirAnalysisDb;
 
@@ -45,6 +46,40 @@ pub(crate) fn clearable_implementor<'db>(
         ImplementorOrigin::Structural,
     );
     Some((implementor, components))
+}
+
+/// Whether `goal` is a `Clearable` goal on a type that names a struct or an
+/// enum. Impls decide such a goal: one may pin the type, and what its
+/// fields' projections resolve to decides whether it is uninhabited, either
+/// of which makes it not clearable. A search that doesn't resolve
+/// projections through impls can't decide it, and deciding it from what
+/// they resolve to would let an impl's where clause refute itself, as `impl
+/// Tr for X where S<X>: Clearable { type Out = ! }` does for `struct S<T:
+/// Tr> { f: T::Out }`.
+pub(crate) fn clearable_needs_impls<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> bool {
+    struct NamesAdt<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: bool,
+    }
+    impl<'db> TyVisitor<'db> for NamesAdt<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_adt(&mut self, _: AdtDef<'db>) {
+            self.found = true;
+        }
+    }
+
+    let mut visitor = NamesAdt { db, found: false };
+    if resolve_core_trait(db, goal.def(db).scope(), &["marker", "Clearable"]) == Some(goal.def(db))
+    {
+        goal.self_ty(db).visit_with(&mut visitor);
+    }
+    visitor.found
 }
 
 /// The types `ty` is clearable through, or `None` when it is not: a pinned

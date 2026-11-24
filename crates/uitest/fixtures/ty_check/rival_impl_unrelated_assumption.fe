@@ -1,0 +1,42 @@
+// A rival impl whose where clause cannot hold is ruled out, even with an
+// assumption in scope that names a projection, when the assumption differs
+// from the where clause somewhere other than at the projection.
+trait Never {}
+trait Other<X> {}
+trait Pick<X, Y> {}
+trait Assoc {
+    type A
+}
+
+trait Tr {
+    type Out
+}
+struct W<T> {
+    t: T,
+}
+impl<T> Tr for W<T> {
+    type Out = u8
+}
+impl<T: Never> Tr for W<T> {
+    type Out = u16
+}
+
+// Another trait.
+fn other_trait<T, U: Other<<V as Assoc>::A>, V: Assoc>(x: <W<T> as Tr>::Out) -> u8 {
+    x
+}
+
+trait Tr2 {
+    type Out
+}
+impl<T> Tr2 for W<T> {
+    type Out = u8
+}
+impl<T: Pick<u16, T>> Tr2 for W<T> {
+    type Out = u16
+}
+
+// The same trait, with another argument.
+fn other_arg<T: Pick<u8, <V as Assoc>::A>, V: Assoc>(x: <W<T> as Tr2>::Out) -> u8 {
+    x
+}

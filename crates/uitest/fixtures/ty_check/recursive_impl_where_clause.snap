@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recursive_impl_where_clause.fe
+---
+error[8-0000]: type mismatch
+    ┌─ recursive_impl_where_clause.fe:113:5
+    │
+113 │     tail(w)
+    │     ^^^^^^^ expected `bool`, but `u8` is given

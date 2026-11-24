@@ -14,7 +14,7 @@ use super::{
     trait_resolution::{PredicateListId, constraint::collect_candidate_constraints},
     ty_check::check_generic_default_body_types,
     ty_def::{BorrowKind, InvalidCause, Kind, PrimTy, TyBase, TyData, TyId, TyParam},
-    ty_error::{collect_hir_ty_diags_deferred, emit_invalid_ty_error, first_invalid_ty_cause},
+    ty_error::{check_written_ty, emit_invalid_ty_error, first_invalid_ty_cause},
     ty_lower::{
         CompleteSubst, GenericParamTypeSet, ParamBasis, SourceParamIndex, collect_generic_params,
         lower_hir_ty_with_minter, param_schema,
@@ -258,12 +258,13 @@ pub(crate) fn type_default_diags<'db>(
             continue;
         }
         let span = view.span().into_type_param().default_ty();
-        let mut errors = collect_hir_ty_diags_deferred(
+        let mut errors = check_written_ty(
             db,
             owner.scope(),
             hir_ty,
             span.clone(),
             default_assumptions(db, owner),
+            ConstBodyLowering::Deferred,
         );
         if errors.is_empty()
             && let Err(error) = generic_default(db, owner, view.idx)

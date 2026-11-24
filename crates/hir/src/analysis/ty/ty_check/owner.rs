@@ -1,9 +1,10 @@
+use crate::analysis::ty::ty_check::written_type_bounds;
 use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef, ClosureTy, TyId};
 use crate::hir_def::{Expr, ExprId, ItemKind, Partial, params::FuncParamMode};
 use crate::span::{DynLazySpan, types::LazyTySpan};
 use crate::{
     analysis::HirAnalysisDb,
-    hir_def::{Body, Const, Contract, EffectParamListId, Func, scope_graph::ScopeId},
+    hir_def::{Body, Const, Contract, EffectParamListId, Func, TypeId, scope_graph::ScopeId},
     span::item::LazyRecvArmSpan,
 };
 use salsa::SalsaValue;
@@ -53,6 +54,19 @@ pub enum EffectParamOwner<'db> {
 }
 
 impl<'db> EffectParamOwner<'db> {
+    /// Whether the effect key `key_ty` written in this owner's effect list has
+    /// a part whose bounds don't hold, which the item's written types report
+    /// (see [`written_type_bounds`]), and which nothing about the key adds to.
+    pub(crate) fn key_is_ill_formed(self, db: &'db dyn HirAnalysisDb, key_ty: TypeId<'db>) -> bool {
+        let item = match self {
+            Self::Func(func) => ItemKind::Func(func),
+            Self::Contract(contract)
+            | Self::ContractInit { contract }
+            | Self::ContractRecvArm { contract, .. } => ItemKind::Contract(contract),
+        };
+        written_type_bounds(db, item).is_ill_formed(key_ty)
+    }
+
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
             EffectParamOwner::Func(func) => func.effects(db),

@@ -20,6 +20,8 @@ impl<T> Tr for L<T> {
     type Out = <L<(T,)> as Tr>::Out
 }
 
+// The definitions above are reported, and not again where a projection
+// resolves through them.
 fn doubling(x: <W<u8> as Tr>::Out) {}
 
 fn linear() -> <L<u8> as Tr>::Out {

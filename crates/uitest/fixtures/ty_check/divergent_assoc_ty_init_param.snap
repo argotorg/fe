@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/divergent_assoc_ty_init_param.fe
+---
+error[3-0058]: type normalization limit exceeded
+  ┌─ divergent_assoc_ty_init_param.fe:6:16
+  │
+6 │     type Out = <S as Div>::Out
+  │                ^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit

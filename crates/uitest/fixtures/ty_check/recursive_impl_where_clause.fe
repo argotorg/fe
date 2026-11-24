@@ -1,0 +1,120 @@
+// An impl whose where clause is the impl's own trait at a projection:
+// `W<Cons<Cons<Nil>>>: Tr` holds through `W<Cons<Nil>>: Tr` and `W<Nil>: Tr`,
+// and the recursive impl does not answer `W<Nil>: Tr`, as `Nil` has no `Tail`.
+trait Seq {
+    type Tail
+}
+trait SubSeq: Seq {}
+trait Tr {
+    type Out
+}
+
+struct Nil {}
+struct Cons<T> {
+    t: T,
+}
+struct W<T> {
+    t: T,
+}
+struct V<T> {
+    t: T,
+}
+
+impl<T> Seq for Cons<T> {
+    type Tail = T
+}
+impl<T> SubSeq for Cons<T> {}
+
+impl Tr for W<Nil> {
+    type Out = u8
+}
+impl<T: Seq> Tr for W<T>
+where
+    W<T::Tail>: Tr,
+{
+    type Out = <W<T::Tail> as Tr>::Out
+}
+
+// The projection's trait holds by a super trait of the impl's bound.
+impl Tr for V<Nil> {
+    type Out = u8
+}
+impl<T: SubSeq> Tr for V<T>
+where
+    V<<T as Seq>::Tail>: Tr,
+{
+    type Out = <V<<T as Seq>::Tail> as Tr>::Out
+}
+
+fn one(_ x: <W<Cons<Nil>> as Tr>::Out) -> u8 {
+    x
+}
+
+fn two(_ x: <W<Cons<Cons<Nil>>> as Tr>::Out) -> u8 {
+    x
+}
+
+fn pick<T: Seq>(_ w: W<T>) -> <W<T> as Tr>::Out
+where
+    W<T>: Tr,
+{
+    todo()
+}
+
+fn pick_sub<T: SubSeq>(_ v: V<T>) -> <V<T> as Tr>::Out
+where
+    V<T>: Tr,
+{
+    todo()
+}
+
+fn generic<T: Seq>(_ w: W<T>)
+where
+    W<T>: Tr,
+{
+    let _x = pick(w)
+}
+
+fn generic_sub<T: SubSeq>(_ v: V<T>)
+where
+    V<T>: Tr,
+{
+    let _x = pick_sub(v)
+}
+
+fn concrete(_ w: W<Cons<Cons<Cons<Nil>>>>) -> u8 {
+    pick(w)
+}
+
+fn concrete_sub(_ v: V<Cons<Cons<Cons<Nil>>>>) -> u8 {
+    pick_sub(v)
+}
+
+// The tail's bound is what a caller proves.
+fn tail<T: Seq>(_ w: W<T>) -> <W<T> as Tr>::Out
+where
+    W<T::Tail>: Tr,
+{
+    todo()
+}
+
+fn through_tail<T>(_ w: W<Cons<T>>) -> <W<T> as Tr>::Out
+where
+    W<T>: Tr,
+{
+    tail(w)
+}
+
+fn tail_concrete(_ w: W<Cons<Cons<Nil>>>) -> u8 {
+    tail(w)
+}
+
+fn tail_mismatch(_ w: W<Cons<Cons<Nil>>>) -> bool {
+    tail(w)
+}
+
+fn tail_of_param<T: Seq>(_ x: <W<T::Tail> as Tr>::Out)
+where
+    W<T::Tail>: Tr,
+{
+}

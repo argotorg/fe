@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/impl_self_ty_nested_projection.fe
+---
+error[5-0001]: conflicting trait implementations
+   ┌─ impl_self_ty_nested_projection.fe:22:15
+   │
+22 │ impl Show for Foo<<W<u32> as Ty>::A> {
+   │               ^^^^^^^^^^^^^^^^^^^^^^ this trait implementation
+   ·
+31 │ impl Show for Foo<u8> {
+   │               ------- conflicts with this trait implementation

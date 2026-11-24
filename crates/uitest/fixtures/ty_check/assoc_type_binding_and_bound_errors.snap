@@ -46,10 +46,10 @@ error[3-0025]: division by zero in const context
    │                                          ^^^^^ cannot divide by zero
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ assoc_type_binding_and_bound_errors.fe:34:35
+   ┌─ assoc_type_binding_and_bound_errors.fe:34:41
    │
 34 │ trait IllFormedBound { type Item: Holds<Guarded<bool>> }
-   │                                   ^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
+   │                                         ^^^^^^^^^^^^^ `bool` doesn't implement `Gate`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ assoc_type_binding_and_bound_errors.fe:38:37

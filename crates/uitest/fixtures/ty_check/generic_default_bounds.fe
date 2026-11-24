@@ -1,0 +1,24 @@
+// A generic parameter's default is checked where it is written, under the
+// item's bounds. Normalizing `<W<u16> as Ty>::A` gives `u8` without proving
+// `W<u16>: Ty`, and where the default applies nothing is written.
+trait Gate {}
+trait Ty { type A }
+struct W<T> { t: T }
+impl<T: Gate> Ty for W<T> { type A = u8 }
+
+fn take<U = <W<u16> as Ty>::A>(_ x: U) {}
+
+struct S {}
+impl S {
+    fn take<U = <W<u16> as Ty>::A>(self, _ x: U) {}
+}
+
+trait Get<U = <W<u16> as Ty>::A> {
+    fn get(self) -> U
+}
+
+struct Holder<U = <W<u16> as Ty>::A> { x: U }
+
+// A default may use the item's bounds on the parameters it names.
+fn bounded<T: Gate, U = <W<T> as Ty>::A>(_ t: T, _ u: U) {}
+fn unbounded<T, U = <W<T> as Ty>::A>(_ t: T, _ u: U) {}

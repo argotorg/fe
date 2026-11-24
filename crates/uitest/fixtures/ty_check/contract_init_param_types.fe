@@ -1,0 +1,21 @@
+// A contract's `init` parameter types are checked where they are written, as
+// a function's are, and a parameter has its normalized type.
+trait Gate {}
+trait Marker {}
+trait Ty { type A }
+struct W<T> { t: T }
+struct Foo<X: Marker> { x: X }
+impl Gate for u32 {}
+impl<T: Gate> Ty for W<T> { type A = u8 }
+
+pub contract Projected {
+    init(a: <W<u32> as Ty>::A) {}
+}
+
+pub contract Unproved {
+    init(a: <W<u16> as Ty>::A) {}
+}
+
+pub contract Written {
+    init(a: Missing, b: Foo<u8>, c: own Foo<bool>) {}
+}

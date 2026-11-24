@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/nested_item_written_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ nested_item_written_bounds.fe:10:26
+   │
+10 │     fn unbounded<T>(_ x: Foo<T>) {}
+   │                          ^^^^^^ `T` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ nested_item_written_bounds.fe:11:20
+   │
+11 │     let _z: Option<Foo<U>> = Option::None
+   │                    ^^^^^^ `U` doesn't implement `Marker`

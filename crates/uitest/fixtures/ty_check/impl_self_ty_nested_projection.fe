@@ -1,0 +1,33 @@
+// An impl is for its normalized self type, a projection inside it included:
+// `impl Foo<<W<u32> as Ty>::A>` is `impl Foo<u8>` to its `self` parameters,
+// `Self`, method lookup and overlap checks.
+trait Gate {}
+trait Ty { type A }
+struct W<T> { t: T }
+struct Foo<X> { x: X }
+impl Gate for u32 {}
+impl<T: Gate> Ty for W<T> { type A = u8 }
+
+impl Foo<<W<u32> as Ty>::A> {
+    fn new() -> Self { Foo { x: 1 } }
+    fn get(self) -> u8 { self.x }
+}
+
+fn inherent() -> u8 { Foo<u8>::new().get() }
+
+trait Show {
+    fn show(self) -> u8
+}
+
+impl Show for Foo<<W<u32> as Ty>::A> {
+    fn show(self) -> u8 { self.x }
+}
+
+fn need<X: Show>(_ x: X) {}
+
+fn trait_impl(_ v: Foo<u8>) { need(v) }
+
+// The same impl as the one above.
+impl Show for Foo<u8> {
+    fn show(self) -> u8 { 0 }
+}

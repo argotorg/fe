@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/equality_cycle_assumptions.fe
+---
+error[3-0058]: type normalization limit exceeded
+   ┌─ equality_cycle_assumptions.fe:20:26
+   │
+20 │ fn growing<T: Tr<Out = V<<T as Tr>::Out>>>(_ x: T::Out) {}
+   │                          ^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ equality_cycle_assumptions.fe:20:49
+   │
+20 │ fn growing<T: Tr<Out = V<<T as Tr>::Out>>>(_ x: T::Out) {}
+   │                                                 ^^^^^^ the associated types here cannot be resolved within the limit

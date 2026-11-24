@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/written_shape_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_shape_bounds.fe:15:18
+   │
+15 │ fn param<D>(_ s: <D as Driver>::Step<ref>) {}
+   │                  ^^^^^^^^^^^^^^^^^^^^^^^^ `D` doesn't implement `Driver`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_shape_bounds.fe:17:37
+   │
+17 │ fn product<D>(_ (i, s): (own usize, <D as Driver>::Step<ref>)) {}
+   │                                     ^^^^^^^^^^^^^^^^^^^^^^^^ `D` doesn't implement `Driver`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_shape_bounds.fe:20:29
+   │
+20 │     fn ret(_ s: own u16) -> <W<u16> as Driver>::Step<ref>
+   │                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   │                             │
+   │                             `W<u16>` doesn't implement `Driver`
+   │                             trait bound `u16: Foo` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_shape_bounds.fe:21:48
+   │
+21 │     fn tuple_ret<D>(_ d: own D) -> (own usize, <D as Driver>::Step<ref>)
+   │                                                ^^^^^^^^^^^^^^^^^^^^^^^^ `D` doesn't implement `Driver`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ written_shape_bounds.fe:26:27
+   │
+26 │     shape Step = (own u8, <W<u16> as Driver>::Step)
+   │                           ^^^^^^^^^^^^^^^^^^^^^^^^
+   │                           │
+   │                           `W<u16>` doesn't implement `Driver`
+   │                           trait bound `u16: Foo` is not satisfied

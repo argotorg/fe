@@ -1,0 +1,29 @@
+trait Seq {
+    type Tail
+}
+trait Tr {
+    type Out
+}
+
+struct Nil {}
+struct Cons<T> {
+    t: T,
+}
+struct W<T> {
+    t: T,
+}
+
+impl<T> Seq for Cons<T> {
+    type Tail = T
+}
+
+impl Tr for W<Nil> {
+    type Out = u8
+}
+impl<T: Seq> Tr for W<T> {
+    type Out = <W<T::Tail> as Tr>::Out
+}
+
+fn one(_ x: <W<Cons<Nil>> as Tr>::Out) -> u8 {
+    x
+}

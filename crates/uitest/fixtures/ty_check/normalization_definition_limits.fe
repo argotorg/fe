@@ -1,0 +1,46 @@
+// An associated type defined through itself, directly or through other
+// impls, or through projections that multiply at each step, can't be
+// normalized. It is reported at the definition, and not again where a
+// projection resolves through it.
+trait Tr {
+    type Out
+}
+trait Tr2 {
+    type Out
+}
+
+struct Own {}
+impl Tr for Own {
+    type Out = <Own as Tr>::Out
+}
+
+struct Mutual {}
+impl Tr for Mutual {
+    type Out = <Mutual as Tr2>::Out
+}
+impl Tr2 for Mutual {
+    type Out = <Mutual as Tr>::Out
+}
+
+struct Fan<T> {
+    t: T,
+}
+impl<T> Tr for Fan<T> {
+    type Out = (<Fan<(T, u8)> as Tr>::Out, <Fan<(T, u16)> as Tr>::Out)
+}
+
+// A definition through one that can't be normalized can't be either.
+struct Through {}
+impl Tr for Through {
+    type Out = <Own as Tr>::Out
+}
+
+fn own_def(x: <Own as Tr>::Out) -> <Own as Tr>::Out {
+    x
+}
+
+fn mutual(x: <Mutual as Tr>::Out) {}
+
+fn fan(x: <Fan<u8> as Tr>::Out) {}
+
+fn through(x: <Through as Tr>::Out) {}

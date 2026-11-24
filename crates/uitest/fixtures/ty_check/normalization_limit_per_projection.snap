@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/normalization_limit_per_projection.fe
+---
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_limit_per_projection.fe:49:17
+   │
+49 │ fn too_large(x: <W<A15> as Tr>::Out) -> u8 {
+   │                 ^^^^^^^^^^^^^^^^^^^ the associated types here cannot be resolved within the limit
+
+error[3-0058]: type normalization limit exceeded
+   ┌─ normalization_limit_per_projection.fe:50:5
+   │
+50 │     x
+   │     ^ the associated types here cannot be resolved within the limit

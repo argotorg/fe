@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/projection_impl_binds_inference_var.fe
+---
+error[8-0000]: type mismatch
+   ┌─ projection_impl_binds_inference_var.fe:57:19
+   │
+57 │     let x: bool = out(w)
+   │                   ^^^^^^ expected `bool`, but `u8` is given
+
+error[8-0031]: type annotation is needed
+   ┌─ projection_impl_binds_inference_var.fe:81:9
+   │
+81 │     let _x = out_v(make_v())
+   │         ^^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: V<_>::Out` here

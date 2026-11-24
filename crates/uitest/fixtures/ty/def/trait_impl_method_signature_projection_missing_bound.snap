@@ -14,9 +14,3 @@ error[6-0003]: trait bound is not satisfied
    │
 16 │     fn run(self) -> <Self as Bound>::Item {
    │                     ^^^^^^^^^^^^^^^^^^^^^ `S` doesn't implement `Bound`
-
-error[6-0003]: trait bound is not satisfied
-   ┌─ trait_impl_method_signature_projection_missing_bound.fe:17:18
-   │
-17 │         unsafe { todo() }
-   │                  ^^^^^^ `S` doesn't implement `Bound`

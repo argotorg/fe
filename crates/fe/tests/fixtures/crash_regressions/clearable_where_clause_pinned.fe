@@ -1,0 +1,32 @@
+// A `Pinned` impl whose where clause names a projection that the where
+// clause `S<X>: Clearable` of the projection's impl decides.
+use core::marker::{Clearable, Pinned, Storage}
+
+trait Mark {}
+trait Tr {
+    type Out
+}
+
+struct S<T> {
+    x: u8,
+}
+
+struct X {}
+
+impl Mark for u8 {}
+
+impl<T> Pinned for S<T>
+where
+    <T as Tr>::Out: Mark
+{
+    type Space = Storage
+}
+
+impl Tr for X
+where
+    S<X>: Clearable
+{
+    type Out = u8
+}
+
+fn check_me(_ x: <X as Tr>::Out) {}

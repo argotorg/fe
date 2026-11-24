@@ -1,0 +1,19 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_arm_ret_bounds.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ recv_arm_ret_bounds.fe:26:21
+   │
+26 │         Unproved -> <W<u16> as Ty>::A {
+   │                     ^^^^^^^^^^^^^^^^^
+   │                     │
+   │                     `W<u16>` doesn't implement `Ty`
+   │                     trait bound `u16: Gate` is not satisfied
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ recv_arm_ret_bounds.fe:29:22
+   │
+29 │         Unbounded -> Foo<u8> {
+   │                      ^^^^^^^ `u8` doesn't implement `Marker`

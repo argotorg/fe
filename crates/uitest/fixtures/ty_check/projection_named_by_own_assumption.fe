@@ -1,0 +1,58 @@
+// An assumption whose trait reference or binding names a projection says
+// nothing of what that projection is, so the projection stays as it is while
+// its assumptions are matched.
+trait Iterator { type Item }
+trait Op<Rhs> { type Out }
+trait Tr { type Out }
+trait Tr2 { type X }
+
+fn flatten<I: Iterator>(_ x: own <I::Item as Iterator>::Item) -> u8
+where
+    I::Item: Iterator<Item = u8>,
+{
+    x
+}
+
+fn flatten_twice<I: Iterator>(_ x: own <<I::Item as Iterator>::Item as Iterator>::Item) -> u8
+where
+    I::Item: Iterator,
+    <I::Item as Iterator>::Item: Iterator<Item = u8>,
+{
+    x
+}
+
+fn in_trait_arg<T: Op<u8>>(_ x: own <T as Op<u8>>::Out) -> <T as Op<u8>>::Out
+where
+    T: Op<<T as Op<u8>>::Out, Out = u8>,
+{
+    x
+}
+
+fn through_another<T: Tr>(_ x: own <<T::Out as Tr2>::X as Tr>::Out) -> u8
+where
+    T::Out: Tr2,
+    <T::Out as Tr2>::X: Tr<Out = u8>,
+{
+    x
+}
+
+fn bound_twice<T: Tr<Out = <T as Tr>::Out> + Tr<Out = u8>>(_ x: own <T as Tr>::Out) -> <T as Tr>::Out {
+    x
+}
+
+fn branching<A, B, C>(_ x: own <A as Tr>::Out) -> <A as Tr>::Out
+where
+    A: Tr<Out = <B as Tr>::Out>,
+    B: Tr<Out = <A as Tr>::Out> + Tr<Out = <C as Tr>::Out>,
+    C: Tr<Out = <A as Tr>::Out>,
+{
+    x
+}
+
+// The element is no `u8`: only its own element is.
+fn element<I: Iterator>(_ x: own I::Item) -> u8
+where
+    I::Item: Iterator<Item = u8>,
+{
+    x
+}

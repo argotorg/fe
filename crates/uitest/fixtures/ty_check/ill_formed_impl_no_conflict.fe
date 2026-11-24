@@ -1,0 +1,21 @@
+// `W<Bad>: Ty` doesn't hold, which is the one error: the projection still
+// resolves to `u8`, and that is no conflict with the impl for `Foo<u8>`.
+trait Mark {}
+trait Other { type X }
+trait Ty { type A }
+trait Show {}
+
+struct Bad {}
+struct W<T> { x: T }
+struct Foo<T> { x: T }
+
+impl Other for Bad { type X = u16 }
+impl<T: Other> Ty for W<T>
+where
+    <T as Other>::X: Mark,
+{
+    type A = u8
+}
+
+impl Show for Foo<<W<Bad> as Ty>::A> {}
+impl Show for Foo<u8> {}

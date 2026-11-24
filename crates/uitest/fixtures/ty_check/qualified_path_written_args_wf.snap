@@ -16,10 +16,10 @@ error[6-0003]: trait bound is not satisfied
    │                     ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
 
 error[6-0003]: trait bound is not satisfied
-   ┌─ qualified_path_written_args_wf.fe:32:13
+   ┌─ qualified_path_written_args_wf.fe:32:18
    │
 32 │     let x: <Wrap<Foo<NotMarked>> as Plain>::Item = 1
-   │             ^^^^^^^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+   │                  ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
 
 error[6-0003]: trait bound is not satisfied
    ┌─ qualified_path_written_args_wf.fe:37:19
@@ -44,3 +44,9 @@ error[6-0003]: trait bound is not satisfied
    │
 47 │     f: <S as Tr<Foo<NotMarked>>>::Item,
    │                 ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ qualified_path_written_args_wf.fe:58:14
+   │
+58 │     <S as Tr<Foo<NotMarked>>>::Item::new()
+   │              ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`

@@ -1,0 +1,20 @@
+// Assumptions that equate projections in a cycle say only that they are one
+// type, and resolve none of them. A projection that the assumptions equate
+// with one in a cycle resolves to it. One equated with a type containing it
+// grows without end.
+trait Tr { type Out }
+struct V<X> { x: X }
+
+fn reflexive<T: Tr<Out = <T as Tr>::Out>>(_ x: own T::Out) -> <T as Tr>::Out { x }
+
+fn call_reflexive<T: Tr<Out = <T as Tr>::Out>>(_ y: own T::Out) -> T::Out {
+    reflexive<T>(y)
+}
+
+fn into_cycle<A: Tr<Out = <B as Tr>::Out>, B: Tr<Out = <A as Tr>::Out>, C: Tr<Out = <A as Tr>::Out>>(
+    _ x: own C::Out,
+) -> A::Out {
+    x
+}
+
+fn growing<T: Tr<Out = V<<T as Tr>::Out>>>(_ x: T::Out) {}

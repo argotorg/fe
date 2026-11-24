@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_assoc_default_ill_formed.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_assoc_default_ill_formed.fe:10:22
+   │
+10 │     type Out: Good = Need<u8>
+   │                      ^^^^^^^^ `u8` doesn't implement `Mark`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_assoc_default_ill_formed.fe:14:22
+   │
+14 │     shape Step = mut Need<u8>
+   │                      ^^^^^^^^ `u8` doesn't implement `Mark`

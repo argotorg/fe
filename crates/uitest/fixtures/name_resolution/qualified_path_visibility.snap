@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/qualified_path_visibility.fe
+---
+error[2-0003]: `Private` is not visible
+   ┌─ qualified_path_visibility.fe:24:35
+   │
+ 6 │     trait Private {
+   │           ------- `Private` is defined here
+   ·
+24 │ fn private_trait(_ x: <m::S as m::Private>::Item) -> u8 {
+   │                                   ^^^^^^^ `Private` is not visible
+
+error[2-0003]: `Private` is not visible
+   ┌─ qualified_path_visibility.fe:25:25
+   │
+ 6 │     trait Private {
+   │           ------- `Private` is defined here
+   ·
+25 │     let _y: <m::S as m::Private>::Item = 1
+   │                         ^^^^^^^ `Private` is not visible
+
+error[2-0003]: `Private` is not visible
+   ┌─ qualified_path_visibility.fe:26:17
+   │
+ 6 │     trait Private {
+   │           ------- `Private` is defined here
+   ·
+26 │     <m::S as m::Private>::make()
+   │                 ^^^^^^^ `Private` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ qualified_path_visibility.fe:29:26
+   │
+ 5 │     struct Hidden {}
+   │            ------ `Hidden` is defined here
+   ·
+29 │ fn private_type(_ x: <m::Hidden as m::Tr>::Item) -> u8 {
+   │                          ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ qualified_path_visibility.fe:30:17
+   │
+ 5 │     struct Hidden {}
+   │            ------ `Hidden` is defined here
+   ·
+30 │     let _y: <m::Hidden as m::Tr>::Item = 1
+   │                 ^^^^^^ `Hidden` is not visible
+
+error[2-0003]: `Hidden` is not visible
+   ┌─ qualified_path_visibility.fe:31:9
+   │
+ 5 │     struct Hidden {}
+   │            ------ `Hidden` is defined here
+   ·
+31 │     <m::Hidden as m::Tr>::make()
+   │         ^^^^^^ `Hidden` is not visible
