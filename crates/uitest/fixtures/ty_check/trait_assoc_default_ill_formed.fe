@@ -1,0 +1,15 @@
+// A default whose bounds don't hold is reported once, where it is written:
+// not again for the bound it must satisfy or for its shape's contract.
+trait Mark {}
+trait Good {}
+
+struct Need<T: Mark> { x: T }
+impl<T: Mark> Good for Need<T> {}
+
+trait Tr {
+    type Out: Good = Need<u8>
+}
+
+trait Driver {
+    shape Step = mut Need<u8>
+}

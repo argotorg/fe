@@ -726,7 +726,9 @@ impl<'db> Trait<'db> {
                 default_ty,
                 assoc.span().ty(),
             );
-            if !value_diags.is_empty() {
+            // A default whose bounds don't hold is reported with the trait's
+            // written types, and what it must satisfy isn't checked.
+            if !value_diags.is_empty() || written_type_bounds(db, self.into()).is_ill_formed(hir) {
                 diags.extend(value_diags);
                 continue;
             }
