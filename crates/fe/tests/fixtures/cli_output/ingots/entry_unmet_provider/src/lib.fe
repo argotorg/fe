@@ -1,0 +1,20 @@
+use core::abi::{AbiDecoder, AbiSize, ByteInput, Decode}
+use std::abi::Sol
+pub trait Open {}
+trait Internal {}
+impl<T: Open> Internal for T {}
+pub trait Extra {}
+pub trait Ready {}
+impl<T: Internal + Extra> Ready for T {}
+pub struct Packet<T> { pub n: u256 }
+impl<T> AbiSize for Packet<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T: Ready> Decode<Sol> for Packet<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ i: I) -> Self { Packet { n: d.read_word(i) } }
+}
+pub msg Commands {
+    #[selector = 123]
+    Ping -> u8,
+}

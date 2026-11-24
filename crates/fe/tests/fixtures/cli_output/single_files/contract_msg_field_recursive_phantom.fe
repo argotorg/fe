@@ -1,0 +1,19 @@
+// minimal, std-free shape: Node refers to itself only as a phantom type argument
+use core::abi::{AbiDecoder, AbiSize, ByteInput, Decode}
+use std::abi::Sol
+pub struct Id<T> { pub raw: u256 }
+pub struct Node { pub parent: Id<Node> }
+impl AbiSize for Node {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Decode<Sol> for Node {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ i: I) -> Self { panic() }
+}
+msg M {
+    #[selector = 1]
+    Put { n: Node },
+}
+pub contract C {
+    recv M { Put { n } {} }
+}

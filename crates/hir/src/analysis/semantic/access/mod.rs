@@ -36,8 +36,8 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
-            SemanticInstanceKey,
+            CallSiteId, SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget,
+            SemanticInstance, SemanticInstanceKey,
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
                 SemanticDiagnosticKind, SemanticDiagnosticSpan, SemanticNormalizationFailure,
@@ -53,7 +53,7 @@ use crate::{
         },
         ty::{
             provider::AddressSpace,
-            ty_check::{BodyOwner, ReturnProjectionStep},
+            ty_check::{BodyOwner, ForLoopStep, ReturnProjectionStep},
         },
     },
     hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
@@ -458,15 +458,33 @@ fn collect_semantic_access_with_blocked<'db>(
             .as_ref()
             .is_none_or(|trust| trust.trusts_authors_of(db, *owner))
     });
+    // The walk runs twice over a root that runs: along every call that the
+    // typed body records, which is what the trust policy judges, and along the
+    // calls that can run (`live`), which is what the drop diagnostic judges. A
+    // call that no path reaches does not run, and neither does its drop; nor
+    // does a function that no runtime root (`Func::is_runtime_root`: a test, a
+    // manual contract root, an export or `main`), contract body or live call
+    // reaches.
     let roots = |owners: Vec<BodyOwner<'db>>| -> VecDeque<_> {
         owners
             .into_iter()
-            .map(|owner| {
+            .flat_map(|owner| {
                 let key = identity_semantic_instance_key(db, owner);
-                (
-                    SemanticInstance::new(db, key),
-                    None::<SemanticDiagnosticSpan>,
-                )
+                let runs = match owner {
+                    BodyOwner::Func(func, _) => func.is_runtime_root(db),
+                    BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => true,
+                    _ => false,
+                };
+                [false, true]
+                    .into_iter()
+                    .filter(move |&live| runs || !live)
+                    .map(move |live| {
+                        (
+                            SemanticInstance::new(db, key),
+                            None::<SemanticDiagnosticSpan>,
+                            live,
+                        )
+                    })
             })
             .collect()
     };
@@ -487,7 +505,7 @@ fn collect_semantic_access_with_blocked<'db>(
     let own: FxHashSet<_> = trusted
         .iter()
         .chain(&untrusted)
-        .map(|(instance, _)| *instance)
+        .map(|(instance, _, _)| *instance)
         .collect();
     let mut test_calls = FxHashSet::default();
     for owner in test_uses {
@@ -497,19 +515,21 @@ fn collect_semantic_access_with_blocked<'db>(
         };
         test_calls.insert(call.clone());
         let key = identity_semantic_instance_key(db, owner);
-        trusted.push_back((SemanticInstance::new(db, key), Some(call)));
+        trusted.push_back((SemanticInstance::new(db, key), Some(call.clone()), false));
+        trusted.push_back((SemanticInstance::new(db, key), Some(call), true));
     }
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
     let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
     for (mut pending, judge) in [(trusted, trust.as_ref()), (untrusted, None)] {
-        while let Some((instance, call)) = pending.pop_front() {
-            if !seen.insert(instance) {
+        while let Some((instance, call, live)) = pending.pop_front() {
+            if !seen.insert((instance, live)) {
                 continue;
             }
             let owner = instance.key(db).owner(db);
             if let (Some(trust), Some(call)) = (judge, &call)
+                && !live
                 && let Some((site, author)) = trust.untrusted_site(db, owner)
                 && seen_untrusted.insert((author, call.clone()))
             {
@@ -524,72 +544,83 @@ fn collect_semantic_access_with_blocked<'db>(
             }
             match body_check(db, instance) {
                 SemanticAccessCheckResult::Ok { warnings, .. } => {
-                    if own.contains(&instance) {
+                    if own.contains(&instance) && !live {
                         diags.extend(
                             warnings
                                 .iter()
                                 .map(|diag| Box::new(*diag) as Box<dyn DiagnosticVoucher + 'db>),
                         );
                     }
-                    let generated = generated_callees(db, instance);
-                    for (drop, origin) in &generated.failures {
+                    let generated = generated_callees(db, instance, live);
+                    for (drop, origin) in generated.failures.iter().filter(|_| live) {
                         let diag =
                             unproved_drop_diagnostic(db, instance, drop, *origin, call.as_ref());
                         if seen_diags.insert(diag) {
                             diags.push(Box::new(diag));
                         }
                     }
-                    let callees: Vec<_> = match call {
-                        Some(call) => instance
-                            .callees(db)
-                            .iter()
-                            .map(|callee| callee.key)
-                            .chain(generated.callees.into_iter().map(|(key, _)| key))
-                            .map(|key| (key, call.clone()))
-                            .collect(),
-                        None => {
-                            let at = |origin| SemanticDiagnosticSpan::Origin { owner, origin };
-                            let calls = instance.call_sites(db).iter().enumerate().filter_map(
-                                |(idx, site)| {
-                                    Some((
-                                        site.as_ref()?.callee?.key,
-                                        at(SemOrigin::Expr(ExprId::new(idx))),
-                                    ))
-                                },
-                            );
-                            let loops = instance
-                                .for_loop_call_sites(db)
-                                .iter()
-                                .enumerate()
-                                .flat_map(|(idx, sites)| {
-                                    sites.iter().flat_map(move |sites| {
-                                        sites.sites.iter().filter_map(move |site| {
-                                            Some((
-                                                site.callee?.key,
-                                                at(SemOrigin::Stmt(StmtId::new(idx))),
-                                            ))
-                                        })
-                                    })
-                                });
-                            let generated = generated
-                                .callees
-                                .into_iter()
-                                .map(|(key, origin)| (key, at(origin)));
-                            calls.chain(loops).chain(generated).collect()
-                        }
+                    // A live walk follows the calls that a statement that runs
+                    // makes, when the body says which those are.
+                    let running = if live {
+                        running_call_sites(db, instance)
+                    } else {
+                        None
                     };
+                    let runs = |site| {
+                        running
+                            .as_ref()
+                            .is_none_or(|running| running.contains(&site))
+                    };
+                    let calls =
+                        instance
+                            .call_sites(db)
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(idx, site)| {
+                                let expr = ExprId::new(idx);
+                                Some((
+                                    site.as_ref()?.callee?.key,
+                                    CallSiteId::Expr(expr),
+                                    SemOrigin::Expr(expr),
+                                ))
+                            });
+                    let loops = instance
+                        .for_loop_call_sites(db)
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(idx, sites)| {
+                            sites.iter().flat_map(move |sites| {
+                                ForLoopStep::ALL.into_iter().filter_map(move |step| {
+                                    let stmt = StmtId::new(idx);
+                                    Some((
+                                        sites.site(step).callee?.key,
+                                        CallSiteId::ForLoop(stmt, step),
+                                        SemOrigin::Stmt(stmt),
+                                    ))
+                                })
+                            })
+                        });
+                    let at = |origin| SemanticDiagnosticSpan::Origin { owner, origin };
+                    let callees: Vec<_> = calls
+                        .chain(loops)
+                        .filter(|&(_, site, _)| runs(site))
+                        .map(|(key, _, origin)| (key, origin))
+                        .chain(generated.callees)
+                        .map(|(key, origin)| (key, call.clone().unwrap_or_else(|| at(origin))))
+                        .collect();
                     pending.extend(
                         callees
                             .into_iter()
-                            .map(|(key, call)| (SemanticInstance::new(db, key), Some(call))),
+                            .map(|(key, call)| (SemanticInstance::new(db, key), Some(call), live)),
                     );
                 }
-                SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
-                SemanticAccessCheckResult::Err(diag) => {
+                SemanticAccessCheckResult::Blocked(body) if !live => blocked.push(body.clone()),
+                SemanticAccessCheckResult::Err(diag) if !live => {
                     if seen_diags.insert(*diag) {
                         diags.push(Box::new(*diag));
                     }
                 }
+                SemanticAccessCheckResult::Blocked(_) | SemanticAccessCheckResult::Err(_) => {}
             }
         }
     }
@@ -642,10 +673,12 @@ fn contract_bodies<'db>(
 ///   argument, or a manual contract root named by a code region.
 ///
 /// A drop of a type whose `Drop` implementation has no proof is reported in
-/// `failures`.
+/// `failures`. With `live`, the statements that no path of the body runs
+/// contribute nothing (see `unrun_statements`).
 fn generated_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
+    live: bool,
 ) -> GeneratedCallees<'db> {
     let root = |owner| root_semantic_instance_key(db, owner).ok();
     if let Some((_, contract)) = instance.contract_metadata(db) {
@@ -668,7 +701,17 @@ fn generated_callees<'db>(
         return GeneratedCallees { callees, failures };
     };
     let body = admitted.body(db);
-    for statement in body.blocks.iter().flat_map(|block| &block.statements) {
+    let unrun = if live {
+        unrun_statements(db, instance, body)
+    } else {
+        FxHashSet::default()
+    };
+    for statement in body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+        .filter(|statement| !unrun.contains(&statement.id))
+    {
         if let NStatementKind::Drop { target } = &statement.kind {
             let origin = implicit::drop_origin(owner, body, statement.origin, target);
             let drops = implicit::drop_callees(db, instance, body, statement.id, target);
@@ -730,6 +773,68 @@ fn generated_callees<'db>(
         }
     }
     GeneratedCallees { callees, failures }
+}
+
+/// The statements of `body`, a body of `instance`, that no run executes: those
+/// of blocks that no path reaches and those after a call that never returns.
+/// It is the control flow that runtime lowering emits. Where the flow is not
+/// known, every statement runs.
+fn unrun_statements<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    body: &NormalizedBody<'db>,
+) -> FxHashSet<NStatementId> {
+    let Some(flow) = semantic_executable_control_flow(db, instance) else {
+        return FxHashSet::default();
+    };
+    let mut unrun = FxHashSet::default();
+    for (block, executable) in body.blocks.iter().zip(&flow.0) {
+        let from = match executable {
+            ExecutableBlock::Unreachable => 0,
+            ExecutableBlock::Diverges(call) => block
+                .statements
+                .iter()
+                .position(|statement| statement.source == Some(*call))
+                .map_or(block.statements.len(), |at| at + 1),
+            ExecutableBlock::Continues(_) => block.statements.len(),
+        };
+        unrun.extend(
+            block.statements[from..]
+                .iter()
+                .map(|statement| statement.id),
+        );
+    }
+    unrun
+}
+
+/// The call sites of `instance` that a statement which runs makes, or `None`
+/// where the body does not say which statements run. The typed body records
+/// every call written, also one after a `return`, which has no statement
+/// that runs.
+fn running_call_sites<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<FxHashSet<CallSiteId>> {
+    let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
+        return None;
+    };
+    semantic_executable_control_flow(db, instance)?;
+    let body = admitted.body(db);
+    let unrun = unrun_statements(db, instance, body);
+    Some(
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter(|statement| !unrun.contains(&statement.id))
+            .filter_map(|statement| match &statement.kind {
+                NStatementKind::Define {
+                    expr: NExpr::Call { call_site, .. },
+                    ..
+                } => Some(*call_site),
+                _ => None,
+            })
+            .collect(),
+    )
 }
 
 /// The result of `generated_callees`.

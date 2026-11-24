@@ -707,21 +707,6 @@ fn generated_abi_reported_at_source<'db>(
         .collect()
 }
 
-/// Whether the generated ABI implementations of `struct_`, an `#[abi]` struct
-/// or a `msg` variant, are left undiagnosed because their fields are reported
-/// where they are written.
-pub(crate) fn abi_failures_reported_at_source<'db>(
-    db: &'db dyn HirAnalysisDb,
-    struct_: crate::hir_def::Struct<'db>,
-) -> bool {
-    matches!(
-        struct_.origin(db),
-        HirOrigin::Desugared(origin)
-            if generated_abi_reported_at_source(db, struct_.top_mod(db), AbiFieldCheck::Diagnostics)
-                .contains(origin)
-    )
-}
-
 /// The generated `SolCompat` impl of an `#[abi]` struct with a field that has
 /// no Solidity type name does not apply, so it is not diagnosed.
 fn is_inapplicable_sol_compat_impl<'db>(

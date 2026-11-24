@@ -47,7 +47,7 @@ use crate::{
         },
     },
     core::semantic::{
-        EntryPlanError, RecvView, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
+        RecvView, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
         resolve_sol_abi_ty,
     },
     hir_def::{
@@ -1025,11 +1025,10 @@ pub(super) fn get_msg_variant_return_type<'db>(
     msg_variant_impl.assoc_ty(db, return_name)
 }
 
-/// A step of the entry code of a contract that cannot be generated: a goal
-/// that the dispatcher needs has no implementation. The entry plan holds the
-/// instances, and the lowering of the contract reads the same plan, so this is
-/// reported exactly where lowering would fail, and not where a check of the
-/// message or of an implementation reports the cause.
+/// A step of the entry code of a contract that cannot be generated. The entry
+/// plan holds the instances, and the lowering of the contract reads the same
+/// plan, so every step that lowering would fail is reported here, also where
+/// a check of the message or of an implementation reports the cause as well.
 pub(crate) struct ContractEntryFailure<'db> {
     contract_name: String,
     span: DynLazySpan<'db>,
@@ -1095,24 +1094,18 @@ pub(crate) fn contract_entry_failures<'db>(
             secondary,
         })
     };
-    if let Err(EntryPlanError::NoInstance(unmet)) = &plan.init {
+    if let Err(error) = &plan.init {
         let params = span.clone().init_block().params();
-        for unmet in unmet {
-            match unmet.arg {
+        for (arg, text) in error.parts() {
+            match arg {
                 Some(idx) => fail(
                     params.clone().param(idx).into(),
-                    format!(
-                        "the dispatcher cannot decode this `init` argument: {}",
-                        unmet.describe()
-                    ),
+                    format!("the dispatcher cannot decode this `init` argument: {text}"),
                     None,
                 ),
                 None => fail(
                     params.clone().into(),
-                    format!(
-                        "the dispatcher cannot decode the arguments of `init`: {}",
-                        unmet.describe()
-                    ),
+                    format!("the dispatcher cannot decode the arguments of `init`: {text}"),
                     None,
                 ),
             }
@@ -1124,29 +1117,23 @@ pub(crate) fn contract_entry_failures<'db>(
             .recv(arm.recv_idx as usize)
             .arms()
             .arm(arm.arm_idx as usize);
-        if let Err(EntryPlanError::NoInstance(unmet)) = &arm.input {
-            for unmet in unmet {
+        if let Err(error) = &arm.input {
+            for (_, text) in error.parts() {
                 fail(
                     arm_span.clone().pat().into(),
-                    format!(
-                        "the dispatcher cannot read the message of this arm: {}",
-                        unmet.describe()
-                    ),
+                    format!("the dispatcher cannot read the message of this arm: {text}"),
                     None,
                 );
             }
         }
-        if let Err(EntryPlanError::NoInstance(unmet)) = &arm.ret {
+        if let Err(error) = &arm.ret {
             let declared = RecvView::new(db, contract, arm.recv_idx)
                 .arms(db)
                 .find(|view| view.arm_idx(db) == arm.arm_idx)
                 .and_then(|view| view.return_decl_span(db));
             let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
-            for unmet in unmet {
-                let message = format!(
-                    "the dispatcher cannot encode this return type: {}",
-                    unmet.describe()
-                );
+            for (_, text) in error.parts() {
+                let message = format!("the dispatcher cannot encode this return type: {text}");
                 match &declared {
                     // A declaration in the contract's own ingot is where the
                     // error is, with the arm as the secondary label. In

@@ -23,7 +23,7 @@ use crate::{
     },
     hir_def::{
         Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
-        Visibility, scope_graph::ScopeId,
+        scope_graph::ScopeId,
     },
 };
 use common::{
@@ -38,6 +38,7 @@ use super::{
     closure::{CallableTrait, callable_params},
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{TyFoldable, TyFolder},
+    normalize::normalize_ty,
     shape::Shape,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
@@ -49,7 +50,10 @@ use super::{
     unify::{PersistentUnificationTable, UnificationTable},
     visitor::{TyVisitable, TyVisitor},
 };
-use crate::analysis::{HirAnalysisDb, name_resolution::Tier};
+use crate::analysis::{
+    HirAnalysisDb,
+    name_resolution::{Tier, is_scope_visible_from},
+};
 
 /// The trait environment of `ingot` in `tier`: in the authored tier, without
 /// the implementations generated in the ingot itself. The generated
@@ -945,10 +949,11 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
 /// the first constraint, that no implementation satisfies, of the only
 /// implementation whose head and associated types match `goal`.
 /// Implementations for a type constructor are considered before blanket ones.
-/// A blanket implementation that needs a trait that is private to another
-/// ingot is not considered: no code of the origin ingot can satisfy it, so it
-/// is no cause to name. `None` when no implementation matches, or when
-/// several do.
+/// A blanket implementation with an unmet constraint of a trait that no code
+/// of the origin ingot can name (another ingot's, private to it or in a
+/// private module) is not considered: no code of the origin ingot can satisfy
+/// it, so it is no cause to name. `None` when no implementation matches, or
+/// when several do.
 pub(crate) fn blocking_constraint<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -960,6 +965,13 @@ pub(crate) fn blocking_constraint<'db>(
     if ty.has_invalid(db) {
         return None;
     }
+    let origin_scope = solve_cx.origin_scope(db);
+    let sealed = |constraint: &TraitInstId<'db>| {
+        let scope = constraint.def(db).scope();
+        scope.ingot(db) != ingot
+            && !std::iter::successors(Some(scope), |scope| scope.parent(db))
+                .all(|scope| is_scope_visible_from(db, scope, origin_scope))
+    };
     let (mut nominal, mut blanket) = (Vec::new(), Vec::new());
     for impl_ in env.impls_for_trait(db, goal.def(db)) {
         if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
@@ -991,6 +1003,9 @@ pub(crate) fn blocking_constraint<'db>(
                 });
         // An implementation that binds an associated type to another type than
         // `goal` does is not the one that could prove it, whatever its bounds.
+        // The types are compared as the solver does, after normalization; one
+        // that is still a projection cannot be confirmed to match.
+        let assumptions = solve_cx.assumptions();
         let assoc_matches = head_matches
             && goal
                 .assoc_type_bindings(db)
@@ -999,37 +1014,42 @@ pub(crate) fn blocking_constraint<'db>(
                     let Some(have) = inst.trait_inst(db).bound_assoc_ty(db, binding) else {
                         return false;
                     };
+                    let mut normal = |ty: TyId<'db>| {
+                        let ty = ty.fold_with(db, &mut table);
+                        normalize_ty(db, ty, origin_scope, assumptions)
+                    };
+                    let (have, want) = (normal(have), normal(want));
+                    if have.has_projection(db) || want.has_projection(db) {
+                        return false;
+                    }
                     let (have, want) = (
                         table.instantiate_to_term(have),
                         table.instantiate_to_term(want),
                     );
-                    have.has_projection(db)
-                        || want.has_projection(db)
-                        || table.unify_for_overlap(have, want).is_ok()
+                    table.unify_for_overlap(have, want).is_ok()
                 });
         if !assoc_matches {
             continue;
         }
-        let constraints = inst.constraints(db).list(db);
-        let sealed = |constraint: &TraitInstId<'db>| {
-            let trait_ = constraint.def(db);
-            trait_.vis(db) != Visibility::Public && trait_.top_mod(db).ingot(db) != ingot
-        };
+        // The constraints that no implementation satisfies, once the arguments
+        // of the goal are substituted.
+        let unmet: Vec<_> = inst
+            .constraints(db)
+            .list(db)
+            .iter()
+            .map(|&constraint| constraint.fold_with(db, &mut table))
+            .filter(|&constraint| {
+                !matches!(
+                    is_goal_satisfiable(db, solve_cx, constraint),
+                    GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
+                )
+            })
+            .collect();
         let nominal_impl = matches!(impl_.self_ty(db).base_ty(db).data(db), TyData::TyBase(_));
-        if !nominal_impl && constraints.iter().any(sealed) {
+        if unmet.is_empty() || (!nominal_impl && unmet.iter().any(sealed)) {
             continue;
         }
-        let unmet = constraints.iter().find_map(|&constraint| {
-            let constraint = constraint.fold_with(db, &mut table);
-            let holds = matches!(
-                is_goal_satisfiable(db, solve_cx, constraint),
-                GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
-            );
-            (!holds).then_some(constraint)
-        });
-        let Some(unmet) = unmet else {
-            continue;
-        };
+        let unmet = unmet[0];
         if nominal_impl {
             nominal.push(unmet)
         } else {

@@ -1,0 +1,66 @@
+use core::ops::Drop
+
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+// The calls and drops that no path of a body reaches are not run, so a drop
+// that needs a proof that only a `with` gives is not reported for them.
+fn middle() {
+    with (Loud2) {
+        hold(Tag2 {})
+    }
+}
+
+fn hold_late<T: Show>(_ t: own T) {
+    return
+    let _held = Holder { t }
+}
+
+#[test]
+fn a_call_after_return_does_not_run() {
+    with (Loud2) {
+        return
+        hold(Tag2 {})
+    }
+}
+
+#[test]
+fn a_call_to_a_helper_after_return_does_not_run() {
+    return
+    middle()
+}
+
+#[test]
+fn a_drop_after_return_does_not_run() {
+    with (Loud2) {
+        hold_late(Tag2 {})
+    }
+}
+
+// A function that nothing calls does not run either.
+fn never_called() {
+    with (Loud2) {
+        hold(Tag2 {})
+    }
+}

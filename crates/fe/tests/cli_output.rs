@@ -465,6 +465,15 @@ fn test_cli_entry_plan_with_dependency_codec_checks_and_builds() {
     check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
 }
 
+// The bound of a dependency's codec that the consumer leaves unmet is named
+// where it can be satisfied; with `impl Extra for Local {}` the contract builds.
+#[test]
+fn test_cli_entry_plan_with_the_named_bound_met_checks_and_builds() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build_ingots/entry_unmet_fixed_consumer");
+    check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
+}
+
 #[test]
 fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
@@ -4028,6 +4037,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "delegatecall_state_effects",
     "deploy_and_call",
     "deposit_contract",
+    "drop_without_proof_after_revert",
     "dyn_array_from_slice",
     "dyn_array_get",
     "dynamic_offset_overflow",

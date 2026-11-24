@@ -1,0 +1,35 @@
+use core::ops::Drop
+
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+use std::evm::{Evm, revert_empty}
+
+#[test(should_revert)]
+fn a_call_after_a_revert_does_not_run() uses (evm: mut Evm) {
+    with (Loud2) {
+        revert_empty()
+        hold(Tag2 {})
+    }
+}

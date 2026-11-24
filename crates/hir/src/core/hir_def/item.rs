@@ -827,6 +827,27 @@ impl<'db> Func<'db> {
             )
     }
 
+    /// A function with an `#[contract_init(..)]` or `#[contract_runtime(..)]`
+    /// attribute that is well formed: the root of a manual contract object.
+    pub fn is_manual_contract_root(self, db: &'db dyn HirDb) -> bool {
+        matches!(
+            self.manual_contract_root_attr(db),
+            Some(ManualContractRootAttr::Init { .. } | ManualContractRootAttr::Runtime { .. })
+        )
+    }
+
+    /// A function that runs when a test run or a build enters its program: a
+    /// test, a manual contract root, an exported function and the executable's
+    /// `main`. Code that no such function reaches is not run, and is not
+    /// generated for any target. The builds find their roots with the same
+    /// predicates (`ingot_contracts`, `exported_funcs`, `main_entry`).
+    pub fn is_runtime_root(self, db: &'db dyn HirDb) -> bool {
+        self.is_test(db)
+            || self.is_manual_contract_root(db)
+            || self.is_exported(db)
+            || self.is_main_entry(db)
+    }
+
     fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {
         self.attributes(db).inline_attr(db)
     }
