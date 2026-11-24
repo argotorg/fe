@@ -1,11 +1,11 @@
 use common::indexmap::IndexMap;
 use fe_hir::{
     analysis::ty::{
-        trait_def::TraitInstId,
+        trait_def::{AssocBinding, TraitInstId},
         trait_resolution::PredicateListId,
         ty_def::{Kind, TraitFamilyId, TyData, TyId},
     },
-    hir_def::{ItemKind, ModeMarker},
+    hir_def::{IdentId, ItemKind, ModeMarker},
     test_db::{HirAnalysisTestDb, initialize_test_analysis_pass},
 };
 
@@ -294,5 +294,33 @@ fn recursion_through_a_family_argument_ends_bound_elaboration() {
     assert_eq!(
         elaborated("Family<trait Rel<Self::Next>>"),
         elaborated("Box<Self::Next>")
+    );
+}
+
+#[test]
+fn associated_bindings_of_a_predicate_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "predicate_binding_order.fe".into(),
+        "trait Parts {\n    type A\n    type B\n}\n",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let parts = module.all_traits(&db)[0];
+    let binding = |name: &str| AssocBinding::of(IdentId::new(&db, name.to_string()));
+    let (a, b) = (binding("A"), binding("B"));
+    let (bool_ty, unit) = (TyId::bool(&db), TyId::unit(&db));
+    let predicate = |bindings: [(_, _); 2]| {
+        TraitInstId::new(
+            &db,
+            parts,
+            vec![bool_ty],
+            bindings.into_iter().collect::<IndexMap<_, _>>(),
+            ModeMarker::None,
+        )
+    };
+    assert_eq!(
+        predicate([(a, bool_ty), (b, unit)]),
+        predicate([(b, unit), (a, bool_ty)])
     );
 }

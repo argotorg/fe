@@ -1920,7 +1920,7 @@ impl<'db> AssocBinding<'db> {
 }
 
 /// A trait predicate, including associated equality evidence when present.
-#[salsa::interned]
+#[salsa::interned(constructor = intern)]
 #[derive(Debug, PartialOrd, Ord)]
 pub struct TraitInstId<'db> {
     #[returns(copy)]
@@ -1941,6 +1941,19 @@ pub struct TraitInstId<'db> {
 }
 
 impl<'db> TraitInstId<'db> {
+    /// The predicate with its associated equalities in canonical order, so
+    /// that bindings written in any order denote one predicate.
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        key: Trait<'db>,
+        args: Vec<TyId<'db>>,
+        mut assoc_type_bindings: IndexMap<AssocBinding<'db>, TyId<'db>>,
+        mode: ModeMarker,
+    ) -> Self {
+        assoc_type_bindings.sort_by(|lhs, _, rhs, _| lhs.canonical_cmp(db, rhs));
+        Self::intern(db, key, args, assoc_type_bindings, mode)
+    }
+
     pub fn def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         self.key(db)
     }
