@@ -884,6 +884,9 @@ pub(crate) fn resolve_path_with_minter<'db>(
     )
 }
 
+/// Like [`resolve_path_with_minter`], and `observer` sees each segment's
+/// resolution, in order, before the next segment is resolved from it. It may
+/// replace the resolution, which the lowering context records as resolved.
 pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
@@ -894,7 +897,7 @@ pub(crate) fn resolve_path_with_observer_and_minter<'db, F>(
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
-    F: FnMut(PathId<'db>, &PathRes<'db>),
+    F: FnMut(PathId<'db>, &mut PathRes<'db>),
 {
     resolve_path_impl(
         db,
@@ -903,9 +906,9 @@ where
         assumptions,
         resolve_tail_as_value,
         true,
-        &mut |path, res| {
+        &mut |path, res: &mut PathRes<'db>| {
+            observer(path, res);
             lowering_cx.record_resolution(path, res);
-            observer(path, res)
         },
         lowering_cx,
     )
@@ -986,7 +989,7 @@ where
         scope,
         assumptions,
         false,
-        observer,
+        &mut |path, res: &mut PathRes<'db>| observer(path, res),
         lowering_cx,
     )
 }
@@ -1015,7 +1018,7 @@ pub(crate) fn resolve_type_position_path_with_minter<'db>(
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>> {
     let mut observer =
-        |path: PathId<'db>, res: &PathRes<'db>| lowering_cx.record_resolution(path, res);
+        |path: PathId<'db>, res: &mut PathRes<'db>| lowering_cx.record_resolution(path, res);
     let parent_res = path
         .parent(db)
         .map(|parent| {
@@ -1259,7 +1262,7 @@ fn resolve_path_impl<'db, F>(
     lowering_cx: &LoweringContext<'db>,
 ) -> PathResolutionResult<'db, PathRes<'db>>
 where
-    F: FnMut(PathId<'db>, &PathRes<'db>),
+    F: FnMut(PathId<'db>, &mut PathRes<'db>),
 {
     let parent_res = path
         .parent(db)
@@ -1276,7 +1279,7 @@ where
             )
         })
         .transpose()?;
-    let res = resolve_segment(
+    let mut res = resolve_segment(
         db,
         path,
         parent_res,
@@ -1287,7 +1290,7 @@ where
         lowering_cx,
         &mut false,
     )?;
-    observer(path, &res);
+    observer(path, &mut res);
     Ok(res)
 }
 
@@ -2557,7 +2560,10 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             path,
                         ));
                     }
-                    PathRes::TyAlias(alias.clone(), alias.instantiate(db, &args(), lowering_cx))
+                    PathRes::TyAlias(
+                        alias.clone(),
+                        alias.instantiate(db, &args(), lowering_cx, |_| None),
+                    )
                 }
 
                 ItemKind::Impl(impl_) => {

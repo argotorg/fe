@@ -1,0 +1,50 @@
+struct List<T, const N: usize> {
+    len: usize,
+}
+
+impl<T, const N: usize> List<T, N> {
+    const CAP: usize = N
+
+    fn new() -> Self {
+        List { len: 0 }
+    }
+}
+
+type ByteList<const N: usize> = List<u8, N>
+
+// Nothing fixes the alias's argument.
+fn not_inferred() {
+    let _ = ByteList::new()
+}
+
+// A type must give the alias its arguments.
+fn in_type_position() {
+    let _: ByteList = List<u8, 4>::new()
+}
+
+// Nothing fixes the receiver of an associated constant.
+fn const_receiver_not_inferred() -> usize {
+    ByteList::CAP
+}
+
+fn const_receiver_of_type_not_inferred() -> usize {
+    List::CAP
+}
+
+struct Bits<const N: usize> {
+    len: usize,
+}
+
+impl<const N: usize> Bits<N> {
+    fn new() -> Self {
+        Bits { len: 0 }
+    }
+}
+
+// An argument used only in a constant expression can't be inferred from
+// the expression's value.
+type Doubled<const N: usize> = Bits<{ N * 2 }>
+
+fn through_const_expression() -> Doubled<4> {
+    Doubled::new()
+}

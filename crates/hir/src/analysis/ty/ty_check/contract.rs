@@ -473,7 +473,7 @@ fn resolve_recv_path<'db>(
     let scope = contract.scope();
     let mut invisible = None;
     let mut applications = Vec::new();
-    let mut observe_segment = |segment: PathId<'db>, reso: &PathRes<'db>| {
+    let mut observe_segment = |segment: PathId<'db>, reso: &mut PathRes<'db>| {
         applications.extend(constrained_applications(db, reso));
         if invisible.is_none()
             && segment.segment_index(db) >= offset
