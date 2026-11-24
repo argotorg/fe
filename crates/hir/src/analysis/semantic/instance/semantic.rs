@@ -50,7 +50,8 @@ use crate::{
                 ResolvedImplInstance, TraitInstId,
             },
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+                COMPONENT_DEPTH_LIMIT, GoalSatisfiability, PredicateListId, TraitSolveCx,
+                is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
@@ -2308,6 +2309,10 @@ impl<'db> SemanticInstance<'db> {
                 Refusal::NoComponent { root: None } => {
                     format!("`{goal}`: no dictionary supplies it")
                 }
+                Refusal::TooDeep { root } => format!(
+                    "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
+                    root.pretty_print(db, true)
+                ),
             };
             return Err(SemanticBodyAdmissionError::InvalidConcreteType(
                 SemanticDiagnosticId::new(

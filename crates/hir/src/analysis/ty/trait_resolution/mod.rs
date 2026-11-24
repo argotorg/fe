@@ -39,6 +39,11 @@ pub(crate) use table_solver::{
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
+/// How many associated types below the first concrete bound a derivation is
+/// followed, and how many bounds beyond the slots the walk keeps.
+pub(crate) const COMPONENT_DEPTH_LIMIT: u32 = 4;
+const COMPONENT_MEMBER_LIMIT: usize = 1024;
+
 /// The arguments a named implementation declared inside a generic item
 /// inherits from it: the item's own generic parameters, as they stand where
 /// the implementation is opened. Folding a choice by the arguments a body is
@@ -1258,13 +1263,25 @@ impl<'db> PredicateListId<'db> {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
         let mut edges: Vec<BoundEdge<'db>> = Vec::new();
+        let mut truncated: Option<TraitInstId<'db>> = None;
+        let slots = all_predicates.len();
 
-        // Each entry says whether the associated type bounds of the predicate are
-        // expanded too. A kept concrete bound and its supertraits are not.
-        let mut worklist: Vec<(TraitInstId<'db>, bool)> =
-            self.list(db).iter().map(|&pred| (pred, true)).collect();
+        // Each entry says how many associated types the predicate lies below the
+        // first concrete bound that derived it: none for a bound no concrete
+        // bound derives, and a concrete bound's own bounds one more. A kept
+        // concrete bound is expanded through associated types to a depth limit.
+        // The plain walk meets no concrete bound, and takes the entries last
+        // first, as it always has; the walk that keeps them takes them first
+        // first, so that a bound is first met by the shortest derivation.
+        let mut worklist: std::collections::VecDeque<(TraitInstId<'db>, u32)> =
+            self.list(db).iter().map(|&pred| (pred, 0)).collect();
 
-        while let Some((pred, expand_assoc)) = worklist.pop() {
+        while let Some((pred, depth)) = if keep_concrete {
+            worklist.pop_front()
+        } else {
+            worklist.pop_back()
+        } {
+            let below_concrete = keep_concrete && is_concrete_bound(db, pred);
             let hir_trait = pred.def(db);
             let parent = all_predicates
                 .get_index_of(&pred)
@@ -1293,16 +1310,28 @@ impl<'db> PredicateListId<'db> {
                 record(child, step);
                 if inserted {
                     // New predicate added, add to worklist for further processing
-                    worklist.push((inst, expand_assoc));
+                    worklist.push_back((inst, depth));
                 }
             }
 
             // 2. Collect associated type bounds
-            if !expand_assoc {
-                continue;
-            }
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
+            if below_concrete && depth >= COMPONENT_DEPTH_LIMIT {
+                // The bounds below this one are not followed. A program whose
+                // dictionaries hold a named implementation is refused for it.
+                if hir_trait.assoc_types(db).any(|trait_type| {
+                    trait_type.name(db).is_some_and(|assoc| {
+                        TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc)
+                            .assoc_type_bounds(db, trait_type)
+                            .count()
+                            > 0
+                    })
+                }) {
+                    truncated.get_or_insert(pred);
+                }
+                continue;
+            }
             for trait_type in hir_trait.assoc_types(db) {
                 // Get the associated type name
                 let Some(assoc) = trait_type.name(db) else {
@@ -1330,14 +1359,19 @@ impl<'db> PredicateListId<'db> {
                     {
                         continue;
                     }
-                    // A kept concrete bound is extended through its supertraits
-                    // only, `Item: Pick` from `Item: Middle`. Its associated type
-                    // bounds are not expanded, which ends the walk where a
-                    // concrete bound names a type that grows with each step.
+                    // A kept concrete bound is extended through its associated
+                    // types to a depth, `Item: Pick` from `Item: Middle`, which
+                    // ends the walk where a concrete bound names a type that
+                    // grows with each step.
                     let (child, inserted) = all_predicates.insert_full(trait_inst);
                     record(child, step);
                     if inserted {
-                        worklist.push((trait_inst, !concrete));
+                        let below = if below_concrete { depth + 1 } else { 0 };
+                        worklist.push_back((trait_inst, below));
+                        if keep_concrete && all_predicates.len() - slots > COMPONENT_MEMBER_LIMIT {
+                            truncated.get_or_insert(trait_inst);
+                            worklist.clear();
+                        }
                     }
                 }
             }
@@ -1346,6 +1380,7 @@ impl<'db> PredicateListId<'db> {
         BoundWalk {
             list: Self::new(db, all_predicates.into_iter().collect::<Vec<_>>()),
             edges,
+            truncated,
         }
     }
 }
@@ -1401,6 +1436,9 @@ pub(crate) struct ComponentTable<'db> {
     pub(crate) members: Vec<Component<'db>>,
     /// The concrete members of each trait, as positions in `members`.
     by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)>,
+    /// The first bound whose associated-type bounds the walk did not follow,
+    /// at its depth or member limit.
+    pub(crate) truncated: Option<TraitInstId<'db>>,
 }
 
 impl<'db> ComponentTable<'db> {
@@ -1409,6 +1447,7 @@ impl<'db> ComponentTable<'db> {
             slots: 0,
             members: Vec::new(),
             by_trait: Vec::new(),
+            truncated: None,
         }
     }
 
@@ -1516,6 +1555,7 @@ pub(crate) fn concrete_components<'db>(
         slots: n as u32,
         members,
         by_trait,
+        truncated: walk.truncated,
     }
 }
 
@@ -1554,6 +1594,9 @@ pub(crate) struct BoundEdge<'db> {
 pub(crate) struct BoundWalk<'db> {
     pub(crate) list: PredicateListId<'db>,
     pub(crate) edges: Vec<BoundEdge<'db>>,
+    /// The first bound whose associated-type bounds the walk that keeps
+    /// concrete bounds did not follow, at its depth or member limit.
+    pub(crate) truncated: Option<TraitInstId<'db>>,
 }
 
 impl<'db> BoundWalk<'db> {
@@ -1670,6 +1713,7 @@ fn bound_walk_cycle_initial<'db>(
     BoundWalk {
         list: predicates,
         edges: Vec::new(),
+        truncated: None,
     }
 }
 

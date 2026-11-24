@@ -4555,3 +4555,79 @@ const fn top() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
         &[("top", 70070)],
     );
 }
+
+// A component one associated-type level below the first concrete bound is read
+// from the dictionary as well: `Item: Pick` below `Wrap<Item>: Middle<Inner =
+// Item>`, which `Slot`'s condition holds.
+#[test]
+fn concrete_component_depth() {
+    values(
+        &format!(
+            r#"{PICK_ITEM}
+trait Middle {{
+    type Inner: Pick
+    const fn via() -> u256
+}}
+impl<T: Pick> Middle for Wrap<T> {{
+    type Inner = T
+    const fn via() -> u256 {{ T::val() }}
+}}
+trait Holder {{ type V: Middle<Inner = Item> }}
+struct H<T> {{}}
+impl<T: Middle<Inner = Item>> Holder for H<T> {{ type V = T }}
+struct Slot<T> {{}}
+trait Outer {{
+    type M: Middle<Inner = Item>
+    type P: Pick
+}}
+impl<T: Holder<V = Wrap<Item>>> Outer for Slot<T> {{
+    type M = Wrap<Item>
+    type P = Item
+}}
+const fn read<B: Outer>() -> u256 {{
+    <B::P as Pick>::val() * 1000 + <B::M as Middle>::via()
+}}
+const fn top() -> u256 {{ with (Named) {{ read<Slot<H<Wrap<Item>>>>() }} }}
+const fn plain() -> u256 {{ read<Slot<H<Wrap<Item>>>>() }}
+"#
+        ),
+        &[("top", 70070), ("plain", 100100)],
+    );
+}
+
+// Five associated-type levels below the first concrete bound are past the
+// limit of four. A program that holds a named implementation in that
+// dictionary is refused and never given a value that mixes it with an ordinary
+// proof; the same program without one keeps its ordinary value.
+#[test]
+fn concrete_component_depth_limit() {
+    let program = r#"
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { const fn show() -> u256 { 70 } }
+struct C0<T> {}
+struct C1<T> {}
+struct C2<T> {}
+struct C3<T> {}
+struct C4<T> {}
+struct C5<T> {}
+trait H0 { type V: H1<V = C2<C3<C4<C5<Foo>>>>> }
+trait H1 { type V: H2<V = C3<C4<C5<Foo>>>> }
+trait H2 { type V: H3<V = C4<C5<Foo>>> }
+trait H3 { type V: H4<V = C5<Foo>> }
+trait H4 { type V: H5<V = Foo> }
+trait H5 { type V: Show }
+impl<T: H1<V = C2<C3<C4<C5<Foo>>>>>> H0 for C0<T> { type V = T }
+impl<T: H2<V = C3<C4<C5<Foo>>>>> H1 for C1<T> { type V = T }
+impl<T: H3<V = C4<C5<Foo>>>> H2 for C2<T> { type V = T }
+impl<T: H4<V = C5<Foo>>> H3 for C3<T> { type V = T }
+impl<T: H5<V = Foo>> H4 for C4<T> { type V = T }
+impl<T: Show> H5 for C5<T> { type V = T }
+const fn read<B: H0<V = C1<C2<C3<C4<C5<Foo>>>>>>>() -> u256 { Foo::show() }
+const fn plain() -> u256 { read<C0<C1<C2<C3<C4<C5<Foo>>>>>>>() }
+const fn chosen() -> u256 { with (Loud) { read<C0<C1<C2<C3<C4<C5<Foo>>>>>>>() } }
+"#;
+    values(program, &[("plain", 100)]);
+    refused(program, "chosen", "C5<Foo>: H5<V = Foo>");
+}

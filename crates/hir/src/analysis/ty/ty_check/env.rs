@@ -1757,7 +1757,9 @@ impl<'db> TyCheckEnv<'db> {
                     },
                 ),
             ),
-            Refusal::NoComponent { .. } => failed_proof(refused.goal, span),
+            Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
+                failed_proof(refused.goal, span)
+            }
         };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.

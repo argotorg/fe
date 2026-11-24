@@ -1292,6 +1292,11 @@ pub(crate) enum Refusal<'db> {
         a: TraitInstId<'db>,
         b: TraitInstId<'db>,
     },
+    /// The goal lies below the limit to which the bounds of associated types
+    /// are followed in the dictionary of `root`, and that dictionary holds a
+    /// named implementation: no value is given where the walk cannot say
+    /// whether they read it.
+    TooDeep { root: TraitInstId<'db> },
 }
 
 /// A goal that the dictionaries of a use or an instance refuse, with the reason.
@@ -1586,6 +1591,9 @@ enum ImplComponent<'db> {
     /// Held by the dictionaries of conditions that state a bound answering the
     /// declared one: the condition's position, and the steps from it.
     Held(Vec<(u32, Vec<BoundStep<'db>>)>),
+    /// As `Own`, but the walk of a condition stopped at its limit, so the
+    /// bound may be held below it. A closed bound only.
+    Truncated,
 }
 
 /// A condition whose bound (or a bound it implies, including a bound an
@@ -1610,8 +1618,10 @@ fn impl_component<'db>(
     let closed = is_closed_goal(db, declared);
     let scope = implementation.scope();
     let mut held = Vec::new();
+    let mut truncated = false;
     for (index, &condition) in basis.list(db).iter().enumerate() {
         let walk = PredicateListId::new(db, vec![condition]).bound_walk_keeping_concrete(db);
+        truncated |= walk.truncated.is_some();
         for (member, &candidate) in walk.list.list(db).iter().enumerate().skip(1) {
             let answering = if closed {
                 same_identity(db, scope, candidate, declared)
@@ -1626,10 +1636,12 @@ fn impl_component<'db>(
             }
         }
     }
-    if held.is_empty() {
-        ImplComponent::Own
-    } else {
+    if !held.is_empty() {
         ImplComponent::Held(held)
+    } else if truncated && closed {
+        ImplComponent::Truncated
+    } else {
+        ImplComponent::Own
     }
 }
 
@@ -1709,7 +1721,13 @@ pub(crate) fn project_step<'db>(
     let Some(declared) = step_bound(db, selected.trait_inst(db), step) else {
         return Projection::Refused;
     };
-    match impl_component(db, *selected, declared) {
+    let component = impl_component(db, *selected, declared);
+    // A dictionary that holds a named implementation is not read where the
+    // walk of its conditions stopped before the bound: it is refused.
+    if matches!(component, ImplComponent::Truncated) && proof.has_named_impl(db) {
+        return Projection::Refused;
+    }
+    match component {
         ImplComponent::Held(held) => {
             let mut agreed: Option<EvidenceId<'db>> = None;
             let mut pending = false;
@@ -1744,7 +1762,7 @@ pub(crate) fn project_step<'db>(
                 (false, None) => Projection::Refused,
             }
         }
-        ImplComponent::Own => {
+        ImplComponent::Own | ImplComponent::Truncated => {
             let Ok(subst) = CompleteSubst::for_owner(
                 db,
                 implementation.into(),
@@ -2817,6 +2835,25 @@ fn component_agreement<'db>(
                 Ok(_) => {}
             }
         }
+    }
+    // A walk that stopped at its limit left bounds below its frontier unread:
+    // a dictionary that holds a named implementation is refused, not given a
+    // value that mixes the component it holds with an ordinary proof.
+    if let Some(frontier) = table.truncated
+        && let Some(root) = table
+            .members
+            .iter()
+            .find(|member| member.goal == frontier)
+            .map(|member| member.root as usize)
+        && closed[root]
+        && entries[root].is_some_and(|proof| proof.has_named_impl(db))
+    {
+        return Some(RefusedGoal {
+            goal: frontier,
+            reason: Refusal::TooDeep {
+                root: goal_at(root),
+            },
+        });
     }
     // Components of one implementation hold one dictionary in an instance.
     let scope = solve_cx.origin_scope(db);
