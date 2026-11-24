@@ -1,7 +1,7 @@
 //! Use-based trust for the unsafe code of dependencies.
 //!
 //! An ingot's unsafe code is trusted when the ingot is the user's own code
-//! (a trust root), `core` or `std`, or a dependency that a trusted ingot
+//! (a trust root), the embedded `core` or `std`, or a dependency that a trusted ingot
 //! declares with `allow_unsafe = true`. Only use counts: the semantic access
 //! walk starts from the bodies of a trust root's modules, follows calls into
 //! every ingot, including indexing's generated `locate` calls and the bodies
@@ -79,11 +79,12 @@ impl<'db> UnsafeTrust<'db> {
     }
 
     fn allows(&self, db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
+        // A package is not `core` or `std` because its manifest says so: the
+        // embedded libraries are trusted through the dependency graph, as
+        // the members of a checked workspace are.
         let url = ingot.base(db);
-        matches!(
-            ingot.kind(db),
-            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) || self.trusted.contains(url)
+        ingot.kind(db) == IngotKind::StandAlone
+            || self.trusted.contains(url)
             || !db.dependency_graph().contains_url(db, url)
     }
 

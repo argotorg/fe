@@ -174,8 +174,14 @@ impl Backend {
         // shares the view prepared for that package and its dependencies.
         let (key, standalone) = match ingot.kind(&self.db) {
             IngotKind::StandAlone => (url.clone(), true),
-            IngotKind::Local | IngotKind::External => (ingot.base(&self.db).clone(), false),
-            IngotKind::Core | IngotKind::Std => return Ok(self.db.clone()),
+            // The embedded libraries carry no requests; a package that calls
+            // itself `core` or `std` is prepared like any other.
+            _ if common::stdlib::is_embedded_builtin(ingot.base(&self.db)) => {
+                return Ok(self.db.clone());
+            }
+            IngotKind::Local | IngotKind::External | IngotKind::Core | IngotKind::Std => {
+                (ingot.base(&self.db).clone(), false)
+            }
         };
         if let Some(view) = self.prepared_views.lock().unwrap().get(&key) {
             return (*view)

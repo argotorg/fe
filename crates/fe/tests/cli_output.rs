@@ -5154,6 +5154,22 @@ fn test_cli_test_generated_code_of_another_package_sees_only_what_is_public() {
 }
 
 #[test]
+fn test_cli_test_unsafe_trust_does_not_trust_a_package_by_its_name() {
+    // The package `evil` calls itself `std` in its fe.toml. A package is
+    // trusted as `core` or `std` only if it is the embedded library or is
+    // trusted through the dependency graph, so its `unsafe` code is judged
+    // like any dependency's and nothing trusts it.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_named_std");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("which is not allowed to use it") && output.contains("evil::raw()"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_follows_the_codec_a_dispatcher_runs() {
     // A `recv` arm that returns a type runs the `Encode` implementation of the
     // type in the dispatcher, and no call names it. `u` wrote the unsafe code

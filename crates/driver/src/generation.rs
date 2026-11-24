@@ -398,10 +398,11 @@ fn plan_ingots(db: &DriverDataBase, roots: &[url::Url]) -> Vec<IngotPlan> {
         in_progress: &mut std::collections::HashSet<url::Url>,
         plans: &mut Vec<IngotPlan>,
     ) -> Option<usize> {
-        if matches!(
-            ingot.kind(db),
-            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) {
+        // The embedded libraries carry no requests. A package is not one
+        // because its manifest says it is named `core` or `std`.
+        if ingot.kind(db) == IngotKind::StandAlone
+            || common::stdlib::is_embedded_builtin(ingot.base(db))
+        {
             return None;
         }
         let base = ingot.base(db).clone();

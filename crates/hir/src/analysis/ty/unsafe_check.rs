@@ -70,6 +70,18 @@ pub enum UnsafeOpSite {
     Pat(PatId),
 }
 
+/// Whether `ingot` is the toolchain's `core` or `std`, whose `extern`
+/// functions need no `unsafe` to call: the embedded library, or a package of
+/// that name that the dependency graph trusts (a member of the checked
+/// workspace, or one that a trusted package allows). Its own name does not
+/// make a package one.
+fn is_toolchain_library<'db>(db: &'db dyn HirAnalysisDb, ingot: common::ingot::Ingot<'db>) -> bool {
+    let url = ingot.base(db);
+    common::stdlib::is_embedded_builtin(url)
+        || matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std)
+            && db.dependency_graph().trusted_ingots(db).contains(url)
+}
+
 struct UnsafeChecker<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -407,10 +419,7 @@ impl<'db> UnsafeChecker<'db, '_> {
             && (func.is_unsafe(self.db)
                 || func.is_extern(self.db)
                     && !func.is_const(self.db)
-                    && !matches!(
-                        func.top_mod(self.db).ingot(self.db).kind(self.db),
-                        IngotKind::Core | IngotKind::Std
-                    ))
+                    && !is_toolchain_library(self.db, func.top_mod(self.db).ingot(self.db)))
         {
             self.push_unsafe(
                 BodyDiag::UnsafeCallRequiresUnsafe {
