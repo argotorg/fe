@@ -3,7 +3,8 @@ mod semantic;
 mod template;
 
 pub use const_ref::{
-    FinalizedGeneratedCall, core_method_callee_key, generated_callee, generated_callee_key,
+    FinalizedGeneratedCall, core_method_callee_key, drop_callee, generated_callee,
+    generated_callee_key,
 };
 pub(crate) use const_ref::{
     provisional_semantic_callee_key, resolve_semantic_const_ref,

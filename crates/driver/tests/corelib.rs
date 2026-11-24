@@ -1071,9 +1071,8 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         // it, and the call that drop glue makes after the presence of `Drop`
         // was decided: identities of written code.
         ("hir/src/analysis/ty/drop_glue.rs", "Drop", 1),
-        ("hir/src/analysis/semantic/access/implicit.rs", "Drop", 1),
+        ("hir/src/analysis/semantic/instance/const_ref.rs", "Drop", 1),
         ("hir/src/analysis/ty/ty_check/expr.rs", "Drop", 1),
-        ("mir/src/runtime/lower/body/drops.rs", "Drop", 2),
         // Whether a written `Pinned` implementation names a state space.
         ("hir/src/analysis/ty/provider.rs", "Pinned", 1),
         // Checks of written `Copy`, `Drop` and `Pinned` implementations.
@@ -1133,7 +1132,6 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
             "resolve_core_trait",
             1,
         ),
-        ("mir/src/runtime/lower/body.rs", "core_method_callee_key", 1),
         // Helpers of the library accessors: a path or a trait handed on by
         // the caller, and the path of a library trait that is not a deciding
         // one (the seal of the EVM capabilities).
@@ -1211,7 +1209,7 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/analysis_pass.rs", "resolve_lib_trait_path", "\"std::abi::SolCompat\"", 1, ErrorOnly, "ABI checks of `#[abi]` fields"),
         ("hir/src/analysis/semantic/access/implicit.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, Unique, "the trust walk follows the instance that the contract lowering selects, and none where that is an error"),
         ("hir/src/analysis/semantic/access/implicit.rs", "resolve_core_trait", "&[\"contracts\", \"ContractHost\"]", 1, Unique, "the trust walk follows the instance that the contract lowering selects, and none where that is an error"),
-        ("hir/src/analysis/semantic/access/implicit.rs", "core_method_callee_key", "&[\"ops\", \"Drop\"]", 1, Identity, "the `drop` call of drop glue that the trust walk follows, after its presence was decided"),
+        ("hir/src/analysis/semantic/instance/const_ref.rs", "core_method_callee_key", "&[\"ops\", \"Drop\"]", 1, Identity, "the `drop` call of drop glue, a fact of the type that the trust walk, the drop test and the lowering share, after its presence was decided"),
         ("hir/src/analysis/semantic/ctfe/machine.rs", "resolve_core_trait", "&[\"meta\", \"FieldQuery\"]", 1, Unique, "the query of a field is selected or an error"),
         ("hir/src/analysis/semantic/ctfe/machine.rs", "resolve_core_trait", "&[\"meta\", \"FieldInit\"]", 1, Unique, "the initializer of each field is selected or an error"),
         ("hir/src/analysis/semantic/instance/const_ref.rs", "resolve_core_trait", "trait_path", 1, HandedOn, "the core method lookup; its callers pass the path written out"),
@@ -1281,9 +1279,6 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/diagnosable.rs", "resolve_core_trait", "&[\"marker\", \"Pinned\"]", 1, Identity, "checks of written implementations"),
         ("hir/src/diagnosable.rs", "resolve_core_trait", "&[\"marker\", \"Clearable\"]", 1, ErrorOnly, "an implementation of `Clearable` is an error"),
         ("mir/src/runtime/lower/body.rs", "presence_trait", "\"core::error::ErrorVariant\"", 1, Deciding, "whether an error type prefixes its revert data"),
-        ("mir/src/runtime/lower/body.rs", "core_method_callee_key", "trait_path", 1, HandedOn, "the core method lookup; its callers pass the path written out"),
-        ("mir/src/runtime/lower/body/drops.rs", "core_method_callee_key", "&[\"ops\", \"Drop\"]", 1, Identity, "the `drop` call of drop glue, after its presence was decided"),
-        ("mir/src/runtime/lower/body/drops.rs", "resolve_core_method", "&[\"ops\", \"Drop\"]", 1, Identity, "the `drop` call of drop glue, after its presence was decided"),
         ("mir/src/runtime/package.rs", "resolve_core_trait", "&[\"contracts\", \"ContractHost\"]", 1, Unique, "resolved as a unique runtime instance, else an error"),
         ("mir/src/runtime/package.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, Unique, "resolved as a unique runtime instance, else an error"),
         ("mir/src/runtime/synthetic.rs", "resolve_core_trait", "&[\"abi\", \"Abi\"]", 1, Unique, "resolved as a unique runtime instance, else an error"),

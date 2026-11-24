@@ -17,8 +17,8 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         semantic::{
-            DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex,
-            core_method_callee_key, drop_elaboration, generated_callee_key,
+            DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex, drop_callee,
+            drop_elaboration, generated_callee_key,
             normalized::{
                 NDropTarget, NPlaceBase, NRootKind, NStatementId, NValueDefinition, NormalizedBody,
             },
@@ -163,16 +163,17 @@ fn recv_arm_callees<'db>(
 /// The `Drop::drop` implementations that drop elaboration inserts for the
 /// drop `statement` of `instance`'s `body`: for each part of the target that
 /// is initialized there, the `drop` of its type if it has one, else those of
-/// the parts it owns. A `drop` destroys its own `self` field by field.
+/// the parts it owns. A `drop` destroys its own `self` field by field. A
+/// type whose `Drop` implementation has no proof is reported in `unproved`.
 pub(super) fn drop_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
     statement: NStatementId,
     target: &NDropTarget<'db>,
-) -> Vec<SemanticInstanceKey<'db>> {
+) -> DropCallees<'db> {
     let Some(elaboration) = drop_elaboration(db, instance) else {
-        return Vec::new();
+        return DropCallees::default();
     };
     let ty = match target {
         NDropTarget::Value(value) => body.values[value.index()].ty,
@@ -183,6 +184,7 @@ pub(super) fn drop_callees<'db>(
         instance,
         seen: FxHashSet::default(),
         callees: Vec::new(),
+        unproved: Vec::new(),
     };
     let own_self = drops_own_self(db, instance, body, target);
     for part in elaboration.parts(statement) {
@@ -192,7 +194,17 @@ pub(super) fn drop_callees<'db>(
             .fold(ty, |ty, step| walk.part_ty(ty, *step));
         walk.destroy(part_ty, own_self && part.path.is_empty());
     }
-    walk.callees
+    DropCallees {
+        keys: walk.callees,
+        unproved: walk.unproved,
+    }
+}
+
+/// The result of `drop_callees`.
+#[derive(Default)]
+pub(super) struct DropCallees<'db> {
+    pub(super) keys: Vec<SemanticInstanceKey<'db>>,
+    pub(super) unproved: Vec<TyId<'db>>,
 }
 
 /// Whether `target` is the `self` of the `Drop::drop` that `instance` runs.
@@ -230,6 +242,8 @@ struct DropWalk<'db> {
     instance: SemanticInstance<'db>,
     seen: FxHashSet<TyId<'db>>,
     callees: Vec<SemanticInstanceKey<'db>>,
+    /// The types whose `Drop` implementation has no proof, in the order met.
+    unproved: Vec<TyId<'db>>,
 }
 
 impl<'db> DropWalk<'db> {
@@ -264,18 +278,11 @@ impl<'db> DropWalk<'db> {
                 .as_ref()
                 .is_some_and(|adt| adt_drop_impl(db, adt.adt_ref(db)).is_some())
         {
-            if let Some(scope) = ty.as_scope(db)
-                && let Ok(key) = core_method_callee_key(
-                    db,
-                    scope,
-                    PredicateListId::empty_list(db),
-                    None,
-                    &["ops", "Drop"],
-                    "drop",
-                    vec![ty],
-                )
-            {
-                self.callees.push(key);
+            match drop_callee(db, ty) {
+                Ok(key) => self.callees.push(key),
+                // A type with parameters is proved where it is instantiated.
+                Err(_) if ty.has_param(db) => {}
+                Err(_) => self.unproved.push(ty),
             }
             return;
         }

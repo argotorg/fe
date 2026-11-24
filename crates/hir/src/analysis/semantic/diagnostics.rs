@@ -195,6 +195,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::UnencodablePanic => 18,
             SemanticDiagnosticKind::CompileTimePhase => 19,
             SemanticDiagnosticKind::DeclaredOnlyImplementation => 20,
+            SemanticDiagnosticKind::UnprovedDrop => 21,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -254,6 +255,7 @@ impl SemanticDiagnosticKind {
             Self::InstanceLimit => format!("instantiation limit exceeded in `{item}`"),
             Self::ConstDestructor => format!("compile-time destructor in `{item}`"),
             Self::UnencodablePanic => format!("panic value without revert data in `{item}`"),
+            Self::UnprovedDrop => format!("`Drop` without an ordinary proof in `{item}`"),
         }
     }
 }
@@ -446,4 +448,8 @@ pub enum SemanticDiagnosticKind {
     /// A call reaching `panic_with_value` with a type that has no Sol encoding,
     /// on a target where that encoding is the panic's revert data.
     UnencodablePanic,
+    /// A value is destroyed whose type has a `Drop` implementation that is
+    /// not proved outside the `with` that made its bounds hold: a drop is a
+    /// fact of the type and reads no lexical choice.
+    UnprovedDrop,
 }

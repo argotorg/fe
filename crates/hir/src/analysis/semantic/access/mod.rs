@@ -38,8 +38,8 @@ use crate::{
             SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
             SemanticInstanceKey,
             diagnostics::{
-                BlockedSemanticBody, SemanticDiagnosticId, SemanticDiagnosticSpan,
-                SemanticNormalizationFailure,
+                BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
+                SemanticDiagnosticKind, SemanticDiagnosticSpan, SemanticNormalizationFailure,
             },
             identity_semantic_instance_key,
             normalized::{
@@ -52,6 +52,7 @@ use crate::{
         ty::{
             provider::AddressSpace,
             ty_check::{BodyOwner, ReturnProjectionStep},
+            ty_def::TyId,
         },
     },
     hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
@@ -528,16 +529,18 @@ fn collect_semantic_access_with_blocked<'db>(
                                 .map(|diag| Box::new(*diag) as Box<dyn DiagnosticVoucher + 'db>),
                         );
                     }
+                    let generated = generated_callees(db, instance);
+                    for diag in generated.failures {
+                        if seen_diags.insert(diag) {
+                            diags.push(Box::new(diag));
+                        }
+                    }
                     let callees: Vec<_> = match call {
                         Some(call) => instance
                             .callees(db)
                             .iter()
                             .map(|callee| callee.key)
-                            .chain(
-                                generated_callees(db, instance)
-                                    .into_iter()
-                                    .map(|(key, _)| key),
-                            )
+                            .chain(generated.callees.into_iter().map(|(key, _)| key))
                             .map(|key| (key, call.clone()))
                             .collect(),
                         None => {
@@ -564,7 +567,8 @@ fn collect_semantic_access_with_blocked<'db>(
                                         })
                                     })
                                 });
-                            let generated = generated_callees(db, instance)
+                            let generated = generated
+                                .callees
                                 .into_iter()
                                 .map(|(key, origin)| (key, at(origin)));
                             calls.chain(loops).chain(generated).collect()
@@ -632,34 +636,44 @@ fn contract_bodies<'db>(
 /// - the bodies of a contract whose code it embeds to create it: a
 ///   high-level contract's, named by a `Contract` metadata builtin's type
 ///   argument, or a manual contract root named by a code region.
+///
+/// A drop of a type whose `Drop` implementation has no proof is reported in
+/// `failures`.
 fn generated_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
-) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+) -> GeneratedCallees<'db> {
     let root = |owner| root_semantic_instance_key(db, owner).ok();
     if let Some((_, contract)) = instance.contract_metadata(db) {
         let owner = instance.key(db).owner(db);
-        return contract_bodies(db, contract)
-            .filter_map(root)
-            .map(|key| (key, SemOrigin::Body(owner)))
-            .collect();
+        return GeneratedCallees {
+            callees: contract_bodies(db, contract)
+                .filter_map(root)
+                .map(|key| (key, SemOrigin::Body(owner)))
+                .collect(),
+            failures: Vec::new(),
+        };
     }
     let owner = instance.key(db).owner(db);
     let mut callees: Vec<_> = implicit::dispatcher_callees(db, owner)
         .into_iter()
         .map(|key| (key, SemOrigin::Body(owner)))
         .collect();
+    let mut failures = Vec::new();
     let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
-        return callees;
+        return GeneratedCallees { callees, failures };
     };
     let body = admitted.body(db);
     for statement in body.blocks.iter().flat_map(|block| &block.statements) {
         if let NStatementKind::Drop { target } = &statement.kind {
             let origin = implicit::drop_origin(owner, body, statement.origin, target);
-            callees.extend(
-                implicit::drop_callees(db, instance, body, statement.id, target)
+            let drops = implicit::drop_callees(db, instance, body, statement.id, target);
+            callees.extend(drops.keys.into_iter().map(|key| (key, origin)));
+            failures.extend(
+                drops
+                    .unproved
                     .into_iter()
-                    .map(|key| (key, origin)),
+                    .map(|ty| unproved_drop_diagnostic(db, instance, ty, origin)),
             );
         }
         let mut visit = |place: &NPlace<'db>| {
@@ -716,7 +730,40 @@ fn generated_callees<'db>(
             } => {}
         }
     }
-    callees
+    GeneratedCallees { callees, failures }
+}
+
+/// The result of `generated_callees`.
+struct GeneratedCallees<'db> {
+    callees: Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)>,
+    failures: Vec<SemanticDiagnosticId<'db>>,
+}
+
+/// A value of `ty` is destroyed at `origin`, but no `Drop` implementation of
+/// it has an ordinary proof. A choice made by a `with` around the value does
+/// not reach its drop, so a bound that only a chosen implementation satisfies
+/// is not proved there.
+fn unproved_drop_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    ty: TyId<'db>,
+    origin: SemOrigin<'db>,
+) -> SemanticDiagnosticId<'db> {
+    SemanticDiagnosticId::new(
+        db,
+        SemanticDiagnostic::new(
+            instance,
+            SemanticDiagnosticKind::UnprovedDrop,
+            format!(
+                "`{}` is destroyed here, but its `Drop` implementation cannot be proved without the implementations that a `with` chose; a drop does not read a `with`",
+                ty.pretty_print(db),
+            ),
+            SemanticDiagnosticSpan::Origin {
+                owner: instance.key(db).owner(db),
+                origin,
+            },
+        ),
+    )
 }
 
 /// Whether `owner` is a function that `fe test` runs: one with `#[test]`.

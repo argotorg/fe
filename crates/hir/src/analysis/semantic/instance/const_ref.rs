@@ -514,6 +514,29 @@ pub fn generated_callee<'db>(
     })
 }
 
+/// The `Drop::drop` that destroys a value of `ty`. It is a fact of the type:
+/// proved in the type's own scope, under no assumptions and no chosen
+/// implementations. The trust walk, the test for whether a drop does anything
+/// and the lowering of the drop all reach this one instance, and a `with` that
+/// surrounds the creation or the move of the value does not change it. A type
+/// whose `Drop` implementation has no such proof is an error.
+#[salsa::tracked(returns(clone))]
+pub fn drop_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
+    let scope = ty.as_scope(db).ok_or(MethodArgMapError::MissingBody)?;
+    core_method_callee_key(
+        db,
+        scope,
+        PredicateListId::empty_list(db),
+        None,
+        &["ops", "Drop"],
+        "drop",
+        vec![ty],
+    )
+}
+
 /// The instance a compiler-generated call of core trait `trait_path`'s
 /// method `name`, on trait arguments `args`, reaches: e.g. the
 /// `StateIndex::locate` an entry `c[k]` calls.

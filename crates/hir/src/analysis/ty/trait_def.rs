@@ -763,7 +763,7 @@ pub struct ResolvedMethodInstance<'db> {
     declared_only: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
     /// The call goes through an implementation that a written header declares

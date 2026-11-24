@@ -1,0 +1,35 @@
+use core::ops::Drop
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+#[test]
+fn a_chosen_implementation_does_not_prove_a_drop() {
+    with (Loud2) {
+        hold(Tag2 {})
+    }
+}

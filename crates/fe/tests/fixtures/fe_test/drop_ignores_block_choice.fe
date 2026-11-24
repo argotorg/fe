@@ -1,0 +1,53 @@
+use core::ops::Drop
+
+// The `Drop` implementation of a type is a fact of the type: a lexical
+// `with` does not choose it. `Show` is chosen as `Loud` where the value is
+// created or moved, and the `drop` of `Holder` must still call the ordinary
+// `Show`, which does not fail.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag {}
+
+impl Show for Tag {
+    fn show(self) {}
+}
+
+pub impl Show for Tag as Loud {
+    fn show(self) {
+        assert(false)
+    }
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn consume(_ held: own Holder<Tag>) {}
+
+#[test]
+fn a_drop_at_scope_end_ignores_the_block_choice() {
+    with (Loud) {
+        let _held = Holder { t: Tag {} }
+    }
+}
+
+#[test]
+fn a_drop_after_a_move_ignores_the_block_choice() {
+    with (Loud) {
+        let held = Holder { t: Tag {} }
+        consume(held)
+    }
+}
+
+#[test]
+fn an_unframed_drop_runs_the_ordinary_implementation() {
+    let _held = Holder { t: Tag {} }
+}
