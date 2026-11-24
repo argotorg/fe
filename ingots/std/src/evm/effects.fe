@@ -1374,7 +1374,7 @@ pub fn staticcall_decode<R>(addr: Address, gas: u256, args: MemSpan) -> R
 impl Call for Evm {}
 
 #[inline(always)]
-pub fn assert(_ b: own bool) {
+pub const fn assert(_ b: own bool) {
     assert!(b)
 }
 
@@ -1426,7 +1426,7 @@ pub fn revert_bytes(_ data: MemSpan) -> ! {
 }
 
 /// Revert without revert data, like Solidity's `revert()`.
-pub fn revert_empty() -> ! {
+pub const fn revert_empty() -> ! {
     ops::revert_empty()
 }
 

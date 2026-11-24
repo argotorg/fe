@@ -1647,6 +1647,58 @@ impl<'db> ClosureTy<'db> {
     }
 }
 
+/// The aborting call that stopped a constant evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum ConstAbort<'db> {
+    /// `core::panic()`.
+    Panic,
+    /// `core::panic_code(code)`.
+    PanicCode(U256),
+    /// `core::panic_with_value(value)`, by the value's type.
+    PanicWithValue(TyId<'db>),
+    /// `core::todo()`.
+    Todo,
+    /// `std::evm::revert_empty()`.
+    RevertEmpty,
+}
+
+impl<'db> ConstAbort<'db> {
+    pub(crate) fn headline(self) -> &'static str {
+        match self {
+            Self::RevertEmpty => "revert in const context",
+            Self::Panic | Self::PanicCode(_) | Self::PanicWithValue(_) | Self::Todo => {
+                "panic in const context"
+            }
+        }
+    }
+
+    /// What the aborting call does, as a diagnostic label.
+    pub(crate) fn label(self, db: &'db dyn HirAnalysisDb) -> String {
+        match self {
+            Self::Panic => "panics here".into(),
+            Self::PanicCode(code) => format!("panics with code {code:#x}"),
+            Self::PanicWithValue(ty) => {
+                format!("panics with a value of type `{}`", ty.pretty_print(db))
+            }
+            Self::Todo => "reaches `todo()`".into(),
+            Self::RevertEmpty => "reverts here".into(),
+        }
+    }
+
+    /// What a constant evaluation that stopped here did.
+    pub(crate) fn reason(self, db: &'db dyn HirAnalysisDb) -> String {
+        match self {
+            Self::Panic => "panicked".into(),
+            Self::PanicCode(code) => format!("panicked with code {code:#x}"),
+            Self::PanicWithValue(ty) => {
+                format!("panicked with a value of type `{}`", ty.pretty_print(db))
+            }
+            Self::Todo => "reached `todo()`".into(),
+            Self::RevertEmpty => "reverted".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum InvalidCause<'db> {
     /// Type is not fully applied where it is required.
@@ -1740,11 +1792,11 @@ pub enum InvalidCause<'db> {
         message: Option<String>,
     },
 
-    /// `core::panic_code(code)` was reached in const evaluation.
-    ConstEvalPanicked {
+    /// An aborting call was reached in const evaluation.
+    ConstEvalAborted {
         body: Body<'db>,
         expr: ExprId,
-        code: U256,
+        abort: ConstAbort<'db>,
     },
 
     ConstEvalNonConstCall {
@@ -1872,8 +1924,8 @@ impl<'db> InvalidCause<'db> {
                 *expr,
                 "assertion failed in const context".to_string(),
             )),
-            InvalidCause::ConstEvalPanicked { body, expr, .. } => {
-                Some((*body, *expr, "panic in const context".to_string()))
+            InvalidCause::ConstEvalAborted { body, expr, abort } => {
+                Some((*body, *expr, abort.headline().to_string()))
             }
             InvalidCause::ConstEvalNonConstCall { body, expr } => Some((
                 *body,
@@ -2032,7 +2084,9 @@ impl InvalidCause<'_> {
             InvalidCause::IntLiteralOutOfRange { ty, .. } => {
                 format!("IntLiteralOutOfRange({})", ty.pretty_print(db))
             }
-            InvalidCause::ConstEvalPanicked { code, .. } => format!("ConstEvalPanicked({code:#x})"),
+            InvalidCause::ConstEvalAborted { abort, .. } => {
+                format!("ConstEvalAborted({})", abort.reason(db))
+            }
             InvalidCause::ConstEvalStepLimitExceeded { .. } => "ConstEvalStepLimitExceeded".into(),
             InvalidCause::ConstEvalRecursionLimitExceeded { .. } => {
                 "ConstEvalRecursionLimitExceeded".into()

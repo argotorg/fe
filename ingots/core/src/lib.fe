@@ -19,18 +19,18 @@ pub use range::{Bound, Known, Unknown, Range}
 pub use iter::{Bidirectional, Collection, Driver, Producer}
 
 extern {
-    pub fn panic() -> !
-    pub fn panic_with_value<T>(_: own T) -> !
+    pub const fn panic() -> !
+    pub const fn panic_with_value<T>(_: own T) -> !
     /// Aborts with a Solidity-compatible panic code (see `core::panics`).
     ///
     /// On EVM targets this reverts with `Panic(uint256)` data; native targets
     /// report the code's reason on stderr and abort.
     pub const fn panic_code(_ code: u256) -> !
-    pub fn todo() -> !
+    pub const fn todo() -> !
 }
 
 /// Trap when a target-neutral assertion fails.
-pub fn assert(_ condition: bool) {
+pub const fn assert(_ condition: bool) {
     if !condition {
         panic()
     }

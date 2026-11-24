@@ -1340,7 +1340,7 @@ fn const_body_ctfe_diags_with_context<'db>(
                 || "failed an assertion".to_string(),
                 |message| format!("failed an assertion: {message}"),
             ),
-            InvalidCause::ConstEvalPanicked { code, .. } => format!("panicked with code {code:#x}"),
+            InvalidCause::ConstEvalAborted { abort, .. } => abort.reason(db),
             InvalidCause::ConstEvalDivisionByZero { .. } => "divided by zero".into(),
             InvalidCause::ConstEvalOutOfBounds { .. } => "indexed out of bounds".into(),
             InvalidCause::ConstEvalInvalidOperation { message, .. } => message.clone(),

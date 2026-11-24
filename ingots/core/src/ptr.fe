@@ -1693,7 +1693,7 @@ impl Index<usize> for MemBuffer {
 }
 
 // Out-of-range indices and ranges fail like Solidity index errors.
-pub(ingot) fn index_out_of_bounds() -> ! {
+pub(ingot) const fn index_out_of_bounds() -> ! {
     panic_code(PANIC_INDEX_OUT_OF_BOUNDS)
 }
 

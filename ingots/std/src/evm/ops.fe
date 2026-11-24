@@ -130,7 +130,7 @@ extern {
     // Control flow
     // -------------------------------------------------------------------------
     pub(ingot) unsafe fn revert(offset: *u8, len: u256) -> !
-    pub(ingot) fn revert_empty() -> !
+    pub(ingot) const fn revert_empty() -> !
     pub(ingot) unsafe fn return_data(offset: *u8, len: u256) -> !
     pub(ingot) fn selfdestruct(_: u256) -> !
     pub(ingot) fn stop() -> !
