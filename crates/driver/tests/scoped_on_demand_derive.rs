@@ -3581,3 +3581,85 @@ fn f() -> u256 {
     let diagnostics = output_diagnostics(&db);
     assert!(diagnostics.contains("8-0031"), "{diagnostics}");
 }
+
+#[test]
+fn with_operand_with_two_meanings_is_ambiguous() {
+    let diagnostics_of = |source: &str| {
+        let (db, file) = input(source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        output_diagnostics(&db)
+    };
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tr { fn op(self) -> u256 }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+"#;
+    // A provider type and a named implementation of one name.
+    let named = format!(
+        "{prelude}impl Tr for R {{ fn op(self) -> u256 {{ 5 }} }}\nimpl Tr for R as P {{ fn op(self) -> u256 {{ 6 }} }}\nfn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    let found = diagnostics_of(&named);
+    assert!(
+        found.contains("ambiguous") && found.contains('P'),
+        "{found}"
+    );
+
+    // A provider type and a value of one name.
+    let value = format!(
+        "{prelude}struct Eff {{ v: u256 }}\nconst P: Eff = Eff {{ v: 9 }}\nfn use_eff() -> u256 uses (e: Eff) {{ e.v }}\nfn f() -> u256 {{ with (P) {{ use_eff() }} }}\n"
+    );
+    let found = diagnostics_of(&value);
+    assert!(
+        found.contains("ambiguous") && found.contains('P'),
+        "{found}"
+    );
+
+    // Control: a provider type alone still opens.
+    let control = format!(
+        "{prelude}impl Tr for R {{ fn op(self) -> u256 {{ 5 }} }}\nfn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    assert_eq!(diagnostics_of(&control), "");
+
+    // A private type written as an argument of the provider's path is
+    // refused as it is in a signature, for a path and for a literal.
+    let argument = |operand: &str| {
+        format!(
+            r#"
+use core::derive::Derive
+use core::meta::{{Record, Code, Item}}
+
+trait Tr {{ fn op(self) -> u256 }}
+mod m {{
+    use core::derive::Derive
+    use core::meta::{{Record, Code, Item}}
+    struct Secret {{}}
+    pub struct PubProvider<T> {{}}
+    impl<T> Derive<trait super::Tr> for PubProvider<T> {{
+        const fn derive(_ record: Record) -> Code<Item> {{
+            quote {{ fn op(self) -> u256 {{ 1 }} }}
+        }}
+    }}
+}}
+struct R {{}}
+fn f() -> u256 {{
+    with ({operand}) {{ R {{}}.op() }}
+}}
+"#
+        )
+    };
+    for operand in ["m::PubProvider<m::Secret>", "m::PubProvider<m::Secret> {}"] {
+        let found = diagnostics_of(&argument(operand));
+        assert!(found.contains("2-0003"), "{operand}\n{found}");
+    }
+}

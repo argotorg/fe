@@ -2224,6 +2224,31 @@ impl<'db> TyChecker<'db> {
                 return true;
             }
         }
+        // The types written in the operand's path are checked where they are
+        // written, as in any other path. A record literal's path is checked
+        // with the literal.
+        if let Partial::Present(Expr::Path(Partial::Present(path))) = value.data(self.db, body) {
+            let diags = super::super::ty_error::path_generic_arg_diags(
+                self.db,
+                *path,
+                value.span(body).into_path_expr().path(),
+                self.env.scope(),
+                self.env.assumptions(),
+                false,
+            );
+            if !diags.is_empty() {
+                self.env.generation_demands.refuse(
+                    key,
+                    "scoped derive provider path has an invalid generic argument",
+                );
+                for diag in diags {
+                    self.push_diag(diag);
+                }
+                self.env.named_impl_operands.insert(value);
+                self.env.type_expr(value, ExprProp::invalid(self.db));
+                return true;
+            }
+        }
         let hints = match hints {
             Ok(hints) => hints,
             Err(problem) => {
@@ -2428,6 +2453,45 @@ impl<'db> TyChecker<'db> {
                                 name,
                                 candidates,
                             ));
+                            self.env.named_impl_operands.insert(binding.value);
+                            self.env.type_expr(
+                                binding.value,
+                                ExprProp::new(TyId::unit(self.db), false),
+                            );
+                            continue;
+                        }
+                        // A derive provider type of the same name is a third
+                        // meaning of the operand, and none is chosen silently.
+                        if let Some((_, provider_span)) = self.with_operand_provider_type(path) {
+                            ambiguous_opening = true;
+                            if implementation
+                                .scope()
+                                .is_generated_in(self.db, self.env.scope().ingot(self.db))
+                            {
+                                self.push_changed_choice(BodyDiag::GenerationChangesChoice {
+                                    primary: binding.value.span(self.body()).into(),
+                                    decision: Decision::WithOperand,
+                                    trait_: None,
+                                    ty: None,
+                                    subject: implementation
+                                        .ty(self.db)
+                                        .pretty_print(self.db)
+                                        .to_string(),
+                                    generated: Some(implementation.scope()),
+                                });
+                            } else {
+                                let name = path
+                                    .ident(self.db)
+                                    .to_opt()
+                                    .expect("implementation path identifier");
+                                let mut candidates = vec![(implementation.span().into(), false)];
+                                candidates.extend(provider_span.map(|span| (span, false)));
+                                self.push_diag(PathResDiag::Ambiguous(
+                                    binding.value.span(self.body()).into(),
+                                    name,
+                                    candidates,
+                                ));
+                            }
                             self.env.named_impl_operands.insert(binding.value);
                             self.env.type_expr(
                                 binding.value,
@@ -2696,14 +2760,6 @@ impl<'db> TyChecker<'db> {
             if binding.key_path.is_none()
                 && let Partial::Present(Expr::Path(Partial::Present(path))) =
                     binding.value.data(self.db, self.body())
-                && !(path.is_bare_ident(self.db)
-                    && self
-                        .env
-                        .visible_binding(
-                            path.local_ident(self.db)
-                                .unwrap_or_else(|| path.ident(self.db).unwrap()),
-                        )
-                        .is_some())
                 && let Ok(resolved) = crate::analysis::name_resolution::resolve_path(
                     self.db,
                     *path,
@@ -2718,9 +2774,33 @@ impl<'db> TyChecker<'db> {
                     }
                     _ => None,
                 })
-                && self.try_open_derive_provider(binding.value, provider_ty, alias_scope)
             {
-                continue;
+                // An operand that names a value and a derive provider type has
+                // two meanings, and none is chosen silently. A value alone
+                // is checked as any other operand.
+                if let Some(value_span) = self.with_operand_value(*path, binding.value) {
+                    if let Some((_, provider_span)) = self.with_operand_provider_type(*path) {
+                        ambiguous_opening = true;
+                        let name = path
+                            .ident(self.db)
+                            .to_opt()
+                            .expect("provider path identifier");
+                        let mut candidates = Vec::new();
+                        candidates.extend(provider_span.map(|span| (span, false)));
+                        candidates.extend(value_span.map(|span| (span, false)));
+                        self.push_diag(PathResDiag::Ambiguous(
+                            binding.value.span(self.body()).into(),
+                            name,
+                            candidates,
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                } else if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
+                    continue;
+                }
             }
             let value_prop = self.check_expr_unknown(binding.value);
             // A record literal is also a spelling of a compile-time provider.
@@ -2999,9 +3079,14 @@ impl<'db> TyChecker<'db> {
         }
     }
 
-    /// Whether the `with` operand `operand`, written as `path`, names a value
-    /// visible here: a local binding or a value item.
-    fn with_operand_names_value(&self, path: PathId<'db>, operand: ExprId) -> bool {
+    /// The value that the `with` operand `operand`, written as `path`, names
+    /// here: a local binding or a visible value item. The span is the one of
+    /// its definition, when it has one.
+    fn with_operand_value(
+        &self,
+        path: PathId<'db>,
+        operand: ExprId,
+    ) -> Option<Option<DynLazySpan<'db>>> {
         if path.as_ident(self.db).is_some() {
             match resolve_ident_expr(
                 self.db,
@@ -3010,25 +3095,80 @@ impl<'db> TyChecker<'db> {
                 operand.span(self.body()).into(),
                 &LoweringContext::new(),
             ) {
-                ResolvedPathInBody::Binding(_) => true,
-                ResolvedPathInBody::Reso(value) => self.is_with_operand_value(&value),
-                ResolvedPathInBody::Diag(_)
+                ResolvedPathInBody::Binding(value) => Some(Some(value.def_span(&self.env))),
+                ResolvedPathInBody::Reso(value) if self.is_with_operand_value(&value) => {
+                    Some(value.name_span(self.db))
+                }
+                ResolvedPathInBody::Reso(_)
+                | ResolvedPathInBody::Diag(_)
                 | ResolvedPathInBody::NewBinding(_)
-                | ResolvedPathInBody::Invalid => false,
+                | ResolvedPathInBody::Invalid => None,
             }
         } else {
-            matches!(
-                crate::analysis::name_resolution::resolve_path(
-                    self.db,
-                    path,
-                    self.env.scope(),
-                    self.env.assumptions(),
-                    true,
-                ),
-                Ok(value) if self.is_with_operand_value(&value)
-                    && value.is_visible_from(self.db, self.env.scope())
-            )
+            match crate::analysis::name_resolution::resolve_path(
+                self.db,
+                path,
+                self.env.scope(),
+                self.env.assumptions(),
+                true,
+            ) {
+                Ok(value)
+                    if self.is_with_operand_value(&value)
+                        && value.is_visible_from(self.db, self.env.scope()) =>
+                {
+                    Some(value.name_span(self.db))
+                }
+                _ => None,
+            }
         }
+    }
+
+    /// Whether the `with` operand `operand`, written as `path`, names a value
+    /// visible here: a local binding or a value item.
+    fn with_operand_names_value(&self, path: PathId<'db>, operand: ExprId) -> bool {
+        self.with_operand_value(path, operand).is_some()
+    }
+
+    /// The derive provider type that the `with` operand `path` names here, and
+    /// the span of its definition: a visible type that a `Derive`
+    /// implementation can serve.
+    fn with_operand_provider_type(
+        &self,
+        path: PathId<'db>,
+    ) -> Option<(TyId<'db>, Option<DynLazySpan<'db>>)> {
+        use super::super::trait_resolution::generation::provider_hints;
+        let (ty, alias_scope) = match crate::analysis::name_resolution::resolve_path(
+            self.db,
+            path,
+            self.env.scope(),
+            self.env.assumptions(),
+            false,
+        )
+        .ok()?
+        {
+            crate::analysis::name_resolution::PathRes::Ty(ty) => (ty, None),
+            crate::analysis::name_resolution::PathRes::TyAlias(alias, ty) => {
+                (ty, Some(alias.alias.scope()))
+            }
+            _ => return None,
+        };
+        for scope in [alias_scope, ty.as_scope(self.db)].into_iter().flatten() {
+            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+                return None;
+            }
+        }
+        let ty = normalize_ty(self.db, ty, self.env.scope(), self.env.assumptions());
+        matches!(
+            provider_hints(self.db, self.env.scope(), self.env.assumptions(), ty),
+            Ok(Some(_))
+        )
+        .then(|| {
+            (
+                ty,
+                ty.as_scope(self.db)
+                    .and_then(|scope| scope.name_span(self.db)),
+            )
+        })
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
