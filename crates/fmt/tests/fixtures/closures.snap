@@ -11,8 +11,7 @@ fn closures(xs: [u256; 3]) -> u256 {
         a + b
     }
     let commented = |
-        x,
-        // the item
+        x, // the item
         y
     | x + y
     let block = |x| {
