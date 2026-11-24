@@ -839,7 +839,10 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         from: TyId<'db>,
         to: TyId<'db>,
-        hint: Option<String>,
+        /// Whether both sides are integers, so that `as` refused the cast
+        /// only for possibly losing information.
+        lossy: bool,
+        note: String,
     },
 
     AccessedFieldNotFound {

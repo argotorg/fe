@@ -36,7 +36,7 @@ error[3-0073]: panic in const context
 55 │             core::panic_code(PANIC_OVERFLOW)
    │             -------------------------------- panics with code 0x11
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ address_construction.fe:19:6
    │
 19 │     (address as u256, word as Address)
@@ -44,7 +44,7 @@ error[8-0055]: cast is not provably lossless
    │
    = cast is not allowed because the struct field is not `pub`
 
-error[8-0055]: cast is not provably lossless
+error[8-0055]: invalid cast
    ┌─ address_construction.fe:19:23
    │
 19 │     (address as u256, word as Address)

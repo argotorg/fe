@@ -452,10 +452,7 @@ mod tests {
         assert!(diagnostics.mir.is_empty(), "{formatted}");
         assert!(formatted.contains("Dependency: core"), "{formatted}");
         assert!(formatted.contains("URL: builtin-core:/"), "{formatted}");
-        assert!(
-            formatted.contains("cast is not provably lossless"),
-            "{formatted}"
-        );
+        assert!(formatted.contains("invalid cast"), "{formatted}");
     }
 
     #[test]

@@ -1,0 +1,84 @@
+use core::ptr::StorPtr
+
+enum Field {
+    A,
+    B,
+}
+impl Copy for Field {}
+
+enum Shape {
+    Unit,
+    Pair(u8, u8),
+}
+
+struct Pair {
+    a: u8,
+    b: u8,
+}
+impl Copy for Pair {}
+
+pub struct Wrapped(pub u64)
+impl Copy for Wrapped {}
+
+pub fn fieldless_enum_to_int(field: Field) -> u64 {
+    field as u64
+}
+
+pub fn enum_with_fields_to_int(shape: Shape) -> u64 {
+    shape as u64
+}
+
+pub fn struct_to_int(pair: Pair) -> u8 {
+    pair as u8
+}
+
+pub fn int_to_enum(x: u8) -> Field {
+    x as Field
+}
+
+pub fn int_to_bool(x: u8) -> bool {
+    x as bool
+}
+
+pub fn literal_to_bool() -> bool {
+    1 as bool
+}
+
+pub fn narrowing_newtype(w: Wrapped) -> u8 {
+    w as u8
+}
+
+pub struct PtrWrap(pub *u8)
+impl Copy for PtrWrap {}
+
+pub fn wrapped_pointer_to_byte(p: PtrWrap) -> u8 {
+    p as u8
+}
+
+pub fn wrapped_pointer_to_storage(p: PtrWrap) -> StorPtr<u8> {
+    p as StorPtr<u8>
+}
+
+pub fn bool_to_string(b: bool) -> String<16> {
+    b as String<16>
+}
+
+pub fn byte_to_string(x: u8) -> String<16> {
+    x as String<16>
+}
+
+pub fn string_to_byte(s: String<16>) -> u8 {
+    s as u8
+}
+
+pub fn string_widths(s: String<16>) -> String<31> {
+    s as String<31>
+}
+
+pub fn bool_to_struct(b: bool) -> Pair {
+    b as Pair
+}
+
+pub fn fieldless_enum_to_struct(field: Field) -> Pair {
+    field as Pair
+}
