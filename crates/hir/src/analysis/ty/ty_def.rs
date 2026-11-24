@@ -1495,18 +1495,23 @@ impl<'db> TraitFamilyId<'db> {
     fn pretty_print(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
         let name = self.def(db).name(db).to_opt().map(|name| name.data(db));
         let name = name.map_or("<missing>", |name| name.as_str());
-        let mut arguments: Vec<_> = self
-            .arguments(db)
-            .iter()
-            .map(|arg| arg.pretty_print_with_mode(db, mode))
-            .collect();
-        arguments.extend(self.associated(db).iter().map(|(name, ty)| {
-            format!(
-                "{} = {}",
-                name.pretty_print(db),
-                ty.pretty_print_with_mode(db, mode)
-            )
-        }));
+        self.render(db, name, |ty| ty.pretty_print_with_mode(db, mode))
+    }
+
+    /// The family as `trait name<arguments, bindings>`, with `name` for the
+    /// trait and `render` for each type written in it.
+    pub(crate) fn render(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: &str,
+        mut render: impl FnMut(TyId<'db>) -> String,
+    ) -> String {
+        let mut arguments: Vec<_> = self.arguments(db).iter().map(|&arg| render(arg)).collect();
+        arguments.extend(
+            self.associated(db)
+                .iter()
+                .map(|(binding, &ty)| format!("{} = {}", binding.pretty_print(db), render(ty))),
+        );
         if arguments.is_empty() {
             format!("trait {name}")
         } else {

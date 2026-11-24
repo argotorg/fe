@@ -73,9 +73,18 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                 ty.pretty_print(db).to_string()
             }
         },
-        TyData::ConstTy(_) | TyData::ConstraintTerm(_) | TyData::TraitFamily(_) => {
-            ty.pretty_print(db).to_string()
+        TyData::TraitFamily(family) => {
+            let path = family.def(db).scope().pretty_path(db);
+            let name = path.unwrap_or_else(|| {
+                family
+                    .def(db)
+                    .name(db)
+                    .to_opt()
+                    .map_or("<missing>".to_string(), |name| name.data(db).clone())
+            });
+            family.render(db, &name, |ty| pretty_print_ty_for_mismatch(db, ty))
         }
+        TyData::ConstTy(_) | TyData::ConstraintTerm(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
     }
