@@ -6188,3 +6188,22 @@ fn named_storage_local_generic_choice() {
         assert_eq!(exit, 0, "{fixture}: {output}");
     }
 }
+
+#[test]
+fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
+    // Two implementations of a foreign trait overlap through an implementation
+    // of a foreign bound that the checking ingot declares, which the trait's
+    // own ingot cannot see.
+    let conflicting = fe_test_runner_fixture_dir("overlap_foreign_trait");
+    let (output, exit_code) = run_fe_main(&["check", conflicting.to_str().expect("utf8")]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("conflicting trait implementations"),
+        "{output}"
+    );
+
+    // Where one of them names a type the bound does not cover, they stay disjoint.
+    let disjoint = fe_test_runner_fixture_dir("overlap_foreign_trait_disjoint");
+    let (output, exit_code) = run_fe_main(&["check", disjoint.to_str().expect("utf8")]);
+    assert_eq!(exit_code, 0, "{output}");
+}

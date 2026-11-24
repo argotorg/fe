@@ -1912,8 +1912,13 @@ impl<'db> ImplementorId<'db> {
 /// This mirrors the legacy `Implementor`-based semantics:
 /// - instantiate both implementors with fresh vars and look for a common header;
 /// - then check that the merged constraints are satisfiable.
+///
+/// The constraints are solved in `scope`, where the implementation that is
+/// being checked is declared: every implementation visible to its package
+/// counts, not only those visible where the trait is defined.
 pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
     a: ImplementorId<'db>,
     b: ImplementorId<'db>,
 ) -> bool {
@@ -1935,8 +1940,7 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified.
     let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope())
-        .with_assumptions(PredicateListId::empty_list(db));
+    let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(PredicateListId::empty_list(db));
 
     for &constraint in merged_constraints.list(db) {
         let constraint = constraint.fold_with(db, &mut table);

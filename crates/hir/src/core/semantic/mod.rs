@@ -4658,7 +4658,7 @@ impl<'db> ImplTrait<'db> {
                 if cand_impl_trait == self {
                     continue;
                 }
-                if does_impl_trait_conflict(db, cand_view, implementor)
+                if does_impl_trait_conflict(db, self.scope(), cand_view, implementor)
                     && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
                         db,
                         cand_impl_trait,
