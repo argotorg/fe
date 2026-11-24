@@ -1420,6 +1420,12 @@ impl ModuleAnalysisPass for ImplTraitAnalysisPass {
                 HirOrigin::Desugared(origin) => {
                     !reported_at_source.contains(origin)
                         && !is_inapplicable_sol_compat_impl(db, top_mod, **impl_trait)
+                        // A file with parse errors is not prepared, so the
+                        // implementations that its short forms (`msg`,
+                        // `#[abi]`, `#[event]`, `#[error]`) rely on do not
+                        // exist; what is written on top of them is not judged
+                        // beside the parse errors.
+                        && !(parse_errors && !matches!(origin, DesugaredOrigin::Use(_)))
                 }
                 _ => true,
             })
