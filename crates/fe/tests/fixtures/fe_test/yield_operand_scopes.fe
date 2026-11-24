@@ -244,6 +244,44 @@ fn guard_if(_ trace: *u256, _ c: bool, _ event: u256) -> Option<Guard> {
     if c { Option::Some(Guard { trace, event }) } else { Option::None }
 }
 
+// A `return` in a compound yield yields on its own.
+fn opt_return(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some({
+        if c {
+            return {
+                let _g = Guard { trace, event: 3 }
+                Option::Some(mut cell.b)
+            }
+        }
+        mut cell.a
+    })
+    log(trace, 9)
+}
+
+// So does each branch of a branching `return` there.
+fn opt_branch_return(_ cell: mut Cell, _ trace: *u256, _ early: bool, _ d: bool) -> Option<mut u256> {
+    yield Option::Some({
+        if early {
+            return if d { Option::Some(mut cell.b) } else { Option::None }
+        }
+        mut cell.a
+    })
+    log(trace, 9)
+}
+
+// A nested `yield` statement in a compound yield yields on its own.
+fn opt_nested_yield(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some({
+        if c {
+            yield Option::Some(mut cell.b)
+            log(trace, 8)
+            return
+        }
+        mut cell.a
+    })
+    log(trace, 9)
+}
+
 // A `return` in the operand whose own value opens scopes, branches, or
 // is the empty variant.
 fn return_block(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
@@ -487,6 +525,65 @@ fn loop_exits_from_the_operand() {
     bump(mut abandoned(mut cell, trace, false), trace)
     assert(read(trace) == 529)
     assert(cell.a == 2 && cell.b == 1)
+}
+
+#[test]
+fn a_return_in_a_compound_yield() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match opt_return(mut cell, trace, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 53)
+    let trace = new_trace()
+    match opt_return(mut cell, trace, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 59)
+}
+
+#[test]
+fn a_branching_return_in_a_compound_yield() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match opt_branch_return(mut cell, trace, true, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 5)
+    let trace = new_trace()
+    match opt_branch_return(mut cell, trace, true, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 6)
+    let trace = new_trace()
+    match opt_branch_return(mut cell, trace, false, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 59)
+    assert(cell.a == 1 && cell.b == 1)
+}
+
+#[test]
+fn a_nested_yield_in_a_compound_yield() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match opt_nested_yield(mut cell, trace, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 58)
+    let trace = new_trace()
+    match opt_nested_yield(mut cell, trace, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 59)
+    assert(cell.a == 1 && cell.b == 1)
 }
 
 #[test]

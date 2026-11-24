@@ -1,3 +1,5 @@
+use std::mem;
+
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -2804,9 +2806,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(break_bb));
             }
             // A `return` ends the body wherever it is written: in a `yield`
-            // statement's operand, no slide follows its yield either.
+            // statement's operand no slide follows its yield either, and in
+            // a compound yield, such as `Option::Some({ .. })`, its value
+            // yields on its own.
             Stmt::Return(expr) => {
                 let slide = self.slide.take();
+                let yield_depth = mem::take(&mut self.yield_depth);
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
                 if !self.is_terminated(self.current) {
                     self.exit(
@@ -2816,12 +2821,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }),
                     );
                 }
+                self.yield_depth = yield_depth;
                 self.slide = slide;
             }
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
                 let outer = self.slide.replace((slide, self.drop_scopes.len()));
+                let yield_depth = mem::take(&mut self.yield_depth);
                 let _ = self.lower_expr(*expr);
+                self.yield_depth = yield_depth;
                 self.slide = outer;
                 self.switch_to(slide);
             }
