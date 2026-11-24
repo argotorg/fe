@@ -945,6 +945,10 @@ fn provisional_call_site<'db>(
     }
 }
 
+/// The first use in the body of `instance` whose outputs disagree with
+/// ordinary normalization. It is also asked from `callee_output_disagreement`,
+/// where an instance can reach itself again through a constant that is
+/// computed under its own choice, so a cycle starts from no disagreement.
 #[salsa::tracked(returns(copy), cycle_initial = output_agreement_cycle_initial)]
 fn output_agreement_diagnostic_query<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -978,43 +982,6 @@ fn output_agreement_diagnostic_query<'db>(
                 output_disagreement_diagnostic(db, instance, expr, own, mismatch)
             });
     });
-    if found.is_some() {
-        return found;
-    }
-    // A callee that receives a named implementation in a dictionary can
-    // answer a goal with it where its caller cannot see the goal. The caller
-    // cannot be lowered over a callee that disagrees, so the callee is
-    // checked first and its diagnostic is the caller's.
-    let key = instance.key(db);
-    typed.for_each_callable(|_, callable| {
-        if found.is_some() {
-            return;
-        }
-        let evidence = callable.use_evidence();
-        let named = evidence.bounds.is_some_and(|bounds| {
-            bounds
-                .entries
-                .entries(db)
-                .iter()
-                .flatten()
-                .any(|proof| proof.has_named_impl(db))
-                || bounds
-                    .entries
-                    .rows(db)
-                    .iter()
-                    .filter_map(|row| row.proof)
-                    .any(|proof| proof.has_named_impl(db))
-        });
-        if !named {
-            return;
-        }
-        if let Ok(Some(callee)) =
-            semantic_callee_key_with_effect_providers(db, key, callable, &[], &[])
-            && callee.key != key
-        {
-            found = output_agreement_diagnostic_query(db, SemanticInstance::new(db, callee.key));
-        }
-    });
     found
 }
 
@@ -1026,6 +993,91 @@ fn output_agreement_cycle_initial<'db>(
     None
 }
 
+/// The first disagreement with ordinary normalization (see
+/// `output_agreement_diagnostic_query`) in an instance that `instance` calls,
+/// directly or through other calls. Only instances within the instance limits
+/// are followed, and the calls of a body with lowering issues are not
+/// (`walk_may_follow_calls`), so the walk ends for recursion that grows its
+/// generic arguments.
+///
+/// Inside a call cycle, which of several real disagreements is reported can
+/// depend on the order in which the queries are asked. A later fix is to take
+/// the one with the smallest source position.
+#[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
+fn callee_output_disagreement_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    instance_calls(db, instance)
+        .into_iter()
+        .map(|(_, callee)| SemanticInstance::new(db, callee.key))
+        .filter(|&callee| callee != instance && instance_limit_violation(db, callee).is_none())
+        .find_map(|callee| {
+            output_agreement_diagnostic_query(db, callee).or_else(|| {
+                walk_may_follow_calls(db, callee)
+                    .then(|| callee_output_disagreement_query(db, callee))
+                    .flatten()
+            })
+        })
+}
+
+fn callee_output_disagreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
+}
+
+/// The header of an implementation as written, `impl<T: Marker> Foo for T`:
+/// its parameters with the bounds on them, then the other bounds in a `where`
+/// clause. The trait is printed without the associated types the
+/// implementation defines.
+fn implementation_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    let params = implementor.params(db);
+    let bounds = implementor.constraints(db).list(db);
+    let generics = params
+        .iter()
+        .map(|&param| {
+            let name = param.pretty_print(db).to_string();
+            let own = bounds
+                .iter()
+                .filter(|bound| bound.self_ty(db) == param)
+                .map(|bound| bound.pretty_print(db, false))
+                .collect::<Vec<_>>();
+            if own.is_empty() {
+                name
+            } else {
+                format!("{name}: {}", own.join(" + "))
+            }
+        })
+        .collect::<Vec<_>>();
+    let generics = if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", generics.join(", "))
+    };
+    let others = bounds
+        .iter()
+        .filter(|bound| !params.contains(&bound.self_ty(db)))
+        .map(|bound| bound.pretty_print(db, true))
+        .collect::<Vec<_>>();
+    let clause = if others.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", others.join(", "))
+    };
+    let header = implementor.trait_(db).without_assoc_bindings(db);
+    format!(
+        "impl{generics} {} for {}{clause}",
+        header.pretty_print(db, false),
+        header.self_ty(db).pretty_print(db)
+    )
+}
+
 /// How an implementation is named in a message: its name, or its header.
 fn implementation_label<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1034,7 +1086,7 @@ fn implementation_label<'db>(
     match implementor.origin(db) {
         ImplementorOrigin::Hir(implementation) => match implementation.selection_name(db) {
             Some(name) => format!("`{}`", name.data(db)),
-            None => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
+            None => format!("`{}`", implementation_header(db, implementor)),
         },
         _ => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
     }
@@ -1047,11 +1099,14 @@ fn output_disagreement_diagnostic<'db>(
     own: ResolvedImplInstance<'db>,
     mismatch: NamedOutputMismatch<'db>,
 ) -> SemanticDiagnosticId<'db> {
-    let goal = own.trait_inst().pretty_print(db, true);
+    let goal = own
+        .trait_inst()
+        .without_assoc_bindings(db)
+        .pretty_print(db, true);
     let answers = implementation_label(db, own.selected());
     let with_label = |with: crate::hir_def::ImplTrait<'db>| {
         crate::analysis::ty::trait_lower::lower_impl_trait(db, with)
-            .map(|implementor| format!("`{}`", implementor.trait_(db).pretty_print(db, true)))
+            .map(|implementor| implementation_label(db, implementor))
             .unwrap_or_else(|| "its implementation".to_string())
     };
     let message = match mismatch {
@@ -1948,11 +2003,6 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
-    /// Codec calls belonging to one checked entry. A codec is only required
-    /// after the ordinary associated layout says this entry is packed. The
-    /// callable may defer an obligation that becomes closed on substitution;
-    /// the shared callee finalizer owns that obligation, as for written calls.
-    #[salsa::tracked(returns(copy))]
     /// The first use in this instance's body whose proof answers a concrete
     /// goal through an implementation whose outputs differ from those
     /// ordinary normalization gives the goal (see
@@ -1965,6 +2015,18 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<SemanticDiagnosticId<'db>> {
         output_agreement_diagnostic_query(db, self)
+    }
+
+    /// The first disagreement with ordinary normalization in an instance this
+    /// one calls, directly or through other calls. A body is checked against the
+    /// outputs of its callees as ordinary normalization gives them, so a callee
+    /// that disagrees can make the body fail verification. Admission asks for it
+    /// only after such a failure.
+    pub(crate) fn callee_output_disagreement(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        callee_output_disagreement_query(db, self)
     }
 
     /// The disagreement in `proof`, a proof this instance's body completed
@@ -1981,6 +2043,11 @@ impl<'db> SemanticInstance<'db> {
         ))
     }
 
+    /// Codec calls belonging to one checked entry. A codec is only required
+    /// after the ordinary associated layout says this entry is packed. The
+    /// callable may defer an obligation that becomes closed on substitution;
+    /// the shared callee finalizer owns that obligation, as for written calls.
+    #[salsa::tracked(returns(copy))]
     pub fn entry_codec_callees(
         self,
         db: &'db dyn HirAnalysisDb,
@@ -2563,6 +2630,19 @@ fn unencodable_call_panic<'db>(
     .then_some(ty)
 }
 
+/// Whether a walk over the calls of instances may follow the calls of
+/// `instance`. A body with lowering issues has no instance limit to end a
+/// chain of calls, and an instance past the instance limits is rejected as
+/// itself, so neither has its calls followed.
+fn walk_may_follow_calls<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> bool {
+    instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+        && instance_limit_violation(db, instance).is_none()
+}
+
 /// The type `instance`, or any instance it calls, panics with that can't be
 /// revert data. An instance past the instance limits is rejected as itself,
 /// and its calls need not end, so this does not follow them.
@@ -2571,13 +2651,7 @@ fn unencodable_panic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<TyId<'db>> {
-    if !instance
-        .key(db)
-        .typed_body(db)
-        .smir_lowering_issues(db)
-        .is_empty()
-        || instance_limit_violation(db, instance).is_some()
-    {
+    if !walk_may_follow_calls(db, instance) {
         return None;
     }
     instance_calls(db, instance)

@@ -32,7 +32,7 @@ use crate::analysis::{
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, ShapeCon, TyBase, TyData, TyFlags, TyId, TyVarSort},
+        ty_def::{BorrowKind, TyData, TyFlags, TyId, TyVarSort},
         unify::{
             PersistentUnificationTable, UnificationError, UnificationResult, UnificationStore,
             UnificationTableBase,
@@ -189,15 +189,6 @@ fn has_open_const<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
     open.open
 }
 
-fn is_shape_projection(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
-    // The bare constructor is a type function. Its applications are queries.
-    matches!(ty.data(db), TyData::TyApp(..))
-        && matches!(
-            ty.base_ty(db).data(db),
-            TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
-        )
-}
-
 fn compare_headers<'db, U: UnificationStore<'db>>(
     db: &'db dyn HirAnalysisDb,
     table: &mut UnificationTableBase<'db, U>,
@@ -274,8 +265,8 @@ fn compare_type_pairs<'db, U: UnificationStore<'db>>(
             table.unify_header(left, right)?;
         } else if let (TyData::TyApp(left_abs, left_arg), TyData::TyApp(right_abs, right_arg)) =
             (left.data(db), right.data(db))
-            && !is_shape_projection(db, left)
-            && !is_shape_projection(db, right)
+            && !left.is_shape_projection(db)
+            && !right.is_shape_projection(db)
         {
             pairs.push((*left_abs, *right_abs));
             pairs.push((*left_arg, *right_arg));
@@ -324,7 +315,7 @@ fn possible_header_overlap<'db, U: UnificationStore<'db>>(
 
     impl<'db, U: UnificationStore<'db>> TyFolder<'db> for UnknownProjections<'_, 'db, U> {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            if matches!(ty.data(db), TyData::AssocTy(_)) || is_shape_projection(db, ty) {
+            if matches!(ty.data(db), TyData::AssocTy(_)) || ty.is_shape_projection(db) {
                 *self
                     .outputs
                     .entry(ty)

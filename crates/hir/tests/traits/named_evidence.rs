@@ -4648,3 +4648,190 @@ fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
     .replace("const fn", "fn");
     assert_eq!(reached_shows(&source, "top"), vec![true]);
 }
+
+#[test]
+fn with_naming_fewer_arguments_than_the_implementation_takes_reports_once() {
+    let source = |argument: &str| {
+        format!(
+            r#"
+struct Pair<T, U> {{ a: T, b: U }}
+trait Pick {{ fn pick(self) -> u256 }}
+impl<T, U> Pick for Pair<T, U> as Named {{ fn pick(self) -> u256 {{ 7 }} }}
+fn run() -> u256 {{
+    let p = Pair<u8, u16> {{ a: 1, b: 2 }}
+    with (Named{argument}) {{ p.pick() }}
+}}
+"#
+        )
+    };
+    // Naming every parameter, or none, is accepted.
+    assert_eq!(diagnostics(&source("<u8, u16>")), Vec::<String>::new());
+    assert_eq!(diagnostics(&source("")), Vec::<String>::new());
+    // One of two is a count error alone: no "too many" report, and no
+    // follow-on report that the method is missing.
+    let codes = diagnostics(&source("<u8>"));
+    assert_eq!(codes.len(), 1, "{codes:?}");
+    assert!(!codes.contains(&"8-0022".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"2-0010".to_string()), "{codes:?}");
+    assert_eq!(codes, vec!["8-0163"]);
+}
+
+const LEN_PICKS: &str = r#"
+trait Len { const fn len() -> usize }
+struct Item {}
+impl Len for Item { const fn len() -> usize { 3 } }
+impl Len for Item as Big { const fn len() -> usize { 4 } }
+struct H<const N: usize, const M: usize = { Item::len() }> { v: u256 }
+struct Only<const N: usize> { v: u256 }
+"#;
+
+#[test]
+fn record_literals_refuse_defaults_that_read_a_choice() {
+    for literal in ["H<1> { v: 1 }", "H<{ 1 }> { v: 1 }"] {
+        let source = format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h = {literal} }} }}\n");
+        let codes = diagnostics(&source);
+        assert!(
+            codes.contains(&"8-0138".to_string()),
+            "{literal}: {codes:?}"
+        );
+        // The annotation of the same type is refused the same way, and
+        // neither is refused outside the choice.
+        let annotated = format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h: H<1> }} }}\n");
+        assert!(diagnostics(&annotated).contains(&"8-0138".to_string()));
+        let ordinary = format!("{LEN_PICKS}\nfn f() {{ let _h = {literal} }}\n");
+        assert_eq!(diagnostics(&ordinary), Vec::<String>::new(), "{literal}");
+    }
+    // A default that is written out is not read from the choice.
+    let written =
+        format!("{LEN_PICKS}\nfn f() {{ with (Big) {{ let _h = H<1, 5> {{ v: 1 }} }} }}\n");
+    assert_eq!(diagnostics(&written), Vec::<String>::new());
+}
+
+#[test]
+fn provider_expressions_refuse_reads_of_the_choices_before_them() {
+    let source =
+        |operands: &str| format!("{LEN_PICKS}\nfn p() -> u256 {{ with ({operands}) {{ 1 }} }}\n");
+    let after = diagnostics(&source("Big, Only<{ Item::len() }> { v: 1 }"));
+    assert!(after.contains(&"8-0138".to_string()), "{after:?}");
+    // The same type written in the body of the choice is refused.
+    let body = format!(
+        "{LEN_PICKS}\nfn p() -> u256 {{ with (Big) {{ let _h: Only<{{ Item::len() }}> = Only<{{ Item::len() }}> {{ v: 1 }}\n1 }} }}\n"
+    );
+    assert!(diagnostics(&body).contains(&"8-0138".to_string()));
+    // A provider before the choice does not see it.
+    assert_eq!(
+        diagnostics(&source("Only<{ Item::len() }> { v: 1 }, Big")),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        diagnostics(&source("Only<{ Item::len() }> { v: 1 }")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn overlap_through_a_projection_that_normalizes_to_an_application() {
+    let declarations = r#"
+struct Wrap<T> {}
+struct Applied<X> {}
+struct Z {}
+trait Inner { type B }
+impl Inner for Z { type B = u8 }
+trait Source { type Out }
+impl Source for Z { type Out = Applied<<Z as Inner>::B> }
+trait Pick<A, B> { const fn n() -> usize }
+impl<T: Source> Pick<T::Out, T> for Wrap<T> as Projected { const fn n() -> usize { 1 } }
+"#;
+    // The projection normalizes to an application whose argument is a
+    // projection of its own, and the other header's argument decides it.
+    for (other, expected) in [
+        ("Applied<u8>", vec!["8-0160"]),
+        ("Applied<u16>", vec![]),
+        ("Applied<<Z as Inner>::B>", vec!["8-0160"]),
+    ] {
+        for openings in ["Projected, Other", "Other, Projected"] {
+            let source = format!(
+                "{declarations}impl<T> Pick<{other}, Z> for Wrap<T> as Other {{ const fn n() -> usize {{ 2 }} }}\nfn run() {{ with ({openings}) {{}} }}"
+            );
+            assert_eq!(diagnostics(&source), expected, "{openings}: {other}");
+        }
+    }
+}
+
+#[test]
+fn selected_headers_with_projections_keep_the_goals_coordinates() {
+    values(
+        r#"
+struct Item {}
+struct Other {}
+struct Wrap<T> {}
+struct Pair<A, B> {}
+trait Tr { type Out }
+impl Tr for Item { type Out = u8 }
+impl Tr for Other { type Out = u8 }
+trait One<X> { const fn v() -> u256 }
+impl<T: Tr> One<T::Out> for Wrap<T> { const fn v() -> u256 { 1 } }
+impl<T: Tr> One<T::Out> for Wrap<T> as Alt { const fn v() -> u256 { 1 } }
+trait Two<X, Y> { const fn v() -> u256 }
+impl<A: Tr, B: Tr> Two<A::Out, B::Out> for Pair<A, B> { const fn v() -> u256 { 2 } }
+impl<A: Tr, B: Tr> Two<A::Out, B::Out> for Pair<A, B> as Alt2 { const fn v() -> u256 { 2 } }
+const fn one<T: Tr>() -> u256 { with (Alt) { <Wrap<T> as One<T::Out>>::v() } }
+const fn two<A: Tr, B: Tr>() -> u256 { with (Alt2) { <Pair<A, B> as Two<A::Out, B::Out>>::v() } }
+const fn run_one() -> u256 { one<Item>() }
+const fn run_two() -> u256 { two<Item, Item>() * 10 + two<Item, Other>() }
+"#,
+        &[("run_one", 1), ("run_two", 22)],
+    );
+}
+
+#[test]
+fn the_compiler_provided_codec_has_no_named_implementation_to_choose() {
+    // The deferred proof of `SolLanes: LaneCodec<T>` for a generic element is
+    // answered by the compiler. Both the trait and the type are external to
+    // any package, so no named implementation of the goal can be declared and
+    // no choice can answer it.
+    let source = r#"
+use std::evm::SolLanes
+use core::ops::LaneCodec
+impl<T> LaneCodec<T> for SolLanes as Mine {
+    const BITS: u256 = 8
+    fn get(_ word: u256, offset: u256) -> T { <SolLanes as LaneCodec<T>>::get(word, offset) }
+    fn set(_ word: u256, offset: u256, value: own T) -> u256 { word }
+}
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"5-0000".to_string()), "{codes:?}");
+}
+
+#[test]
+fn selected_conditions_reach_every_call_form_of_a_method() {
+    values(
+        r#"
+trait Pick { const fn value() -> u256 }
+struct Item {}
+impl Pick for Item { const fn value() -> u256 { 1 } }
+impl Pick for Item as Alt { const fn value() -> u256 { 2 } }
+struct Boxed<T> { x: T }
+trait Wrap { const fn go(self) -> u256 }
+impl<T: Pick> Wrap for Boxed<T> { const fn go(self) -> u256 { T::value() } }
+const fn via<U: Wrap>(_ u: U) -> u256 { u.go() }
+const fn method() -> u256 {
+    let b = Boxed<Item> { x: Item {} }
+    with (Alt) { b.go() }
+}
+const fn path() -> u256 {
+    let b = Boxed<Item> { x: Item {} }
+    with (Alt) { Wrap::go(b) }
+}
+const fn qualified() -> u256 {
+    let b = Boxed<Item> { x: Item {} }
+    with (Alt) { <Boxed<Item> as Wrap>::go(b) }
+}
+const fn bound() -> u256 {
+    let b = Boxed<Item> { x: Item {} }
+    with (Alt) { via(b) }
+}
+"#,
+        &[("method", 2), ("path", 2), ("qualified", 2), ("bound", 2)],
+    );
+}

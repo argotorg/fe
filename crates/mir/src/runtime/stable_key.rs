@@ -83,8 +83,16 @@ fn body_owner_identity_in_mode<'db>(
 ) -> String {
     match owner {
         BodyOwner::Func(func, mode) => {
-            let owner_context =
-                owner_context_identity_in_mode(db, owner, render_mode).unwrap_or_default();
+            // A function declared in a trait or impl is placed by that
+            // context. One declared in a body is placed by the bodies and
+            // blocks around it: local functions of one name in different
+            // bodies are different functions.
+            let owner_context = owner_context_identity_in_mode(db, owner, render_mode)
+                .or_else(|| {
+                    lexical_scope_identity_in_mode(db, func.scope(), render_mode)
+                        .map(|lexical| format!("lexical${lexical}"))
+                })
+                .unwrap_or_default();
             let mode = match render_mode {
                 OwnerContextRenderMode::Textual => "",
                 OwnerContextRenderMode::Fingerprinted => mode_identity(mode),
@@ -109,10 +117,18 @@ fn body_owner_identity_in_mode<'db>(
             "contract_recv${}${recv_idx}${arm_idx}",
             item_identity(db, contract.into())
         ),
-        BodyOwner::Closure { ty, receiver, .. } => format!(
-            "closure_body${}${receiver:?}",
-            type_identity(db, TyId::closure(db, ty))
-        ),
+        BodyOwner::Closure { ty, receiver, .. } => {
+            // The closure's type names the owner of the body that defines
+            // it, whose impl context is spelled out on the trace wire.
+            let closure = match render_mode {
+                OwnerContextRenderMode::Fingerprinted => type_identity(db, TyId::closure(db, ty)),
+                OwnerContextRenderMode::Textual => {
+                    let owner = closure_owner_identity_in_mode(db, ty.def(db), render_mode);
+                    closure_type_identity(db, ty, owner)
+                }
+            };
+            format!("closure_body${closure}${receiver:?}")
+        }
     }
 }
 
@@ -124,7 +140,8 @@ fn anon_const_body_identity_in_mode<'db>(
 ) -> String {
     let owner = BodyOwner::AnonConstBody { body, expected };
     let mut identity = format!(
-        "anon_const${}${}",
+        "anon_const${}${}${}",
+        ingot_identity_for_top_mod(db, body.top_mod(db)),
         module_path_components_for_scope(db, body.scope()).join("$"),
         type_identity(db, expected)
     );
@@ -674,10 +691,58 @@ fn effect_param_site_identity<'db>(
 
 /// The owner of the body a closure is in: closures are nameless.
 fn closure_owner_identity<'db>(db: &'db dyn HirAnalysisDb, def: ClosureDef<'db>) -> String {
+    closure_owner_identity_in_mode(db, def, OwnerContextRenderMode::Fingerprinted)
+}
+
+fn closure_owner_identity_in_mode<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: ClosureDef<'db>,
+    render_mode: OwnerContextRenderMode,
+) -> String {
     BodyOwner::closure_parent(db, def).map_or_else(
         || module_path_components_for_scope(db, def.body.scope()).join("$"),
-        |owner| body_owner_identity(db, owner),
+        |owner| body_owner_identity_in_mode(db, owner, render_mode),
     )
+}
+
+/// A closure's type is nameless: the owner of the body defining it, which
+/// `owner` renders, and its position there identify it.
+fn closure_type_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    closure: ClosureTy<'db>,
+    owner: String,
+) -> String {
+    let def = closure.def(db);
+    let leaves: Vec<_> = closure
+        .params(db)
+        .iter()
+        .flat_map(|param| param.leaves(db))
+        .collect();
+    let tys = closure
+        .parent_args(db)
+        .iter()
+        .chain(closure.captures(db))
+        .copied()
+        .chain(leaves.iter().map(|&(_, ty)| ty))
+        .chain([closure.ret_ty(db)])
+        .map(|ty| type_identity(db, ty))
+        .collect::<Vec<_>>()
+        .join("$");
+    let shapes: Vec<_> = closure
+        .params(db)
+        .iter()
+        .map(|param| param.pretty_print_product(db))
+        .collect();
+    let proofs = closure
+        .bound_evidence(db)
+        .map(|bound| evidence_list_identity(db, bound.entries))
+        .unwrap_or_default();
+    let base = format!("closure${owner}${}${:?}${tys}", def.expr.as_u32(), shapes);
+    if proofs.is_empty() {
+        base
+    } else {
+        format!("{base}$proofs${proofs}")
+    }
 }
 
 pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
@@ -712,40 +777,7 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
                 }
             },
             TyBase::Closure(closure) => {
-                // Closures are nameless: the owner of the body defining one
-                // and its position there identify it.
-                let def = closure.def(db);
-                let owner = closure_owner_identity(db, def);
-                let leaves: Vec<_> = closure
-                    .params(db)
-                    .iter()
-                    .flat_map(|param| param.leaves(db))
-                    .collect();
-                let tys = closure
-                    .parent_args(db)
-                    .iter()
-                    .chain(closure.captures(db))
-                    .copied()
-                    .chain(leaves.iter().map(|&(_, ty)| ty))
-                    .chain([closure.ret_ty(db)])
-                    .map(|ty| type_identity(db, ty))
-                    .collect::<Vec<_>>()
-                    .join("$");
-                let shapes: Vec<_> = closure
-                    .params(db)
-                    .iter()
-                    .map(|param| param.pretty_print_product(db))
-                    .collect();
-                let proofs = closure
-                    .bound_evidence(db)
-                    .map(|bound| evidence_list_identity(db, bound.entries))
-                    .unwrap_or_default();
-                let base = format!("closure${owner}${}${:?}${tys}", def.expr.as_u32(), shapes);
-                if proofs.is_empty() {
-                    base
-                } else {
-                    format!("{base}$proofs${proofs}")
-                }
+                closure_type_identity(db, *closure, closure_owner_identity(db, closure.def(db)))
             }
         },
         TyData::TyParam(param) => {
@@ -911,7 +943,8 @@ pub fn stable_identity_fingerprint(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        body_owner_trace_identity, semantic_instance_identity, semantic_instance_symbol_identity,
+        body_owner_trace_identity, ingot_identity_for_top_mod, semantic_instance_identity,
+        semantic_instance_symbol_identity,
     };
     use hir::{
         analysis::{
@@ -1466,5 +1499,121 @@ fn pre_intern() -> u256 {
         let baseline = collect_identities(false);
         let shifted = collect_identities(true);
         assert_eq!(baseline, shifted);
+    }
+
+    #[test]
+    fn anonymous_constant_identity_names_its_ingot() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "stable_key_anonymous_constant_ingot.fe".into(),
+            "fn sample() -> [u256; { 1 + 2 }] {\n    [1 as u256; { 1 + 2 }]\n}",
+        );
+        let (module, _) = db.top_mod(file);
+        let func = find_func(&db, module, "sample");
+        let body = func.body(&db).unwrap();
+        let ingot = ingot_identity_for_top_mod(&db, module);
+        let bodies: Vec<_> = body
+            .scope_graph(&db)
+            .items_dfs()
+            .filter_map(|item| match item {
+                ItemKind::Body(child) if child != body => Some(child),
+                _ => None,
+            })
+            .collect();
+        assert!(!bodies.is_empty());
+        for body in bodies {
+            let identity = body_owner_trace_identity(
+                &db,
+                BodyOwner::AnonConstBody {
+                    body,
+                    expected: TyId::usize(&db),
+                },
+            );
+            assert!(
+                identity.starts_with(&format!("anon_const${ingot}$")),
+                "{identity}"
+            );
+        }
+        let function = body_owner_trace_identity(&db, BodyOwner::Func(func, None));
+        assert!(function.contains(&ingot), "{function}");
+    }
+
+    #[test]
+    fn local_functions_of_one_name_in_different_bodies_have_distinct_identities() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "stable_key_local_functions.fe".into(),
+            r#"
+fn first() -> u256 {
+    fn helper() -> u256 { 1 }
+    helper()
+}
+fn second() -> u256 {
+    fn helper() -> u256 { 2 }
+    helper()
+}
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let helpers: Vec<_> = module
+            .all_funcs(&db)
+            .iter()
+            .copied()
+            .filter(|func| {
+                func.name(&db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(&db) == "helper")
+            })
+            .collect();
+        assert_eq!(helpers.len(), 2);
+        let identities: Vec<_> = helpers
+            .iter()
+            .map(|&func| body_owner_trace_identity(&db, BodyOwner::Func(func, None)))
+            .collect();
+        assert_ne!(identities[0], identities[1]);
+        let first = find_func(&db, module, "first");
+        let second = find_func(&db, module, "second");
+        assert_ne!(
+            body_owner_trace_identity(&db, BodyOwner::Func(first, None)),
+            body_owner_trace_identity(&db, BodyOwner::Func(second, None))
+        );
+    }
+
+    #[test]
+    fn closure_trace_identity_spells_its_impl_context_textually() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "stable_key_closure_trace.fe".into(),
+            r#"
+trait Run { fn run(self) -> u256 }
+impl Run for u256 {
+    fn run(self) -> u256 {
+        let f = || 7 as u256
+        f()
+    }
+}
+fn call() -> u256 { (0 as u256).run() }
+"#,
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let root = SemanticInstance::new(
+            &db,
+            root_semantic_instance_key(&db, BodyOwner::Func(find_func(&db, module, "call"), None))
+                .unwrap(),
+        );
+        let run = SemanticInstance::new(&db, root.callees(&db)[0].key);
+        let owners: Vec<_> = run
+            .callees(&db)
+            .iter()
+            .map(|callee| callee.key.owner(&db))
+            .collect();
+        let closure = owners
+            .iter()
+            .copied()
+            .find(|owner| matches!(owner, BodyOwner::Closure { .. }))
+            .unwrap_or_else(|| panic!("no closure callee among {owners:?}"));
+        assert_trace_has_no_fingerprint(&body_owner_trace_identity(&db, closure));
     }
 }

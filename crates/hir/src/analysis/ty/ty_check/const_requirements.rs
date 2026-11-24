@@ -617,7 +617,6 @@ pub(super) fn check_body_requirements<'db>(
             typed.record_init_lowering(expr),
             Some(RecordInitLowering::Struct)
         ) && let Some(Expr::RecordInit(Partial::Present(path), _)) = data.borrowed().to_opt()
-            && path_const_bodies(db, *path).is_empty()
         {
             let hir_ty = crate::hir_def::TypeId::new(db, TypeKind::Path(Partial::Present(*path)));
             let deferred = super::super::ty_lower::lower_hir_ty_deferred(
@@ -646,9 +645,9 @@ pub(super) fn check_body_requirements<'db>(
     } else {
         &[]
     } {
-        if let WrittenEntry::ConstBodies(bodies) = entry {
+        if let WrittenEntry::ConstBodies(bodies, expr) = entry {
             for &(nested, expected) in bodies {
-                if let Some(choices) = typed.choices_in_scope(db, nested.scope()) {
+                if let Some(choices) = typed.choices_at(db, *expr, nested.scope()) {
                     let cx = TraitSolveCx::new(db, nested.scope())
                         .with_assumptions(typed.assumptions())
                         .with_choices(Some(choices));
@@ -674,7 +673,7 @@ pub(super) fn check_body_requirements<'db>(
             }
         }
         if let WrittenEntry::Type(written) = entry
-            && let Some(choices) = typed.choices_in_scope(db, written.scope)
+            && let Some(choices) = typed.choices_at(db, written.expr, written.scope)
         {
             let deferred = super::super::ty_lower::lower_hir_ty_deferred(
                 db,
@@ -696,10 +695,10 @@ pub(super) fn check_body_requirements<'db>(
             }
         }
     }
-    for (nested, expected) in expression_const_bodies(db, owner, body, typed) {
+    for (nested, expected, expr) in expression_const_bodies(db, owner, body, typed) {
         check.extend(anon_const_position_check(db, nested, expected));
         if typed.has_chosen_impls()
-            && let Some(choices) = typed.choices_in_scope(db, nested.scope())
+            && let Some(choices) = typed.choices_at(db, expr, nested.scope())
         {
             let cx = TraitSolveCx::new(db, nested.scope())
                 .with_assumptions(typed.assumptions())
@@ -1286,7 +1285,7 @@ fn expression_const_bodies<'db>(
     owner: BodyOwner<'db>,
     body: Body<'db>,
     typed: &TypedBody<'db>,
-) -> Vec<(Body<'db>, TyId<'db>)> {
+) -> Vec<(Body<'db>, TyId<'db>, Option<ExprId>)> {
     let checked_const_ty = |ty: TyId<'db>| match ty.data(db) {
         TyData::ConstTy(const_ty) if !ty.has_invalid(db) => Some(const_ty.ty(db)),
         _ => None,
@@ -1408,7 +1407,9 @@ fn expression_const_bodies<'db>(
         segment_const_args(db, path, &lowering_cx.into_resolutions())
     };
 
-    let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
+    // Each body with the expression it is written in, whose choices it is
+    // under; a pattern has none of its own.
+    let mut found: Vec<(Body<'db>, TyId<'db>, Option<ExprId>)> = Vec::new();
     for (expr, data) in body.exprs(db).iter() {
         let entries = match data.borrowed().to_opt() {
             Some(Expr::ArrayRep(_, len)) => {
@@ -1425,7 +1426,11 @@ fn expression_const_bodies<'db>(
             Some(Expr::MethodCall(_, _, args, _)) => explicit_args(expr, *args),
             _ => Vec::new(),
         };
-        found.extend(entries);
+        found.extend(
+            entries
+                .into_iter()
+                .map(|(body, expected)| (body, expected, Some(expr))),
+        );
     }
     // A recv arm's variant path is resolved as the arm resolves it, which
     // finds no path when the arm's block doesn't resolve its msg.
@@ -1447,7 +1452,11 @@ fn expression_const_bodies<'db>(
             && pat_id == arm_pat
         {
             if let Some(lookup) = lookup {
-                found.extend(segment_args(lookup.path, scope, false));
+                found.extend(
+                    segment_args(lookup.path, scope, false)
+                        .into_iter()
+                        .map(|(body, expected)| (body, expected, None)),
+                );
             }
             continue;
         }
@@ -1457,12 +1466,16 @@ fn expression_const_bodies<'db>(
             | Pat::Record(Partial::Present(path), _),
         ) = pat.borrowed().to_opt()
         {
-            found.extend(segment_args(*path, body.scope(), true));
+            found.extend(
+                segment_args(*path, body.scope(), true)
+                    .into_iter()
+                    .map(|(body, expected)| (body, expected, None)),
+            );
         }
     }
     // A body appears in one position, but two lookups can both find it.
     let mut seen = FxHashSet::default();
-    found.retain(|(body, _)| seen.insert(*body));
+    found.retain(|(body, _, _)| seen.insert(*body));
     found
 }
 
@@ -1854,7 +1867,7 @@ pub(crate) fn check_declared_type_requirements<'db>(
 enum WrittenEntry<'db> {
     /// Anonymous constants written in a type or trait reference, each with
     /// the type its position checks it against.
-    ConstBodies(Vec<(Body<'db>, TyId<'db>)>),
+    ConstBodies(Vec<(Body<'db>, TyId<'db>)>, Option<ExprId>),
     /// A written type, listed after the types nested in it.
     Type(WrittenType<'db>),
 }
@@ -1873,6 +1886,9 @@ struct WrittenType<'db> {
     dropped: bool,
     /// The index of the first entry nested in this type.
     nested_from: usize,
+    /// The innermost expression of the body it is written in, if any: the
+    /// choices in force there are those of that expression.
+    expr: Option<ExprId>,
 }
 
 #[salsa::interned]
@@ -1919,6 +1935,8 @@ fn written_types_query<'db>(
         /// the alias drops it, and how deep the walk is inside one dropped.
         alias_args: Option<(GenericArgListId<'db>, Vec<bool>)>,
         dropped_depth: usize,
+        /// The expressions enclosing the position being walked.
+        exprs: Vec<ExprId>,
     }
     impl<'db> Visitor<'db> for Collector<'db> {
         // Nested items and bodies are their own regions.
@@ -1963,7 +1981,10 @@ fn written_types_query<'db>(
                 let bodies =
                     trait_ref_const_args(self.db, path, scope, assumptions_at(self.db, scope));
                 if !bodies.is_empty() {
-                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                    self.entries.push(WrittenEntry::ConstBodies(
+                        bodies,
+                        self.exprs.last().copied(),
+                    ));
                 }
             }
             walk_trait_ref(self, ctxt, trait_ref);
@@ -2025,7 +2046,9 @@ fn written_types_query<'db>(
                     });
                 }
             }
+            self.exprs.push(expr);
             walk_expr(self, ctxt, expr);
+            self.exprs.pop();
         }
     }
     impl<'db> Collector<'db> {
@@ -2070,7 +2093,10 @@ fn written_types_query<'db>(
             if self.default_depth == 0 {
                 let bodies = written_const_args(db, hir_ty, scope, assumptions);
                 if !bodies.is_empty() {
-                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                    self.entries.push(WrittenEntry::ConstBodies(
+                        bodies,
+                        self.exprs.last().copied(),
+                    ));
                 }
             }
             let alias_args = match hir_ty.data(db) {
@@ -2102,6 +2128,7 @@ fn written_types_query<'db>(
                     applications,
                     dropped: self.dropped_depth > 0,
                     nested_from,
+                    expr: self.exprs.last().copied(),
                 }));
             }
             self.default_depth -= usize::from(in_default);
@@ -2116,6 +2143,7 @@ fn written_types_query<'db>(
         default_depth: 0,
         alias_args: None,
         dropped_depth: 0,
+        exprs: Vec::new(),
     };
     collector.visit_item(&mut VisitorCtxt::with_item(db, root), root);
     collector.entries
@@ -2176,7 +2204,7 @@ fn written_type_check_query<'db>(
             _ => false,
         });
         let (report, reported_choice) = match entry {
-            WrittenEntry::ConstBodies(bodies) => {
+            WrittenEntry::ConstBodies(bodies, _) => {
                 let mut has_choice_diag = false;
                 for &(body, expected) in bodies {
                     let body_diags = anon_const_position_check(db, body, expected).diags;

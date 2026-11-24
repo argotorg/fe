@@ -2555,6 +2555,10 @@ pub(crate) fn instance_evidence<'db>(
             if proof.has_deferred(db) {
                 // A selected parent is authoritative even if one retained
                 // obligation cannot close. Never replace that tree.
+                // Known gap: the completed proof is not compared with ordinary
+                // normalization (`proof_output_mismatch`), as the proofs
+                // completed in `entry_codec_callees` are; see
+                // `semantic_callee_key_with_assumptions`.
                 complete_deferred_evidence(db, proof)
                     .filter(|completed| !closed[index] || completed.is_closed(db))
             } else {

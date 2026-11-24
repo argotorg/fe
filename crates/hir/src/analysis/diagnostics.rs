@@ -5170,6 +5170,33 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::TooFewWithGenericArgs {
+                primary,
+                def_span,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "too few generic arguments".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: match expected {
+                            1 => format!("expected 1 generic argument, but {given} given"),
+                            _ => format!("expected {expected} generic arguments, but {given} given"),
+                        },
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "implementation defined here".to_string(),
+                        span: def_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
             Self::CallArgNumMismatch {
                 primary,
                 def_span,

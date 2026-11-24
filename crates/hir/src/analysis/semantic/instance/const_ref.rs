@@ -517,6 +517,11 @@ fn semantic_callee_key_with_assumptions<'db>(
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    // Known gap: the proof completed here is not compared with ordinary
+    // normalization (`proof_output_mismatch`), as the proofs completed in
+    // `entry_codec_callees` are. No program was found whose completed proof
+    // disagrees: a named `SolPacked` needs an ordinary one it agrees with at
+    // its header, and an ordinary `LaneCodec` for `SolLanes` is an orphan.
     let mut completed;
     let callable = if callable.has_deferred_evidence(db) {
         completed = callable.clone();

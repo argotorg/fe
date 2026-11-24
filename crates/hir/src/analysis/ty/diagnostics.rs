@@ -1220,6 +1220,16 @@ pub enum BodyDiag<'db> {
         expected: usize,
     },
 
+    /// Fewer generic arguments naming an implementation in `with` than it
+    /// has parameters without a default. Unlike a call, the operand has no
+    /// arguments left to infer.
+    TooFewWithGenericArgs {
+        primary: DynLazySpan<'db>,
+        def_span: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
     CallArgNumMismatch {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
@@ -1685,6 +1695,7 @@ impl<'db> BodyDiag<'db> {
             Self::VariadicArgLabel(_) => 160,
             Self::InvalidVariadicArg { .. } => 161,
             Self::ImmutableContractEffectMutBinding { .. } => 162,
+            Self::TooFewWithGenericArgs { .. } => 163,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,

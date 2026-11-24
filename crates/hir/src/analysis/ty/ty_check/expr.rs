@@ -2085,7 +2085,7 @@ impl<'db> TyChecker<'db> {
                     }
                     ImplNameRes::NotVisible { name, definition } => {
                         self.push_diag(PathResDiag::Invisible(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             name,
                             definition,
                         ));
@@ -2094,16 +2094,16 @@ impl<'db> TyChecker<'db> {
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                         continue;
                     }
-                    ImplNameRes::Ambiguous => {
+                    ImplNameRes::Ambiguous(candidates) => {
                         ambiguous_opening = true;
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             path.ident(self.db)
                                 .to_opt()
                                 .expect("implementation path identifier"),
-                            Vec::new(),
+                            candidates,
                         ));
                         self.env.named_impl_operands.insert(binding.value);
                         self.env
@@ -2167,6 +2167,7 @@ impl<'db> TyChecker<'db> {
                                 .to_vec()
                         })
                         .unwrap_or_default();
+                    let written = args.len();
                     let args =
                         match super::super::ty_lower::collect_generic_params(self.db, owner.into())
                             .complete_args(
@@ -2196,10 +2197,14 @@ impl<'db> TyChecker<'db> {
                         };
                     let expected = implementation.params(self.db).len() - inherited.len();
                     if args.len() != expected {
-                        self.push_diag(BodyDiag::TooManyCallGenericArgs {
+                        // Completion refuses too many arguments, so these are
+                        // too few, and no choice can stand for the operand:
+                        // the block's meaning is left open.
+                        ambiguous_opening = true;
+                        self.push_diag(BodyDiag::TooFewWithGenericArgs {
                             primary: binding.value.span(self.body()).into(),
-                            def_span: owner.span().into(),
-                            given: args.len(),
+                            def_span: owner.span().selection_name().into(),
+                            given: written,
                             expected,
                         });
                         self.env.named_impl_operands.insert(binding.value);
@@ -2435,9 +2440,10 @@ impl<'db> TyChecker<'db> {
         }
 
         if ambiguous_opening {
-            // An operand with two meanings leaves the block's meaning open:
-            // its body is not checked, so that it reports nothing the operand
-            // would have provided.
+            // An operand with two meanings, or with arguments that name no
+            // implementation, leaves the block's meaning open: its body is
+            // not checked, so that it reports nothing the operand would have
+            // provided.
             self.env.effect_env_mut().pop_frame();
             self.env.choices = outer_choices;
             return ExprProp::invalid(self.db);
@@ -2472,6 +2478,18 @@ impl<'db> TyChecker<'db> {
             }
             _ => true,
         }
+    }
+
+    /// The span of the last segment of the `with` operand `operand`, written
+    /// as the path `path`: the name a diagnostic about the operand points at.
+    fn with_operand_name_span(&self, path: PathId<'db>, operand: ExprId) -> DynLazySpan<'db> {
+        operand
+            .span(self.body())
+            .into_path_expr()
+            .path()
+            .segment(path.segment_index(self.db))
+            .ident()
+            .into()
     }
 
     /// Whether the `with` operand `operand`, written as `path`, names a value

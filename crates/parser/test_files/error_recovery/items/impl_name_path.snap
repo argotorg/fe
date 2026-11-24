@@ -1,0 +1,90 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/impl_name_path.fe
+---
+Root@0..88
+  ItemList@0..87
+    Item@0..29
+      ImplTrait@0..29
+        ImplKw@0..4 "impl"
+        WhiteSpace@4..5 " "
+        TraitRef@5..6
+          Path@5..6
+            PathSegment@5..6
+              Ident@5..6 "P"
+        WhiteSpace@6..7 " "
+        ForKw@7..10 "for"
+        WhiteSpace@10..11 " "
+        PathType@11..14
+          Path@11..14
+            PathSegment@11..14
+              Ident@11..14 "Foo"
+        WhiteSpace@14..15 " "
+        AsKw@15..17 "as"
+        WhiteSpace@17..18 " "
+        Ident@18..21 "Bar"
+        Error@21..26
+          Colon2@21..23 "::"
+          Ident@23..26 "Baz"
+        WhiteSpace@26..27 " "
+        TraitItemList@27..29
+          LBrace@27..28 "{"
+          RBrace@28..29 "}"
+    Newline@29..31 "\n\n"
+    Item@31..72
+      ImplTrait@31..72
+        ImplKw@31..35 "impl"
+        WhiteSpace@35..36 " "
+        TraitRef@36..37
+          Path@36..37
+            PathSegment@36..37
+              Ident@36..37 "P"
+        WhiteSpace@37..38 " "
+        ForKw@38..41 "for"
+        WhiteSpace@41..42 " "
+        PathType@42..45
+          Path@42..45
+            PathSegment@42..45
+              Ident@42..45 "Foo"
+        WhiteSpace@45..46 " "
+        AsKw@46..48 "as"
+        WhiteSpace@48..49 " "
+        Ident@49..52 "Bar"
+        Error@52..56
+          Lt@52..53 "<"
+          Ident@53..55 "u8"
+          Gt@55..56 ">"
+        WhiteSpace@56..57 " "
+        TraitItemList@57..72
+          LBrace@57..58 "{"
+          WhiteSpace@58..59 " "
+          Func@59..70
+            FnKw@59..61 "fn"
+            WhiteSpace@61..62 " "
+            FuncSignature@62..67
+              Ident@62..65 "run"
+              FuncParamList@65..67
+                LParen@65..66 "("
+                RParen@66..67 ")"
+            WhiteSpace@67..68 " "
+            BlockExpr@68..70
+              LBrace@68..69 "{"
+              RBrace@69..70 "}"
+          WhiteSpace@70..71 " "
+          RBrace@71..72 "}"
+    Newline@72..74 "\n\n"
+    Item@74..87
+      Func@74..87
+        FnKw@74..76 "fn"
+        WhiteSpace@76..77 " "
+        FuncSignature@77..84
+          Ident@77..82 "after"
+          FuncParamList@82..84
+            LParen@82..83 "("
+            RParen@83..84 ")"
+        WhiteSpace@84..85 " "
+        BlockExpr@85..87
+          LBrace@85..86 "{"
+          RBrace@86..87 "}"
+  Newline@87..88 "\n"

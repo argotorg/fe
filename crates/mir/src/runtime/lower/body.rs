@@ -171,6 +171,10 @@ pub(super) fn check_runtime_body_supported<'db>(
                 && func.body(db).is_none()
                 && contract_metadata_builtin(db, SemanticInstance::new(db, callee.key)).is_none()
             {
+                // This error is not attributed to a callee whose outputs
+                // disagree with ordinary normalization (see
+                // `SemanticInstance::callee_output_disagreement`): only the
+                // admission of the semantic body asks for that.
                 return Err(LowerError::Unsupported(format!(
                     "runtime call requires a selected implementation before layout planning: caller={key:?} callee={:?}",
                     callee.key,
