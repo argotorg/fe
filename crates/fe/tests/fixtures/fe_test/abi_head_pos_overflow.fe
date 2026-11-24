@@ -1,0 +1,51 @@
+// A byte position that overflows names no byte of the input: `head_pos`
+// panics instead of wrapping to an earlier position.
+use core::abi::ByteSource
+use core::ptr::{MemBuffer, MemSpan}
+use std::abi::{FieldKey, RecordView, decode_record_view_from}
+
+#[abi]
+pub struct Rec { pub a: u256, pub b: u256 }
+
+struct MemInput { ptr: *u8, len: u256 }
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+#[test(should_revert)]
+fn overflowing_head_pos_reverts() {
+    let data = MemBuffer::new(128)
+    let input = MemInput { ptr: data.ptr(), len: 128 }
+    let v: RecordView<MemInput, Rec> = decode_record_view_from(input, 32)
+    let key: FieldKey<Rec, u256> = FieldKey::new(!(0 as u256) - 31)
+    let _ = v.head_pos(key)
+}
+
+#[test(should_revert)]
+fn overflowing_word_reverts() {
+    let data = MemBuffer::new(128)
+    let input = MemInput { ptr: data.ptr(), len: 128 }
+    let v: RecordView<MemInput, Rec> = decode_record_view_from(input, 32)
+    let key: FieldKey<Rec, u256> = FieldKey::new(!(0 as u256) - 31)
+    let _ = v.word(key)
+}
+
+#[test]
+fn control_head_pos_in_range() {
+    let data = MemBuffer::new(128)
+    let input = MemInput { ptr: data.ptr(), len: 128 }
+    let v: RecordView<MemInput, Rec> = decode_record_view_from(input, 32)
+    let key: FieldKey<Rec, u256> = FieldKey::new(32)
+    assert!(v.head_pos(key) == 64)
+}

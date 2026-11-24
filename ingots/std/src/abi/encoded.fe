@@ -120,7 +120,18 @@ impl<I, A, T> Part<I, A> for T
 
 /// Read a record from a checked head slot. A static record lies in place.
 /// For a dynamic record, check the head of the record reached by the offset.
+/// The handle of a record has no length: a sequence is read by the
+/// constructors of its own (`Part` for `DynArray` and `[U; N]`).
 pub fn record_part<I, T, A>(_ part: PartHead<I, T>) -> Encoded<I, T, A>
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize
+{
+    frame_part(part)
+}
+
+/// The handle at a checked head slot, laid out as a record is: in place when
+/// the type is static, behind the head's offset when it is dynamic. The
+/// length is not set; the sequence constructors that use this set it.
+fn frame_part<I, T, A>(_ part: PartHead<I, T>) -> Encoded<I, T, A>
     where I: ByteInput + Copy, A: Abi, T: AbiSize
 {
     let pos = if T::IS_DYNAMIC {
@@ -159,7 +170,7 @@ impl<I, A, U, const N: usize> Part<I, A> for [U; N]
     type Of = Encoded<I, [U; N], A>
 
     fn read(_ part: PartHead<I, [U; N]>) -> Encoded<I, [U; N], A> {
-        let h: Encoded<I, [U; N], A> = record_part(part)
+        let h: Encoded<I, [U; N], A> = frame_part(part)
         Encoded { extent: h.extent, pos: h.pos, len: N }
     }
 }
@@ -328,7 +339,7 @@ pub fn decode_part_at<A, T, I>(_ input: I, base: u256, head_pos: u256) -> T::Of
 /// as `Decode::decode_from(input, pos)` decodes it. Checks that the
 /// record's head lies within the input.
 pub fn decode_record_from<A, T, I>(_ input: I, _ pos: u256) -> Encoded<I, T, A>
-    where I: ByteInput + Copy, A: Abi, T: AbiSize
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize
 {
     let extent = InputExtent::new(input)
     frame_at<A>(0, pos, T::HEAD_SIZE, extent.end())
@@ -347,7 +358,7 @@ pub fn decode_record_from<A, T, I>(_ input: I, _ pos: u256) -> Encoded<I, T, A>
 #[arithmetic(unchecked)]
 #[inline(always)]
 pub fn decode_record_at<A, T, I>(_ input: I, base: u256, head_pos: u256) -> Encoded<I, T, A>
-    where I: ByteInput + Copy, A: Abi, T: AbiSize
+    where I: ByteInput + Copy, A: Abi, T: AbiFields + AbiSize
 {
     let extent = InputExtent::new(input)
     // A tail at or after base covers an earlier slot if the record's head
@@ -422,20 +433,20 @@ impl<I, T, A> Encoded<I, T, A>
     /// not implement `Part`; the same as `at` for one that does.
     #[arithmetic(unchecked)]
     pub fn sub<F>(self, _ key: FieldKey<T, F>) -> Encoded<I, F, A>
-        where T: AbiSize, F: AbiSize
+        where T: AbiSize, F: AbiFields + AbiSize
     {
         record_part(self.field_head(key))
     }
 
     /// The raw first word of the field's head, without any validation: the
     /// tail offset of a dynamic field, or the first word of a static one.
-    #[arithmetic(unchecked)]
+    /// Panics if the position overflows: it then names no byte of the input.
     pub fn word<F>(self, _ key: FieldKey<T, F>) -> u256 {
         self.input().word_at(self.pos + key.offset())
     }
 
     /// Byte position in `input` of the field's head.
-    #[arithmetic(unchecked)]
+    /// Panics if the position overflows: it then names no byte of the input.
     pub fn head_pos<F>(self, _ key: FieldKey<T, F>) -> u256 {
         self.pos + key.offset()
     }
@@ -543,7 +554,7 @@ impl<I, S, A> Encoded<I, S, A>
     /// does not implement `Part`.
     #[arithmetic(unchecked)]
     pub fn record_at(self, _ index: usize) -> Encoded<I, S::Elem, A>
-        where S::Elem: AbiSize
+        where S::Elem: AbiFields + AbiSize
     {
         record_part(self.element_head(index))
     }
