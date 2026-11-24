@@ -2007,10 +2007,11 @@ pub(crate) fn is_unfulfilled_derive_request(
     // has no authored identity to prepare against and stays unfulfilled.
     ast.derive_provider().is_some()
         && !(module == request.top_mod(db)
-            && db.generation_inputs().requests(db).iter().any(|plan| {
-                plan.request_impl == Some(ast.syntax().text_range())
-                    && Some(plan.target_file.clone()) == module.file(db).url(db)
-            }))
+            && common::generation::file_generation(db, module.file(db))
+                .as_ref()
+                .is_some_and(|generation| {
+                    generation.members.contains_key(&ast.syntax().text_range())
+                }))
 }
 
 /// Whether `request` is a header that lookup must not treat as an implementor:
@@ -2078,8 +2079,7 @@ pub(crate) fn is_unfulfilled_inherent_derive_request(
     let range = ptr.syntax_node_ptr().text_range();
     request.derive_provider(db).is_some()
         && !(module == request.top_mod(db)
-            && db.generation_inputs().requests(db).iter().any(|plan| {
-                plan.request_impl == Some(range)
-                    && Some(plan.target_file.clone()) == module.file(db).url(db)
-            }))
+            && common::generation::file_generation(db, module.file(db))
+                .as_ref()
+                .is_some_and(|generation| generation.members.contains_key(&range)))
 }
