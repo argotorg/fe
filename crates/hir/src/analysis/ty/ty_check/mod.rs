@@ -1755,9 +1755,11 @@ impl<'db> TyChecker<'db> {
                     match runtime_size_bytes_with_source(self.db, ConcreteTypeView::new(ty, source))
                     {
                         Err(RuntimeSizeError::InvalidType(cause)) => {
+                            // A divergent associated type is reported at
+                            // its definition.
                             if let Some(diag) = diag_from_invalid_cause(span.clone(), &cause) {
                                 self.push_diag(diag);
-                            } else {
+                            } else if cause != InvalidCause::DivergentAssocTy {
                                 self.push_diag(BodyDiag::TypeMustBeKnown(span));
                             }
                             continue;

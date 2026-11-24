@@ -1,0 +1,11 @@
+// A divergent associated type is reported at its definition, and not again
+// as an unknown type where a contract's `init` takes it.
+trait Div { type Out }
+struct S {}
+impl Div for S {
+    type Out = <S as Div>::Out
+}
+
+contract C {
+    init(x: <S as Div>::Out) {}
+}
