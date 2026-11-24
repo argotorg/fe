@@ -1004,7 +1004,7 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         ("resolve_core_trait(", 2),
         ("resolve_lib_trait_path(", 2),
         ("resolve_lib_trait(", 2),
-        ("core_method_callee_key(", 3),
+        ("core_method_callee_key(", 4),
         ("resolve_core_method(", 0),
     ];
     let mut named: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -1301,7 +1301,7 @@ fn library_trait_resolutions() -> std::collections::BTreeMap<(String, String, St
         ("resolve_lib_trait_path(", 2),
         ("resolve_lib_trait(", 2),
         ("presence_trait(", 2),
-        ("core_method_callee_key(", 3),
+        ("core_method_callee_key(", 4),
         ("resolve_core_method(", 0),
     ];
     let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");

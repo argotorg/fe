@@ -3275,7 +3275,7 @@ impl<'db> RmirEmitter<'db> {
         let func = resolve_lib_func_path(self.db, scope, func_path)
             .unwrap_or_else(|| panic!("missing {func_path}"));
         let semantic_key =
-            generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
+            generated_callee_key(self.db, scope, assumptions, None, func, None, &[value_ty])
                 .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
         runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
     }
@@ -4217,6 +4217,7 @@ impl<'db> RmirEmitter<'db> {
             self.db,
             impl_env.normalization_scope(self.db),
             impl_env.assumptions(self.db),
+            None,
             routine,
             None,
             &generic_args,
@@ -5641,11 +5642,16 @@ impl<'db> RmirEmitter<'db> {
             .scope
             .or_else(|| scope_ty.as_scope(self.db))
             .expect("core trait resolution requires a scope");
-        let key =
-            core_method_callee_key(self.db, scope, self.env.assumptions, trait_path, name, args)
-                .unwrap_or_else(|error| {
-                    panic!("failed to finalize generated call to `{name}`: {error:?}")
-                });
+        let key = core_method_callee_key(
+            self.db,
+            scope,
+            self.env.assumptions,
+            None,
+            trait_path,
+            name,
+            args,
+        )
+        .unwrap_or_else(|error| panic!("failed to finalize generated call to `{name}`: {error:?}"));
         SemanticInstance::new(self.db, key)
     }
 

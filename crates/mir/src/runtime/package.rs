@@ -2163,6 +2163,7 @@ pub(crate) fn resolve_trait_runtime_instance<'db>(
         db,
         scope,
         PredicateListId::empty_list(db),
+        None,
         func,
         Some(inst),
         &own_args,

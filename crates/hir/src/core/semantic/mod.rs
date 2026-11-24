@@ -2063,7 +2063,7 @@ impl<'db> RecvArmView<'db> {
         let key = |path: &str, args: &[TyId<'db>]| -> Result<SemanticInstanceKey<'db>, String> {
             let func = resolve_lib_func_path(db, scope, path)
                 .ok_or_else(|| format!("missing required {path}"))?;
-            generated_callee_key(db, scope, assumptions, func, None, args).map_err(|error| {
+            generated_callee_key(db, scope, assumptions, None, func, None, args).map_err(|error| {
                 let name = func
                     .name(db)
                     .to_opt()

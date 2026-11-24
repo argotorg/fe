@@ -623,6 +623,7 @@ pub(crate) fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool
             db,
             scope,
             PredicateListId::empty_list(db),
+            None,
             &["ops", "Drop"],
             "drop",
             vec![ty],

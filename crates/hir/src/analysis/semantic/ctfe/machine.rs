@@ -2651,6 +2651,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             self.db,
             scope,
             assumptions,
+            None,
             method_func,
             Some(goal),
             &[],

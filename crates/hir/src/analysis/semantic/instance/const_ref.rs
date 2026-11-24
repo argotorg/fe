@@ -28,7 +28,7 @@ use crate::{
             shape::Shape,
             trait_def::{ImplementorOrigin, MethodArgMapError, ResolvedImplInstance, TraitInstId},
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx,
+                ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
                 constraint::collect_func_decl_constraints, is_goal_satisfiable,
             },
             ty_check::{
@@ -442,17 +442,19 @@ pub fn generated_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     func: Func<'db>,
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
-    Ok(generated_callee(db, scope, assumptions, func, trait_inst, own_args)?.key)
+    Ok(generated_callee(db, scope, assumptions, choices, func, trait_inst, own_args)?.key)
 }
 
 pub fn generated_callee<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     func: Func<'db>,
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
@@ -481,7 +483,9 @@ pub fn generated_callee<'db>(
     );
     // The call proves its goal and its callee's bounds where it is made, as
     // the checker proves a written call's.
-    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
+        .with_assumptions(assumptions)
+        .with_choices(choices);
     callable.record_evidence(db, solve_cx);
     // A generated call carries no effect arguments.
     callable.record_bound_evidence(db, solve_cx, &[]);
@@ -517,6 +521,7 @@ pub fn core_method_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     trait_path: &[&str],
     name: &str,
     args: Vec<TyId<'db>>,
@@ -529,7 +534,7 @@ pub fn core_method_callee_key<'db>(
         .copied()
         .unwrap_or_else(|| panic!("{trait_path:?} declares {name}"));
     let trait_inst = TraitInstId::new_simple(db, trait_def, args);
-    generated_callee_key(db, scope, assumptions, func, Some(trait_inst), &[])
+    generated_callee_key(db, scope, assumptions, choices, func, Some(trait_inst), &[])
 }
 
 #[allow(clippy::too_many_arguments)]
