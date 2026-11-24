@@ -3862,3 +3862,46 @@ const fn f() -> u256 {
     assert_eq!(output_diagnostics(&db), "");
     assert_eq!(eval_const_fn_u256(&db, "f"), "1");
 }
+
+#[test]
+fn effect_literal_with_unnormalized_projection_is_not_a_derive_provider() {
+    // No `Derive` implementation exists, so each operand is an ordinary
+    // effect value whose type mentions an associated type: a literal, and a
+    // value bound under its key.
+    let literal = r#"
+trait Assoc {
+    type Item
+}
+struct EmptyEffect<T> {}
+fn needs_eff<T: Assoc>() uses (e: EmptyEffect<T::Item>) {}
+
+fn caller<T: Assoc>() {
+    with (EmptyEffect<T::Item> {}) { needs_eff<T>() }
+}
+"#;
+    let keyed = r#"
+trait Assoc {
+    type Item
+}
+struct EmptyEffect<T> {}
+fn needs_eff<T: Assoc>() uses (e: EmptyEffect<T::Item>) {}
+
+fn caller<T: Assoc>(v: EmptyEffect<T::Item>) {
+    with (EmptyEffect<T::Item> = v) { needs_eff<T>() }
+}
+"#;
+    for (name, source) in [("literal", literal), ("keyed value", keyed)] {
+        // No generation is involved, so preparation produces no output database.
+        let (db, file) = input(source);
+        assert!(
+            prepare_file(&db, file).unwrap().is_none(),
+            "{name}: expected no generation"
+        );
+        let diagnostics = db.run_on_top_mod(db.top_mod(file));
+        assert!(
+            !diagnostics.has_errors(&db),
+            "{name}: {}",
+            diagnostics.format_diags(&db)
+        );
+    }
+}
