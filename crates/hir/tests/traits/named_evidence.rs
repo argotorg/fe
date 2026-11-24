@@ -2679,3 +2679,59 @@ impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> as Named {{
         "equal outputs agree"
     );
 }
+
+#[test]
+fn inherent_const_receives_choice() {
+    values(
+        r#"
+trait Foo { const fn value() -> u256 }
+impl Foo for u256 { const fn value() -> u256 { 1 } }
+impl Foo for u256 as AltFoo { const fn value() -> u256 { 2 } }
+struct Wrapper<T> {}
+impl<T: Foo> Wrapper<T> {
+    const X: u256 = T::value()
+    const fn x() -> u256 { T::value() }
+}
+const fn read() -> u256 { with (AltFoo) { Wrapper<u256>::X } }
+const fn read_method() -> u256 { with (AltFoo) { Wrapper<u256>::x() } }
+const fn read_ordinary() -> u256 { Wrapper<u256>::X }
+const fn read_after() -> u256 {
+    let inside = with (AltFoo) { Wrapper<u256>::X }
+    inside * 10 + Wrapper<u256>::X
+}
+"#,
+        &[
+            ("read", 2),
+            ("read_method", 2),
+            ("read_ordinary", 1),
+            ("read_after", 21),
+        ],
+    );
+}
+
+#[test]
+fn written_types_refuse_inherent_constant_reads_of_choices() {
+    let program = |use_: &str| {
+        format!(
+            r#"{PICKS}
+struct Array<const N: u256> {{}}
+struct Wrapper<T> {{}}
+impl<T: Pick> Wrapper<T> {{ const X: u256 = T::value() }}
+fn chosen() {{ with (Discount) {{ let x: Array<{{ {use_} }}> = Array {{}} }} }}
+"#
+        )
+    };
+    // The twin through a trait constant's goal is refused the same way.
+    let trait_const = format!(
+        r#"{PICKS}
+struct Array<const N: u256> {{}}
+fn chosen() {{ with (Discount) {{ let x: Array<{{ Item::value() }}> = Array {{}} }} }}
+"#
+    );
+    let twin = diagnostics(&trait_const);
+    assert!(twin.contains(&"8-0138".to_string()), "{twin:?}");
+    let codes = diagnostics(&program("Wrapper<Item>::X"));
+    assert_eq!(codes, twin, "{codes:?}");
+    let ordinary = program("Wrapper<Item>::X").replace("with (Discount) ", "");
+    assert!(diagnostics(&ordinary).is_empty());
+}

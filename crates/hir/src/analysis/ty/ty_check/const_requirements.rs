@@ -132,7 +132,9 @@ impl<'db> PredicateKeyBuilder<'_, 'db> {
                             self.instantiate(reference.inst())?,
                             reference.name(),
                         ),
-                        Some(ConstRef::InherentConst(reference)) => PredicateTerm::InherentConst(
+                        Some(ConstRef::InherentConst {
+                            use_: reference, ..
+                        }) => PredicateTerm::InherentConst(
                             reference.impl_(),
                             self.instantiate(reference.receiver_ty())?,
                             reference.name(),
@@ -1521,7 +1523,9 @@ fn const_ref_headers<'db>(
     match typed.expr_const_ref(expr)? {
         ConstRef::Const(_) => None,
         ConstRef::TraitConst { use_, .. } => Some(use_.inst().args(db).to_vec()),
-        ConstRef::InherentConst(reference) => Some(vec![reference.receiver_ty()]),
+        ConstRef::InherentConst {
+            use_: reference, ..
+        } => Some(vec![reference.receiver_ty()]),
     }
 }
 
@@ -2448,6 +2452,32 @@ fn type_choice_read<'db>(
                 {
                     let goal = use_.inst();
                     self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                }
+                // An inherent constant's value is checked under its
+                // implementation's bounds, which the use proves.
+                if let Some(reference) = typed.expr_const_ref(expr)
+                    && let ConstRef::InherentConst { use_, .. } =
+                        capture.specialize(self.db, reference)
+                    && let Some((const_body, impl_args)) =
+                        crate::analysis::ty::const_ty::inherent_const_body_and_impl_args(
+                            self.db,
+                            use_.impl_(),
+                            use_.receiver_ty(),
+                            use_.name(),
+                        )
+                    && let Ok(subst) =
+                        CompleteSubst::for_owner(self.db, use_.impl_().into(), impl_args)
+                {
+                    let bounds = crate::analysis::ty::const_ty::const_body_assumptions(
+                        self.db,
+                        const_body.scope(),
+                    )
+                    .extend_all_bounds(self.db);
+                    for &bound in bounds.list(self.db) {
+                        if let Ok(goal) = substitute_complete(self.db, bound, &subst) {
+                            self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                        }
+                    }
                 }
             }
         }

@@ -124,7 +124,8 @@ use crate::analysis::ty::{
     closure::{CallableTrait, CallableValue},
     const_ty::{
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
-        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
+        inherent_const_body_and_impl_args, inherent_const_decl_ty, invalid_cause_from_eval_failure,
+        origin_expr_for_const_eval_diag, root_ctfe_error,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
@@ -4457,13 +4458,27 @@ pub enum ConstRef<'db> {
         use_: AssocConstUse<'db>,
         evidence: UseEvidence<'db>,
     },
-    InherentConst(InherentConstUse<'db>),
+    /// A constant of an inherent implementation. Its value is checked under
+    /// the implementation's bounds, so a use passes proofs of them, as a call
+    /// passes proofs of the bounds its callee declares.
+    InherentConst {
+        use_: InherentConstUse<'db>,
+        evidence: UseEvidence<'db>,
+    },
 }
 
 impl<'db> ConstRef<'db> {
     pub(super) fn qualify_evidence(&mut self, db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) {
-        if let Self::TraitConst { evidence, .. } = self {
+        if let Self::TraitConst { evidence, .. } | Self::InherentConst { evidence, .. } = self {
             evidence.qualify(db, owner);
+        }
+    }
+
+    /// An inherent constant use with no recorded evidence.
+    pub fn inherent(use_: InherentConstUse<'db>) -> Self {
+        Self::InherentConst {
+            use_,
+            evidence: UseEvidence::default(),
         }
     }
 
@@ -4519,6 +4534,9 @@ impl<'db> ConstRef<'db> {
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
     ) -> Vec<TraitInstId<'db>> {
+        if let ConstRef::InherentConst { use_, evidence } = self {
+            return Self::record_inherent_bound_evidence(db, *use_, evidence, choices);
+        }
         let ConstRef::TraitConst { use_, evidence, .. } = self else {
             return Vec::new();
         };
@@ -4560,6 +4578,51 @@ impl<'db> ConstRef<'db> {
     }
 }
 
+impl<'db> ConstRef<'db> {
+    /// Proves, in the use's context, the bounds the body of an inherent
+    /// constant declares, instantiated for the use, as a call records the
+    /// bounds of its callee. Returns the dictionaries lexical selection
+    /// misses.
+    fn record_inherent_bound_evidence(
+        db: &'db dyn HirAnalysisDb,
+        use_: InherentConstUse<'db>,
+        evidence: &mut UseEvidence<'db>,
+        choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
+    ) -> Vec<TraitInstId<'db>> {
+        let (Some((body, impl_args)), Some(expected)) = (
+            inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name()),
+            inherent_const_decl_ty(db, use_.impl_(), use_.name()),
+        ) else {
+            return Vec::new();
+        };
+        let Ok(subst) = CompleteSubst::for_owner(db, use_.impl_().into(), impl_args) else {
+            return Vec::new();
+        };
+        let declared = const_body_assumptions(db, body.scope());
+        let signature = declared.extend_all_bounds(db);
+        let recorded = declared_bound_evidence(
+            db,
+            declared,
+            signature,
+            &subst,
+            use_.solve_cx(db).with_choices(choices),
+        );
+        evidence.bounds = Some(BoundEvidence {
+            schema: BoundSchemaId::new(
+                db,
+                BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
+                signature,
+            ),
+            entries: recorded,
+        });
+        if choices.is_some() {
+            recorded.missing_bound_goals(db, signature, &subst)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 impl<'db> TyVisitable<'db> for ConstRef<'db> {
     fn visit_with<V>(&self, visitor: &mut V)
     where
@@ -4571,7 +4634,10 @@ impl<'db> TyVisitable<'db> for ConstRef<'db> {
                 use_.visit_with(visitor);
                 evidence.visit_with(visitor);
             }
-            ConstRef::InherentConst(use_) => use_.visit_with(visitor),
+            ConstRef::InherentConst { use_, evidence } => {
+                use_.visit_with(visitor);
+                evidence.visit_with(visitor);
+            }
         }
     }
 }
@@ -4587,7 +4653,10 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
                 use_: use_.fold_with(db, folder),
                 evidence: evidence.fold_with(db, folder),
             },
-            ConstRef::InherentConst(use_) => ConstRef::InherentConst(use_.fold_with(db, folder)),
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.fold_with(db, folder),
+                evidence: evidence.fold_with(db, folder),
+            },
         }
     }
 }
@@ -5331,7 +5400,9 @@ impl<'db> TypedBody<'db> {
             }
         }
         for const_ref in tables.const_refs.values_mut().flatten() {
-            if let ConstRef::TraitConst { evidence, .. } = const_ref {
+            if let ConstRef::TraitConst { evidence, .. }
+            | ConstRef::InherentConst { evidence, .. } = const_ref
+            {
                 evidence.bind(db, bound);
             }
         }
@@ -5366,7 +5437,10 @@ impl<'db> TypedBody<'db> {
     pub(crate) fn for_each_use_evidence(&self, mut visit: impl FnMut(ExprId, &UseEvidence<'db>)) {
         self.for_each_callable(|expr, callable| visit(expr, &callable.use_evidence()));
         for (expr, const_ref) in self.tables.const_refs.iter() {
-            if let Some(ConstRef::TraitConst { evidence, .. }) = const_ref {
+            if let Some(
+                ConstRef::TraitConst { evidence, .. } | ConstRef::InherentConst { evidence, .. },
+            ) = const_ref
+            {
                 visit(expr, evidence);
             }
         }

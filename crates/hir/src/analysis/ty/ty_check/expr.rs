@@ -4754,7 +4754,7 @@ impl<'db> TyChecker<'db> {
                     ) {
                         self.env.register_const_ref(
                             expr,
-                            ConstRef::InherentConst(InherentConstUse::new(
+                            ConstRef::inherent(InherentConstUse::new(
                                 self.env.scope(),
                                 self.env.assumptions(),
                                 impl_,

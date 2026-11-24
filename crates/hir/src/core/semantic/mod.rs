@@ -3057,7 +3057,7 @@ fn selector_signature_from_expr<'db>(
                 visited,
             )
         }
-        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
+        crate::analysis::ty::ty_check::ConstRef::InherentConst { use_, .. } => {
             // Follow the inherent const's value body so a selector that
             // delegates to `Selectors::TRANSFER` resolves the underlying
             // `sol("...")` signature, mirroring the top-level `Const` branch.

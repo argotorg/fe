@@ -20,7 +20,7 @@ use crate::{
                 place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, RowPath, expand_rows},
             },
-            evidence::{Evidence, EvidenceList, impl_method_bound_evidence},
+            evidence::{Evidence, EvidenceList, UseEvidence, impl_method_bound_evidence},
             fold::{TyFoldable, TyFolder},
             method_cmp::{normalize_compare_assoc_consts, normalize_predicate_for_comparison},
             normalize::normalize_ty,
@@ -1389,7 +1389,9 @@ pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
                 policy,
             ))
         }
-        ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
+        ConstRef::InherentConst { use_, evidence } => {
+            semantic_const_key_for_inherent_const(db, use_, evidence, policy)
+        }
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
 }
@@ -1409,20 +1411,34 @@ fn semantic_const_key_for_const<'db>(
     ))
 }
 
+/// The instance of an inherent constant's value. It receives the proofs of
+/// the bounds its implementation declares that the use recorded, as a callee
+/// receives the proofs of its own.
 fn semantic_const_key_for_inherent_const<'db>(
     db: &'db dyn HirAnalysisDb,
     use_: InherentConstUse<'db>,
+    evidence: UseEvidence<'db>,
+    policy: InstanceEvidencePolicy,
 ) -> Option<SemanticInstanceKey<'db>> {
     let (body, impl_args) =
         inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name())?;
     let ty = inherent_const_decl_ty(db, use_.impl_(), use_.name())?;
-    Some(SemanticInstanceKey::of(
+    let received = evidence
+        .bound_proofs()
+        .unwrap_or_else(|| EvidenceList::none(db));
+    let received = if collect_flags(db, received).contains(TyFlags::HAS_PROJECTION) {
+        normalize_ty(db, received, use_.origin_scope(), use_.assumptions())
+    } else {
+        received
+    };
+    Some(SemanticInstanceKey::with_evidence_policy(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
         GenericSubst::for_owner(db, use_.impl_().into(), impl_args),
         EffectProviderSubst::empty(db),
         ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), vec![]),
-        EvidenceList::none(db),
+        received,
+        policy,
     ))
 }
 

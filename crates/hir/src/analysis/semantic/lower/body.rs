@@ -1551,9 +1551,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 use_: use_.with_env(use_.origin_scope(), self.assumptions),
                 evidence,
             },
-            ConstRef::InherentConst(use_) => {
-                ConstRef::InherentConst(use_.with_env(use_.origin_scope(), self.assumptions))
-            }
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.with_env(use_.origin_scope(), self.assumptions),
+                evidence,
+            },
             ConstRef::Const(_) => const_ref,
         };
         let policy = self.instance.key(self.db).evidence_policy(self.db);
@@ -1577,7 +1578,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ConstRef::TraitConst { use_: assoc, .. } => {
                 const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
             }
-            ConstRef::InherentConst(use_) => {
+            ConstRef::InherentConst { use_, .. } => {
                 const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
             }
             ConstRef::Const(_) => None,

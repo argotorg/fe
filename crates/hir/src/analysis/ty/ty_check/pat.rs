@@ -335,7 +335,7 @@ impl<'db> TyChecker<'db> {
                     ConstRef::TraitConst { use_, .. } => {
                         collect_flags(self.db, use_.inst()).contains(TyFlags::HAS_PARAM)
                     }
-                    ConstRef::InherentConst(use_) => use_.receiver_ty().has_param(self.db),
+                    ConstRef::InherentConst { use_, .. } => use_.receiver_ty().has_param(self.db),
                 };
                 self.push_diag(if generic {
                     BodyDiag::GenericConstPattern { primary }
@@ -672,7 +672,7 @@ impl<'db> TyChecker<'db> {
                     recv_ty,
                     name,
                 ) {
-                    let cref = ConstRef::InherentConst(InherentConstUse::new(
+                    let cref = ConstRef::inherent(InherentConstUse::new(
                         self.env.scope(),
                         self.env.assumptions(),
                         impl_,
