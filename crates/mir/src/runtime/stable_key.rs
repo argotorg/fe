@@ -771,18 +771,12 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
             )
         }
         TyData::TraitFamily(family) => {
-            let args = family
-                .arguments(db)
-                .iter()
-                .map(|&ty| type_identity(db, ty))
-                .collect::<Vec<_>>()
-                .join("$");
-            let bindings = family
-                .associated(db)
-                .iter()
-                .map(|(name, &ty)| format!("{}${}", name.pretty_print(db), type_identity(db, ty)))
-                .collect::<Vec<_>>()
-                .join("$");
+            let args =
+                framed_identity_list(family.arguments(db).iter().map(|&ty| type_identity(db, ty)));
+            let bindings =
+                framed_identity_list(family.associated(db).iter().map(|(name, &ty)| {
+                    format!("{}${}", name.pretty_print(db), type_identity(db, ty))
+                }));
             format!(
                 "trait_family${}${:?}$args${args}$assoc${bindings}",
                 item_identity(db, family.def(db).into()),
@@ -807,24 +801,29 @@ pub fn type_identity<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> String {
     }
 }
 
+/// Writes a variable-length list of identities with its length and balanced
+/// delimiters, so that a list nested in another one cannot take over the
+/// neighbouring entries of the outer one.
+fn framed_identity_list(items: impl IntoIterator<Item = String>) -> String {
+    let items: Vec<_> = items.into_iter().collect();
+    format!("{}[{}]", items.len(), items.join("$"))
+}
+
 fn trait_identity<'db>(db: &'db dyn HirAnalysisDb, trait_inst: TraitInstId<'db>) -> String {
     let trait_ref = trait_ref_identity(db, trait_inst.trait_ref(db));
-    let assoc_types = trait_inst
-        .assoc_type_bindings(db)
-        .iter()
-        .map(|(binding, ty)| format!("{}${}", binding.pretty_print(db), type_identity(db, *ty)))
-        .collect::<Vec<_>>()
-        .join("$");
+    let assoc_types = framed_identity_list(
+        trait_inst
+            .assoc_type_bindings(db)
+            .iter()
+            .map(|(binding, ty)| {
+                format!("{}${}", binding.pretty_print(db), type_identity(db, *ty))
+            }),
+    );
     format!("{trait_ref}$assoc${assoc_types}")
 }
 
 fn trait_ref_identity<'db>(db: &'db dyn HirAnalysisDb, trait_ref: TraitRefId<'db>) -> String {
-    let args = trait_ref
-        .args(db)
-        .iter()
-        .map(|arg| type_identity(db, *arg))
-        .collect::<Vec<_>>()
-        .join("$");
+    let args = framed_identity_list(trait_ref.args(db).iter().map(|arg| type_identity(db, *arg)));
     format!(
         "{}$args${args}",
         item_identity(db, trait_ref.def(db).into())
@@ -939,6 +938,7 @@ pub fn stable_identity_fingerprint(value: &str) -> String {
 mod tests {
     use super::{
         body_owner_trace_identity, semantic_instance_identity, semantic_instance_symbol_identity,
+        type_identity,
     };
     use hir::{
         analysis::{
@@ -1445,5 +1445,33 @@ fn pre_intern() -> u256 {
         let baseline = collect_identities(false);
         let shifted = collect_identities(true);
         assert_eq!(baseline, shifted);
+    }
+
+    #[test]
+    fn identities_of_differently_nested_trait_families_differ() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "nested_family_identity.fe".into(),
+            r#"
+trait Inner {
+    type B
+    type C
+}
+trait Outer {
+    type A: * -> Constraint
+    type C
+}
+struct Family<P: * -> Constraint> {}
+type Split = Family<trait Outer<A = trait Inner<B = u8>, C = u16>>
+type Nested = Family<trait Outer<A = trait Inner<B = u8, C = u16>>>
+type SplitAgain = Family<trait Outer<C = u16, A = trait Inner<B = u8>>>
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let aliases = top_mod.all_type_aliases(&db);
+        let identity = |index: usize| type_identity(&db, aliases[index].ty(&db));
+        assert_ne!(identity(0), identity(1));
+        assert_eq!(identity(0), identity(2));
     }
 }

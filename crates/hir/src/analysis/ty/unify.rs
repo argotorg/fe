@@ -380,7 +380,12 @@ where
         if left_args.len() != right_args.len() || left_assoc.len() != right_assoc.len() {
             return Err(UnificationError::TypeMismatch);
         }
-        let old = std::mem::replace(&mut self.comparison, TypeComparison::Header);
+        // Arguments of a constraint compare by header, but an overlap query must keep
+        // treating equal-named projections as possibly equal inside them.
+        let old = self.comparison;
+        if old == TypeComparison::Expression {
+            self.comparison = TypeComparison::Header;
+        }
         let result = left_args
             .iter()
             .zip(right_args)

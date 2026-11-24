@@ -139,6 +139,16 @@ impl<'db> WherePredicateView<'db> {
             return Vec::new();
         };
 
+        // The written subject reports its own errors, such as an invisible
+        // name, even when it lowers to a valid type. A subject that does not
+        // lower is reported by `diag_subject_ty`.
+        if !subject.has_invalid(db) {
+            let errs = self.subject_written_ty_errors(db);
+            if !errs.is_empty() {
+                return errs;
+            }
+        }
+
         if let Some(diag) = self.diag_subject_ty(db, subject) {
             return vec![diag];
         }
@@ -1779,19 +1789,21 @@ impl<'db> ImplTrait<'db> {
             };
             let scope = self.scope();
             let assumptions = constraints_for(db, self.into());
+            // The written type reports its own errors whether or not lowering
+            // produced an invalid type.
+            let errs = impl_const.hir_ty(db).map(|hir_ty| {
+                collect_ty_lower_errors(db, scope, hir_ty, impl_const.span().ty(), assumptions)
+            });
+            match errs {
+                Some(errs) if !errs.is_empty() => {
+                    diags.extend(errs);
+                    continue;
+                }
+                _ => {}
+            }
             if impl_header_ty.has_invalid(db) {
-                let errs = impl_const.hir_ty(db).map(|hir_ty| {
-                    collect_ty_lower_errors(db, scope, hir_ty, impl_const.span().ty(), assumptions)
-                });
-                match errs {
-                    Some(errs) if !errs.is_empty() => diags.extend(errs),
-                    _ => {
-                        if let Some(diag) =
-                            impl_header_ty.emit_diag(db, impl_const.span().ty().into())
-                        {
-                            diags.push(diag);
-                        }
-                    }
+                if let Some(diag) = impl_header_ty.emit_diag(db, impl_const.span().ty().into()) {
+                    diags.push(diag);
                 }
                 continue;
             }
@@ -2654,13 +2666,23 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
         let assumptions = constraints_for(db, self.into());
         for assoc in self.assoc_consts(db) {
             if let Some(hir_ty) = assoc.hir_ty(db) {
-                out.extend(ty::ty_error::collect_hir_ty_diags(
+                let ty_diags = ty::ty_error::collect_hir_ty_diags(
                     db,
                     self.scope(),
                     hir_ty,
                     assoc.span().ty(),
                     assumptions,
-                ));
+                );
+                if ty_diags.is_empty()
+                    && let Some(ty) = assoc.ty(db)
+                {
+                    out.extend(ty::ty_check::const_type_diag(
+                        db,
+                        assoc.span().ty().into(),
+                        ty,
+                    ));
+                }
+                out.extend(ty_diags);
             }
         }
         out.extend(self.diags_assoc_defaults(db));

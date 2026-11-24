@@ -496,8 +496,9 @@ fn lower_explicit_trait_family<'db>(
         Ok(other) => return TyId::invalid(db, InvalidCause::NotAType(other)),
         Err(_) => return TyId::invalid(db, InvalidCause::PathResolutionFailed { path }),
     };
-    // Only the written arguments are captured. Defaults use the subject when
-    // the family is applied.
+    // The written arguments are captured. A default that does not depend on
+    // the subject is part of the family (see `TraitFamilyId::new`); the others
+    // use the subject when the family is applied.
     let written = path
         .generic_args(db)
         .data(db)

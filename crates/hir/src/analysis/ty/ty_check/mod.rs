@@ -239,6 +239,10 @@ pub(crate) fn const_type_diag<'db>(
     span: DynLazySpan<'db>,
     ty: TyId<'db>,
 ) -> Option<TyDiagCollection<'db>> {
+    // A constant is a value, so its type has kind `*`.
+    if !ty.has_invalid(db) && !ty.is_star_kind(db) {
+        return Some(TyLowerDiag::ExpectedStarKind(span.into()).into());
+    }
     if let Some(view) = ty.is_view(db).then_some(ty).or_else(|| ty.view_part(db)) {
         return Some(
             TyLowerDiag::ViewTypeMode {
@@ -3659,22 +3663,21 @@ impl<'db> TyChecker<'db> {
     ) -> TyId<'db> {
         let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
 
-        // If lowering failed, try to produce precise diagnostics (e.g., path resolution errors)
-        if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors(
-                self.db,
-                self.env.scope(),
-                hir_ty,
-                span.clone(),
-                self.env.assumptions(),
-            );
-            if !diags.is_empty() {
-                for d in diags {
-                    self.push_diag(d);
-                }
-                // Avoid cascading kind errors for already-invalid types
-                return TyId::invalid(self.db, InvalidCause::Other);
+        // The written type reports its own errors (path resolution, visibility,
+        // associated bindings), whether or not lowering produced an invalid type.
+        let diags = collect_ty_lower_errors(
+            self.db,
+            self.env.scope(),
+            hir_ty,
+            span.clone(),
+            self.env.assumptions(),
+        );
+        if !diags.is_empty() {
+            for d in diags {
+                self.push_diag(d);
             }
+            // Avoid cascading kind errors for already-invalid types
+            return TyId::invalid(self.db, InvalidCause::Other);
         }
 
         // A qualified path resolves to a type that no longer mentions the

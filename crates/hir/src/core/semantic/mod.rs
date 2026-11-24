@@ -3577,6 +3577,25 @@ impl<'db> WherePredicateView<'db> {
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
     }
 
+    /// Errors the written subject type reports, as a type written anywhere
+    /// does: an invisible name, a duplicate or unknown associated binding.
+    pub fn subject_written_ty_errors(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+            return Vec::new();
+        };
+        let owner_item = ItemKind::from(self.clause.owner);
+        collect_ty_lower_errors(
+            db,
+            owner_item.scope(),
+            hir_ty,
+            self.span().ty(),
+            header_constraints_for(db, owner_item),
+        )
+    }
+
     /// True if the lowered subject type is a const type.
     pub fn subject_is_const(self, db: &'db dyn HirAnalysisDb) -> bool {
         self.subject_ty(db).is_some_and(|t| t.is_const_ty(db))
@@ -5110,13 +5129,14 @@ impl<'db> ImplTrait<'db> {
         };
         use crate::analysis::ty::diagnostics::TraitLowerDiag;
 
-        // First check implementor type
+        // First check implementor type. The written type reports its own
+        // errors whether or not lowering produced an invalid type.
         let ty = self.ty(db);
+        let diags = self.ty_errors(db);
+        if !diags.is_empty() {
+            return (None, diags);
+        }
         if ty.has_invalid(db) {
-            let diags = self.ty_errors(db);
-            if !diags.is_empty() {
-                return (None, diags);
-            }
             if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
                 return (None, vec![diag]);
             }

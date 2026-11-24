@@ -1,0 +1,14 @@
+mod a {
+    pub trait Tr {}
+}
+
+mod b {
+    pub trait Tr {}
+}
+
+struct Family<P: * -> Constraint> {}
+
+// Two traits with one name print with their paths.
+fn convert(_ x: Family<trait a::Tr>) -> Family<trait b::Tr> {
+    x
+}

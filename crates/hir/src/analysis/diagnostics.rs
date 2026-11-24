@@ -73,9 +73,18 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
                 ty.pretty_print(db).to_string()
             }
         },
-        TyData::ConstTy(_) | TyData::ConstraintTerm(_) | TyData::TraitFamily(_) => {
-            ty.pretty_print(db).to_string()
+        TyData::TraitFamily(family) => {
+            let path = family.def(db).scope().pretty_path(db);
+            let name = path.unwrap_or_else(|| {
+                family
+                    .def(db)
+                    .name(db)
+                    .to_opt()
+                    .map_or("<missing>".to_string(), |name| name.data(db).clone())
+            });
+            family.render(db, &name, |ty| pretty_print_ty_for_mismatch(db, ty))
         }
+        TyData::ConstTy(_) | TyData::ConstraintTerm(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
     }
@@ -1971,6 +1980,39 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         },
                     ],
                     notes: vec![],
+                    error_code,
+                }
+            }
+
+            Self::UnknownAssocBinding {
+                span,
+                name,
+                trait_,
+                declared_by,
+            } => {
+                let trait_name = |trait_: Trait<'_>| {
+                    trait_
+                        .name(db)
+                        .to_opt()
+                        .map_or_else(|| "<missing>".to_string(), |name| name.data(db).to_string())
+                };
+                let name = name.data(db);
+                let trait_label = trait_name(*trait_);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{trait_label}` has no associated type `{name}`"),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{name}` is not declared by `{trait_label}`"),
+                        span: span.resolve(db),
+                    }],
+                    notes: declared_by
+                        .into_iter()
+                        .map(|declared_by| {
+                            let declared_by = trait_name(*declared_by);
+                            format!("`{name}` is declared by `{declared_by}`; bind it on that trait")
+                        })
+                        .collect(),
                     error_code,
                 }
             }

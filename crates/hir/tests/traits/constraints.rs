@@ -492,3 +492,49 @@ fn probe() {
     let (top_mod, _) = db.top_mod(file);
     db.assert_no_diags(top_mod);
 }
+
+#[test]
+fn unknown_associated_binding_is_reported() {
+    let messages = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("unknown_binding.fe".into(), source);
+        let (top_mod, _) = db.top_mod(file);
+        diagnostics_for(&db, top_mod)
+    };
+    let supers =
+        "trait Super {\n    type Item\n    fn get(self) -> Self::Item\n}\ntrait Sub: Super {}\n";
+
+    for source in [
+        "trait Eq {}\nfn f<T: Eq<NoSuchAssoc = u8>>() {}\n".to_string(),
+        "trait Eq {}\nstruct Family<P: * -> Constraint> {}\ntype Phantom = Family<trait Eq<NoSuchAssoc = u8>>\n"
+            .to_string(),
+    ] {
+        let diags = messages(&source);
+        assert!(
+            diags
+                .iter()
+                .any(|diag| diag.message == "`Eq` has no associated type `NoSuchAssoc`"),
+            "{source}: {diags:#?}"
+        );
+    }
+
+    // An item declared only by a super trait is bound on that trait.
+    let diags = messages(&format!("{supers}fn f<T: Sub<Item = u8>>() {{}}\n"));
+    let reported = diags
+        .iter()
+        .find(|diag| diag.message == "`Sub` has no associated type `Item`")
+        .unwrap_or_else(|| panic!("{diags:#?}"));
+    assert!(
+        reported
+            .notes
+            .iter()
+            .any(|note| note.contains("`Item` is declared by `Super`")),
+        "{reported:#?}"
+    );
+
+    // Binding it on the trait that declares it is accepted.
+    let diags = messages(&format!(
+        "{supers}fn g<T: Super<Item = u8>>(_ t: T) -> u8 {{ t.get() }}\n"
+    ));
+    assert!(diags.is_empty(), "{diags:#?}");
+}
