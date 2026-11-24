@@ -3864,13 +3864,15 @@ fn a_condition_bound_equal_to_the_associated_bound_answers_it() {
     );
 }
 
-// The condition says only `P`, so it does not answer `P<Out = u8>`: the
-// implementation's own `I: P<Out = u8>` component is the ordinary one.
+// The condition says only `P`, and the associated bound `P<Out = u8>` is on
+// the closed type `I`. A proof names no goal, so the dictionary that holds
+// `I: P` holds the implementation of `I: P<Out = u8>` too, and the
+// implementation's component is read from it, not proved again.
 #[test]
-fn a_weaker_condition_bound_does_not_answer_a_stronger_associated_bound() {
+fn a_weaker_condition_bound_answers_a_closed_goal_by_identity() {
     values(
         &strength("P", "P<Out = u8>"),
-        &[("chosen", 3107), ("plain", 3131)],
+        &[("chosen", 707), ("plain", 3131)],
     );
 }
 
@@ -3970,7 +3972,6 @@ fn reached_shows(source: &str, root: &str) -> Vec<bool> {
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_call_bound() {
     values(
         &format!(
@@ -3985,7 +3986,6 @@ const fn plain() -> u256 {{ caller<W<Foo>>() }}
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_dispatch() {
     values(
         &format!(
@@ -4033,7 +4033,6 @@ const fn top() -> u256 {{ caller<W<Foo>>() }}
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_unrelated_block() {
     values(
         &format!(
@@ -4073,7 +4072,6 @@ fn concrete_component_two_roots_disagree() {
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_two_roots_agree() {
     values(
         &two_roots("const fn agree() -> u256 { with (Loud) { f<W<Foo>, V<Foo>>() } }"),
@@ -4082,7 +4080,6 @@ fn concrete_component_two_roots_agree() {
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_closure() {
     let source = format!(
         r#"{SHOWS}
@@ -4098,7 +4095,6 @@ fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_late_function_item() {
     let source = format!(
         r#"{SHOWS}
@@ -4116,7 +4112,7 @@ fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
 // A function item passed to a callable bound carries the proofs of its bounds
 // made where it is passed. Its `Foo: Show` is the component of `B`.
 #[test]
-#[ignore = "fixed by the root readers cut"]
+#[ignore = "fixed by the conditions cut"]
 fn concrete_component_function_item_passed() {
     let source = format!(
         r#"{SHOWS}
@@ -4138,7 +4134,6 @@ struct Wrap<T> {}
 "#;
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_impl_method() {
     values(
         &format!(
@@ -4190,7 +4185,6 @@ const fn top() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_impl_const() {
     for condition in ["Holder<V = Item>", "Holder"] {
         let value = if condition == "Holder" {
@@ -4230,7 +4224,6 @@ const fn top() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
 // A goal states `Read` or `Read<Out = u8>`, the dictionary holds `Read`: the
 // implementation is the same, and one body reads one dictionary.
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_two_spellings() {
     let program = |body: &str| {
         format!(
@@ -4332,7 +4325,6 @@ fn concrete_component_diamond_mixed() {
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_diamond_agree() {
     values(
         &diamond(
@@ -4343,7 +4335,6 @@ fn concrete_component_diamond_agree() {
 }
 
 #[test]
-#[ignore = "fixed by the root readers cut"]
 fn concrete_component_relay() {
     values(
         &format!(

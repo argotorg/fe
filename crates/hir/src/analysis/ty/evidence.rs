@@ -1145,6 +1145,45 @@ pub fn prove<'db>(
     prove_outcome(db, solve_cx, goal).evidence()
 }
 
+/// The slot of `slots`, an extended assumption list, that answers `goal`, as a
+/// reference in the namespace of that list: the first slot that is `goal`; or,
+/// for a closed goal, the concrete component of the slots' dictionaries that is
+/// the same implementation (`same_identity`), addressed by its path. A closed
+/// goal that a component answers is never proved afresh: a proof names no goal,
+/// so the dictionary that holds the component holds the implementation.
+pub(crate) fn slot_answering<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+    scope: ScopeId<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<BoundSlotRef<'db>> {
+    let schema = BoundSchemaId::context(db, slots);
+    if let Some(index) = slots.list(db).iter().position(|&bound| bound == goal) {
+        return schema.slot(db, index);
+    }
+    if !has_concrete_components(db, slots) {
+        return None;
+    }
+    // A goal written on a projection that a slot's equality settles,
+    // `<B::A as Show>` under `B: Tr<A = Foo>`, is the closed goal it gives.
+    let goal = if collect_flags(db, goal).contains(TyFlags::HAS_PROJECTION) {
+        normalize_trait_inst_preserving_validity(db, goal, scope, slots)
+    } else {
+        goal
+    };
+    if !is_closed_goal(db, goal) {
+        return None;
+    }
+    let table = concrete_components(db, slots);
+    let (_, member) = table
+        .of_trait(goal.def(db))
+        .find(|(_, member)| same_identity(db, scope, member.goal, goal))?;
+    Some(BoundSlotRef {
+        component: Some(ComponentPath::new(db, member.path.clone())),
+        ..schema.slot(db, member.root as usize)?
+    })
+}
+
 pub(crate) fn prove_outcome<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
@@ -1166,17 +1205,14 @@ pub(crate) fn prove_outcome<'db>(
     // A body's declared dictionary remains authoritative even when its type
     // is concrete. A lexical override explicitly replaces that dictionary.
     if !solve_cx.has_matching_choice(db, goal)
-        && let Some(index) = solve_cx
-            .assumptions()
-            .extend_all_bounds(db)
-            .list(db)
-            .iter()
-            .position(|&bound| bound == goal)
+        && let Some(slot) = slot_answering(
+            db,
+            solve_cx.assumptions().extend_all_bounds(db),
+            solve_cx.normalization_scope_for_trait_inst(db, goal),
+            goal,
+        )
     {
-        return ProofOutcome::Proven(
-            BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
-                .assumption(db, index),
-        );
+        return ProofOutcome::Proven(EvidenceId::new(db, Evidence::Assumption(slot)));
     }
     // Closed goals without supplied dictionaries or choices share a proof.
     let solve_cx = if is_closed_goal(db, goal) && solve_cx.choices().is_none() {
@@ -1261,12 +1297,19 @@ pub(crate) fn declared_bound_evidence<'db>(
         subst,
         assumptions,
         |_, goal, direct| {
-            // Without a lexical choice, this leaves the proof to the instance.
+            // Without a lexical choice, a closed goal that no slot and no
+            // component of the dictionaries answers is left to the instance.
             // Only a use under a choice reports a refused slot.
             if direct
                 && is_closed_goal(db, goal)
                 && solve_cx.choices().is_none()
-                && !assumptions.list(db).contains(&goal)
+                && slot_answering(
+                    db,
+                    assumptions,
+                    solve_cx.normalization_scope_for_trait_inst(db, goal),
+                    goal,
+                )
+                .is_none()
             {
                 return None;
             }
@@ -1493,8 +1536,11 @@ enum ImplComponent<'db> {
 
 /// A condition whose bound (or a bound it implies, including a bound an
 /// equality makes concrete) answers `declared` holds that component in its
-/// dictionary, so the implementation does not prove it again. A candidate with
-/// more equalities or a stronger mode answers; the reverse does not.
+/// dictionary, so the implementation does not prove it again. An open
+/// `declared` is answered by a candidate with more equalities or a stronger
+/// mode; the reverse does not answer it. A closed one is answered by the
+/// candidate of the same trait and arguments (`same_identity`), the rule by
+/// which a body's goal reads a component, so that both read one dictionary.
 #[salsa::tracked(returns(ref))]
 fn impl_component<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1507,11 +1553,18 @@ fn impl_component<'db>(
     let basis = selected.constraints(db);
     let cx = TraitSolveCx::new(db, implementation.scope()).with_assumptions(basis);
     let answers = assumption_matcher(db, cx, declared);
+    let closed = is_closed_goal(db, declared);
+    let scope = implementation.scope();
     let mut held = Vec::new();
     for (index, &condition) in basis.list(db).iter().enumerate() {
         let walk = PredicateListId::new(db, vec![condition]).bound_walk_keeping_concrete(db);
         for (member, &candidate) in walk.list.list(db).iter().enumerate().skip(1) {
-            if basis.list(db).contains(&candidate) || !answers(candidate) {
+            let answering = if closed {
+                same_identity(db, scope, candidate, declared)
+            } else {
+                answers(candidate)
+            };
+            if basis.list(db).contains(&candidate) || !answering {
                 continue;
             }
             if let Some(path) = walk.path_to(db, member) {
