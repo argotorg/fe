@@ -312,15 +312,11 @@ fn lower_abi_span_impl<'db>(
                 let core = body.roots().core;
                 // let mut end: u256 = checked_frame_end<Sol>(pos, Self::HEAD_SIZE, input_len)
                 let end_ident = body.generated_ident("end");
-                let callee = body.path_expr(
-                    PathId::from_ident(db, core)
-                        .push_str(db, "abi")
-                        .push_str_args(
-                            db,
-                            "checked_frame_end",
-                            GenericArgListId::given_types(db, [body.sol_ty()]),
-                        ),
-                );
+                let callee = body.path_expr(core.push_str(db, "abi").push_str_args(
+                    db,
+                    "checked_frame_end",
+                    GenericArgListId::given_types(db, [body.sol_ty()]),
+                ));
                 let args = vec![
                     body.ident_expr(pos_ident),
                     body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE"),
@@ -335,18 +331,11 @@ fn lower_abi_span_impl<'db>(
 
                 // end = abi_record_field_end<Sol, F, I>(input, pos, head_pos, input_len, end)
                 for (idx, (_, field_ty)) in field_specs.iter().copied().enumerate() {
-                    let callee = body.path_expr(
-                        PathId::from_ident(db, core)
-                            .push_str(db, "abi")
-                            .push_str_args(
-                                db,
-                                "abi_record_field_end",
-                                GenericArgListId::given_types(
-                                    db,
-                                    [body.sol_ty(), field_ty, input_ty],
-                                ),
-                            ),
-                    );
+                    let callee = body.path_expr(core.push_str(db, "abi").push_str_args(
+                        db,
+                        "abi_record_field_end",
+                        GenericArgListId::given_types(db, [body.sol_ty(), field_ty, input_ty]),
+                    ));
                     let args = vec![
                         body.ident_expr(input_ident),
                         body.ident_expr(pos_ident),
@@ -488,18 +477,15 @@ fn lower_decode_impl<'db>(
                     }
                     // core::abi::decode_frame_from<Sol, Self, I>(input, pos, input_len)
                     let db = body.db();
-                    let callee = body.path_expr(
-                        PathId::from_ident(db, body.roots().core)
-                            .push_str(db, "abi")
-                            .push_str_args(
+                    let callee =
+                        body.path_expr(body.roots().core.push_str(db, "abi").push_str_args(
+                            db,
+                            "decode_frame_from",
+                            GenericArgListId::given_types(
                                 db,
-                                "decode_frame_from",
-                                GenericArgListId::given_types(
-                                    db,
-                                    [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty],
-                                ),
+                                [body.sol_ty(), TypeId::fallback_self_ty(db), input_ty],
                             ),
-                    );
+                        ));
                     let args = [input_ident, pos_ident, input_len_ident]
                         .map(|ident| body.ident_expr(ident))
                         .to_vec();
@@ -761,7 +747,8 @@ fn lower_part_impl<'db>(
                 |body| {
                     let db = body.db();
                     let callee = body.path_expr(
-                        PathId::from_ident(db, body.roots().std)
+                        body.roots()
+                            .std
                             .push_str(db, "abi")
                             .push_str(db, "record_part"),
                     );

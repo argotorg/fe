@@ -180,9 +180,7 @@ fn lower_msg_variant_abi_size_impl<'db>(
     let db = builder.db();
     let roots = builder.roots();
     let field_specs = lower_msg_variant_field_specs(builder.ctxt(), variant);
-    let trait_path = PathId::from_ident(db, roots.core)
-        .push_str(db, "abi")
-        .push_str(db, "AbiSize");
+    let trait_path = roots.core.push_str(db, "abi").push_str(db, "AbiSize");
     let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
     let ty = Partial::Present(variant_struct_ty(db, struct_));
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();
@@ -227,7 +225,8 @@ pub(super) fn create_payload_size_func<'db, O: Clone + Into<crate::span::Desugar
         FuncModifiers::new(Visibility::Private, false, false, false),
         |body| {
             let db = body.db();
-            let dynamic_payload_size_path = PathId::from_ident(db, roots.core)
+            let dynamic_payload_size_path = roots
+                .core
                 .push_str(db, "abi")
                 .push_str(db, "dynamic_payload_size");
             let mut expr = body.abi_size_assoc_expr(TypeId::fallback_self_ty(db), "HEAD_SIZE");
@@ -293,9 +292,7 @@ fn push_int_expr<'db>(
 fn abi_size_trait_ref<'db>(ctxt: &FileLowerCtxt<'db>) -> TraitRefId<'db> {
     let db = ctxt.db();
     let roots = super::hir_builder::LibRoots::for_ctxt(ctxt);
-    let path = PathId::from_ident(db, roots.core)
-        .push_str(db, "abi")
-        .push_str(db, "AbiSize");
+    let path = roots.core.push_str(db, "abi").push_str(db, "AbiSize");
     TraitRefId::new(db, Partial::Present(path))
 }
 
@@ -375,7 +372,7 @@ pub(super) fn create_head_size_assoc_const<'db, O: Clone + Into<crate::span::Des
 
     for (_, field_ty) in fields.iter().copied() {
         let args = GenericArgListId::given1_type(db, field_ty);
-        let path = PathId::from_ident(db, core)
+        let path = core
             .push_str(db, "abi")
             .push_str_args(db, "abi_field_head_size", args);
         let callee = body_ctxt.push_expr(Expr::Path(Partial::Present(path)), origin.clone());
@@ -561,9 +558,11 @@ fn lower_msg_variant_impl<'db>(
     let roots = builder.roots();
     let abi_args = builder.sol_args();
 
-    let msg_variant_trait_path = PathId::from_ident(db, roots.core)
-        .push_str(db, "message")
-        .push_str_args(db, "MsgVariant", abi_args);
+    let msg_variant_trait_path =
+        roots
+            .core
+            .push_str(db, "message")
+            .push_str_args(db, "MsgVariant", abi_args);
     let trait_ref = TraitRefId::new(db, Partial::Present(msg_variant_trait_path));
 
     let ty = variant_struct_ty(db, struct_);

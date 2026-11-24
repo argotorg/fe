@@ -128,11 +128,11 @@ pub(super) fn lower_error_struct<'db>(
     // Generate impl ErrorVariant<Sol>
     let trait_ref = TraitRefId::new(
         db,
-        Partial::Present(
-            PathId::from_ident(db, builder.roots().core)
-                .push_str(db, "error")
-                .push_str_args(db, "ErrorVariant", builder.sol_args()),
-        ),
+        Partial::Present(builder.roots().core.push_str(db, "error").push_str_args(
+            db,
+            "ErrorVariant",
+            builder.sol_args(),
+        )),
     );
 
     let field_type_paths = parsed_fields.field_type_paths.clone();
@@ -275,7 +275,8 @@ fn create_selector_const<'db>(
     let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);
 
     // sol() callee — std::abi::sol::sol
-    let sol_path = PathId::from_ident(db, roots.std)
+    let sol_path = roots
+        .std
         .push_str(db, "abi")
         .push_str(db, "sol")
         .push_str(db, "sol");
@@ -389,9 +390,7 @@ fn lower_error_abi_size_impl<'db>(
 ) {
     let db = builder.db();
     let roots = builder.roots();
-    let trait_path = PathId::from_ident(db, roots.core)
-        .push_str(db, "abi")
-        .push_str(db, "AbiSize");
+    let trait_path = roots.core.push_str(db, "abi").push_str(db, "AbiSize");
     let trait_ref = Partial::Present(TraitRefId::new(db, Partial::Present(trait_path)));
     let ty = Partial::Present(self_ty);
     let impl_trait_idx = builder.ctxt().next_impl_trait_idx();

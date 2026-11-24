@@ -113,7 +113,9 @@ pub(super) fn lower_event_struct<'db>(
     let trait_ref = TraitRefId::new(
         db,
         Partial::Present(
-            PathId::from_ident(db, builder.roots().std)
+            builder
+                .roots()
+                .std
                 .push_str(db, "evm")
                 .push_str(db, "Event"),
         ),
@@ -301,7 +303,7 @@ fn create_topic0_const<'db>(
     let mut body_ctxt = super::body::BodyCtxt::new(ctxt, id);
 
     // keccak callee
-    let keccak_path = PathId::from_ident(db, roots.core).push_str(db, "keccak");
+    let keccak_path = roots.core.push_str(db, "keccak");
     let callee = Expr::Path(Partial::Present(keccak_path));
     let callee_id = body_ctxt.push_expr(callee, origin.clone());
 
@@ -416,11 +418,7 @@ fn push_sol_type_fragments<'db>(
     let roots = super::hir_builder::LibRoots::for_ctxt(body.f_ctxt);
     let sol_compat = TraitRefId::new(
         db,
-        Partial::Present(
-            PathId::from_ident(db, roots.std)
-                .push_str(db, "abi")
-                .push_str(db, "SolCompat"),
-        ),
+        Partial::Present(roots.std.push_str(db, "abi").push_str(db, "SolCompat")),
     );
     let qualified = PathId::new(
         db,

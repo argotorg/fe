@@ -14,9 +14,9 @@ use self::{item::lower_module_items, scope_builder::ScopeGraphBuilder};
 use crate::{
     HirDb, LowerHirDb,
     hir_def::{
-        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, IdentId, ImplTrait,
-        IntegerId, ItemKind, LitKind, ModuleTree, Partial, PathId, StringId, TopLevelMod,
-        TrackedItemId, TrackedItemVariant, Use, Visibility,
+        AttrListId, AuthoredLocator, AuthoredScope, Body, ExprId, Func, HirIngot, IdentId,
+        ImplTrait, IntegerId, ItemKind, LitKind, ModuleTree, Partial, PathId, StringId,
+        TopLevelMod, TrackedItemId, TrackedItemVariant, Use, Visibility,
         authored::ScopedDeriveDemandId,
         module_tree_impl,
         scope_graph::{ScopeGraph, ScopeId},
@@ -1086,15 +1086,35 @@ impl<'db> FileLowerCtxt<'db> {
     }
 
     /// The path naming the builtin ingot `name` of `kind`, `core` or `std`,
-    /// from the file: `ingot` within that ingot.
+    /// from the file: `ingot` within that ingot, and otherwise the root of
+    /// the dependency of that kind, bound where the path is written. Bound,
+    /// it does not depend on what a module of the file declares: a user
+    /// `mod std` cannot take the place of the library. Without such a
+    /// dependency the path is the plain name, which then fails to resolve.
     pub(super) fn builtin_ingot_path(&self, kind: IngotKind, name: &str) -> PathId<'db> {
         let db = self.db();
-        let root = if self.top_mod().ingot(db).kind(db) == kind {
-            IdentId::make_ingot(db)
-        } else {
-            IdentId::new(db, name.to_string())
-        };
-        PathId::from_ident(db, root)
+        let own = self.top_mod().ingot(db);
+        if own.kind(db) == kind {
+            return PathId::from_ident(db, IdentId::make_ingot(db));
+        }
+        let display = IdentId::new(db, name.to_string());
+        let library = own
+            .resolved_external_ingots(db)
+            .iter()
+            .find_map(|(dependency, ingot)| {
+                (*dependency == display && ingot.kind(db) == kind).then_some(*ingot)
+            });
+        match library {
+            Some(library) => PathId::new(
+                db,
+                crate::hir_def::PathKind::BoundIngot {
+                    scope: AuthoredScope::producer(db, library.root_mod(db), None, None),
+                    display,
+                },
+                None,
+            ),
+            None => PathId::from_ident(db, display),
+        }
     }
 
     pub(super) fn insert_synthetic_prelude_use(&mut self) {
