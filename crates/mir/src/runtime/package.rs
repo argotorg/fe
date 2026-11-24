@@ -1,6 +1,6 @@
 use common::{compilation::Target, indexmap::IndexMap, ingot::IngotKind};
 use hir::analysis::ty::AddressSpace;
-use hir::semantic::{RecvArmAbiInfo, RecvArmInput, RecvArmView};
+use hir::semantic::{RecvArmAbiInfo, RecvArmInput, RecvArmView, contract_entry_plan};
 use hir::{
     analysis::{
         semantic::{
@@ -10,7 +10,7 @@ use hir::{
         },
         ty::{
             const_ty::ConstTyData,
-            corelib::{resolve_core_trait, resolve_lib_func_path, resolve_lib_type_path},
+            corelib::{resolve_lib_func_path, resolve_lib_type_path},
             trait_def::{MethodArgMapError, TraitInstId},
             trait_resolution::PredicateListId,
             ty_check::{BodyOwner, EffectParamSite, LocalBinding},
@@ -1366,12 +1366,18 @@ fn contract_init_abi_plan<'db>(
     } else {
         InitArgsPlan::DecodeInitTail {
             tuple_ty: contract.init_args_ty(db),
-            decode_fn: resolve_decode_instance(
+            decode_fn: entry_instance(
                 db,
-                contract.scope(),
-                contract.init_args_ty(db),
-                memory_span_ty(db, contract.scope())?,
-            )?,
+                match &contract_entry_plan(db, contract, None).init {
+                    Ok(Some(key)) => *key,
+                    Ok(None) => {
+                        return Err(LowerError::Unsupported(
+                            "an init with arguments has no decode".to_string(),
+                        ));
+                    }
+                    Err(error) => return Err(LowerError::Unsupported(error.message().to_string())),
+                },
+            ),
             projected_fields,
         }
     };
@@ -1397,6 +1403,7 @@ fn contract_recv_wrapper<'db>(
         validate_runtime_array_extents_in_env(db, type_env, ret_ty)?;
     }
     let recv = arm.recv(db);
+    let arm_entry = contract_entry_plan(db, contract, None).arm(recv.recv_idx(db), arm.arm_idx(db));
     let owner = BodyOwner::ContractRecvArm {
         contract,
         recv_idx: recv.recv_idx(db),
@@ -1424,7 +1431,11 @@ fn contract_recv_wrapper<'db>(
         RuntimeInputPlan::None
     } else {
         let host = host.clone().expect("non-unit recv args require a host");
-        match arm.input(db).clone().map_err(LowerError::Unsupported)? {
+        match arm
+            .input(db)
+            .clone()
+            .map_err(|error| LowerError::Unsupported(error.message().to_string()))?
+        {
             RecvArmInput::None => RuntimeInputPlan::None,
             RecvArmInput::Whole { decode } => RuntimeInputPlan::DecodeHostPayload {
                 msg_ty: abi_info.args_ty,
@@ -1454,22 +1465,15 @@ fn contract_recv_wrapper<'db>(
     };
     let ret = if let Some(ret_ty) = abi_info.ret_ty {
         let host = host.expect("value-returning recv requires a host");
-        let contract_host = resolve_core_trait(
-            db,
-            contract.scope(),
-            &["contracts", "ContractHost"],
-        )
-        .ok_or_else(|| {
-            LowerError::Unsupported("missing required core::contracts::ContractHost".to_string())
-        })?;
-        let host_inst = TraitInstId::new_simple(db, contract_host, vec![host.declared_ty]);
-        let return_value = resolve_trait_runtime_instance(
-            db,
-            contract.scope(),
-            host_inst,
-            "return_value",
-            vec![abi_ty, ret_ty],
-        )?;
+        let return_value = match arm_entry.map(|arm| &arm.ret) {
+            Some(Ok(Some(key))) => entry_instance(db, *key),
+            Some(Ok(None)) | None => {
+                return Err(LowerError::Unsupported(
+                    "a recv arm that returns a value has no encode".to_string(),
+                ));
+            }
+            Some(Err(error)) => return Err(LowerError::Unsupported(error.message().to_string())),
+        };
         RuntimeReturnPlan::Value {
             ty: ret_ty,
             host,
@@ -2102,25 +2106,10 @@ fn synthetic_instance<'db>(
     get_or_build_runtime_instance(db, key)
 }
 
-fn resolve_decode_instance<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-    ty: TyId<'db>,
-    input_ty: TyId<'db>,
-) -> Result<RuntimeInstance<'db>, LowerError> {
-    let abi_ty = sol_abi_ty(db, scope)?;
-    let decoder_ty = resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder")
-        .ok_or_else(|| LowerError::Unsupported("missing std::abi::sol::SolDecoder".to_string()))?;
-    let decode_trait = resolve_core_trait(db, scope, &["abi", "Decode"])
-        .ok_or_else(|| LowerError::Unsupported("missing required core::abi::Decode".to_string()))?;
-    let inst = TraitInstId::new_simple(db, decode_trait, vec![ty, abi_ty]);
-    resolve_trait_runtime_instance(
-        db,
-        scope,
-        inst,
-        "decode_payload",
-        vec![decoder_ty, input_ty],
-    )
+/// The runtime instance of the semantic instance `key` that a step of the
+/// contract's entry plan runs.
+fn entry_instance<'db>(db: &'db dyn MirDb, key: SemanticInstanceKey<'db>) -> RuntimeInstance<'db> {
+    runtime_instance_for_semantic(db, SemanticInstance::new(db, key))
 }
 
 /// The instance `key` that a dispatcher calls with the host of a recv arm as
@@ -2230,14 +2219,6 @@ fn visible_recv_arg_fields<'db>(
         })
         .collect::<Vec<_>>()
         .into_boxed_slice()
-}
-
-fn memory_span_ty<'db>(
-    db: &'db dyn MirDb,
-    scope: hir::hir_def::scope_graph::ScopeId<'db>,
-) -> Result<TyId<'db>, LowerError> {
-    resolve_lib_type_path(db, scope, "core::ptr::MemSpan")
-        .ok_or_else(|| LowerError::Unsupported("missing core::ptr::MemSpan".to_string()))
 }
 
 fn make_runtime_object<'db>(
@@ -3693,5 +3674,104 @@ pub contract NoInitBox {}
             *root_init_abi, init_abi,
             "contract init root should always call the synthesized init abi wrapper"
         );
+    }
+
+    /// The semantic instance that a runtime instance of the dispatcher runs.
+    fn semantic_key_of<'db>(
+        db: &'db DriverDataBase,
+        instance: RuntimeInstance<'db>,
+    ) -> SemanticInstanceKey<'db> {
+        let RuntimeInstanceSource::Semantic(semantic) = instance.key(db).source(db) else {
+            panic!("the dispatcher runs a semantic instance");
+        };
+        semantic.key(db)
+    }
+
+    #[test]
+    fn the_trust_walk_and_the_lowering_run_the_same_dispatcher_instances() {
+        use hir::analysis::{semantic::access::dispatcher_callees, ty::ty_check::BodyOwner};
+
+        let file_url = Url::parse("file:///dispatcher_instances_agree.fe").unwrap();
+        let (db, file) = prepare_test_file(
+            &file_url,
+            r#"
+use std::abi::sol
+
+msg Entry {
+    #[selector = sol("raw(uint256)")]
+    Raw { value: u256 } -> u256,
+    #[selector = sol("swap(uint64,uint64)")]
+    Swap { a: u64, b: u64 } -> u64,
+}
+
+pub contract Agree {
+    init(start: u256, label: u64) {}
+    recv Entry {
+        Raw { value } -> u256 { value }
+        Swap { ref b, a } -> u64 { a }
+    }
+}
+"#,
+        );
+        let top_mod = db.top_mod(file);
+        let contract = top_mod
+            .all_contracts(&db)
+            .first()
+            .copied()
+            .expect("fixture should define a contract");
+        let abi_ty = sol_abi_ty(&db, contract.scope()).expect("Sol ABI type");
+
+        let init = contract_init_abi_plan(&db, contract).expect("init plan");
+        let InitArgsPlan::DecodeInitTail { decode_fn, .. } = init.init_args else {
+            panic!("an init with arguments decodes them");
+        };
+        assert_eq!(
+            dispatcher_callees(&db, BodyOwner::ContractInit { contract }),
+            vec![semantic_key_of(&db, decode_fn)],
+            "the init decode"
+        );
+
+        let recv = hir::semantic::RecvView::new(&db, contract, 0);
+        let mut arms = 0;
+        for arm in recv.arms(&db) {
+            arms += 1;
+            let (_, wrapper) = contract_recv_wrapper(&db, arm, abi_ty).expect("recv wrapper");
+            let RuntimeInstanceSource::Synthetic(synthetic) = wrapper.key(&db).source(&db) else {
+                panic!("recv wrapper should be synthetic");
+            };
+            let RuntimeSyntheticSpec::ContractRecvAbi { plan } = synthetic.spec(&db) else {
+                panic!("expected recv wrapper synthetic spec");
+            };
+            let mut lowered = match &plan.input {
+                RuntimeInputPlan::None => Vec::new(),
+                RuntimeInputPlan::DecodeHostPayload { decode_args_fn, .. } => {
+                    vec![semantic_key_of(&db, *decode_args_fn)]
+                }
+                RuntimeInputPlan::ReadHostPayloadInPlace { args_fn, reads, .. } => {
+                    std::iter::once(*args_fn)
+                        .chain(reads.iter().map(|(_, read)| *read))
+                        .map(|instance| semantic_key_of(&db, instance))
+                        .collect()
+                }
+            };
+            if let RuntimeReturnPlan::Value { return_value, .. } = &plan.ret {
+                lowered.push(semantic_key_of(&db, *return_value));
+            }
+            assert!(!lowered.is_empty(), "each arm decodes or encodes");
+            assert_eq!(
+                dispatcher_callees(
+                    &db,
+                    BodyOwner::ContractRecvArm {
+                        contract,
+                        recv_idx: 0,
+                        arm_idx: arm.arm_idx(&db),
+                    }
+                ),
+                lowered,
+                "the instances of arm {}",
+                arm.arm_idx(&db)
+            );
+        }
+        assert_eq!(arms, 2);
     }
 }

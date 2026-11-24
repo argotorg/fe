@@ -1027,6 +1027,12 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
             );
 
             diags.extend(
+                ty_check::contract_entry_failures(db, contract)
+                    .into_iter()
+                    .map(|failure| Box::new(failure) as Box<dyn DiagnosticVoucher + 'db>),
+            );
+
+            diags.extend(
                 ty_check::check_contract_field_address_spaces(db, contract)
                     .iter()
                     .map(|diag| diag.to_voucher()),

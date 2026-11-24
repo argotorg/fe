@@ -30,7 +30,7 @@ use crate::analysis::semantic::{SemanticInstanceKey, generated_callee_key};
 use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::closure::closure_effect_requirements;
 use crate::analysis::ty::corelib::{
-    resolve_core_trait, resolve_lib_func_path, resolve_lib_trait_path,
+    resolve_core_trait, resolve_lib_func_path, resolve_lib_trait_path, resolve_lib_type_path,
 };
 use crate::analysis::ty::diagnostics::{ContractFieldLayoutIssue, ImplDiag, TyLowerDiag};
 use crate::analysis::ty::effects::rows::RowKey;
@@ -94,7 +94,8 @@ use crate::analysis::ty::effects::{
     EffectKeyKind, ResolvedEffectKey, place_effect_provider_param_index_map, resolve_effect_key,
 };
 use crate::analysis::ty::trait_def::{
-    ImplementorId, ImplementorOrigin, TraitInstId, does_impl_trait_conflict, impls_for_trait_def,
+    ImplementorId, ImplementorOrigin, MethodArgMapError, TraitInstId, does_impl_trait_conflict,
+    impls_for_trait_def,
 };
 use crate::analysis::ty::trait_lower::{
     TraitRefLowerError, collect_implementor_methods, collect_trait_impls, lower_impl_trait,
@@ -113,7 +114,10 @@ use crate::analysis::ty::{
         ProviderKind, ProviderSemantics, RootProviderRegistration, RootProviderScope,
         provider_semantics, registered_root_providers,
     },
-    trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
+    trait_resolution::{
+        ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
+        check_ty_wf, is_goal_satisfiable,
+    },
     ty_check::{EffectParamSite, RecvArmResolution, recv_arm_resolution},
     ty_def::{InvalidCause, PrimTy, TyId},
     ty_error::{collect_ty_lower_errors, demanded_ground_const_cause, diag_from_invalid_cause},
@@ -1881,8 +1885,6 @@ impl<'db> RecvArmView<'db> {
     /// alone.
     #[salsa::tracked(returns(ref))]
     pub fn reading(self, db: &'db dyn HirAnalysisDb) -> RecvArmReading<'db> {
-        use crate::analysis::ty::trait_resolution::{GoalSatisfiability, is_goal_satisfiable};
-
         let Some(hir_arm) = self.arm(db) else {
             return RecvArmReading::default();
         };
@@ -2032,12 +2034,14 @@ impl<'db> RecvArmView<'db> {
     /// (see `RecvArmInput`), or why it cannot. The arm's type check, the
     /// trust walk and the lowering of the contract read the same plan.
     #[salsa::tracked(returns(ref))]
-    pub fn input(self, db: &'db dyn HirAnalysisDb) -> Result<RecvArmInput<'db>, String> {
+    pub fn input(self, db: &'db dyn HirAnalysisDb) -> Result<RecvArmInput<'db>, EntryPlanError> {
         let contract = self.contract(db);
         let scope = contract.scope();
         let assumptions = PredicateListId::empty_list(db);
         let Some(abi) = resolve_sol_abi_ty(db, scope, assumptions) else {
-            return Err("missing std::abi::Sol".to_string());
+            return Err(EntryPlanError::Reported(
+                "missing std::abi::Sol".to_string(),
+            ));
         };
         let info = self.abi_info(db, abi);
         if info.is_fallback || info.args_ty == TyId::unit(db) {
@@ -2050,27 +2054,23 @@ impl<'db> RecvArmView<'db> {
             arm_idx: self.arm_idx(db),
         };
         let Some(host) = registered_root_providers(db, site).first() else {
-            return Err(format!(
+            return Err(EntryPlanError::Reported(format!(
                 "contract `{}` recv arm has no registered root provider",
                 contract
                     .name(db)
                     .to_opt()
                     .map_or("<unnamed>", |name| name.data(db))
-            ));
+            )));
         };
         let host_ty = host.provider_ty;
         let reading = self.reading(db);
-        let key = |path: &str, args: &[TyId<'db>]| -> Result<SemanticInstanceKey<'db>, String> {
-            let func = resolve_lib_func_path(db, scope, path)
-                .ok_or_else(|| format!("missing required {path}"))?;
-            generated_callee_key(db, scope, assumptions, None, func, None, args).map_err(|error| {
-                let name = func
-                    .name(db)
-                    .to_opt()
-                    .map_or("<unnamed>", |name| name.data(db));
-                format!("failed to finalize generated call to `{name}`: {error:?}")
-            })
-        };
+        let key =
+            |path: &str, args: &[TyId<'db>]| -> Result<SemanticInstanceKey<'db>, EntryPlanError> {
+                let func = resolve_lib_func_path(db, scope, path)
+                    .ok_or_else(|| EntryPlanError::Reported(format!("missing required {path}")))?;
+                generated_callee_key(db, scope, assumptions, None, func, None, args)
+                    .map_err(|error| EntryPlanError::no_instance(db, func, None, error))
+            };
         if !reading.in_place {
             return Ok(RecvArmInput::Whole {
                 decode: key(
@@ -2080,7 +2080,9 @@ impl<'db> RecvArmView<'db> {
             });
         }
         let Some(input_ty) = reading.input_ty.filter(|_| reading.failures.is_empty()) else {
-            return Err("recv arm reads in place but its reads are not valid".to_string());
+            return Err(EntryPlanError::Reported(
+                "recv arm reads in place but its reads are not valid".to_string(),
+            ));
         };
         let args = key("std::abi::message_args", &[host_ty, abi, info.args_ty])?;
         let mut reads = Vec::with_capacity(reading.fields.len());
@@ -2195,6 +2197,183 @@ pub enum RecvArmInput<'db> {
         args: SemanticInstanceKey<'db>,
         reads: Vec<(u32, SemanticInstanceKey<'db>)>,
     },
+}
+
+/// Why a step of a contract's entry code has no instance to run.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub enum EntryPlanError {
+    /// A library item is missing, or the cause is reported where it arises
+    /// (a recv arm's type check, a contract without a root provider). The
+    /// lowering of the contract names it.
+    Reported(String),
+    /// A generated call has no instance: a goal of the call or a bound of its
+    /// callee has no proof. Only the entry plan reports it.
+    NoInstance(String),
+}
+
+impl EntryPlanError {
+    fn no_instance<'db>(
+        db: &'db dyn HirAnalysisDb,
+        func: Func<'db>,
+        goal: Option<TraitInstId<'db>>,
+        error: MethodArgMapError<'db>,
+    ) -> Self {
+        let name = func
+            .name(db)
+            .to_opt()
+            .map_or("<unnamed>", |name| name.data(db));
+        let goal = goal.map_or(String::new(), |goal| {
+            format!(" for `{}`", goal.pretty_print(db, true))
+        });
+        let detail = match error {
+            MethodArgMapError::MissingBody => String::new(),
+            error => format!(" ({error:?})"),
+        };
+        Self::NoInstance(format!(
+            "the generated call of `{name}`{goal} has no instance: a goal or a bound of the call is not proved{detail}"
+        ))
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Reported(message) | Self::NoInstance(message) => message,
+        }
+    }
+}
+
+/// What the entry code of a contract runs for each of its steps: the decode of
+/// the `init` arguments, and for each recv arm the read of the message and the
+/// encode of the return value. The trust walk, the lowering of the contract
+/// and the contract's check read this one plan, so the check refuses exactly
+/// the contracts whose entry code the lowering cannot build.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub struct ContractEntryPlan<'db> {
+    /// The decode of the `init` arguments; `Ok(None)` when there is none.
+    pub init: Result<Option<SemanticInstanceKey<'db>>, EntryPlanError>,
+    pub arms: Vec<RecvArmEntry<'db>>,
+}
+
+/// The steps of the entry code for one recv arm.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub struct RecvArmEntry<'db> {
+    pub recv_idx: u32,
+    pub arm_idx: u32,
+    pub input: Result<RecvArmInput<'db>, EntryPlanError>,
+    /// The encode of the return value; `Ok(None)` when the arm returns none.
+    pub ret: Result<Option<SemanticInstanceKey<'db>>, EntryPlanError>,
+}
+
+impl<'db> ContractEntryPlan<'db> {
+    /// The plan entry of a recv arm.
+    pub fn arm(&self, recv_idx: u32, arm_idx: u32) -> Option<&RecvArmEntry<'db>> {
+        self.arms
+            .iter()
+            .find(|arm| arm.recv_idx == recv_idx && arm.arm_idx == arm_idx)
+    }
+}
+
+/// The plan for the entry code of `contract`. `frame` is the choice frame of
+/// the calls that decode the `init` arguments and encode the return values;
+/// no frame is passed yet, so they resolve as any generated call does. A recv
+/// arm's input is read from the arm's own plan (`RecvArmView::input`).
+#[salsa::tracked(returns(ref))]
+pub fn contract_entry_plan<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+    frame: Option<ChosenImpls<'db>>,
+) -> ContractEntryPlan<'db> {
+    let scope = contract.scope();
+    let assumptions = PredicateListId::empty_list(db);
+    let call = |trait_inst: TraitInstId<'db>,
+                method: &str,
+                own_args: &[TyId<'db>]|
+     -> Result<SemanticInstanceKey<'db>, EntryPlanError> {
+        let func = *trait_inst
+            .def(db)
+            .method_defs(db)
+            .get(&IdentId::new(db, method.to_string()))
+            .ok_or_else(|| {
+                EntryPlanError::Reported(format!("missing trait method `{method}` for the entry"))
+            })?;
+        generated_callee_key(
+            db,
+            scope,
+            assumptions,
+            frame,
+            func,
+            Some(trait_inst),
+            own_args,
+        )
+        .map_err(|error| {
+            // Only a goal with no implementation is the contract's own error. A
+            // goal that holds, or holds an invalid type, fails inside the
+            // callee or follows from an error that is reported where the type is
+            // written; the lowering names it.
+            let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
+                .with_assumptions(assumptions)
+                .with_choices(frame);
+            match is_goal_satisfiable(db, solve_cx, trait_inst) {
+                GoalSatisfiability::UnSat(_) => {
+                    EntryPlanError::no_instance(db, func, Some(trait_inst), error)
+                }
+                _ => EntryPlanError::Reported(format!(
+                    "failed to finalize generated call to `{method}`: {error:?}"
+                )),
+            }
+        })
+    };
+    let missing = |what: &str| EntryPlanError::Reported(format!("missing {what}"));
+
+    let args_ty = contract.init_args_ty(db);
+    let init = if contract.init(db).is_none() || args_ty == TyId::unit(db) {
+        Ok(None)
+    } else {
+        (|| {
+            let abi = resolve_lib_type_path(db, scope, "std::abi::Sol")
+                .ok_or_else(|| missing("std::abi::Sol"))?;
+            let decoder = resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder")
+                .ok_or_else(|| missing("std::abi::sol::SolDecoder"))?;
+            let input = resolve_lib_type_path(db, scope, "core::ptr::MemSpan")
+                .ok_or_else(|| missing("core::ptr::MemSpan"))?;
+            let decode = resolve_core_trait(db, scope, &["abi", "Decode"])
+                .ok_or_else(|| missing("core::abi::Decode"))?;
+            let inst = TraitInstId::new_simple(db, decode, vec![args_ty, abi]);
+            call(inst, "decode_payload", &[decoder, input]).map(Some)
+        })()
+    };
+
+    let mut arms = Vec::new();
+    for recv_idx in 0..contract.recvs(db).data(db).len() as u32 {
+        for arm in RecvView::new(db, contract, recv_idx).arms(db) {
+            let ret = (|| {
+                let abi = resolve_lib_type_path(db, scope, "std::abi::Sol")
+                    .ok_or_else(|| missing("std::abi::Sol"))?;
+                let Some(ret_ty) = arm.abi_info(db, abi).ret_ty else {
+                    return Ok(None);
+                };
+                let site = EffectParamSite::ContractRecvArm {
+                    contract,
+                    recv_idx,
+                    arm_idx: arm.arm_idx(db),
+                };
+                let host = registered_root_providers(db, site)
+                    .first()
+                    .ok_or_else(|| missing("a registered root provider of the recv arm"))?
+                    .provider_ty;
+                let host_trait = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
+                    .ok_or_else(|| missing("core::contracts::ContractHost"))?;
+                let inst = TraitInstId::new_simple(db, host_trait, vec![host]);
+                call(inst, "return_value", &[abi, ret_ty]).map(Some)
+            })();
+            arms.push(RecvArmEntry {
+                recv_idx,
+                arm_idx: arm.arm_idx(db),
+                input: arm.input(db).clone(),
+                ret,
+            });
+        }
+    }
+    ContractEntryPlan { init, arms }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]

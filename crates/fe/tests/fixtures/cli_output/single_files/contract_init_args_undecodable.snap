@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_init_args_undecodable.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_init_args_undecodable.fe
+
+error[16-0022]: the entry code of contract `C` cannot be generated
+   ┌─ contract_init_args_undecodable.fe:36:9
+   │
+36 │     init(w: W<u8>) {}
+   │         ^^^^^^^^^^ decoding the arguments of `init`: the generated call of `decode_payload` for `(W<u8>): Decode<Sol>` has no instance: a goal or a bound of the call is not proved
+
+
+=== EXIT CODE: 1 ===

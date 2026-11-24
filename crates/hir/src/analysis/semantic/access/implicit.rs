@@ -18,148 +18,61 @@ use crate::{
         HirAnalysisDb,
         semantic::{
             DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex, drop_callee,
-            drop_elaboration, generated_callee_key,
+            drop_elaboration,
             normalized::{
                 NDropTarget, NPlaceBase, NRootKind, NStatementId, NValueDefinition, NormalizedBody,
             },
         },
         ty::{
             adt_def::AdtRef,
-            corelib::{resolve_core_trait, resolve_lib_type_path},
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
-            provider::registered_root_providers,
-            trait_def::TraitInstId,
-            trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, EffectParamSite},
+            ty_check::BodyOwner,
             ty_def::TyId,
         },
     },
-    hir_def::{Contract, IdentId},
-    semantic::{RecvArmInput, RecvView},
+    semantic::{RecvArmInput, contract_entry_plan},
 };
-
-/// The instance of `trait_inst`'s method `name` that a compiler-generated call
-/// reaches, for the trait's own arguments `own_args`.
-fn trait_method_callee<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    trait_inst: TraitInstId<'db>,
-    name: &str,
-    own_args: &[TyId<'db>],
-) -> Option<SemanticInstanceKey<'db>> {
-    let func = *trait_inst
-        .def(db)
-        .method_defs(db)
-        .get(&IdentId::new(db, name.to_string()))?;
-    generated_callee_key(
-        db,
-        contract.scope(),
-        PredicateListId::empty_list(db),
-        None,
-        func,
-        Some(trait_inst),
-        own_args,
-    )
-    .ok()
-}
-
 /// The instances the dispatcher runs for `owner`, which is an `init` or a
 /// `recv` arm of a contract: the decode of the arguments, and for an arm the
-/// encode of its return value. The arm and the entry resolve the same
-/// instances when the contract is lowered.
-pub(super) fn dispatcher_callees<'db>(
+/// read of the message and the encode of its return value. They are the steps
+/// of the contract's entry plan, which the lowering of the contract and the
+/// contract's check read too. A step without an instance is reported by the
+/// check, and the walk has nothing to follow for it.
+pub fn dispatcher_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Vec<SemanticInstanceKey<'db>> {
     match owner {
-        BodyOwner::ContractInit { contract } => init_callees(db, contract),
+        BodyOwner::ContractInit { contract } => contract_entry_plan(db, contract, None)
+            .init
+            .iter()
+            .flatten()
+            .copied()
+            .collect(),
         BodyOwner::ContractRecvArm {
             contract,
             recv_idx,
             arm_idx,
-        } => recv_arm_callees(db, contract, recv_idx, arm_idx),
+        } => {
+            let Some(arm) = contract_entry_plan(db, contract, None).arm(recv_idx, arm_idx) else {
+                return Vec::new();
+            };
+            let mut callees = Vec::new();
+            match &arm.input {
+                Ok(RecvArmInput::Whole { decode }) => callees.push(*decode),
+                Ok(RecvArmInput::InPlace { args, reads }) => {
+                    callees.push(*args);
+                    callees.extend(reads.iter().map(|(_, read)| *read));
+                }
+                Ok(RecvArmInput::None) | Err(_) => {}
+            }
+            callees.extend(arm.ret.iter().flatten().copied());
+            callees
+        }
         _ => Vec::new(),
     }
 }
 
-fn init_callees<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-) -> Vec<SemanticInstanceKey<'db>> {
-    let args_ty = contract.init_args_ty(db);
-    if contract.init(db).is_none() || args_ty == TyId::unit(db) {
-        return Vec::new();
-    }
-    let scope = contract.scope();
-    let (Some(abi_ty), Some(decoder_ty), Some(input_ty), Some(decode)) = (
-        resolve_lib_type_path(db, scope, "std::abi::Sol"),
-        resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder"),
-        resolve_lib_type_path(db, scope, "core::ptr::MemSpan"),
-        resolve_core_trait(db, scope, &["abi", "Decode"]),
-    ) else {
-        return Vec::new();
-    };
-    let inst = TraitInstId::new_simple(db, decode, vec![args_ty, abi_ty]);
-    trait_method_callee(
-        db,
-        contract,
-        inst,
-        "decode_payload",
-        &[decoder_ty, input_ty],
-    )
-    .into_iter()
-    .collect()
-}
-
-fn recv_arm_callees<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    recv_idx: u32,
-    arm_idx: u32,
-) -> Vec<SemanticInstanceKey<'db>> {
-    let scope = contract.scope();
-    let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
-        return Vec::new();
-    };
-    let Some(arm) = RecvView::new(db, contract, recv_idx).arm(db, arm_idx) else {
-        return Vec::new();
-    };
-    let info = arm.abi_info(db, abi_ty);
-    let Some(host_ty) = registered_root_providers(
-        db,
-        EffectParamSite::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        },
-    )
-    .first()
-    .map(|registration| registration.provider_ty) else {
-        return Vec::new();
-    };
-    let mut callees = Vec::new();
-    match arm.input(db) {
-        Ok(RecvArmInput::Whole { decode }) => callees.push(*decode),
-        Ok(RecvArmInput::InPlace { args, reads }) => {
-            callees.push(*args);
-            callees.extend(reads.iter().map(|(_, read)| *read));
-        }
-        Ok(RecvArmInput::None) | Err(_) => {}
-    }
-    if let Some(ret_ty) = info.ret_ty
-        && let Some(host) = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
-    {
-        let inst = TraitInstId::new_simple(db, host, vec![host_ty]);
-        callees.extend(trait_method_callee(
-            db,
-            contract,
-            inst,
-            "return_value",
-            &[abi_ty, ret_ty],
-        ));
-    }
-    callees
-}
 /// The `Drop::drop` implementations that drop elaboration inserts for the
 /// drop `statement` of `instance`'s `body`: for each part of the target that
 /// is initialized there, the `drop` of its type if it has one, else those of

@@ -1,0 +1,40 @@
+// The dispatcher decodes the `init` arguments with `Decode<Sol>`. `W<u8>` has
+// an implementation only for `T: Marker`, and `u8` is not a `Marker`, so the
+// entry code of `C` cannot be generated. `fe check` reports what `fe build`
+// cannot generate.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::message::MsgVariant
+use std::abi::Sol
+
+pub trait Marker {}
+pub struct M {}
+impl MsgVariant<Sol> for M {
+    const SELECTOR: u32 = 0x55667788
+    type Return = u256
+}
+impl AbiSize for M {
+    const HEAD_SIZE: u256 = 0
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for M { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Sol> for M {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { M {} }
+}
+
+pub struct W<T> { v: u256 }
+impl<T> AbiSize for W<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T: Marker> Decode<Sol> for W<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        W { v: d.read_word(input) }
+    }
+}
+
+pub contract C {
+    init(w: W<u8>) {}
+    recv {
+        M {} -> u256 { 1 }
+    }
+}

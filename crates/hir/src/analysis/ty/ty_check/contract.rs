@@ -4,6 +4,9 @@
 //! recv blocks, and recv arm bodies.
 
 use crate::analysis::name_resolution::Tier;
+use common::diagnostics::{
+    CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{TypedBody, owner::BodyOwner};
@@ -14,6 +17,7 @@ use ruint::aliases::U256;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         name_resolution::{
             ExpectedPathKind, PathRes, PathResError, diagnostics::PathResDiag,
             resolve_path_with_observer_and_minter,
@@ -25,7 +29,7 @@ use crate::{
         ty::{
             adt_def::AdtRef,
             const_ty::LoweringContext,
-            corelib::resolve_core_trait,
+            corelib::{resolve_core_trait, resolve_lib_type_path},
             diagnostics::{
                 BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
             },
@@ -42,13 +46,16 @@ use crate::{
             ty_error::{emit_invalid_ty_error, path_generic_arg_diags},
         },
     },
-    core::semantic::{ValidatedFieldLayoutPlan, msg_variant_impl, resolve_sol_abi_ty},
+    core::semantic::{
+        EntryPlanError, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
+        resolve_sol_abi_ty,
+    },
     hir_def::{
         Body, Contract, ContractRecvArm, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId,
         PathKind, Struct, scope_graph::ScopeId,
     },
     semantic::FieldView,
-    span::{DynLazySpan, pat::LazyPatSpan, path::LazyPathSpan},
+    span::{DynLazySpan, LazySpan, pat::LazyPatSpan, path::LazyPathSpan},
 };
 
 /// Returns true if `ty` implements the core MsgVariant trait for the ABI of
@@ -1016,4 +1023,98 @@ pub(super) fn get_msg_variant_return_type<'db>(
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());
     msg_variant_impl.assoc_ty(db, return_name)
+}
+
+/// The step of a contract's entry code that has no instance to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryStep {
+    InitArgs,
+    RecvInput,
+    RecvReturn,
+}
+
+/// A step of the entry code of a contract that cannot be generated: the
+/// instance it runs has no proof. The entry plan holds the instances, and the
+/// lowering of the contract reads the same plan, so this is reported exactly
+/// where lowering would fail.
+pub(crate) struct ContractEntryFailure<'db> {
+    contract_name: String,
+    step: EntryStep,
+    span: DynLazySpan<'db>,
+    message: String,
+}
+
+impl DiagnosticVoucher for ContractEntryFailure<'_> {
+    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let step = match self.step {
+            EntryStep::InitArgs => "decoding the arguments of `init`",
+            EntryStep::RecvInput => "reading the message of this arm",
+            EntryStep::RecvReturn => "encoding the value this arm returns",
+        };
+        CompleteDiagnostic::new(
+            Severity::Error,
+            format!(
+                "the entry code of contract `{}` cannot be generated",
+                self.contract_name
+            ),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                format!("{step}: {}", self.message),
+                self.span.resolve(db),
+            )],
+            Vec::new(),
+            GlobalErrorCode::new(DiagnosticPass::SemanticAccess, 22),
+        )
+    }
+}
+
+/// The steps of the entry code of `contract` that have no instance to run.
+pub(crate) fn contract_entry_failures<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<ContractEntryFailure<'db>> {
+    // A contract with no ABI library has no entry code to generate; the
+    // lowering names the missing item.
+    if resolve_lib_type_path(db, contract.scope(), "std::abi::Sol").is_none() {
+        return Vec::new();
+    }
+    let contract_name = contract
+        .name(db)
+        .to_opt()
+        .map_or("<unnamed>", |name| name.data(db))
+        .to_string();
+    let plan = contract_entry_plan(db, contract, None);
+    let span = contract.span();
+    let mut failures = Vec::new();
+    let mut fail = |step, span: DynLazySpan<'db>, error: &EntryPlanError| {
+        if let EntryPlanError::NoInstance(message) = error {
+            failures.push(ContractEntryFailure {
+                contract_name: contract_name.clone(),
+                step,
+                span,
+                message: message.clone(),
+            });
+        }
+    };
+    if let Err(error) = &plan.init {
+        fail(
+            EntryStep::InitArgs,
+            span.clone().init_block().params().into(),
+            error,
+        );
+    }
+    for arm in &plan.arms {
+        let arm_span = span
+            .clone()
+            .recv(arm.recv_idx as usize)
+            .arms()
+            .arm(arm.arm_idx as usize);
+        if let Err(error) = &arm.input {
+            fail(EntryStep::RecvInput, arm_span.clone().pat().into(), error);
+        }
+        if let Err(error) = &arm.ret {
+            fail(EntryStep::RecvReturn, arm_span.ret_ty().into(), error);
+        }
+    }
+    failures
 }
