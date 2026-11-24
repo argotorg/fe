@@ -71,7 +71,7 @@ fn take(_ o: Inner) -> u256 {
     o.x
 }
 
-// 8-0160: the message is not read field by field.
+// 8-0167: the message is not read field by field.
 pub contract NotFieldwise {
     recv {
         Hand { ref v } -> u256 {
@@ -80,7 +80,7 @@ pub contract NotFieldwise {
     }
 }
 
-// 8-0161: the field has no `Part`.
+// 8-0168: the field has no `Part`.
 pub contract NotPart {
     recv N {
         V { ref p } -> u256 {

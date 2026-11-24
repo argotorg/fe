@@ -17,7 +17,7 @@ error[8-0120]: a `mut` binding needs a place or an access
    │
    = write `var` for a mutable value
 
-error[8-0160]: this arm reads its message where it lies, but `Hand` is not read field by field
+error[8-0167]: this arm reads its message where it lies, but `Hand` is not read field by field
    ┌─ recv_arm_ref_fields.fe:77:16
    │
 77 │         Hand { ref v } -> u256 {
@@ -25,7 +25,7 @@ error[8-0160]: this arm reads its message where it lies, but `Hand` is not read 
    │
    = a `ref` field reads the message in place, which needs its encoding to be the tuple of its fields; `msg` variants and `#[abi]` structs have it, and a hand-written message states `impl AbiFields for Hand {}`
 
-error[8-0161]: a `ref` field cannot be read where it lies
+error[8-0168]: a `ref` field cannot be read where it lies
    ┌─ recv_arm_ref_fields.fe:86:13
    │
 86 │         V { ref p } -> u256 {
