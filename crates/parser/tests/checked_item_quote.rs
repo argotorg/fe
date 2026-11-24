@@ -284,3 +284,21 @@ fn where_clause_of_a_quoted_derive_header_ends_at_the_line_end() {
         );
     }
 }
+
+#[test]
+fn an_attributed_or_documented_shape_member_parses_like_a_bare_one() {
+    for lead in ["/// documented", "#[inline]", "/// documented\n #[inline]"] {
+        let source = format!(
+            "const fn provider() {{ quote {{\n {lead}\n shape Step = (own usize, u8)\n }} }}"
+        );
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{lead}: {errors:?}");
+        let root = SyntaxNode::new_root(green);
+        let shapes: Vec<_> = root
+            .descendants()
+            .filter_map(TraitShapeItem::cast)
+            .collect();
+        assert_eq!(shapes.len(), 1, "{lead}");
+        assert!(shapes[0].attr_list().is_some(), "{lead}");
+    }
+}

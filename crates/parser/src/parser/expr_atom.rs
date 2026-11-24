@@ -750,6 +750,9 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
                     shape.newline(0);
                     p.bump();
                 }
+                // A doc comment belongs to the item or statement after it, which
+                // decides the kind of the body, as an attribute does.
+                Some(SyntaxKind::DocComment) => p.bump(),
                 Some(SyntaxKind::Dollar) => {
                     if !skip_splice(p) {
                         return QuoteBodyKind::Expr;
@@ -895,6 +898,10 @@ fn attributes_precede_item<S: TokenStream>(parser: &mut Parser<S>) -> bool {
 
 /// Whether the next tokens start an associated shape member, `shape Step ..`.
 /// `shape` is an ordinary identifier outside this position.
+fn shape_follows_attributes<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| super::attr::parse_attr_list(p).is_ok() && at_quoted_shape(p))
+}
+
 fn at_quoted_shape<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser.is_ident("shape")
         && parser.peek_n_non_trivia(2).as_slice() == [SyntaxKind::Ident, SyntaxKind::Ident]
@@ -947,10 +954,12 @@ impl super::Parse for QuoteItemListScope {
             }
             if parser.current_kind() == Some(SyntaxKind::Dollar) {
                 parser.parse(QuoteHoleScope::default())?;
-            } else if at_quoted_shape(parser) {
+            } else if shape_follows_attributes(parser) {
                 // An associated shape member, `shape Step = (own u256, ref T)`: it
                 // has no module item form, so only a member splice can lower it.
-                parser.parse(super::item::TraitShapeItemScope::default())?;
+                // Attributes and doc comments belong to it as to any member.
+                let checkpoint = super::attr::parse_attr_list(parser)?;
+                parser.parse_cp(super::item::TraitShapeItemScope::default(), checkpoint)?;
             } else {
                 parser.parse(ItemScope::default())?;
             }
