@@ -1738,7 +1738,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpaqueShapeBound { .. } => 147,
             Self::ParamBindsTwice { .. } => 134,
             Self::DropCalledDirectly { .. } => 152,
-            Self::GenerationChangesChoice { .. } => 162,
+            Self::GenerationChangesChoice { .. } => 166,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
