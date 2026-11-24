@@ -1,4 +1,5 @@
 use ingot::marker::{Clearable, Copy, Pinned}
+use ingot::option::Option
 
 pub trait Add<T = Self> {
     type Output = Self
@@ -79,6 +80,50 @@ pub trait SaturatingSub<T = Self> {
 pub trait SaturatingMul<T = Self> {
     type Output = Self
     fn saturating_mul(self, _ other: T) -> Self::Output
+}
+
+// Arithmetic that reports overflow as a value. `overflowing_*` returns the
+// wrapped result and whether the operation overflowed. `checked_*` returns
+// `None` exactly where its operator would panic, and the operator's result
+// otherwise, so `MIN.checked_rem(-1)` is `Some(0)`, as `MIN % -1` is `0`.
+pub trait OverflowingAdd<T = Self> {
+    type Output = Self
+    fn overflowing_add(self, _ other: T) -> (Self::Output, bool)
+}
+
+pub trait OverflowingSub<T = Self> {
+    type Output = Self
+    fn overflowing_sub(self, _ other: T) -> (Self::Output, bool)
+}
+
+pub trait OverflowingMul<T = Self> {
+    type Output = Self
+    fn overflowing_mul(self, _ other: T) -> (Self::Output, bool)
+}
+
+pub trait CheckedAdd<T = Self> {
+    type Output = Self
+    fn checked_add(self, _ other: T) -> Option<Self::Output>
+}
+
+pub trait CheckedSub<T = Self> {
+    type Output = Self
+    fn checked_sub(self, _ other: T) -> Option<Self::Output>
+}
+
+pub trait CheckedMul<T = Self> {
+    type Output = Self
+    fn checked_mul(self, _ other: T) -> Option<Self::Output>
+}
+
+pub trait CheckedDiv<T = Self> {
+    type Output = Self
+    fn checked_div(self, _ other: T) -> Option<Self::Output>
+}
+
+pub trait CheckedRem<T = Self> {
+    type Output = Self
+    fn checked_rem(self, _ other: T) -> Option<Self::Output>
 }
 
 // Bitwise binary operators

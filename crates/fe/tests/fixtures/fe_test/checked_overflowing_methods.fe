@@ -1,0 +1,333 @@
+use core::hint::black_box
+use core::num::IntWord
+use core::ops::{
+    CheckedAdd, CheckedDiv, CheckedMul, CheckedRem, CheckedSub, Eq, OverflowingAdd, OverflowingMul,
+    OverflowingSub,
+}
+
+// Operands pass through `black_box` so the overflow flags come from the
+// arithmetic at runtime rather than from constant folding.
+
+#[test]
+fn overflowing_u8() {
+    let max: u8 = black_box(255)
+    let zero: u8 = black_box(0)
+    let sixteen: u8 = black_box(16)
+    assert(max.overflowing_add(1) == (0, true))
+    assert(max.overflowing_add(0) == (255, false))
+    assert(zero.overflowing_sub(1) == (255, true))
+    assert(max.overflowing_sub(255) == (0, false))
+    assert(sixteen.overflowing_mul(sixteen) == (0, true))
+    assert(sixteen.overflowing_mul(15) == (240, false))
+    assert(max.overflowing_mul(2) == (254, true))
+}
+
+#[test]
+fn checked_u8() {
+    let max: u8 = black_box(255)
+    let zero: u8 = black_box(0)
+    let sixteen: u8 = black_box(16)
+    assert(max.checked_add(1).is_none())
+    assert(sixteen.checked_add(239) == Some(255))
+    assert(zero.checked_sub(1).is_none())
+    assert(max.checked_sub(255) == Some(0))
+    assert(sixteen.checked_mul(sixteen).is_none())
+    assert(sixteen.checked_mul(15) == Some(240))
+    assert(max.checked_div(zero).is_none())
+    assert(max.checked_div(16) == Some(15))
+    assert(max.checked_rem(zero).is_none())
+    assert(max.checked_rem(16) == Some(15))
+}
+
+#[test]
+fn overflowing_u64() {
+    let max: u64 = black_box(u64::max())
+    let zero: u64 = black_box(0)
+    let half: u64 = black_box(0x8000000000000000)
+    assert(max.overflowing_add(1) == (0, true))
+    assert(max.overflowing_add(max) == (max - 1, true))
+    assert(half.overflowing_add(half - 1) == (max, false))
+    assert(zero.overflowing_sub(1) == (max, true))
+    assert(half.overflowing_sub(half) == (0, false))
+    assert(half.overflowing_mul(2) == (0, true))
+    assert(half.overflowing_mul(1) == (half, false))
+    assert(max.overflowing_mul(max) == (1, true))
+}
+
+#[test]
+fn checked_u64() {
+    let max: u64 = black_box(u64::max())
+    let zero: u64 = black_box(0)
+    let half: u64 = black_box(0x8000000000000000)
+    assert(max.checked_add(1).is_none())
+    assert(half.checked_add(half - 1) == Some(max))
+    assert(zero.checked_sub(1).is_none())
+    assert(max.checked_sub(max) == Some(0))
+    assert(half.checked_mul(2).is_none())
+    assert((half - 1).checked_mul(2) == Some(max - 1))
+    assert(max.checked_div(zero).is_none())
+    assert(max.checked_div(half) == Some(1))
+    assert(max.checked_rem(zero).is_none())
+    assert(max.checked_rem(half) == Some(half - 1))
+}
+
+#[test]
+fn overflowing_u256() {
+    let max: u256 = black_box(u256::max())
+    let zero: u256 = black_box(0)
+    let half: u256 = black_box(1 << 255)
+    assert(max.overflowing_add(1) == (0, true))
+    assert(half.overflowing_add(half - 1) == (max, false))
+    assert(zero.overflowing_sub(1) == (max, true))
+    assert(max.overflowing_sub(max) == (0, false))
+    assert(half.overflowing_mul(2) == (0, true))
+    assert(max.overflowing_mul(max) == (1, true))
+    assert(half.overflowing_mul(1) == (half, false))
+}
+
+#[test]
+fn checked_u256() {
+    let max: u256 = black_box(u256::max())
+    let zero: u256 = black_box(0)
+    let half: u256 = black_box(1 << 255)
+    assert(max.checked_add(1).is_none())
+    assert(half.checked_add(half - 1) == Some(max))
+    assert(zero.checked_sub(1).is_none())
+    assert(max.checked_sub(1) == Some(max - 1))
+    assert(half.checked_mul(2).is_none())
+    assert((half - 1).checked_mul(2) == Some(max - 1))
+    assert(max.checked_div(zero).is_none())
+    assert(max.checked_div(half) == Some(1))
+    assert(max.checked_rem(zero).is_none())
+    assert(max.checked_rem(half) == Some(half - 1))
+}
+
+#[test]
+fn overflowing_i8() {
+    let max: i8 = black_box(127)
+    let min: i8 = black_box(-128)
+    let minus_one: i8 = black_box(-1)
+    assert(max.overflowing_add(1) == (-128, true))
+    assert(min.overflowing_add(minus_one) == (127, true))
+    assert(min.overflowing_add(max) == (-1, false))
+    assert(min.overflowing_sub(1) == (127, true))
+    assert(max.overflowing_sub(minus_one) == (-128, true))
+    assert(minus_one.overflowing_sub(max) == (-128, false))
+    assert(min.overflowing_mul(minus_one) == (-128, true))
+    assert(max.overflowing_mul(2) == (-2, true))
+    assert(minus_one.overflowing_mul(minus_one) == (1, false))
+    assert(max.overflowing_mul(minus_one) == (-127, false))
+}
+
+#[test]
+fn checked_i8() {
+    let max: i8 = black_box(127)
+    let min: i8 = black_box(-128)
+    let minus_one: i8 = black_box(-1)
+    let zero: i8 = black_box(0)
+    assert(max.checked_add(1).is_none())
+    assert(min.checked_add(minus_one).is_none())
+    assert(min.checked_add(max) == Some(-1))
+    assert(min.checked_sub(1).is_none())
+    assert(minus_one.checked_sub(max) == Some(-128))
+    assert(min.checked_mul(minus_one).is_none())
+    assert(max.checked_mul(minus_one) == Some(-127))
+    assert(min.checked_div(zero).is_none())
+    assert(min.checked_div(minus_one).is_none())
+    assert(min.checked_div(2) == Some(-64))
+    assert(max.checked_div(minus_one) == Some(-127))
+    assert(min.checked_rem(zero).is_none())
+    assert(min.checked_rem(minus_one) == Some(0))
+    assert((-7 as i8).checked_rem(2) == Some(-1))
+}
+
+#[test]
+fn overflowing_i256() {
+    let max: i256 = black_box(i256::max())
+    let min: i256 = black_box(i256::min())
+    let minus_one: i256 = black_box(-1)
+    assert(max.overflowing_add(1) == (min, true))
+    assert(min.overflowing_add(minus_one) == (max, true))
+    assert(min.overflowing_add(max) == (-1, false))
+    assert(min.overflowing_sub(1) == (max, true))
+    assert(max.overflowing_sub(minus_one) == (min, true))
+    assert(minus_one.overflowing_sub(max) == (min, false))
+    assert(min.overflowing_mul(minus_one) == (min, true))
+    assert(max.overflowing_mul(2) == (-2, true))
+    assert(max.overflowing_mul(minus_one) == (min + 1, false))
+}
+
+#[test]
+fn checked_i256() {
+    let max: i256 = black_box(i256::max())
+    let min: i256 = black_box(i256::min())
+    let minus_one: i256 = black_box(-1)
+    let zero: i256 = black_box(0)
+    assert(max.checked_add(1).is_none())
+    assert(min.checked_add(max) == Some(-1))
+    assert(min.checked_sub(1).is_none())
+    assert(minus_one.checked_sub(max) == Some(min))
+    assert(min.checked_mul(minus_one).is_none())
+    assert(max.checked_mul(minus_one) == Some(min + 1))
+    assert(min.checked_div(zero).is_none())
+    assert(min.checked_div(minus_one).is_none())
+    assert(max.checked_div(minus_one) == Some(min + 1))
+    assert(min.checked_rem(zero).is_none())
+    assert(min.checked_rem(minus_one) == Some(0))
+    assert(min.checked_rem(max) == Some(minus_one))
+}
+
+// The boundaries of every width, from its bounds: `T::max()`, `T::min()`,
+// and the words `low`, all ones below the top bit, and `high`, the top bit.
+fn unsigned_cases<T>()
+    where T: IntWord + Bounded + Eq
+        + OverflowingAdd<Output = T> + OverflowingSub<Output = T> + OverflowingMul<Output = T>
+        + CheckedAdd<Output = T> + CheckedSub<Output = T> + CheckedMul<Output = T>
+        + CheckedDiv<Output = T> + CheckedRem<Output = T>
+{
+    let max = black_box(T::max())
+    let zero = black_box(T::min())
+    let one: T = T::from_word(1)
+    let two: T = T::from_word(2)
+    let low: T = black_box(T::from_word(T::MASK >> 1))
+    let high: T = black_box(T::from_word((T::MASK >> 1) + 1))
+    let max_less_one: T = T::from_word(T::MASK - 1)
+    assert(max.overflowing_add(one) == (zero, true))
+    assert(max.overflowing_add(max) == (max_less_one, true))
+    assert(high.overflowing_add(low) == (max, false))
+    assert(zero.overflowing_sub(one) == (max, true))
+    assert(low.overflowing_sub(high) == (max, true))
+    assert(max.overflowing_sub(max) == (zero, false))
+    assert(high.overflowing_mul(two) == (zero, true))
+    assert(max.overflowing_mul(max) == (one, true))
+    assert(low.overflowing_mul(two) == (max_less_one, false))
+    assert(high.overflowing_mul(one) == (high, false))
+    assert(max.checked_add(one).is_none())
+    assert(high.checked_add(low) == Some(max))
+    assert(zero.checked_sub(one).is_none())
+    assert(max.checked_sub(low) == Some(high))
+    assert(high.checked_mul(two).is_none())
+    assert(low.checked_mul(two) == Some(max_less_one))
+    assert(max.checked_div(zero).is_none())
+    assert(max.checked_div(high) == Some(one))
+    assert(max.checked_rem(zero).is_none())
+    assert(max.checked_rem(high) == Some(low))
+}
+
+// As `unsigned_cases`, with `min` the top bit alone and `-1` all ones.
+fn signed_cases<T>()
+    where T: IntWord + Bounded + Eq
+        + OverflowingAdd<Output = T> + OverflowingSub<Output = T> + OverflowingMul<Output = T>
+        + CheckedAdd<Output = T> + CheckedSub<Output = T> + CheckedMul<Output = T>
+        + CheckedDiv<Output = T> + CheckedRem<Output = T>
+{
+    let max = black_box(T::max())
+    let min = black_box(T::min())
+    let zero: T = black_box(T::from_word(0))
+    let one: T = T::from_word(1)
+    let two: T = T::from_word(2)
+    let minus_one: T = black_box(T::from_word(u256::max()))
+    let minus_two: T = T::from_word(u256::max() - 1)
+    let min_plus_one: T = T::from_word(T::SIGN_BIT + 1)
+    // `min / 2`, whose double is exactly `min`.
+    let half_min: T = black_box(T::from_word(u256::max() ^ ((T::SIGN_BIT >> 1) - 1)))
+    assert(max.overflowing_add(one) == (min, true))
+    assert(min.overflowing_add(minus_one) == (max, true))
+    assert(min.overflowing_add(max) == (minus_one, false))
+    assert(min.overflowing_sub(one) == (max, true))
+    assert(max.overflowing_sub(minus_one) == (min, true))
+    assert(minus_one.overflowing_sub(max) == (min, false))
+    assert(min.overflowing_mul(minus_one) == (min, true))
+    assert(minus_one.overflowing_mul(min) == (min, true))
+    assert(min.overflowing_mul(zero) == (zero, false))
+    assert(min.overflowing_mul(two) == (zero, true))
+    assert(min.overflowing_mul(min) == (zero, true))
+    assert(max.overflowing_mul(two) == (minus_two, true))
+    assert(max.overflowing_mul(minus_one) == (min_plus_one, false))
+    assert(minus_one.overflowing_mul(minus_one) == (one, false))
+    assert(half_min.overflowing_mul(two) == (min, false))
+    assert(half_min.overflowing_mul(minus_two) == (min, true))
+    assert(max.checked_add(one).is_none())
+    assert(min.checked_add(max) == Some(minus_one))
+    assert(min.checked_sub(one).is_none())
+    assert(minus_one.checked_sub(max) == Some(min))
+    assert(min.checked_mul(minus_one).is_none())
+    assert(minus_one.checked_mul(min).is_none())
+    assert(max.checked_mul(minus_one) == Some(min_plus_one))
+    assert(half_min.checked_mul(two) == Some(min))
+    assert(half_min.checked_mul(minus_two).is_none())
+    assert(min.checked_div(zero).is_none())
+    assert(min.checked_div(minus_one).is_none())
+    assert(min.checked_div(two) == Some(half_min))
+    assert(max.checked_div(minus_one) == Some(min_plus_one))
+    assert(min.checked_rem(zero).is_none())
+    assert(min.checked_rem(minus_one) == Some(zero))
+    assert(min.checked_rem(max) == Some(minus_one))
+    assert(max.checked_rem(min) == Some(max))
+}
+
+#[test]
+fn unsigned_all_widths() {
+    unsigned_cases<u8>()
+    unsigned_cases<u16>()
+    unsigned_cases<u32>()
+    unsigned_cases<u64>()
+    unsigned_cases<u128>()
+    unsigned_cases<u256>()
+    unsigned_cases<usize>()
+}
+
+#[test]
+fn signed_all_widths() {
+    signed_cases<i8>()
+    signed_cases<i16>()
+    signed_cases<i32>()
+    signed_cases<i64>()
+    signed_cases<i128>()
+    signed_cases<i256>()
+    signed_cases<isize>()
+}
+
+// Overflowing and checked operations evaluate in constants too.
+const OVERFLOWING_ADD: (u8, bool) = (255 as u8).overflowing_add(2)
+const OVERFLOWING_SUB: (i8, bool) = i8::min().overflowing_sub(1)
+const OVERFLOWING_MUL: (u64, bool) = u64::max().overflowing_mul(u64::max())
+const NOT_OVERFLOWING_MUL: (i256, bool) = (-3 as i256).overflowing_mul(5)
+const CHECKED_ADD: Option<u8> = (255 as u8).checked_add(1)
+const CHECKED_SUB: Option<u256> = (7 as u256).checked_sub(3)
+const CHECKED_MUL: Option<i8> = i8::min().checked_mul(-1)
+const CHECKED_DIV: Option<i8> = i8::min().checked_div(-1)
+const CHECKED_REM: Option<u8> = (7 as u8).checked_rem(0)
+const SIGNED_CHECKED_REM: Option<i8> = i8::min().checked_rem(-1)
+const U256_OVERFLOWING_ADD: (u256, bool) = u256::max().overflowing_add(1)
+const I256_OVERFLOWING_MUL: (i256, bool) = i256::min().overflowing_mul(-1)
+const I256_CHECKED_DIV: Option<i256> = i256::min().checked_div(-1)
+const I256_CHECKED_REM: Option<i256> = i256::min().checked_rem(-1)
+const USIZE_OVERFLOWING_MUL: (usize, bool) = usize::max().overflowing_mul(2)
+const USIZE_CHECKED_SUB: Option<usize> = (0 as usize).checked_sub(1)
+const ISIZE_OVERFLOWING_MUL: (isize, bool) = isize::min().overflowing_mul(-1)
+const ISIZE_CHECKED_DIV: Option<isize> = isize::min().checked_div(-1)
+const ISIZE_CHECKED_REM: Option<isize> = isize::min().checked_rem(-1)
+
+#[test]
+fn const_overflowing_and_checked() {
+    assert(OVERFLOWING_ADD == (1, true))
+    assert(OVERFLOWING_SUB == (127, true))
+    assert(OVERFLOWING_MUL == (1, true))
+    assert(NOT_OVERFLOWING_MUL == (-15, false))
+    assert(CHECKED_ADD.is_none())
+    assert(CHECKED_SUB == Some(4))
+    assert(CHECKED_MUL.is_none())
+    assert(CHECKED_DIV.is_none())
+    assert(CHECKED_REM.is_none())
+    assert(SIGNED_CHECKED_REM == Some(0))
+    assert(U256_OVERFLOWING_ADD == (0, true))
+    assert(I256_OVERFLOWING_MUL == (i256::min(), true))
+    assert(I256_CHECKED_DIV.is_none())
+    assert(I256_CHECKED_REM == Some(0))
+    assert(USIZE_OVERFLOWING_MUL == (usize::max() - 1, true))
+    assert(USIZE_CHECKED_SUB.is_none())
+    assert(ISIZE_OVERFLOWING_MUL == (isize::min(), true))
+    assert(ISIZE_CHECKED_DIV.is_none())
+    assert(ISIZE_CHECKED_REM == Some(0))
+}

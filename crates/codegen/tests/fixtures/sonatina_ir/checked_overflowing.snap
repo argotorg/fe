@@ -1,0 +1,178 @@
+---
+source: crates/codegen/tests/sonatina_ir.rs
+expression: output
+input_file: crates/codegen/tests/fixtures/checked_overflowing.fe
+---
+target = "evm-ethereum-osaka"
+
+type @layout_0 = {i8, i1};
+type @layout_3 = {i64, i1};
+type @layout_4 = {i256, i1};
+type @layout_5 = {@layout_3, @layout_4, @layout_1, @layout_2};
+type @layout_1 = enum {
+    #variant_0,
+    #variant_1(i8),
+};
+type @layout_2 = enum {
+    #variant_0,
+    #variant_1(i32),
+};
+
+func private %checked(v0.@layout_0) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i8 = extract_value v0 0.i256;
+        v5.i1 = extract_value v0 1.i256;
+        br v5 block2 block3;
+
+    block2:
+        v6.@layout_1 = enum.make @layout_1 #variant_0;
+        v7.@layout_1 = enum.make @layout_1 #variant_0;
+        jump block4;
+
+    block3:
+        v9.@layout_1 = enum.make @layout_1 #variant_1 v3;
+        jump block4;
+
+    block4:
+        v10.@layout_1 = phi (v7 block2) (v9 block3);
+        return v10;
+}
+
+func private %checked_add(v0.i8, v1.i8) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        (v4.i8, v5.i1) = uaddo v0 v1;
+        v6.@layout_0 = agg.make @layout_0 v4 v5;
+        v7.@layout_1 = call %checked v6;
+        return v7;
+}
+
+func private %checked_add_u8(v0.i8, v1.i8) -> @layout_1 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.@layout_1 = call %checked_add v0 v1;
+        return v4;
+}
+
+func private %checked_div(v0.i32, v1.i32) -> @layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i1 = eq v1 0.i32;
+        br v4 block2 block5;
+
+    block2:
+        v5.@layout_2 = enum.make @layout_2 #variant_0;
+        v6.@layout_2 = enum.make @layout_2 #variant_0;
+        jump block4;
+
+    block3:
+        v9.i1 = eq v1 0.i32;
+        br v9 block7 block8;
+
+    block4:
+        v17.@layout_2 = phi (v6 block2) (v16 block8);
+        return v17;
+
+    block5:
+        v20.i1 = eq v0 -2147483648.i32;
+        br v20 block6 block3;
+
+    block6:
+        v23.i1 = eq v1 -1.i32;
+        br v23 block2 block3;
+
+    block7:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 18.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block8:
+        v15.i32 = evm_sdiv v0 v1;
+        v16.@layout_2 = enum.make @layout_2 #variant_1 v15;
+        jump block4;
+}
+
+func private %checked_div_i32(v0.i32, v1.i32) -> @layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.@layout_2 = call %checked_div v0 v1;
+        return v4;
+}
+
+func private %main() -> @layout_5 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.@layout_3 = call %overflowing_sub_u64 1.i64 2.i64;
+        v5.@layout_4 = call %overflowing_mul_i256 3.i256 4.i256;
+        v8.@layout_1 = call %checked_add_u8 5.i8 6.i8;
+        v11.@layout_2 = call %checked_div_i32 7.i32 8.i32;
+        v12.@layout_5 = agg.make @layout_5 v2 v5 v8 v11;
+        return v12;
+}
+
+func private %main_root() {
+    block0:
+        jump block1;
+
+    block1:
+        v0.@layout_5 = call %main;
+        evm_stop;
+}
+
+func private %overflowing_mul(v0.i256, v1.i256) -> @layout_4 {
+    block0:
+        jump block1;
+
+    block1:
+        (v4.i256, v5.i1) = smulo v0 v1;
+        v6.@layout_4 = agg.make @layout_4 v4 v5;
+        return v6;
+}
+
+func private %overflowing_mul_i256(v0.i256, v1.i256) -> @layout_4 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.@layout_4 = call %overflowing_mul v0 v1;
+        return v4;
+}
+
+func private %overflowing_sub(v0.i64, v1.i64) -> @layout_3 {
+    block0:
+        jump block1;
+
+    block1:
+        (v4.i64, v5.i1) = usubo v0 v1;
+        v6.@layout_3 = agg.make @layout_3 v4 v5;
+        return v6;
+}
+
+func private %overflowing_sub_u64(v0.i64, v1.i64) -> @layout_3 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.@layout_3 = call %overflowing_sub v0 v1;
+        return v4;
+}
+
+
+object @main {
+    section main {
+        entry %main_root;
+    }
+}

@@ -1,0 +1,26 @@
+use core::ops::{CheckedAdd, CheckedDiv, OverflowingMul, OverflowingSub}
+
+pub fn overflowing_sub_u64(a: u64, b: u64) -> (u64, bool) {
+    a.overflowing_sub(b)
+}
+
+pub fn overflowing_mul_i256(a: i256, b: i256) -> (i256, bool) {
+    a.overflowing_mul(b)
+}
+
+pub fn checked_add_u8(a: u8, b: u8) -> Option<u8> {
+    a.checked_add(b)
+}
+
+pub fn checked_div_i32(a: i32, b: i32) -> Option<i32> {
+    a.checked_div(b)
+}
+
+pub fn main() -> ((u64, bool), (i256, bool), Option<u8>, Option<i32>) {
+    (
+        overflowing_sub_u64(1, 2),
+        overflowing_mul_i256(3, 4),
+        checked_add_u8(5, 6),
+        checked_div_i32(7, 8),
+    )
+}

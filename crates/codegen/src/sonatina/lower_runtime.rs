@@ -34,11 +34,11 @@ use mir::runtime::{
 };
 use mir::{
     ArrayLayout, BorrowAccess, ConstNode, ConstRegionId, ConstScalar, FieldPlacement,
-    IntrinsicArithBinOp, Layout, LayoutId, NativeRuntimeFunc, RBlock, RBlockId, RExpr, RLocalId,
-    RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody, RuntimeBuiltin,
-    RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance, RuntimeLinkage,
-    RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePackage, RuntimePlace, RuntimeSyntheticSpec,
-    SaturatingBinOp, ScalarClass, ScalarRepr, StructLayout, VariantId, WasmParamShape,
+    IntrinsicArithBinOp, Layout, LayoutId, NativeRuntimeFunc, OverflowBinOp, RBlock, RBlockId,
+    RExpr, RLocalId, RStmt, RTerminator, ResolvedPlaceElem, ResolvedPlaceRootKind, RuntimeBody,
+    RuntimeBuiltin, RuntimeClass, RuntimeFunction, RuntimeInlineHint, RuntimeInstance,
+    RuntimeLinkage, RuntimeLocalRoot, RuntimeMemoryLayout, RuntimePackage, RuntimePlace,
+    RuntimeSyntheticSpec, ScalarClass, ScalarRepr, StructLayout, VariantId, WasmParamShape,
     WasmResultShape, instance::RuntimeInstanceSource, resolve_runtime_place,
     runtime_param_accesses, scalar_raw_memory_size_bytes,
 };
@@ -3070,13 +3070,38 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let rhs = self.cast_scalar(rhs, scalar_ty(class))?;
                 let signed = class.is_signed_int();
                 match (op, signed) {
-                    (SaturatingBinOp::Add, true) => self.fb.insert_saddsat(lhs, rhs),
-                    (SaturatingBinOp::Add, false) => self.fb.insert_uaddsat(lhs, rhs),
-                    (SaturatingBinOp::Sub, true) => self.fb.insert_ssubsat(lhs, rhs),
-                    (SaturatingBinOp::Sub, false) => self.fb.insert_usubsat(lhs, rhs),
-                    (SaturatingBinOp::Mul, true) => self.fb.insert_smulsat(lhs, rhs),
-                    (SaturatingBinOp::Mul, false) => self.fb.insert_umulsat(lhs, rhs),
+                    (OverflowBinOp::Add, true) => self.fb.insert_saddsat(lhs, rhs),
+                    (OverflowBinOp::Add, false) => self.fb.insert_uaddsat(lhs, rhs),
+                    (OverflowBinOp::Sub, true) => self.fb.insert_ssubsat(lhs, rhs),
+                    (OverflowBinOp::Sub, false) => self.fb.insert_usubsat(lhs, rhs),
+                    (OverflowBinOp::Mul, true) => self.fb.insert_smulsat(lhs, rhs),
+                    (OverflowBinOp::Mul, false) => self.fb.insert_umulsat(lhs, rhs),
                 }
+            }
+            RuntimeBuiltin::Overflowing {
+                op,
+                lhs,
+                rhs,
+                class,
+                layout,
+            } => {
+                let lhs = self.local_value(*lhs)?;
+                let rhs = self.local_value(*rhs)?;
+                let lhs = self.cast_scalar(lhs, scalar_ty(class))?;
+                let rhs = self.cast_scalar(rhs, scalar_ty(class))?;
+                let [value, overflow] = match (op, class.is_signed_int()) {
+                    (OverflowBinOp::Add, true) => self.fb.insert_saddo(lhs, rhs),
+                    (OverflowBinOp::Add, false) => self.fb.insert_uaddo(lhs, rhs),
+                    (OverflowBinOp::Sub, true) => self.fb.insert_ssubo(lhs, rhs),
+                    (OverflowBinOp::Sub, false) => self.fb.insert_usubo(lhs, rhs),
+                    (OverflowBinOp::Mul, true) => self.fb.insert_smulo(lhs, rhs),
+                    (OverflowBinOp::Mul, false) => self.fb.insert_umulo(lhs, rhs),
+                };
+                let ty = self.module.ty_for_layout(*layout)?;
+                self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), ty, smallvec![value, overflow]),
+                    ty,
+                )
             }
             RuntimeBuiltin::Address => self.fb.insert_inst(
                 EvmAddress::new(self.module.required_inst::<EvmAddress>()?),

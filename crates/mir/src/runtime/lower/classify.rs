@@ -37,8 +37,8 @@ use crate::{
         field_path_lane, place_reference_class, project_field_class, project_index_class, ref_lane,
     },
     runtime::{
-        BorrowAccess, Layout, LayoutId, RefKind, RefView, RuntimeBoundarySpec, RuntimeCarrier,
-        RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan, SaturatingBinOp,
+        BorrowAccess, Layout, LayoutId, OverflowBinOp, RefKind, RefView, RuntimeBoundarySpec,
+        RuntimeCarrier, RuntimeClass, RuntimeCodeRegion, RuntimeCodeRegionKey, RuntimeParamPlan,
         ScalarClass, ScalarRepr, ScalarRole, StorageLaneView,
     },
 };
@@ -2307,7 +2307,8 @@ fn desired_read_only_view_param_plan<'db>(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum GenericNumericIntrinsicKind {
     Bitcast,
-    Saturating(SaturatingBinOp),
+    Saturating(OverflowBinOp),
+    Overflowing(OverflowBinOp),
     CheckedBinary(ArithBinOp),
     CheckedNeg,
 }
@@ -2657,9 +2658,12 @@ fn is_runtime_intrinsic_name(name: &str) -> bool {
 pub(super) fn generic_numeric_intrinsic_kind(name: &str) -> Option<GenericNumericIntrinsicKind> {
     Some(match name {
         "__bitcast" => GenericNumericIntrinsicKind::Bitcast,
-        "__saturating_add" => GenericNumericIntrinsicKind::Saturating(SaturatingBinOp::Add),
-        "__saturating_sub" => GenericNumericIntrinsicKind::Saturating(SaturatingBinOp::Sub),
-        "__saturating_mul" => GenericNumericIntrinsicKind::Saturating(SaturatingBinOp::Mul),
+        "__saturating_add" => GenericNumericIntrinsicKind::Saturating(OverflowBinOp::Add),
+        "__saturating_sub" => GenericNumericIntrinsicKind::Saturating(OverflowBinOp::Sub),
+        "__saturating_mul" => GenericNumericIntrinsicKind::Saturating(OverflowBinOp::Mul),
+        "__overflowing_add" => GenericNumericIntrinsicKind::Overflowing(OverflowBinOp::Add),
+        "__overflowing_sub" => GenericNumericIntrinsicKind::Overflowing(OverflowBinOp::Sub),
+        "__overflowing_mul" => GenericNumericIntrinsicKind::Overflowing(OverflowBinOp::Mul),
         "__checked_add" => GenericNumericIntrinsicKind::CheckedBinary(ArithBinOp::Add),
         "__checked_sub" => GenericNumericIntrinsicKind::CheckedBinary(ArithBinOp::Sub),
         "__checked_mul" => GenericNumericIntrinsicKind::CheckedBinary(ArithBinOp::Mul),

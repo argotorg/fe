@@ -546,6 +546,9 @@ fn builtin_result_class<'db>(
         }
         RuntimeBuiltin::Saturating {
             lhs, rhs, class, ..
+        }
+        | RuntimeBuiltin::Overflowing {
+            lhs, rhs, class, ..
         } => {
             let expected = RuntimeClass::Scalar(class.clone());
             if runtime_value_class(body, *lhs)? != &expected
@@ -553,7 +556,12 @@ fn builtin_result_class<'db>(
             {
                 return Err(VerifyError::InvalidExprClass(*lhs));
             }
-            Ok(Some(expected))
+            Ok(Some(match builtin {
+                RuntimeBuiltin::Overflowing { layout, .. } => {
+                    RuntimeClass::AggregateValue { layout: *layout }
+                }
+                _ => expected,
+            }))
         }
         RuntimeBuiltin::BlockHash { block } => {
             verify_word_value(body, *block)?;
