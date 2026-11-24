@@ -2145,8 +2145,23 @@ impl<'db> TyChecker<'db> {
             generation::{ProviderOpening, provider_hints},
         };
         use parser::ast::prelude::*;
-        let Some(hints) = provider_hints(self.db, self.env.scope(), provider_ty) else {
-            return false;
+        let provider_ty = normalize_ty(
+            self.db,
+            provider_ty,
+            self.env.scope(),
+            self.env.assumptions(),
+        );
+        let hints = match provider_hints(
+            self.db,
+            self.env.scope(),
+            self.env.assumptions(),
+            provider_ty,
+        ) {
+            Ok(Some(hints)) => Ok(hints),
+            // No `Derive` implementation can serve the type: the operand is
+            // an ordinary effect value.
+            Ok(None) => return false,
+            Err(problem) => Err(problem),
         };
         let mut owner_scope = Some(self.env.owner().scope());
         let mut generated_owner = false;
@@ -2209,6 +2224,23 @@ impl<'db> TyChecker<'db> {
                 return true;
             }
         }
+        let hints = match hints {
+            Ok(hints) => hints,
+            Err(problem) => {
+                // A `Derive` implementation could serve the type, but what it
+                // offers cannot be determined: the operand is no ordinary
+                // value and no usable provider.
+                self.env.generation_demands.refuse(key, problem);
+                self.push_diag(BodyDiag::CompileTimePhase {
+                    primary: value.span(body).into(),
+                    message: problem.into(),
+                    label: BodyDiag::REFUSED_OPENING_LABEL,
+                });
+                self.env.named_impl_operands.insert(value);
+                self.env.type_expr(value, ExprProp::invalid(self.db));
+                return true;
+            }
+        };
         if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
             && !fields.is_empty()
         {

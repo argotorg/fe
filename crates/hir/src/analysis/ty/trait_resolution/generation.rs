@@ -212,19 +212,22 @@ impl<'a> IntoIterator for &'a GenerationDemands {
 
 /// Discover names for lexical method lookup. Actual eligibility is checked on
 /// the requested family, before the ordinary solver discharges prerequisites.
+///
+/// `Ok(None)` means that no `Derive` implementation can serve the type, so an
+/// operand of this type is an ordinary value. `Err` means that one can but its
+/// offers cannot be determined: the operand is refused where it is written.
 pub(crate) fn provider_hints<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
     provider_ty: TyId<'db>,
-) -> Option<ProviderHints<'db>> {
+) -> Result<Option<ProviderHints<'db>>, &'static str> {
     if provider_ty.has_invalid(db) || provider_ty.has_var(db) {
-        return None;
+        return Ok(None);
     }
-    let Ok(offers) = provider_headers(db, scope, provider_ty) else {
-        return Some(ProviderHints {
-            traits: Vec::new(),
-            open: true,
-        });
+    let offers = match provider_search(db, scope, assumptions) {
+        Some(mut search) => search.headers(provider_ty)?,
+        None => Vec::new(),
     };
     let mut traits = IndexSet::default();
     let mut open = false;
@@ -235,10 +238,10 @@ pub(crate) fn provider_hints<'db>(
             open = true;
         }
     }
-    (open || !traits.is_empty()).then(|| ProviderHints {
+    Ok((open || !traits.is_empty()).then(|| ProviderHints {
         traits: traits.into_iter().collect(),
         open,
-    })
+    }))
 }
 
 pub(crate) fn closed_offers<'db>(

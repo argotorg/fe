@@ -3404,3 +3404,56 @@ const fn run() -> usize {
         );
     assert_eq!(eval_const_fn_u256(&prepare(&written).unwrap(), "run"), "9");
 }
+
+#[test]
+fn runtime_effect_with_projection_is_not_a_provider() {
+    let source = r#"
+trait Assoc { type Item }
+struct RuntimeEffect<T> { val: u256 }
+struct W {}
+impl Assoc for W { type Item = u8 }
+
+fn broken<T: Assoc>() {
+    with (RuntimeEffect<T::Item> { val: 1 }) {}
+}
+
+fn caller() { broken<W>() }
+"#;
+    // No generation is involved, so preparation produces no output database.
+    let (db, file) = input(source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "{}",
+        diagnostics.format_diags(&db)
+    );
+
+    // A `Derive` implementation whose receiver can match the operand makes it
+    // a provider whose offers cannot be determined: it is refused where it is
+    // written, not accepted as a value.
+    let provider = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item, empty}
+
+trait Assoc { type Item }
+trait Tr {}
+struct Wrap<X> {}
+impl<X> Derive<trait Tr> for Wrap<X> {
+    const fn derive(_ record: Record) -> Code<Item> { empty<Item>() }
+}
+struct W {}
+impl Assoc for W { type Item = u8 }
+
+fn broken<T: Assoc>() {
+    with (Wrap<T::Item> {}) {}
+}
+
+fn caller() { broken<W>() }
+"#;
+    let cause = prepare_err(provider);
+    assert!(
+        cause.contains("derive could not determine the type of a provider"),
+        "{cause}"
+    );
+}

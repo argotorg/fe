@@ -178,27 +178,49 @@ impl<'db> ProviderSearch<'db> {
         } else {
             receiver
         };
-        if receiver
-            .flags(db)
-            .intersects(TyFlags::HAS_INVALID | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION)
-        {
-            return Err(
+        let flags = receiver.flags(db);
+        let undetermined = || {
+            Err(
                 "derive could not determine the type of a provider required by its forwarding bounds",
-            );
+            )
+        };
+        if flags.contains(TyFlags::HAS_INVALID) {
+            return undetermined();
         }
         // The index uses only the Derive declaration and the receiver's ingot.
         let inventory = TraitInstId::new_simple(db, self.derive, vec![receiver, TyId::unit(db)]);
         let (primary, secondary) = super::TraitSolveCx::new(db, self.scope, Tier::All)
             .search_ingots_for_trait_inst(db, inventory);
-        let mut headers = Vec::new();
-        for &header in impls_for_trait_in_ingots(
+        let inventory_headers = impls_for_trait_in_ingots(
             db,
             primary,
             secondary,
             Canonical::new(db, inventory),
             Tier::All,
             self.scope.ingot(db),
-        ) {
+        );
+        if flags.intersects(TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION) {
+            // A receiver that is not settled is a provider only if some
+            // header's receiver could match it once settled. When none can,
+            // the receiver is no provider and offers nothing.
+            let may_match = inventory_headers.iter().any(|&header| {
+                let mut table = UnificationTable::new(db);
+                let candidate = table.instantiate_with_fresh_vars(header);
+                let header_base = candidate.trait_inst(db).self_ty(db).base_ty(db);
+                let receiver_base = receiver.base_ty(db);
+                header_base.is_ty_var(db)
+                    || receiver_base.is_ty_var(db)
+                    || receiver_base.has_projection(db)
+                    || header_base == receiver_base
+            });
+            return if may_match {
+                undetermined()
+            } else {
+                Ok(Vec::new())
+            };
+        }
+        let mut headers = Vec::new();
+        for &header in inventory_headers {
             let mut table = UnificationTable::new(db);
             let mut candidate = table.instantiate_with_fresh_vars(header);
             let candidate_receiver = candidate.trait_inst(db).self_ty(db);
