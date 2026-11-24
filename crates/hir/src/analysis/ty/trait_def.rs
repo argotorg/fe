@@ -766,6 +766,11 @@ pub struct ResolvedMethodInstance<'db> {
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    /// A bound of the callee, instantiated for a generated call, has no proof
+    /// where the call is made.
+    UnprovedBound {
+        goal: TraitInstId<'db>,
+    },
     /// The call goes through an implementation that a written header declares
     /// and preparation has not produced.
     DeclaredOnly,

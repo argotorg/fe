@@ -412,6 +412,29 @@ fn trigger() {
 }
 
 #[test]
+fn test_cli_build_contract_whose_return_encode_bound_holds() {
+    // The program of `contract_return_unencodable.fe` with the bound `u8: Marker` met.
+    let source = include_str!("fixtures/cli_output/single_files/contract_return_unencodable.fe");
+    let marker = "pub trait Marker {}\n";
+    assert!(source.contains(marker));
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("contract_return_encodable.fe");
+    fs::write(
+        &file,
+        source.replace(marker, &format!("{marker}impl Marker for u8 {{}}\n")),
+    )
+    .expect("write fixture");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("out dir utf8"),
+        file.to_str().expect("fixture path utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+}
+
+#[test]
 fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("generic_oversized_size.fe");

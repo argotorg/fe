@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_return_unencodable.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_return_unencodable.fe
+
+error[16-0022]: the entry code of contract `R` cannot be generated
+   ┌─ contract_return_unencodable.fe:38:17
+   │
+38 │         M {} -> Out<u8> { Out<u8> { v: 1 } }
+   │                 ^^^^^^^ encoding the value this arm returns: the generated call of `return_value` has no instance: its bound `Out<u8>: Encode<Sol>` is not proved
+
+
+=== EXIT CODE: 1 ===

@@ -436,6 +436,10 @@ pub(super) fn root_impl_env<'db>(
 pub struct FinalizedGeneratedCall<'db> {
     pub key: SemanticInstanceKey<'db>,
     pub evidence: Option<crate::analysis::ty::evidence::EvidenceId<'db>>,
+    /// A bound of the callee that no implementation satisfies. The call has no
+    /// instance a lowering can build, but the preparation of generation, which
+    /// finalizes calls before the implementations it admits exist, ignores it.
+    pub unproved_bound: Option<TraitInstId<'db>>,
 }
 
 pub fn generated_callee_key<'db>(
@@ -447,7 +451,11 @@ pub fn generated_callee_key<'db>(
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
-    Ok(generated_callee(db, scope, assumptions, choices, func, trait_inst, own_args)?.key)
+    let call = generated_callee(db, scope, assumptions, choices, func, trait_inst, own_args)?;
+    match call.unproved_bound {
+        Some(goal) => Err(MethodArgMapError::UnprovedBound { goal }),
+        None => Ok(call.key),
+    }
 }
 
 pub fn generated_callee<'db>(
@@ -508,9 +516,22 @@ pub fn generated_callee<'db>(
     if !callee.concrete_dispatch {
         return Err(MethodArgMapError::MissingBody);
     }
+    // A closed bound with no recorded proof is left to ordinary selection where
+    // the callee is instantiated, so a bound that no implementation satisfies
+    // leaves the call with no instance a lowering can build.
+    let unproved_bound = callable
+        .missing_bound_evidence(db)
+        .into_iter()
+        .find(|&goal| {
+            matches!(
+                is_goal_satisfiable(db, solve_cx, goal),
+                GoalSatisfiability::UnSat(_)
+            )
+        });
     Ok(FinalizedGeneratedCall {
         key: callee.key,
         evidence: callable.evidence(),
+        unproved_bound,
     })
 }
 

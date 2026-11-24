@@ -2222,6 +2222,12 @@ impl EntryPlanError {
             .name(db)
             .to_opt()
             .map_or("<unnamed>", |name| name.data(db));
+        if let MethodArgMapError::UnprovedBound { goal } = error {
+            return Self::NoInstance(format!(
+                "the generated call of `{name}` has no instance: its bound `{}` is not proved",
+                goal.pretty_print(db, true)
+            ));
+        }
         let goal = goal.map_or(String::new(), |goal| {
             format!(" for `{}`", goal.pretty_print(db, true))
         });
@@ -2305,6 +2311,19 @@ pub fn contract_entry_plan<'db>(
             own_args,
         )
         .map_err(|error| {
+            // The trait goal of the call is also a bound of the method; it is
+            // judged below, as a goal of the call.
+            let error = match error {
+                MethodArgMapError::UnprovedBound { goal } if goal == trait_inst => {
+                    MethodArgMapError::MissingBody
+                }
+                error => error,
+            };
+            // Any other bound of the callee with no proof is the contract's own
+            // error: the type it names has no instance the lowering can run.
+            if matches!(error, MethodArgMapError::UnprovedBound { .. }) {
+                return EntryPlanError::no_instance(db, func, Some(trait_inst), error);
+            }
             // Only a goal with no implementation is the contract's own error. A
             // goal that holds, or holds an invalid type, fails inside the
             // callee or follows from an error that is reported where the type is
