@@ -2191,19 +2191,10 @@ impl<'db> TyChecker<'db> {
             Ok(None) => return false,
             Err(problem) => Err(problem),
         };
-        let mut owner_scope = Some(self.env.owner().scope());
-        let mut generated_owner = false;
-        while let Some(scope) = owner_scope {
-            // Members under an explicit derive header, such as its generated
-            // constants, are generated even though the header is authored.
-            generated_owner |= scope.is_published(self.db)
-                || matches!(
-                    scope,
-                    ScopeId::Item(ItemKind::ImplTrait(header))
-                        if crate::core::meta::is_derive_request(self.db, header)
-                );
-            owner_scope = scope.parent(self.db);
-        }
+        // Everything a quotation lowered is generated code, whichever item
+        // holds it, and generated code opens no provider. The same question
+        // decides the trust and the visibility rules.
+        let generated_owner = self.env.scope().is_in_published_item(self.db);
         let body = self.body();
         let origin = body.source_map(self.db).expr_map.node_to_source(value);
         let key = if !generated_owner

@@ -7553,3 +7553,51 @@ fn named_output_walk_does_not_follow_a_body_with_errors() {
     assert!(output.contains("8-0012"), "{output}");
     assert!(!output.contains("16-"), "{output}");
 }
+
+#[test]
+fn a_constant_generated_under_a_derive_header_cannot_open_a_provider() {
+    // The value of a constant that `impl Target with (MakeConst)` generates
+    // writes `with (P2) { 7 }`. The constant is generated code, so it opens no
+    // provider, whichever file holds the header; the check ends with a
+    // diagnostic and does not panic.
+    let manifest = "[ingot]\nname = \"opening\"\nversion = \"0.1.0\"\n";
+    let lib = "use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+
+pub trait Arity { const fn arity() -> usize }
+pub struct P2 {}
+impl Derive<trait Arity> for P2 {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn arity() -> usize { 7 } }
+    }
+}
+pub struct MakeConst {}
+impl DeriveInherent for MakeConst {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub const K: usize = with (P2) { 7 }
+        }
+    }
+}
+pub struct Target { a: u256 }
+";
+    let header = "use super::{Target, MakeConst}\nimpl Target with (MakeConst)\n";
+    let control = lib.replace("pub const K: usize = with (P2) { 7 }", "pub const K: usize = 7");
+    let temp = tempdir().unwrap();
+    for (name, lib, expected_exit) in [("opens", lib, 1), ("control", control.as_str(), 0)] {
+        let root = temp.path().join(name);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("fe.toml"), manifest).unwrap();
+        fs::write(root.join("src/lib.fe"), lib).unwrap();
+        fs::write(root.join("src/other.fe"), header).unwrap();
+        let (output, exit) = run_fe_main(&["check", root.to_str().unwrap()]);
+        assert!(!output.contains("panicked"), "{name}: {output}");
+        assert_eq!(exit, expected_exit, "{name}: {output}");
+        if expected_exit != 0 {
+            assert!(
+                output.contains("generated openings need a portable generated-owner identity"),
+                "{name}: {output}"
+            );
+        }
+    }
+}
