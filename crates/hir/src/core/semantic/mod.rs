@@ -5095,10 +5095,20 @@ impl<'db> ImplTrait<'db> {
                         let local_impls = self.top_mod(db).ingot(db).all_impl_traits(db);
                         let primary_idx = local_impls.iter().position(|&item| item == primary);
                         let conflict_idx = local_impls.iter().position(|&item| item == conflict);
-                        if !matches!(
-                            (primary_idx, conflict_idx),
-                            (Some(primary_idx), Some(conflict_idx)) if primary_idx > conflict_idx
-                        ) {
+                        // An implementor type whose bounds don't hold may
+                        // resolve through an impl that doesn't apply, so it
+                        // conflicts with nothing.
+                        let ill_formed = [primary, conflict].into_iter().any(|impl_| {
+                            impl_.type_ref(db).to_opt().is_some_and(|hir_ty| {
+                                written_type_bounds(db, impl_.into()).is_ill_formed(hir_ty)
+                            })
+                        });
+                        if !ill_formed
+                            && !matches!(
+                                (primary_idx, conflict_idx),
+                                (Some(primary_idx), Some(conflict_idx)) if primary_idx > conflict_idx
+                            )
+                        {
                             diags.push(
                                 TraitLowerDiag::ConflictTraitImpl {
                                     primary,

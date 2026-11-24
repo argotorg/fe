@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/ill_formed_impl_no_conflict.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ ill_formed_impl_no_conflict.fe:20:19
+   │
+20 │ impl Show for Foo<<W<Bad> as Ty>::A> {}
+   │                   ^^^^^^^^^^^^^^^^^
+   │                   │
+   │                   `W<Bad>` doesn't implement `Ty`
+   │                   trait bound `Bad::X: Mark` is not satisfied
