@@ -1,10 +1,49 @@
 use dir_test::{Fixture, dir_test};
-use fe_parser::SyntaxKind;
+use fe_parser::{RecoveryMode, SyntaxKind, SyntaxNode, parse_source_file};
 
 use test_utils::{normalize::normalize_newlines, snap_test};
 
 mod test_runner;
 use test_runner::*;
+
+#[test]
+fn trait_items_and_trait_family_bounds_after_where_predicates() {
+    for (source, traits, families) in [
+        ("struct Wrapper<T>(T) where T: Copy\ntrait Next {}", 1, 0),
+        (
+            "struct Wrapper<T>(T) where T: Copy,\ntrait Next: Parent {}",
+            1,
+            0,
+        ),
+        (
+            "struct Wrapper<T>(T) where T: Copy,\ntrait Family: Bound",
+            0,
+            1,
+        ),
+        (
+            "struct Wrapper<T> where T: Copy,\ntrait Family: Bound {}",
+            0,
+            1,
+        ),
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}\n{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(root.to_string(), source);
+        for (kind, count) in [
+            (SyntaxKind::Trait, traits),
+            (SyntaxKind::TraitFamilyType, families),
+        ] {
+            assert_eq!(
+                root.descendants()
+                    .filter(|node| node.kind() == kind)
+                    .count(),
+                count,
+                "{source}",
+            );
+        }
+    }
+}
 
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/test_files/syntax_node/items",
