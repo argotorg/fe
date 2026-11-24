@@ -5727,6 +5727,28 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
     }
 }
 
+// A program that names no implementation is unaffected by the checks that read
+// implied bounds from dictionaries. A message field of a recursive type has no
+// `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
+// `Node: AbiSize` from; the instance stays admitted, as it was before those
+// checks. The refusal where a named implementation is involved is covered by
+// `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
+// `fe-hir`.
+#[test]
+fn named_checks_leave_recursive_message_fields_without_choices_alone() {
+    for fixture in [
+        "named_checks_recursive_field_without_choice.fe",
+        "named_checks_phantom_field_without_choice.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(!output.contains("16-0019"), "{fixture}: {output}");
+    }
+}
+
 #[test]
 fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
     let source = include_str!("fixtures/named_storage_alias.fe");
