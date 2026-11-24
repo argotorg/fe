@@ -48,6 +48,32 @@ fn comments_between_methods_format_in_one_pass() {
 }
 
 #[test]
+fn derive_header_with_a_line_comment_keeps_its_keywords_apart() {
+    let config = Config::default();
+    for (header, keywords) in [
+        (
+            "impl Packet with (\n    // c\n    P\n)",
+            "impl Packet with (",
+        ),
+        (
+            "impl Packet for Tr as Z with (\n    // c\n    F\n)",
+            "impl Packet for Tr as Z with (",
+        ),
+    ] {
+        let source = format!(
+            "struct Packet {{}}\nstruct P {{}}\ntrait Tr {{}}\nstruct Z {{}}\nstruct F {{}}\n{header}\n"
+        );
+        let formatted = format_str(&source, &config).expect("format should succeed");
+        assert!(formatted.contains(keywords), "{formatted}");
+        assert_eq!(
+            formatted,
+            format_str(&formatted, &config).expect("reformat should succeed"),
+            "{source}",
+        );
+    }
+}
+
+#[test]
 fn ambiguous_binary_operators_break_after_the_operator() {
     let source = r#"
 fn calculate() {
