@@ -768,6 +768,7 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
                         return QuoteBodyKind::Items;
                     }
                 }
+                Some(SyntaxKind::UseKw) if use_opens_a_block(p) => return QuoteBodyKind::Expr,
                 Some(kind)
                     if kind.is_item_head()
                         && !(kind == SyntaxKind::UnsafeKw
@@ -900,6 +901,27 @@ fn attributes_precede_item<S: TokenStream>(parser: &mut Parser<S>) -> bool {
 /// `shape` is an ordinary identifier outside this position.
 fn shape_follows_attributes<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser.dry_run(|p| super::attr::parse_attr_list(p).is_ok() && at_quoted_shape(p))
+}
+
+/// Whether the body starts with imports and a statement or expression follows
+/// them, so that the body is a block that the imports open. Imports followed
+/// by items, a splice or nothing stay the start of an item list.
+fn use_opens_a_block<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| {
+        while p.current_kind() == Some(SyntaxKind::UseKw) {
+            if p.parse(super::item::UseScope::default()).is_err() {
+                return false;
+            }
+            while p.current_kind() == Some(SyntaxKind::Newline) {
+                p.bump();
+            }
+        }
+        match p.current_kind() {
+            None | Some(SyntaxKind::RBrace | SyntaxKind::Dollar | SyntaxKind::Pound) => false,
+            Some(kind) if kind.is_item_head() => false,
+            _ => !at_quoted_shape(p),
+        }
+    })
 }
 
 fn at_quoted_shape<S: TokenStream>(parser: &mut Parser<S>) -> bool {

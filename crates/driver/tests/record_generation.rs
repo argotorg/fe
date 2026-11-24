@@ -4236,3 +4236,39 @@ impl S with (P)
     let (db, file) = input(RECURSIVE_PROVIDER);
     assert!(prepare_file(&db, file).is_err());
 }
+
+#[test]
+fn an_import_opens_a_quoted_expression_block_that_a_provider_splices() {
+    let source = "use core::derive::DeriveInherent
+use core::meta::{Code, Item, Expr, Record}
+mod m {
+    pub const fn a() -> u256 { 1 }
+    pub const fn b() -> u256 { 2 }
+}
+const fn body() -> Code<Expr> {
+    quote {
+        use m::{a, b}
+        a() + b()
+    }
+}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e = body()
+        quote { pub const fn f() -> u256 { ${e} } }
+    }
+}
+struct S {}
+impl S with (P)
+const fn run() -> u256 { S::f() }
+";
+    let (db, file) = input(source);
+    let output = prepare_file(&db, file)
+        .unwrap_or_else(|error| panic!("{error}"))
+        .expect("a prepared view");
+    let output_file = output
+        .workspace()
+        .get(&output, &file.url(&db).unwrap())
+        .unwrap();
+    assert_generated_integer(&output, output_file, "run", "3");
+}

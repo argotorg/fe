@@ -302,3 +302,29 @@ fn an_attributed_or_documented_shape_member_parses_like_a_bare_one() {
         assert!(shapes[0].attr_list().is_some(), "{lead}");
     }
 }
+
+#[test]
+fn an_import_may_open_a_quoted_expression_block() {
+    // The names that the import lists are declared in the quotation's block,
+    // as in a function body.
+    for body in [
+        "use m::{a, b}\n a() + b()",
+        "use m::a\n use m::b\n let x = a()\n x + b()",
+    ] {
+        let source = format!("const fn body() {{ quote {{\n {body}\n }} }}");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{body}: {errors:?}");
+        let root = SyntaxNode::new_root(green);
+        let quote = root.descendants().find_map(QuoteExpr::cast).unwrap();
+        assert!(quote.item_list().is_none(), "{body}");
+        let block = quote.body().unwrap();
+        assert!(block.items().count() >= 1, "{body}");
+        assert!(block.stmts().count() >= 1, "{body}");
+    }
+    // A quote of imports and items stays an item quote.
+    let source = "const fn items() { quote {\n use m::a\n fn f() {}\n } }";
+    let (green, _) = parse_source_file(source, RecoveryMode::Recover);
+    let root = SyntaxNode::new_root(green);
+    let quote = root.descendants().find_map(QuoteExpr::cast).unwrap();
+    assert!(quote.item_list().is_some());
+}

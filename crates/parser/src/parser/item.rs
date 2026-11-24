@@ -144,6 +144,7 @@ impl super::Parse for ItemScope {
                 parser.current_kind(),
                 Some(FnKw | ConstKw | ImplKw | TypeKw)
             )
+            && !(parser.current_kind() == Some(UseKw) && at_quoted_block_root(parser))
         {
             parser.error_msg_on_current_token(
                 "only functions, constants, types and impls can be quoted",
@@ -213,6 +214,16 @@ fn at_quoted_item_root<S: TokenStream>(parser: &Parser<S>) -> bool {
             .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr),
         _ => false,
     }
+}
+
+/// Whether the item starts the block of a quoted expression, where an import
+/// declares names for the statements that follow, as in a function body.
+fn at_quoted_block_root<S: TokenStream>(parser: &Parser<S>) -> bool {
+    let mut parents = parser.parents.iter().rev().skip(1);
+    parents.next().map(|entry| entry.kind) == Some(SyntaxKind::BlockExpr)
+        && parents
+            .next()
+            .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr)
 }
 
 fn quoted_fn_scope<S: TokenStream>(parser: &Parser<S>) -> FuncDefScope {
@@ -1037,7 +1048,7 @@ impl super::Parse for ImplItemListScope {
     }
 }
 
-define_scope! { UseScope, Use }
+define_scope! { pub(super) UseScope, Use }
 impl super::Parse for UseScope {
     type Error = Recovery<ErrProof>;
 
