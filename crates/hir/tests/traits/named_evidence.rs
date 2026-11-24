@@ -4437,3 +4437,121 @@ const fn ordinary() -> u256 {{ caller<P<Item>>() }}
     values(&program("b"), &[("chosen", 9), ("ordinary", 2)]);
     values(&program("a"), &[("chosen", 1), ("ordinary", 9)]);
 }
+
+// A closure that adds an effect bound after the signature's bounds reads the
+// component of its parent's dictionary.
+#[test]
+fn concrete_component_closure_with_effect() {
+    let source = format!(
+        r#"{SHOWS}
+trait Store {{ fn get(self) -> u256 }}
+struct S {{}}
+impl Store for S {{ fn get(self) -> u256 {{ 0 }} }}
+fn caller<B: Tr<A = Foo>>() -> u256 uses (s: Store) {{
+    let c = || s.get() + one<B::A>()
+    c() * 1000 + B::via()
+}}
+fn top() -> u256 {{ with (Loud, Store = S {{}}) {{ caller<W<Foo>>() }} }}
+"#
+    )
+    .replace("const fn", "fn");
+    assert_eq!(reached_shows(&source, "top"), vec![true]);
+}
+
+// A trait constant's default body reads the component of the dictionary of the
+// supertrait bound that implementations fix where they are declared.
+#[test]
+fn concrete_component_trait_constant_default() {
+    values(
+        &format!(
+            r#"{SHOWS}
+trait C: Tr<A = Foo> {{ const K: u256 = Foo::show() }}
+impl C for W<Foo> {{}}
+const fn read<X: C>() -> u256 {{ X::K }}
+const fn top() -> u256 {{ with (Loud) {{ read<W<Foo>>() }} }}
+const fn plain() -> u256 {{ read<W<Foo>>() }}
+"#
+        ),
+        &[("top", 100), ("plain", 100)],
+    );
+}
+
+// An inherent constant reads the component of the dictionary its
+// implementation's bound received.
+#[test]
+fn concrete_component_inherent_constant() {
+    values(
+        &format!(
+            r#"{SHOWS}
+struct Wrapper<B> {{}}
+impl<B: Tr<A = Foo>> Wrapper<B> {{ const X: u256 = Foo::show() }}
+const fn caller<B: Tr<A = Foo>>() -> u256 {{ Wrapper<B>::X }}
+const fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
+const fn plain() -> u256 {{ caller<W<Foo>>() }}
+"#
+        ),
+        &[("top", 70), ("plain", 100)],
+    );
+}
+
+// Programs in which `Show` has an associated output that both implementations
+// give equally: the output agreement walk sees the resolved proofs, so it names
+// no disagreement.
+#[test]
+fn concrete_component_equal_outputs() {
+    let shows = SHOWS
+        .replace(
+            "impl Show for Foo { const fn",
+            "impl Show for Foo { type Out = u8\n    const fn",
+        )
+        .replace(
+            "impl Show for Foo as Loud { const fn",
+            "impl Show for Foo as Loud { type Out = u8\n    const fn",
+        )
+        .replace(
+            "trait Show { const fn",
+            "trait Show { type Out\n    const fn",
+        );
+    values(
+        &format!(
+            r#"{shows}
+const fn caller<B: Tr<A = Foo>>() -> u256 {{ one<B::A>() * 1000 + B::via() }}
+const fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}
+
+// An associated constant that an implementation reads from a component, read
+// through a default method of its trait.
+#[test]
+fn concrete_component_constant_through_a_default() {
+    values(
+        &format!(
+            r#"{PICK_ITEM}
+trait Holder {{
+    type V: Pick
+    const fn hv() -> u256
+}}
+impl<T: Pick> Holder for Wrap<T> {{
+    type V = T
+    const fn hv() -> u256 {{ T::val() }}
+}}
+struct Slot<T> {{}}
+trait Outer {{
+    const K: u256
+    const fn ov() -> u256
+    const fn dflt() -> u256 {{ Self::K }}
+}}
+impl<T: Holder<V = Item>> Outer for Slot<T> {{
+    const K: u256 = Item::val()
+    const fn ov() -> u256 {{ T::hv() }}
+}}
+const fn read<B: Outer>() -> u256 {{ B::dflt() * 1000 + B::ov() }}
+const fn top() -> u256 {{ with (Named) {{ read<Slot<Wrap<Item>>>() }} }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}

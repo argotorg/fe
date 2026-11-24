@@ -3321,4 +3321,35 @@ fn plain<B: Tr>() {}
         // A root that is still open is left to the instance that closes it.
         assert!(reference(signature).unresolved_component(&db).is_none());
     }
+
+    /// A row goal that differs from the slot's goal by a concrete component has
+    /// no derivation the plain walk of the root records: it is refused, never
+    /// read from an ordinary proof.
+    #[test]
+    fn component_row_goal_is_refused() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("pinned.fe".into(), PINNED);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let func = find_func(&db, module, "caller");
+        let signature = func_signature(&db, func, None);
+        let root = signature.list(&db)[0];
+        let member = concrete_components(&db, signature).members[0].clone();
+        let foo = adt_ty(&db, module, "Foo", &[]);
+        let w_foo = adt_ty(&db, module, "W", &[foo]);
+        let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
+        let dictionary =
+            prove(&db, TraitSolveCx::new(&db, module.scope()), goal).expect("W<Foo> implements Tr");
+        assert_eq!(
+            implied_bound_evidence(
+                &db,
+                dictionary,
+                root,
+                member.goal,
+                module.scope(),
+                PredicateListId::empty_list(&db),
+            ),
+            Projection::Refused
+        );
+    }
 }
