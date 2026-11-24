@@ -2956,6 +2956,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::FieldSpliceOutsideHeader(span) => primary_diag(
+                Severity::Error,
+                "a field type is spliced outside the header of its record",
+                "the type of a record's field is spliced in code generated for the record's own header, which gives the record's parameters their arguments",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::NonTrailingDefaultGenericParam(span) => primary_diag(
                 Severity::Error,
                 "generic parameters with a default must be trailing",

@@ -227,9 +227,9 @@ pub(crate) fn resolve_authored_scope<'db>(
     }
 }
 
-/// The declared type of an authored record's field, bound as a type splice
-/// copies it: names in the record's scope, its generic parameters left to the
-/// use site.
+/// The declared type of an authored record's field as written: names bound in
+/// the record's scope, its generic parameters left as bare names. Type lowering
+/// does not read this type; it answers questions about the written syntax.
 #[salsa::tracked(returns(copy))]
 pub(crate) fn authored_field_type<'db>(
     db: &'db dyn HirDb,

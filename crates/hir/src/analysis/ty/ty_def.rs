@@ -1782,6 +1782,10 @@ pub enum InvalidCause<'db> {
     /// than the normalizer allows.
     TypeNormalizationLimit,
 
+    /// The type of a record's field spliced where no derive header requests
+    /// that record, so nothing says what the record's parameters stand for.
+    FieldSpliceOutsideHeader,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1945,6 +1949,7 @@ impl InvalidCause<'_> {
             | InvalidCause::ModeArgNotShape
             | InvalidCause::InferArgOutsideCall
             | InvalidCause::AssocBindingNotOnTrait
+            | InvalidCause::FieldSpliceOutsideHeader
             | InvalidCause::TooManyGenericArgs { .. }
             | InvalidCause::InvalidConstParamTy
             | InvalidCause::RecursiveConstParamTy

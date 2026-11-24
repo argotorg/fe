@@ -183,9 +183,12 @@ pub struct AuthoredFieldType<'db> {
 }
 
 impl<'db> AuthoredFieldType<'db> {
-    /// The field's declared type, its names bound in the record's scope and
-    /// the record's generic parameters left to the use site, as the type
-    /// splice copies them. `None` when the declaration omits the type.
+    /// The field's declared type as written, its names bound in the record's
+    /// scope and the record's generic parameters left as bare names. It answers
+    /// questions about the syntax of the type, such as whether it names a
+    /// mode; what the type means where it is spliced is decided by lowering,
+    /// from the record's own field type. `None` when the declaration omits the
+    /// type.
     pub fn bound_type(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
         crate::core::lower::authored_field_type(db, self)
     }

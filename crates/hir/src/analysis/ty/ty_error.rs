@@ -1357,6 +1357,10 @@ pub(crate) fn diag_from_invalid_cause<'db>(
 
         InvalidCause::TypeNormalizationLimit => TyLowerDiag::TypeNormalizationLimit(span).into(),
 
+        InvalidCause::FieldSpliceOutsideHeader => {
+            TyLowerDiag::FieldSpliceOutsideHeader(span).into()
+        }
+
         InvalidCause::NotAType(_) => return None,
 
         // These errors should be caught and reported elsewhere

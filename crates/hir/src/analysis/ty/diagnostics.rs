@@ -321,6 +321,9 @@ pub enum TyLowerDiag<'db> {
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
     TypeNormalizationLimit(DynLazySpan<'db>),
+    /// The type of a record's field spliced where no derive header requests
+    /// the record.
+    FieldSpliceOutsideHeader(DynLazySpan<'db>),
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -491,6 +494,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
             Self::TypeNormalizationLimit(_) => 58,
+            Self::FieldSpliceOutsideHeader(_) => 97,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidVarSelfWithExplicitType { .. } => 30,

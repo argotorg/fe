@@ -1,13 +1,14 @@
 use crate::core::hir_def::{
-    Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, ItemKind, KindBound as HirKindBound, Partial, PathId, Stmt,
-    TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
-    scope_graph::ScopeId,
+    AuthoredFieldType, Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam,
+    GenericParamOwner, GenericParamView, IdentId, ItemKind, KindBound as HirKindBound, Partial,
+    PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind,
+    TypeMode, scope_graph::ScopeId,
 };
 use salsa::SalsaValue;
 use smallvec::smallvec;
 
 use super::{
+    adt_def::{AdtRef, instantiate_adt_field_shape_in_mode},
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
         ConstBodyLowering, ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext,
@@ -113,19 +114,7 @@ fn lower_hir_ty_impl<'db>(
             TyId::foldl(db, base, &args)
         }
         HirTyKind::Never => TyId::never(db),
-        HirTyKind::AuthoredField(field) => match field.bound_type(db) {
-            Some(ty) => {
-                let record = field
-                    .record(db)
-                    .resolve(db)
-                    .to_item()
-                    .and_then(GenericParamOwner::from_item_opt);
-                lowering_cx.with_spliced_record(record, || {
-                    lower_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
-                })
-            }
-            None => TyId::invalid(db, InvalidCause::Other),
-        },
+        HirTyKind::AuthoredField(field) => lower_authored_field(db, *field, scope, lowering_cx),
     };
     // A `#[view]` type exists only behind accesses, never inside a value.
     match lowered.view_part(db) {
@@ -288,11 +277,6 @@ pub(crate) fn lower_opt_const_body<'db>(
     let Some(body) = body.to_opt() else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
     };
-    if let Some(record) = lowering_cx.spliced_record()
-        && super::const_ty::lexical_const_body_owner(db, body) == Some(record)
-    {
-        return lower_spliced_record_const(db, body, record, scope, assumptions, lowering_cx);
-    }
     if lowering_cx.const_bodies() == ConstBodyLowering::Deferred {
         if let Some(path) = const_body_simple_path(db, body)
             && path.parent(db).is_none()
@@ -346,59 +330,42 @@ pub(crate) fn derive_header_self_ty<'db>(
     None
 }
 
-/// An anonymous constant of a spliced field type: an array length or constant
-/// argument written in the field's record. The splice names the type's other
-/// names in the record and leaves the record's parameters to the use site
-/// (`AuthoredFieldType::bound_type`), but a lowered body cannot be rebound. So
-/// the constant is read in the record, as the record's own field types read
-/// it, and each of the record's parameters is then what its name means where
-/// the type is spliced. A parameter whose name means nothing there keeps the
-/// record's formal, as an unspliced read of the constant would.
-fn lower_spliced_record_const<'db>(
+/// The type of a field of the record that a derive header requests, as
+/// generated code splices it (`${field_type(field(record, i))}`): the record's
+/// own lowered field type, with the record's parameters replaced by position
+/// with the arguments of the header's self type (`impl<X> S<X>` gives `T := X`
+/// for `struct S<T>`). The field type means what the record's declaration
+/// says, whatever the names around the splice are.
+fn lower_authored_field<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    record: GenericParamOwner<'db>,
+    field: AuthoredFieldType<'db>,
     scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
     lowering_cx: &LoweringContext<'db>,
-) -> ConstTyId<'db> {
-    let declared = lowering_cx.with_spliced_record(None, || {
-        lower_opt_const_body(
-            db,
-            Partial::Present(body),
-            crate::hir_def::ItemKind::from(record).scope(),
-            collect_constraints(db, record).instantiate_identity(),
-            lowering_cx,
-        )
-    });
-    let schema = ParamSchemaId::full(db, record);
-    let subst = CompleteSubst::from_optional_values(db, ParamDomainId::full(db, schema), |slot| {
-        let formal = schema.formal_at(db, slot)?;
-        let name = formal.as_generic_param(db)?.name;
-        let named = lowering_cx.with_spliced_record(None, || {
-            lowering_cx.without_recording(|| {
-                lower_path_impl(
-                    db,
-                    scope,
-                    Partial::Present(PathId::from_ident(db, name)),
-                    assumptions,
-                    TypePosition::GenericArg,
-                    lowering_cx,
-                )
-            })
-        });
-        (!named.has_invalid(db)
-            && named.is_const_ty(db) == formal.is_const_ty(db)
-            && named.kind(db) == formal.kind(db))
-        .then_some(named)
-    });
-    let spliced = Binder::bind(record, TyId::const_ty(db, declared))
-        .instantiate_subst(db, &subst)
-        .expect("a record's constant uses its declaration domain");
-    match spliced.data(db) {
-        TyData::ConstTy(const_ty) => *const_ty,
-        _ => unreachable!("constant parameters are substituted by constants"),
-    }
+) -> TyId<'db> {
+    let Some(adt) = field
+        .record(db)
+        .resolve(db)
+        .to_item()
+        .and_then(AdtRef::try_from_item)
+        .map(|adt_ref| adt_ref.as_adt(db))
+    else {
+        return TyId::invalid(db, InvalidCause::Other);
+    };
+    let header = derive_header_self_ty(db, scope);
+    let args = match header {
+        Some(header) if header.adt_ref(db) == Some(adt.adt_ref(db)) => header.generic_args(db),
+        // A record without parameters has one field type wherever it is read.
+        _ if adt.params(db).is_empty() => &[],
+        _ => return TyId::invalid(db, InvalidCause::FieldSpliceOutsideHeader),
+    };
+    instantiate_adt_field_shape_in_mode(
+        db,
+        adt,
+        field.variant(db).unwrap_or(0),
+        field.index(db),
+        args,
+        lowering_cx.const_bodies(),
+    )
 }
 
 /// Whether lowering reads an anonymous constant as the constant, trait
