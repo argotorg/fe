@@ -2831,13 +2831,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.yield_depth = yield_depth;
                 self.slide = slide;
             }
-            // The operand's scope holds its temporaries until the session
-            // resumes.
+            // The operand's scope holds its temporaries, and the bindings of
+            // an access block in it, until the session resumes.
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
                 let outer = self.slide.replace((slide, self.drop_scopes.len()));
                 let yield_depth = mem::take(&mut self.yield_depth);
-                self.push_drop_scope(false);
+                self.push_drop_scope(true);
                 let _ = self.lower_expr(*expr);
                 self.pop_drop_scope(None);
                 self.yield_depth = yield_depth;

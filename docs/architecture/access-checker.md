@@ -46,7 +46,8 @@ flowchart TD
   forwarded `yield self.entry(k)`, tests its value. Each yield site yields
   on its own path. The resume block destroys what the scopes the yield
   leaves hold: before the slide, those of a `yield` statement's operand,
-  whose own scope holds the statement's temporaries; or every scope. A
+  whose own scope holds its temporaries and the bindings of an access block
+  in it, which has no scope of its own; or every scope. A
   compound yield site, a tuple or variant constructor, yields once after
   its elements: a block among them passes what it holds to the enclosing
   scope, a branch of an `if` or `match` among them destroys what it holds

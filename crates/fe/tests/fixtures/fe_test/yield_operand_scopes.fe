@@ -437,6 +437,128 @@ const fn picked(_ early: bool) -> u256 {
 const PICKED_EARLY: u256 = picked(true)
 const PICKED_LATE: u256 = picked(false)
 
+fn take_holder(_ h: mut Holder) -> mut u256 {
+    mut h.v
+}
+
+fn ref_guard(_ g: Guard) -> ref Guard {
+    ref g
+}
+
+// An access block in the operand has no scope of its own: its bindings and
+// the temporaries a `let` in it extends belong to the operand's scope.
+fn access_block(_ trace: *u256) -> mut u256 {
+    let _outer = Guard { trace, event: 4 }
+    yield take_holder({
+        var h = Holder { v: 6, guard: Guard { trace, event: 2 } }
+        mut h
+    })
+    log(trace, 9)
+    let _after = Guard { trace, event: 8 }
+}
+
+fn access_block_in_compound(_ trace: *u256) -> Option<mut u256> {
+    let _outer = Guard { trace, event: 4 }
+    yield Option::Some(take_holder({
+        var h = Holder { v: 6, guard: Guard { trace, event: 2 } }
+        mut h
+    }))
+    log(trace, 9)
+}
+
+fn access_block_extended(_ trace: *u256) -> mut u256 {
+    let _outer = Guard { trace, event: 4 }
+    yield take_holder({
+        var h = Holder { v: 6, guard: Guard { trace, event: 2 } }
+        let _r = ref ref_guard(Guard { trace, event: 3 })
+        mut h
+    })
+    log(trace, 9)
+}
+
+// `g` in the access block shadows the outer `g`; `late` belongs to the
+// block declaring it, though the access block assigns it.
+fn access_block_shadows(_ trace: *u256) -> mut u256 {
+    let g = Guard { trace, event: 4 }
+    var late: Guard
+    yield take_holder({
+        late = Guard { trace, event: 8 }
+        let g = Guard { trace, event: 2 }
+        var h = Holder { v: g.event, guard: Guard { trace, event: 3 } }
+        mut h
+    })
+    log(trace, g.event + 5)
+}
+
+// Passed blocks end innermost and latest first.
+fn two_blocks(_ cell: mut Cell, _ trace: *u256) -> (mut u256, mut u256) {
+    yield ({
+        let _a = Guard { trace, event: 3 }
+        mut cell.a
+    }, {
+        let _b = Guard { trace, event: 2 }
+        mut cell.b
+    })
+    log(trace, 9)
+}
+
+fn nested_blocks(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
+    yield Option::Some({
+        let _a = Guard { trace, event: 3 }
+        {
+            let _b = Guard { trace, event: 2 }
+            mut cell.a
+        }
+    })
+    log(trace, 9)
+}
+
+fn late_return(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
+    yield ({
+        let _a = Guard { trace, event: 3 }
+        mut cell.a
+    }, {
+        if c {
+            return (mut cell.a, mut cell.b)
+        }
+        mut cell.b
+    })
+    log(trace, 9)
+}
+
+fn maybe_set(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some({
+        var g: Guard
+        if c {
+            g = Guard { trace, event: 2 }
+        }
+        mut cell.a
+    })
+    log(trace, 9)
+}
+
+fn handed_out(_ cell: mut Cell, _ trace: *u256) -> (Guard, mut u256) {
+    yield ({
+        let g = Guard { trace, event: 2 }
+        let _a = Guard { trace, event: 3 }
+        g
+    }, mut cell.a)
+    log(trace, 9)
+}
+
+// Pins current behavior, the documented limit of
+// `issues/fe/compound-yield-branches`: what a branch inside a compound yield
+// binds ends with the branch, before the yield. The model wants 539.
+fn branch_limit(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        7
+    } else {
+        8
+    }, mut cell.a)
+    log(trace, 9)
+}
+
 #[test]
 fn operand_bindings_end_before_the_slide() {
     let trace = new_trace()
@@ -746,4 +868,88 @@ fn a_binding_moved_on_one_path() {
 fn a_return_in_the_operand_at_compile_time() {
     assert(PICKED_EARLY == 1)
     assert(PICKED_LATE == 110)
+}
+
+#[test]
+fn access_block_bindings_end_at_resume() {
+    let trace = new_trace()
+    bump(mut access_block(trace), trace)
+    assert(read(trace) == 52984)
+    let trace = new_trace()
+    match access_block_in_compound(trace) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 5294)
+    let trace = new_trace()
+    bump(mut access_block_extended(trace), trace)
+    assert(read(trace) == 53294)
+}
+
+#[test]
+fn an_access_block_shadowing_and_assigning_outer_bindings() {
+    let trace = new_trace()
+    bump(mut access_block_shadows(trace), trace)
+    assert(read(trace) == 532984)
+}
+
+#[test]
+fn passed_blocks_end_latest_first() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    let (mut x, _) = two_blocks(mut cell, trace)
+    bump(mut x, trace)
+    assert(read(trace) == 5239)
+    let trace = new_trace()
+    match nested_blocks(mut cell, trace) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 5239)
+}
+
+#[test]
+fn a_return_after_a_passed_block() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    let (mut x, _) = late_return(mut cell, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 53)
+    let trace = new_trace()
+    let (mut y, _) = late_return(mut cell, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 539)
+}
+
+#[test]
+fn passed_owners_initialized_or_moved_on_some_paths() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match maybe_set(mut cell, trace, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 529)
+    let trace = new_trace()
+    match maybe_set(mut cell, trace, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    {
+        let (g, mut x) = handed_out(mut cell, trace)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 5392)
+}
+
+#[test]
+fn a_branch_in_a_compound_yield_ends_with_the_branch() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    let (n, mut x) = branch_limit(mut cell, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 359)
 }

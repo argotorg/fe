@@ -40,7 +40,8 @@ value's lifetime ends, and a type that holds a resource releases it in its
   bindings of a block inside a yielded tuple or variant, as in
   `Option::Some({ .. })`. After a `return` or a tail yield, every scope ends
   there. What an `if` or `match` branch inside a yielded tuple or variant
-  binds is destroyed when the branch ends, before the yield.
+  binds, and its temporaries, are destroyed when the branch ends, before
+  the yield.
 
 A value that moved is not destroyed where it moved from, and a partial move
 destroys only the fields left behind. Where a value moved on some paths
