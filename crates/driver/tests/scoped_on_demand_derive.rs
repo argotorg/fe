@@ -3457,3 +3457,62 @@ fn caller() { broken<W>() }
         "{cause}"
     );
 }
+
+#[test]
+fn declared_bound_answers_before_a_blanket_impl_needs_a_provider() {
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tag { fn tag(self) -> u256 }
+trait Need { fn need(self) -> u256 }
+impl<U: Tag> Need for U { fn need(self) -> u256 { self.tag() } }
+struct ProviderForTag {}
+impl Derive<trait Tag> for ProviderForTag {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn tag(self) -> u256 { 1 } }
+    }
+}
+fn helper<T: Need>(x: T) -> u256 { x.need() }
+"#;
+    // The call's goal is the caller's declared bound, so the provider that
+    // could supply the blanket implementation's prerequisite is not asked.
+    for body in [
+        "fn use_need<T: Need>(x: T) -> u256 { with (ProviderForTag) { helper(x) } }",
+        "fn use_need<T: Need>(x: T) -> u256 { with (ProviderForTag) { x.need() } }",
+    ] {
+        let source = format!("{prelude}{body}\n");
+        let (db, file) = input(&source);
+        let db = prepare_file(&db, file)
+            .expect("the program is not refused")
+            .unwrap_or(db);
+        assert_eq!(output_diagnostics(&db), "", "{body}");
+    }
+
+    // The dictionary the caller received is the one used.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tag { const fn tag(self) -> u256 }
+trait Need { const fn need(self) -> u256 }
+impl<U: Tag> Need for U { const fn need(self) -> u256 { self.tag() } }
+struct ProviderForTag {}
+impl Derive<trait Tag> for ProviderForTag {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn tag(self) -> u256 { 1 } }
+    }
+}
+struct R {}
+impl Tag for R { const fn tag(self) -> u256 { 9 } }
+const fn helper<T: Need>(x: T) -> u256 { x.need() }
+const fn use_need<T: Need>(_ x: T) -> u256 { with (ProviderForTag) { helper(x) } }
+const fn run() -> u256 { use_need(R {}) }
+"#;
+    let (db, file) = input(source);
+    let db = prepare_file(&db, file)
+        .expect("the program is not refused")
+        .unwrap_or(db);
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "9");
+}

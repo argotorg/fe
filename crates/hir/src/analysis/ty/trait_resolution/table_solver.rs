@@ -1023,6 +1023,30 @@ impl<'db> ResolutionContext for TraitResolutionContext<'db> {
             }
             None => {}
         }
+        // A declared bound answers a settled goal that no `with` choice
+        // matches, before implementations are tried: an implementation's own
+        // prerequisites could otherwise stop the search on a generation
+        // request that the declared bound makes unnecessary. This is the
+        // precedence that `prove_outcome` gives evidence.
+        if !prepared.query.require_impl
+            && !super::super::visitor::collect_flags(self.db, prepared.normalized_goal)
+                .intersects(super::super::ty_def::TyFlags::HAS_VAR)
+        {
+            let declared: Vec<_> = prepared
+                .query
+                .assumptions
+                .list(self.db)
+                .iter()
+                .enumerate()
+                .filter(|&(_, &bound)| {
+                    bound == prepared.query.goal || bound == prepared.normalized_goal
+                })
+                .map(|(index, _)| Clause::Assumption(index))
+                .collect();
+            if !declared.is_empty() {
+                return Ok(CallbackOutcome::Continue(declared));
+            }
+        }
         // An impl lives in its normalized self type's ingot or its trait's
         // (`trait_impl_admissibility`): `<Option<P> as Unwrap>::Out: Copy` is
         // `P: Copy`, whose impl is in `P`'s ingot, not `Option`'s.
