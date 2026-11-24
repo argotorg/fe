@@ -1671,11 +1671,14 @@ pub(crate) fn impl_method_evidence<'db>(
         return None;
     };
     let implementor = lower_impl_trait(db, impl_trait)?;
-    let conditions = collect_candidate_constraints(db, impl_trait.into())
-        .instantiate_identity()
-        .extend_all_bounds(db);
     let nominal_mode = BodyOwner::func_at(db, nominal, mode).mode();
     let body_mode = BodyOwner::func_at(db, body, mode).mode();
+    // The implementation's `mut?` conditions are read at the mode the body
+    // is used at, as the body's own signature and selection read them.
+    let conditions = collect_candidate_constraints(db, impl_trait.into())
+        .instantiate_identity()
+        .extend_all_bounds(db)
+        .at_mode(db, body_mode);
     let (subst, _, _) = trait_to_impl_param_subst(
         db,
         (CallableDef::Func(body), body_mode),

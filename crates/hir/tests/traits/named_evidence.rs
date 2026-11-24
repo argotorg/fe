@@ -2482,3 +2482,51 @@ impl<T: Source<Out = u8>> Output<T::Out> for Wrap<T> as Projected {{ {named} }}
         }
     }
 }
+
+#[test]
+fn mut_condition_keeps_choice_at_mut() {
+    values(
+        r#"
+struct Item { a: u256, b: u256 }
+struct Box<T> { v: T }
+trait Pick { const fn slot(mut? self) -> mut? u256 }
+impl Pick for Item { const fn slot(mut? self) -> mut? u256 { mut? self.a } }
+impl Pick for Item as Alt { const fn slot(mut? self) -> mut? u256 { mut? self.b } }
+trait Wrap { const fn wrap(mut? self) -> mut? u256 }
+impl<T: mut? Pick> Wrap for Box<T> {
+    const fn wrap(mut? self) -> mut? u256 { mut? self.v.slot() }
+}
+const fn at_view() -> u256 {
+    let bx = Box<Item> { v: Item { a: 1, b: 2 } }
+    with (Alt) { bx.wrap() }
+}
+const fn chosen_b() -> u256 {
+    var bx = Box<Item> { v: Item { a: 1, b: 2 } }
+    with (Alt) { bx.wrap() = 9 }
+    bx.v.b
+}
+const fn chosen_a() -> u256 {
+    var bx = Box<Item> { v: Item { a: 1, b: 2 } }
+    with (Alt) { bx.wrap() = 9 }
+    bx.v.a
+}
+const fn ordinary_a() -> u256 {
+    var bx = Box<Item> { v: Item { a: 1, b: 2 } }
+    bx.wrap() = 9
+    bx.v.a
+}
+const fn ordinary_b() -> u256 {
+    var bx = Box<Item> { v: Item { a: 1, b: 2 } }
+    bx.wrap() = 9
+    bx.v.b
+}
+"#,
+        &[
+            ("at_view", 2),
+            ("chosen_b", 9),
+            ("chosen_a", 1),
+            ("ordinary_a", 9),
+            ("ordinary_b", 2),
+        ],
+    );
+}
