@@ -2361,7 +2361,16 @@ pub const fn run() -> u256 {
     if xs[0] { 4 } else { 0 }
 }
 "#;
-    let output = prepare(expr_anon_source)
+    // The method is the visible `VisibleTrait::val`. `HiddenTrait` is not in
+    // scope and is not selected, so probing it asks nothing of the provider:
+    // nothing is generated.
+    let (db, file) = input(expr_anon_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "4");
+
+    // A call that the provider supplies is a demand of the anon const body.
+    let output = prepare(&expr_anon_source.replace("(Pair {}).val()", "Pair::score()"))
         .expect("expression-position anon const body should rebind provider opening");
     assert_eq!(eval_const_fn_u256(&output, "run"), "4");
 
@@ -2412,7 +2421,13 @@ pub const fn run() -> u256 {
     xs[0] as u256
 }
 "#;
-    let output = prepare(type_anon_rebind_source)
+    // As above, the visible method is selected and nothing is generated.
+    let (db, file) = input(type_anon_rebind_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "run"), "7");
+
+    let output = prepare(&type_anon_rebind_source.replace("(Pair {}).val()", "Pair::score()"))
         .expect("written-type anon const bodies should prepare and rebind provider opening");
     assert_eq!(eval_const_fn_u256(&output, "run"), "7");
 
@@ -2496,7 +2511,15 @@ pub struct Buffer {
     pub bytes: [u8; { with (MyScore) { (Pair {}).val() } }],
 }
 "#;
-    let cause = prepare_err(dropped_demand_source);
+    // The visible method is selected, so the provider is not asked and its
+    // fault is not reached.
+    let (db, file) = input(dropped_demand_source);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(output_diagnostics(&db), "");
+
+    // A demand of the written type's anon const body is not dropped: the
+    // provider it names runs, and its fault is reported.
+    let cause = prepare_err(&dropped_demand_source.replace("(Pair {}).val()", "Pair::score()"));
     assert!(cause.contains("division by zero"), "{cause}");
 }
 
@@ -3724,4 +3747,118 @@ const fn g() -> u256 {
     let db = evaluated(bound);
     assert_eq!(eval_const_fn_u256(&db, "f"), "5");
     assert_eq!(eval_const_fn_u256(&db, "g"), "1");
+}
+
+#[test]
+fn unselected_offered_probes_do_not_become_demands() {
+    // The diagnostics of a program, or the cause when preparation refuses it.
+    let outcome = |source: &str| {
+        let (db, file) = input(source);
+        match prepare_file(&db, file) {
+            Err(error) => format!("refused: {}", error.cause),
+            Ok(Some(output)) => output_diagnostics(&output),
+            Ok(None) => output_diagnostics(&db),
+        }
+    };
+    let prelude = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { fn val(self) -> u256 }
+impl Foo for u256 { fn val(self) -> u256 { 1 } }
+trait Bar { fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+"#;
+
+    // A primitive receiver that the provider cannot serve: the written method
+    // applies, and the provider's trait is not probed into a demand.
+    let primitive = format!(
+        "{prelude}fn f() -> u256 {{\n    let x: u256 = 5\n    with (P) {{ x.val() }}\n}}\n"
+    );
+    assert_eq!(outcome(&primitive), "");
+
+    // The same through a declared bound on a type parameter.
+    let parameter =
+        format!("{prelude}fn g<T: Foo>(x: T) -> u256 {{\n    with (P) {{ x.val() }}\n}}\n");
+    assert_eq!(outcome(&parameter), "");
+
+    // A receiver whose private field only the admission of a generated
+    // implementation would refuse: both methods apply, and no provider runs.
+    let foreign = format!(
+        "{prelude}mod m {{\n    pub struct S {{ x: u256 }}\n    pub fn mk() -> S {{ S {{ x: 1 }} }}\n}}\nimpl Foo for m::S {{ fn val(self) -> u256 {{ 4 }} }}\nfn f() -> u256 {{\n    with (P) {{ m::mk().val() }}\n}}\n"
+    );
+    let found = outcome(&foreign);
+    assert!(
+        found.contains("8-0026") && !found.contains("refused:"),
+        "{found}"
+    );
+
+    // A receiver whose supertrait bound of the offered trait fails.
+    let unsatisfied = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Marker {}
+trait Foo { fn val(self) -> u256 }
+trait Bar: Marker { fn val(self) -> u256 }
+struct S { a: u256 }
+impl Foo for S { fn val(self) -> u256 { 1 } }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn val(self) -> u256 { 2 } }
+    }
+}
+fn f() -> u256 {
+    let s = S { a: 1 }
+    with (P) { s.val() }
+}
+"#;
+    let found = outcome(unsatisfied);
+    assert!(
+        found.contains("8-0026") && !found.contains("generated implementation admission failed"),
+        "{found}"
+    );
+
+    // An authored record can receive `Bar` from the provider, so both methods
+    // are candidates and the ambiguity stays.
+    let generic = format!(
+        "{prelude}struct G<T> {{ t: T }}\nimpl<T> Foo for G<T> {{ fn val(self) -> u256 {{ 3 }} }}\nfn f() -> u256 {{\n    let g = G<u8> {{ t: 1 }}\n    with (P) {{ g.val() }}\n}}\n"
+    );
+    let found = outcome(&generic);
+    assert!(
+        found.contains("8-0026") && !found.contains("refused:"),
+        "{found}"
+    );
+
+    // The written method is the one that runs.
+    let evaluated = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Foo { const fn val(self) -> u256 }
+impl Foo for u256 { const fn val(self) -> u256 { 1 } }
+trait Bar { const fn val(self) -> u256 }
+struct P {}
+impl Derive<trait Bar> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn val(self) -> u256 { 2 } }
+    }
+}
+const fn f() -> u256 {
+    let x: u256 = 5
+    with (P) { x.val() }
+}
+"#;
+    let (db, file) = input(evaluated);
+    let db = prepare_file(&db, file)
+        .expect("the program is not refused")
+        .unwrap_or(db);
+    assert_eq!(output_diagnostics(&db), "");
+    assert_eq!(eval_const_fn_u256(&db, "f"), "1");
 }

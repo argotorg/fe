@@ -141,6 +141,25 @@ enum TraitCandidateCheck<'db> {
     Rejected,
 }
 
+impl<'db> TraitCandidateCheck<'db> {
+    fn cand(&self) -> Option<TraitMethodCand<'db>> {
+        match *self {
+            Self::Confirmed(cand) | Self::NeedsConfirmation(cand) | Self::Unsatisfied(cand) => {
+                Some(cand)
+            }
+            Self::Rejected => None,
+        }
+    }
+}
+
+/// A trait candidate, its check, and the generation requests that its probe
+/// stopped on.
+type CheckedTraitCand<'db> = (
+    AssembledTraitMethodCand<'db>,
+    TraitCandidateCheck<'db>,
+    Vec<GenerationRequest<'db>>,
+);
+
 pub(crate) fn select_method_candidate<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
@@ -312,6 +331,7 @@ fn select_filtered_method_in<'db>(
         choices,
         tier,
         pending: Default::default(),
+        probed: Default::default(),
         unsatisfied: Default::default(),
     }
     .select()
@@ -366,6 +386,7 @@ pub(crate) fn select_trait_method_candidates<'db>(
         choices: None,
         tier,
         pending: Default::default(),
+        probed: Default::default(),
         unsatisfied: Default::default(),
     };
 
@@ -652,8 +673,13 @@ struct MethodSelector<'db, 'a> {
     /// Whether the candidates are checked with the implementations generated
     /// in the ingot of `scope`.
     tier: Tier,
-    /// Requests that the probes of unconfirmed candidates stopped on.
+    /// Requests that the probes of the selected candidates stopped on. A probe
+    /// of a candidate that is not selected contributes none: it never runs a
+    /// provider.
     pending: std::cell::RefCell<Vec<GenerationRequest<'db>>>,
+    /// The requests of the candidate probe in progress, moved to that
+    /// candidate's check when the probe ends.
+    probed: std::cell::RefCell<Vec<GenerationRequest<'db>>>,
     /// Set when the result is a candidate with a proven unmet bound.
     unsatisfied: std::cell::Cell<bool>,
 }
@@ -737,27 +763,31 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         // Each candidate is checked exactly once here and the result is carried
         // through pruning and selection, so the trait solver isn't re-run for
         // the same candidate.
-        let checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> = self
+        let checked: Vec<CheckedTraitCand<'db>> = self
             .candidates
             .traits
             .iter()
             .copied()
-            .map(|cand| (cand, self.check_trait_cand(cand)))
+            .map(|cand| {
+                let (check, requests) = self.check_trait_cand(cand);
+                (cand, check, requests)
+            })
             .collect();
         let checked = self.prune_inapplicable_trait_checks(checked);
 
         if checked.len() == 1 {
-            return self.finalize_sole_check(checked[0].1);
+            let result = self.finalize_sole_check(checked[0].1);
+            return self.release_requests(&checked, result);
         }
 
         let available_traits = self.available_traits();
         let visible: Vec<_> = checked
             .iter()
-            .copied()
-            .filter(|(cand, _)| {
+            .filter(|(cand, _, _)| {
                 self.filter == TraitFilter::CallableTraits
                     || available_traits.contains(&cand.trait_def(self.db))
             })
+            .cloned()
             .collect();
 
         let visible = self.merge_equal_instances(visible);
@@ -769,110 +799,145 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     // Suggests trait imports.
                     let traits = checked
                         .iter()
-                        .map(|(cand, _)| cand.trait_def(self.db))
+                        .map(|(cand, _, _)| cand.trait_def(self.db))
                         .collect();
                     Err(MethodSelectionError::InvisibleTraitMethod(traits))
                 }
             }
 
-            1 => self.finalize_sole_check(visible[0].1),
+            1 => {
+                let result = self.finalize_sole_check(visible[0].1);
+                self.release_requests(&visible, result)
+            }
 
             _ => {
-                // Some candidates are equivalent after trait solving (e.g., an explicit
-                // bound and an implied/blanket-derived bound for the same method), but we
-                // must still treat distinct methods as ambiguous so later return-type
-                // constraints can disambiguate them.
-                let mut selected = IndexMap::default();
-                let mut unsatisfied = IndexSet::default();
-                for (_, check) in visible.iter().copied() {
-                    match check {
-                        TraitCandidateCheck::Confirmed(cand) => {
-                            selected
-                                .entry(cand)
-                                .and_modify(|confirmed| *confirmed = true)
-                                .or_insert(true);
-                        }
-                        TraitCandidateCheck::NeedsConfirmation(cand) => {
-                            selected.entry(cand).or_insert(false);
-                        }
-                        TraitCandidateCheck::Unsatisfied(cand) => {
-                            unsatisfied.insert(cand);
-                        }
-                        TraitCandidateCheck::Rejected => {}
-                    }
-                }
+                let result = self.select_among_visible(&visible);
+                self.release_requests(&visible, result)
+            }
+        }
+    }
 
-                if selected.is_empty() {
-                    if unsatisfied.len() == 1 {
-                        self.unsatisfied.set(true);
-                        return Ok(MethodCandidate::NeedsConfirmation(
-                            *unsatisfied.iter().next().unwrap(),
-                        ));
-                    }
-                    if !unsatisfied.is_empty() {
-                        let diagnostic_traits = visible
-                            .iter()
-                            .map(|(cand, _)| cand.diagnostic_inst(self.db))
-                            .collect();
-                        let candidates = unsatisfied
-                            .into_iter()
-                            .map(|cand| AmbiguousTraitMethodCand {
-                                cand,
-                                needs_confirmation: true,
-                            })
-                            .collect();
-                        return Err(MethodSelectionError::AmbiguousTraitMethod(
-                            AmbiguousTraitMethods {
-                                candidates,
-                                diagnostic_traits,
-                            },
-                        ));
-                    }
-                    return Err(MethodSelectionError::NotFound);
+    /// Passes the requests of the candidate that `result` selects on to
+    /// preparation. The probes of the other candidates are dropped: a request
+    /// is a demand of the body only if the proof that the program uses
+    /// stopped on it, and a refused or ambiguous selection runs nothing.
+    fn release_requests(
+        &self,
+        checked: &[CheckedTraitCand<'db>],
+        result: Result<MethodCandidate<'db>, MethodSelectionError<'db>>,
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        if let Ok(
+            MethodCandidate::TraitMethod(selected) | MethodCandidate::NeedsConfirmation(selected),
+        ) = &result
+        {
+            let mut pending = self.pending.borrow_mut();
+            for (_, check, requests) in checked {
+                if check.cand().as_ref() == Some(selected) {
+                    pending.extend(requests.iter().copied());
                 }
+            }
+        }
+        result
+    }
 
-                if selected.len() == 1 {
-                    let (cand, confirmed) = selected.into_iter().next().unwrap();
-                    return Ok(if confirmed {
-                        MethodCandidate::TraitMethod(cand)
-                    } else {
-                        MethodCandidate::NeedsConfirmation(cand)
-                    });
+    /// Chooses among several visible trait candidates.
+    fn select_among_visible(
+        &self,
+        visible: &[CheckedTraitCand<'db>],
+    ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
+        // Some candidates are equivalent after trait solving (e.g., an explicit
+        // bound and an implied/blanket-derived bound for the same method), but we
+        // must still treat distinct methods as ambiguous so later return-type
+        // constraints can disambiguate them.
+        let mut selected = IndexMap::default();
+        let mut unsatisfied = IndexSet::default();
+        for (_, check, _) in visible.iter().cloned() {
+            match check {
+                TraitCandidateCheck::Confirmed(cand) => {
+                    selected
+                        .entry(cand)
+                        .and_modify(|confirmed| *confirmed = true)
+                        .or_insert(true);
                 }
-
-                let confirmed: Vec<_> = selected
-                    .iter()
-                    .filter_map(|(&cand, &confirmed)| confirmed.then_some(cand))
-                    .collect();
-                if confirmed.len() == 1
-                    && (self.receiver.original().has_var(self.db)
-                        || selected
-                            .iter()
-                            .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
-                            .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
-                {
-                    return Ok(MethodCandidate::TraitMethod(confirmed[0]));
+                TraitCandidateCheck::NeedsConfirmation(cand) => {
+                    selected.entry(cand).or_insert(false);
                 }
+                TraitCandidateCheck::Unsatisfied(cand) => {
+                    unsatisfied.insert(cand);
+                }
+                TraitCandidateCheck::Rejected => {}
+            }
+        }
 
+        if selected.is_empty() {
+            if unsatisfied.len() == 1 {
+                self.unsatisfied.set(true);
+                return Ok(MethodCandidate::NeedsConfirmation(
+                    *unsatisfied.iter().next().unwrap(),
+                ));
+            }
+            if !unsatisfied.is_empty() {
                 let diagnostic_traits = visible
                     .iter()
-                    .map(|(cand, _)| cand.diagnostic_inst(self.db))
+                    .map(|(cand, _, _)| cand.diagnostic_inst(self.db))
                     .collect();
-                let candidates = selected
+                let candidates = unsatisfied
                     .into_iter()
-                    .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
+                    .map(|cand| AmbiguousTraitMethodCand {
                         cand,
-                        needs_confirmation: !confirmed,
+                        needs_confirmation: true,
                     })
                     .collect();
-                Err(MethodSelectionError::AmbiguousTraitMethod(
+                return Err(MethodSelectionError::AmbiguousTraitMethod(
                     AmbiguousTraitMethods {
                         candidates,
                         diagnostic_traits,
                     },
-                ))
+                ));
             }
+            return Err(MethodSelectionError::NotFound);
         }
+
+        if selected.len() == 1 {
+            let (cand, confirmed) = selected.into_iter().next().unwrap();
+            return Ok(if confirmed {
+                MethodCandidate::TraitMethod(cand)
+            } else {
+                MethodCandidate::NeedsConfirmation(cand)
+            });
+        }
+
+        let confirmed: Vec<_> = selected
+            .iter()
+            .filter_map(|(&cand, &confirmed)| confirmed.then_some(cand))
+            .collect();
+        if confirmed.len() == 1
+            && (self.receiver.original().has_var(self.db)
+                || selected
+                    .iter()
+                    .filter_map(|(&cand, &confirmed)| (!confirmed).then_some(cand))
+                    .all(|cand| self.candidate_specializes_to(cand, confirmed[0])))
+        {
+            return Ok(MethodCandidate::TraitMethod(confirmed[0]));
+        }
+
+        let diagnostic_traits = visible
+            .iter()
+            .map(|(cand, _, _)| cand.diagnostic_inst(self.db))
+            .collect();
+        let candidates = selected
+            .into_iter()
+            .map(|(cand, confirmed)| AmbiguousTraitMethodCand {
+                cand,
+                needs_confirmation: !confirmed,
+            })
+            .collect();
+        Err(MethodSelectionError::AmbiguousTraitMethod(
+            AmbiguousTraitMethods {
+                candidates,
+                diagnostic_traits,
+            },
+        ))
     }
 
     /// Resolves the outcome when a single trait candidate remains (the only
@@ -903,13 +968,16 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         let checked = self.prune_inapplicable_trait_checks(
             traits
                 .into_iter()
-                .map(|cand| (cand, self.check_trait_cand(cand)))
+                .map(|cand| {
+                    let (check, requests) = self.check_trait_cand(cand);
+                    (cand, check, requests)
+                })
                 .collect(),
         );
         let checked = self.merge_equal_instances(checked);
         let mut selected = IndexMap::default();
         let mut diagnostic_traits = ThinVec::new();
-        for (cand, check) in checked {
+        for (cand, check, _) in checked {
             diagnostic_traits.push(cand.diagnostic_inst(self.db));
             match check {
                 TraitCandidateCheck::Confirmed(cand) => {
@@ -947,19 +1015,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// `Get<[u8; 4]>`, stay apart.
     fn merge_equal_instances(
         &self,
-        checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>,
-    ) -> Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> {
-        let cand_of = |check: &TraitCandidateCheck<'db>| match *check {
-            TraitCandidateCheck::Confirmed(cand)
-            | TraitCandidateCheck::NeedsConfirmation(cand)
-            | TraitCandidateCheck::Unsatisfied(cand) => Some(cand),
-            TraitCandidateCheck::Rejected => None,
-        };
+        checked: Vec<CheckedTraitCand<'db>>,
+    ) -> Vec<CheckedTraitCand<'db>> {
         // Only candidates of one trait method can name one instance.
         let mut methods = FxHashSet::default();
         if checked
             .iter()
-            .filter_map(|(_, check)| cand_of(check))
+            .filter_map(|(_, check, _)| check.cand())
             .all(|cand| methods.insert(cand.method))
         {
             return checked;
@@ -971,7 +1033,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         };
         checked
             .into_iter()
-            .map(|(assembled, check)| {
+            .map(|(assembled, check, requests)| {
                 let check = match check {
                     TraitCandidateCheck::Confirmed(cand) => {
                         TraitCandidateCheck::Confirmed(representative(cand))
@@ -984,28 +1046,28 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     }
                     TraitCandidateCheck::Rejected => TraitCandidateCheck::Rejected,
                 };
-                (assembled, check)
+                (assembled, check, requests)
             })
             .collect()
     }
 
     fn prune_inapplicable_trait_checks(
         &self,
-        checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>,
-    ) -> Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)> {
+        checked: Vec<CheckedTraitCand<'db>>,
+    ) -> Vec<CheckedTraitCand<'db>> {
         if checked.len() <= 1 || self.receiver.original().has_var(self.db) {
             return checked;
         }
 
         let applicable: Vec<_> = checked
             .iter()
-            .copied()
-            .filter(|(_, check)| {
+            .filter(|(_, check, _)| {
                 !matches!(
                     check,
                     TraitCandidateCheck::Rejected | TraitCandidateCheck::Unsatisfied(_)
                 )
             })
+            .cloned()
             .collect();
         if applicable.is_empty() {
             checked
@@ -1055,19 +1117,33 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                             solve_cx,
                             &query,
                             confirmed,
-                            &mut self.pending.borrow_mut(),
+                            &mut Vec::new(),
                         ))
             }
             GoalSatisfiability::ContainsInvalid | GoalSatisfiability::UnSat(_) => false,
-            GoalSatisfiability::NeedsGeneration(request) => {
-                self.pending.borrow_mut().push(request);
-                false
-            }
+            // A request met while comparing candidates belongs to no
+            // candidate's probe and is not owed.
+            GoalSatisfiability::NeedsGeneration(_) => false,
         }
     }
 
-    fn check_trait_cand(&self, cand: AssembledTraitMethodCand<'db>) -> TraitCandidateCheck<'db> {
-        match cand {
+    /// Whether `request` can never be served: it was refused when it was made
+    /// or its demand cannot be frozen. A candidate whose proof stops on such
+    /// a request does not apply.
+    fn request_is_refused(&self, request: GenerationRequest<'db>) -> bool {
+        request.refusal(self.db).is_some()
+            || crate::core::meta::freeze_generation_request(self.db, request).is_err()
+    }
+
+    /// Checks one candidate and returns the generation requests that its
+    /// probe stopped on, which preparation owes only if the candidate is
+    /// selected.
+    fn check_trait_cand(
+        &self,
+        cand: AssembledTraitMethodCand<'db>,
+    ) -> (TraitCandidateCheck<'db>, Vec<GenerationRequest<'db>>) {
+        let start = self.probed.borrow().len();
+        let check = match cand {
             AssembledTraitMethodCand::Impl {
                 implementor,
                 method,
@@ -1075,15 +1151,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             AssembledTraitMethodCand::Assumption { inst, method }
             | AssembledTraitMethodCand::Offered { inst, method } => {
                 let offered = matches!(cand, AssembledTraitMethodCand::Offered { .. });
-                match self.check_inst(inst, method, offered) {
-                    MethodCandidate::TraitMethod(cand) => TraitCandidateCheck::Confirmed(cand),
-                    MethodCandidate::NeedsConfirmation(cand) => {
-                        TraitCandidateCheck::NeedsConfirmation(cand)
-                    }
-                    MethodCandidate::InherentMethod(_) => unreachable!(),
-                }
+                self.check_inst(inst, method, offered)
             }
-        }
+        };
+        let requests = self.probed.borrow_mut().split_off(start);
+        (check, requests)
     }
 
     fn check_impl_cand(
@@ -1120,7 +1192,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     let _ = table.unify(constraint, solved);
                 }
                 GoalSatisfiability::NeedsGeneration(request) => {
-                    self.pending.borrow_mut().push(request);
+                    self.probed.borrow_mut().push(request);
+                    // A refused request is no proof: the candidate does not
+                    // apply. A pending one leaves it unconfirmed.
+                    if self.request_is_refused(request) {
+                        unsatisfied = true;
+                        break;
+                    }
                     needs_confirmation = true;
                 }
                 GoalSatisfiability::NeedsConfirmation { .. }
@@ -1164,7 +1242,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         declared: TraitInstId<'db>,
         method: Func<'db>,
         offered: bool,
-    ) -> MethodCandidate<'db> {
+    ) -> TraitCandidateCheck<'db> {
         let mut table = UnificationTable::new(self.db);
         // Seed the table with receiver's canonical variables so that subsequent
         // canonicalization can safely probe them.
@@ -1211,7 +1289,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     solution.fold_with(self.db, &mut table)
                 };
 
-                MethodCandidate::TraitMethod(TraitMethodCand::new(
+                TraitCandidateCheck::Confirmed(TraitMethodCand::new(
                     self.receiver
                         .canonicalize_solution(self.db, &mut table, solution),
                     method,
@@ -1222,14 +1300,31 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             | GoalSatisfiability::NeedsGeneration(_)
             | GoalSatisfiability::ContainsInvalid
             | GoalSatisfiability::UnSat(_) => {
+                // An offered candidate that cannot apply is unsatisfied, so
+                // that an applicable candidate is preferred to it: its goal
+                // has no solution, or only a request that can never be
+                // served. An assumption candidate stays unconfirmed.
+                let unsatisfied = offered
+                    && match result {
+                        GoalSatisfiability::UnSat(_) => true,
+                        GoalSatisfiability::NeedsGeneration(request) => {
+                            self.request_is_refused(request)
+                        }
+                        _ => false,
+                    };
                 if let GoalSatisfiability::NeedsGeneration(request) = result {
-                    self.pending.borrow_mut().push(request);
+                    self.probed.borrow_mut().push(request);
                 }
-                MethodCandidate::NeedsConfirmation(TraitMethodCand::new(
+                let cand = TraitMethodCand::new(
                     self.receiver
                         .canonicalize_solution(self.db, &mut table, inst),
                     method,
-                ))
+                );
+                if unsatisfied {
+                    TraitCandidateCheck::Unsatisfied(cand)
+                } else {
+                    TraitCandidateCheck::NeedsConfirmation(cand)
+                }
             }
         }
     }
