@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_body_diagnostics.fe
+---
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:11:31
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+11 │ fn unbraced(_ h: Holder<m::S::CAP>) {}
+   │                               ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:13:29
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+13 │ fn lone(_ h: Holder<{ m::S::CAP }>) {}
+   │                             ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:15:28
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+15 │ fn sum(_ h: Holder<{ m::S::CAP + 0 }>) {}
+   │                            ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:18:27
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+18 │     let _: Holder<{ m::S::CAP }> = Holder {}
+   │                           ^^^ `CAP` is not visible

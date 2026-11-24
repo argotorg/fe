@@ -13,9 +13,13 @@ use crate::analysis::name_resolution::{
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::trait_resolution::{constraint::collect_constraints, mentions_ty};
 use crate::analysis::ty::{
-    const_ty::ConstBodyLowering,
+    const_ty::{ConstBodyLowering, LoweringContext},
     subst::substitute_complete,
-    ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
+    ty_error::diag_from_invalid_cause,
+    ty_lower::{
+        CompleteSubst, SubstError, const_body_names_a_constant, lower_hir_ty_with_resolutions,
+        lower_opt_const_body, lower_type_alias,
+    },
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 use crate::semantic::{constraints_for, param_env};
@@ -961,26 +965,47 @@ fn anon_const_position_check<'db>(
     body: Body<'db>,
     expected: TyId<'db>,
 ) -> RequirementCheck<'db> {
-    use crate::analysis::ty::const_ty::{ConstBodyFailure, const_body_failure};
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
     if diags_allow_evaluation(db, diags) {
         return check_body_requirements(db, owner, typed);
     }
-    // A lone path to a constant is read as that constant, not checked as a
-    // body, so its failures are reported where the constant is.
+    // Lowering reads a lone path as the constant it names and checks that
+    // constant's type and bounds where the type is written, but not whether
+    // the path may name it here. Other bodies it evaluates, an integer
+    // expression without inference, so the constant can be valid though its
+    // body failed: the type reports the failure only if the constant is
+    // invalid with an error that renders. The parser reports a parse error.
     let position = body.scope().parent(db).unwrap_or(body.scope());
-    let mut check = RequirementCheck::default();
-    if !crate::analysis::ty::ty_lower::const_body_names_a_constant(
-        db,
-        body,
-        position,
-        typed.assumptions(),
-    ) && let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed)
-    {
-        check.diags = diags.clone();
+    let assumptions = typed.assumptions();
+    let diags = if const_body_names_a_constant(db, body, position, assumptions) {
+        diags
+            .iter()
+            .filter(|diag| matches!(diag, FuncBodyDiag::NameRes(_)))
+            .cloned()
+            .collect()
+    } else {
+        let lowered = lower_opt_const_body(
+            db,
+            Partial::Present(body),
+            position,
+            assumptions,
+            &LoweringContext::new(),
+        )
+        .evaluate(db, Some(expected));
+        if lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
+            matches!(cause, InvalidCause::ParseError)
+                || diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_some()
+        }) {
+            Vec::new()
+        } else {
+            diags.clone()
+        }
+    };
+    RequirementCheck {
+        diags,
+        ..RequirementCheck::default()
     }
-    check
 }
 
 /// The anonymous constants written directly in `path`'s segments, such as

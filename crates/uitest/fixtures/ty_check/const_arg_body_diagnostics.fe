@@ -1,0 +1,19 @@
+mod m {
+    pub struct S {}
+
+    impl S {
+        const CAP: usize = 4
+    }
+}
+
+struct Holder<const N: usize> {}
+
+fn unbraced(_ h: Holder<m::S::CAP>) {}
+
+fn lone(_ h: Holder<{ m::S::CAP }>) {}
+
+fn sum(_ h: Holder<{ m::S::CAP + 0 }>) {}
+
+fn local() {
+    let _: Holder<{ m::S::CAP }> = Holder {}
+}
