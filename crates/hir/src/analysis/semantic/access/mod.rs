@@ -428,23 +428,15 @@ fn collect_semantic_access_with_blocked<'db>(
         // The initializer of a constant that an implementation or a trait holds
         // is a body like a module constant's. It is checked where it is
         // written, whether or not anything reads it, by the enumeration that
-        // the type checker's own pass over these bodies uses. Implementations
-        // and traits that the compiler generates (`#[event]`, `#[error]`,
-        // `#[abi]`) are the compiler's: the type checker reports no body
-        // errors for them either, and a read of one is followed as before.
-        let written = match item {
-            ItemKind::ImplTrait(impl_trait) => impl_trait.origin(db).generated().is_none(),
-            ItemKind::Trait(trait_) => trait_.origin(db).generated().is_none(),
-            _ => true,
-        };
-        if written {
-            owners.extend(
-                assoc_const_bodies_of(db, *item)
-                    .into_iter()
-                    .filter(|constant| !constant.expected.has_invalid(db))
-                    .map(AssocConstBody::owner),
-            );
-        }
+        // the type checker's own pass over these bodies uses. The constants of
+        // implementations and traits that the compiler generates (`#[event]`,
+        // `#[error]`, `#[abi]`) are roots like written ones.
+        owners.extend(
+            assoc_const_bodies_of(db, *item)
+                .into_iter()
+                .filter(|constant| !constant.expected.has_invalid(db))
+                .map(AssocConstBody::owner),
+        );
         match item {
             ItemKind::Func(func) => owners.extend(BodyOwner::func_bodies(db, *func)),
             ItemKind::Const(const_) => owners.push(BodyOwner::Const(*const_)),
