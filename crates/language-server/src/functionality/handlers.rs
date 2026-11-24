@@ -825,6 +825,27 @@ fn map_related_info_uris(backend: &Backend, diagnostics: &mut [async_lsp::lsp_ty
     }
 }
 
+/// The documentation and SCIP data that a live reload serves, as JSON. They
+/// describe the program that generation produces for the packages of the
+/// workspace, as `fe doc` does, and the authored program when nothing is
+/// generated or generation fails.
+fn regenerate_for_reload(db: &driver::DriverDataBase) -> (String, Option<String>) {
+    let roots: Vec<Url> = db
+        .dependency_graph()
+        .petgraph(db)
+        .node_weights()
+        .cloned()
+        .collect();
+    match driver::generation::prepare_ingots(db, &roots) {
+        Ok(Some(prepared)) => semantic_indexing::doc::regenerate(&prepared),
+        Ok(None) => semantic_indexing::doc::regenerate(db),
+        Err(error) => {
+            warn!("doc reload: generation failed, documenting the authored program: {error}");
+            semantic_indexing::doc::regenerate(db)
+        }
+    }
+}
+
 pub async fn handle_doc_reload(
     backend: &Backend,
     _message: DocReloadExecute,
@@ -847,7 +868,7 @@ pub async fn handle_doc_reload(
     // query results with the Backend's db, no mutation needed.
     let outcome = backend
         .spawn_on_workers(move |db| {
-            let result = semantic_indexing::doc::regenerate(db);
+            let result = regenerate_for_reload(db);
             (result, generation)
         })
         .await;
@@ -970,6 +991,18 @@ mod tests {
             std::io::ErrorKind::NotFound,
             "the directory was removed",
         ))
+    }
+
+    /// A header publishes `generated` into `Pair`, from a provider in another
+    /// file. The live documentation describes it, as `fe doc` does.
+    #[test]
+    fn doc_reload_describes_the_members_a_header_generates() {
+        let package = crate::test_utils::prepared_package("pub fn generated() { true }");
+        let (docs, _scip) = regenerate_for_reload(&package.authored);
+        assert!(
+            docs.contains("\"name\":\"generated\""),
+            "the reload payload has no entry for the generated function"
+        );
     }
 
     #[test]
