@@ -1,0 +1,10 @@
+unsafe const fn raw() -> i8 { -3 }
+pub const fn peek() -> i8 { unsafe { raw() } }
+
+/// The default of `K` calls `peek`, which runs unsafe code that this package
+/// wrote. The declared type of `K` depends on `Self`, so the default is typed
+/// again where it is read.
+pub trait Narrow {
+    type X
+    const K: Self::X = peek() as i8
+}

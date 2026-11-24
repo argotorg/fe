@@ -232,6 +232,9 @@ pub(crate) struct TyCheckEnv<'db> {
     place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
     /// The expressions of type `!` typed as their context's type.
     never_coercions: FxHashSet<ExprId>,
+    /// Whether the body is a constant checked against a declared type that
+    /// mentions a parameter, and typed as its tail.
+    tail_depends_on_instantiation: bool,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -404,6 +407,7 @@ impl<'db> TyCheckEnv<'db> {
             inspected_places: FxHashSet::default(),
             place_entries: FxHashMap::default(),
             never_coercions: FxHashSet::default(),
+            tail_depends_on_instantiation: false,
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -1062,6 +1066,12 @@ impl<'db> TyCheckEnv<'db> {
         } else {
             self.never_coercions.remove(&expr);
         }
+    }
+
+    /// Records that the body is typed as its tail, not as the declared type
+    /// that it is coerced to (`TyChecker::check_tail_against_declared_type`).
+    pub(super) fn mark_tail_depends_on_instantiation(&mut self) {
+        self.tail_depends_on_instantiation = true;
     }
 
     pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
@@ -1939,6 +1949,16 @@ impl<'db> TyCheckEnv<'db> {
             for refused in const_ref.record_bound_evidence(self.db, choices) {
                 diags.push(refused_proof(refused, expr.span(self.body).into()));
             }
+            if let Some((expected, given)) = (*const_ref).default_tail_mismatch(self.db) {
+                diags.push(
+                    super::super::diagnostics::BodyDiag::TypeMismatch {
+                        span: expr.span(self.body).into(),
+                        expected,
+                        given,
+                    }
+                    .into(),
+                );
+            }
             const_ref.qualify_evidence(self.db, self.owner);
         }
         self.closure_infos
@@ -1987,6 +2007,7 @@ impl<'db> TyCheckEnv<'db> {
             place_entries: self.place_entries,
             unsafe_ops: Vec::new(),
             never_coercions: self.never_coercions,
+            tail_depends_on_instantiation: self.tail_depends_on_instantiation,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,
