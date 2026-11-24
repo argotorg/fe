@@ -93,9 +93,9 @@ use crate::analysis::{
     HirAnalysisDb, Spanned,
     name_resolution::{
         Decision, EarlyNameQueryId, ExpectedPathKind, NameDomain, NameResBucket,
-        NameResolutionError, PathRes, QueryDirective, Tier, authored_first, choose_in_tiers,
+        NameResolutionError, PathRes, QueryDirective, Tier, Viewer, authored_first,
+        choose_in_tiers,
         diagnostics::PathResDiag,
-        is_visible_to_writer,
         method_selection::{
             AmbiguousTraitMethodCand, AmbiguousTraitMethods, MethodCandidate, MethodSelectionError,
             TraitMethodCand, select_callable_value_method, select_method_candidate_in,
@@ -4840,6 +4840,7 @@ impl<'db> TyChecker<'db> {
                 path_span.clone(),
                 path_expr_span.clone().into(),
                 &lowering_cx,
+                MemberSite::Expr(expr),
             ) {
                 Ok(r) => ResolvedPathInBody::Reso(r),
                 Err(err) => {
@@ -5339,6 +5340,7 @@ impl<'db> TyChecker<'db> {
             path_span.clone(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Expr(expr),
         ) {
             Ok(reso) => reso,
             Err(err) => {
@@ -6984,10 +6986,17 @@ pub(super) enum MemberSite {
 
 impl<'db> TyChecker<'db> {
     /// Whether the code at `site` may use `target`, a field, a variant or an
-    /// inherent method. The code's writer is the package of the innermost
-    /// quotation around it (the package that holds hand-written code), and
-    /// what it may use is decided by `is_visible_to_writer`.
+    /// inherent method, as `viewer` decides.
     pub(super) fn member_visible(&self, target: ScopeId<'db>, site: MemberSite) -> bool {
+        self.viewer(site).sees(self.db, target)
+    }
+
+    /// Who looks at a name at `site`: the place the code runs, the package that
+    /// wrote it and the record that the header around it requests. The writer
+    /// is the package of the innermost quotation around the expression or
+    /// pattern (the package that holds hand-written code). Name resolution and
+    /// the member checks both decide visibility through this value.
+    pub(super) fn viewer(&self, site: MemberSite) -> Viewer<'db> {
         let body = self.body();
         let chain = match site {
             MemberSite::Expr(expr) => body.expr_quote_chain(self.db, expr),
@@ -6997,10 +7006,13 @@ impl<'db> TyChecker<'db> {
                 None => body.quote_chain(self.db),
             },
         };
-        let writer = chain[0].ingot(self.db);
-        is_visible_to_writer(self.db, target, self.env.scope(), writer, || {
+        let scope = self.env.scope();
+        let requested = if scope.is_in_published_item(self.db) {
             self.requested_record()
-        })
+        } else {
+            None
+        };
+        Viewer::written_by(scope, chain[0].ingot(self.db), requested)
     }
 
     /// The record that the derive header around the code being checked asks

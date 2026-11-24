@@ -140,7 +140,7 @@ fn the_template_calls_the_helper_next_to_the_provider() {
 
 `score()` returns 42, from the `bonus` next to the provider, and not 902 from the `bonus` of the module that wrote the header.
 
-What a template can use is decided the same way. Generated code that a provider of another package wrote can use the public items of the package that asked for it, the fields and variants of the requested record, and what the same package generated; other private and `pub(ingot)` items of the asking package are not visible to it.
+What a template can use is decided the same way. Generated code that a provider of another package wrote can use the public items of the package that asked for it, the fields and variants of the requested record, and what the same package generated; other private and `pub(ingot)` items of the asking package are not visible to it, whether the generated code names them by a method call, a field or a path such as `Self::hidden(self)`. The `pub(ingot)` items of the provider's own package stay visible to the code it generates.
 
 A name that a template takes from the place where it is spliced is listed in parentheses, as in `quote(other) { .. }`. In `inherent_fold.fe` both the template of `step` and the template of `derive` list `other`. Without the list the name is not found in the template that uses it:
 

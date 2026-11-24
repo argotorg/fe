@@ -4820,6 +4820,10 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
             "generated_code_visibility_provider_items",
             "provider_private_helper",
         ),
+        ("generated_code_visibility_provider_members", "own_method"),
+        ("generated_code_visibility_provider_members", "own_field"),
+        ("generated_code_visibility_generated_path", "by_call"),
+        ("generated_code_visibility_generated_path", "by_path"),
         ("unsafe_trust_const_allowed", "via_const"),
         ("unsafe_trust_const_allowed", "assoc"),
         ("unsafe_trust_const_allowed", "pat"),
@@ -5151,6 +5155,24 @@ fn test_cli_test_generated_code_of_another_package_sees_only_what_is_public() {
         !output.contains("`vault` is not visible"),
         "a field of the requested record stays visible:\n{output}"
     );
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_by_path() {
+    // The same rule holds for a member named by a path through `Self`: `prov`
+    // writes `Self::hidden(self)`, `Self::secret()` and `Self::K`, and the
+    // private method, function and constant belong to `user`, not to the
+    // record that the header hands over.
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_path_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected visibility errors:\n{output}");
+    for name in ["hidden", "secret", "K"] {
+        assert!(
+            output.contains(&format!("`{name}` is not visible")),
+            "expected `{name}` to be refused:\n{output}"
+        );
+    }
 }
 
 #[test]

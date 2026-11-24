@@ -76,6 +76,7 @@ pub use env::{
     PatBindingMode, PathReadSemantics,
 };
 use env::{ProvidedEffect, TyCheckEnv, func_param_bindings, func_row_components};
+use expr::MemberSite;
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
@@ -4531,8 +4532,10 @@ impl<'db> TyChecker<'db> {
         span: LazyPathSpan<'db>,
         site: DynLazySpan<'db>,
         lowering_cx: &LoweringContext<'db>,
+        member_site: MemberSite,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
+        let viewer = self.viewer(member_site);
         let mut invisible = None;
         let mut applications = Vec::new();
         let mut observe_segment =
@@ -4542,7 +4545,7 @@ impl<'db> TyChecker<'db> {
                     return;
                 }
                 if !quoted_visibility
-                    .unwrap_or_else(|| reso.is_segment_visible_from(self.db, path, scope))
+                    .unwrap_or_else(|| reso.is_segment_visible_to(self.db, path, viewer))
                 {
                     invisible = Some((path, reso.name_span(self.db)));
                 }

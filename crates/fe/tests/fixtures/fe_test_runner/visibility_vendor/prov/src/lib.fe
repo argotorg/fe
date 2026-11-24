@@ -39,3 +39,38 @@ impl DeriveInherent for Own {
         }
     }
 }
+// The provider's own type with `pub(ingot)` members, used by its generated code.
+pub struct Acc { pub(ingot) n: u256 }
+impl Acc { pub(ingot) fn get(self) -> u256 { self.n } }
+pub(ingot) fn make_acc() -> Acc { Acc { n: 5 } }
+pub struct OwnMembers {}
+impl DeriveInherent for OwnMembers {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn via_method() -> u256 { make_acc().get() }
+            pub fn via_field() -> u256 { make_acc().n }
+        }
+    }
+}
+// A private item that the provider generated, reached by a method call and by a path.
+pub struct GenPath {}
+impl DeriveInherent for GenPath {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            fn k(self) -> u256 { 3 }
+            pub fn by_call(self) -> u256 { self.k() }
+            pub fn by_path(self) -> u256 { Self::k(self) }
+        }
+    }
+}
+// Private members of the requesting package, reached by a path through `Self`.
+pub struct PathLeak {}
+impl DeriveInherent for PathLeak {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub fn leak_method_path(self) -> u256 { Self::hidden(self) }
+            pub fn leak_assoc_fn() -> u256 { Self::secret() }
+            pub fn leak_const() -> u256 { Self::K }
+        }
+    }
+}

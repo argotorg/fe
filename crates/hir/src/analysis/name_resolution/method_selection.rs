@@ -1,3 +1,4 @@
+use super::visibility_checker::is_scope_visible_to_lexical_writers;
 use crate::core::hir_def::{IdentId, Trait, scope_graph::ScopeId};
 use common::indexmap::{IndexMap, IndexSet};
 use rustc_hash::FxHashSet;
@@ -1132,6 +1133,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
 
     fn is_inherent_method_visible(&self, def: CallableDef) -> bool {
         is_scope_visible_from(self.db, def.scope(), self.scope)
+            || is_scope_visible_to_lexical_writers(self.db, def.scope(), self.scope)
     }
 
     fn available_traits(&self) -> IndexSet<Trait<'db>> {

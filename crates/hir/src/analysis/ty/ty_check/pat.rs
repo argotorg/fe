@@ -650,6 +650,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         );
 
         let (actual, analysis) = match res {
@@ -983,6 +984,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         ) {
             Ok(res) => match res {
                 PathRes::Ty(ty) if ty.as_tuple_struct(self.db).is_some() => {
@@ -1143,6 +1145,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         ) {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
                 if RecordLike::from_ty(ty).is_record(self.db) =>

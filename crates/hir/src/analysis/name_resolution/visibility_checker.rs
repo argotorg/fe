@@ -47,6 +47,20 @@ fn def_scope_for_vis<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Op
 
 /// Return `true` if the given `scope` is visible from `from_scope`.
 pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope: ScopeId) -> bool {
+    is_scope_visible_to(db, scope, from_scope, from_scope.ingot(db))
+}
+
+/// Return `true` if `scope` is visible to code in the ingot `from_ingot` that
+/// runs at `from_scope`. Lexical privacy is judged from `from_scope`; the
+/// visibility that names an ingot is judged against `from_ingot`, which is the
+/// ingot of `from_scope` unless a body was written by another package than the
+/// one it runs in (see `Viewer`).
+fn is_scope_visible_to(
+    db: &dyn HirAnalysisDb,
+    scope: ScopeId,
+    from_scope: ScopeId,
+    from_ingot: Ingot,
+) -> bool {
     use crate::core::hir_def::item::Visibility;
 
     let vis = scope.data(db).vis;
@@ -68,7 +82,7 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
 
         Visibility::PubIngot => {
             // Visible within the same ingot.
-            scope.ingot(db) == from_scope.ingot(db)
+            scope.ingot(db) == from_ingot
         }
 
         Visibility::PubSuper => {
@@ -80,7 +94,7 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
                 Some(parent_of_def) => from_scope.is_transitive_child_of(db, parent_of_def),
                 // At the ingot root, pub(super) behaves like pub(ingot)
                 // (matches Rust where pub(super) at crate root = pub(crate)).
-                None => scope.ingot(db) == from_scope.ingot(db),
+                None => scope.ingot(db) == from_ingot,
             }
         }
 
@@ -94,44 +108,109 @@ pub fn is_scope_visible_from(db: &dyn HirAnalysisDb, scope: ScopeId, from_scope:
     }
 }
 
-/// Whether code that the package `writer` wrote may use `target`, a member of
-/// a type (a field, a variant or an inherent method), where the code runs, at
-/// `from_scope`.
-///
-/// What a template can use is decided at the package that wrote it, as the
-/// names in it are. Code written by a package may use the members that are
-/// visible from `from_scope` of its own items and of what it generated, and,
-/// for another package's items, what is public. A header hands the code that a
-/// provider writes for it the fields and variants of the record it requests,
-/// `requested`, and nothing else of the package that asked: the private and
-/// `pub(ingot)` members of the asking package are not the provider's to use.
-/// Code written and used in one package sees what `is_scope_visible_from`
-/// says.
-pub fn is_visible_to_writer<'db>(
-    db: &'db dyn HirAnalysisDb,
-    target: ScopeId<'db>,
-    from_scope: ScopeId<'db>,
-    writer: Ingot<'db>,
-    requested: impl FnOnce() -> Option<AdtRef<'db>>,
+/// Whether `target` is visible to the package that wrote the template that
+/// `scope` is published from. A published body climbs its lexical parents into
+/// the provider's quotation, so what the provider's own package may see,
+/// beyond what the package that holds `scope` may, is judged against that
+/// package. Inherent method selection, which knows the scope but not the
+/// expression, admits what any writer of the code could use; the member check
+/// of the type checker then decides for the expression's own writer (`Viewer`).
+pub(super) fn is_scope_visible_to_lexical_writers(
+    db: &dyn HirAnalysisDb,
+    target: ScopeId,
+    scope: ScopeId,
 ) -> bool {
-    if writer == target.ingot(db) || target.syntax_top_mod(db).ingot(db) == writer {
-        return is_scope_visible_from(db, target, from_scope);
-    }
-    if target.data(db).vis.is_pub()
-        || matches!(target, ScopeId::Item(ItemKind::Func(_)))
-            && matches!(target.parent_item(db), Some(ItemKind::Trait(..)))
-    {
-        return true;
-    }
-    let Some(requested) = requested() else {
+    let own = scope.ingot(db);
+    let target_ingot = target.ingot(db);
+    if own == target_ingot {
         return false;
-    };
-    match target {
-        ScopeId::Field(FieldParent::Struct(struct_), _) => requested == AdtRef::Struct(struct_),
-        ScopeId::Field(FieldParent::Variant(variant), _) | ScopeId::Variant(variant) => {
-            requested == AdtRef::Enum(variant.enum_)
+    }
+    let mut current = scope.lex_parent(db);
+    while let Some(ancestor) = current {
+        if ancestor.ingot(db) == target_ingot {
+            return is_scope_visible_to(db, target, scope, target_ingot);
         }
-        _ => false,
+        current = ancestor.lex_parent(db);
+    }
+    false
+}
+
+/// Who looks at a name: the place the code runs, the package that wrote it and
+/// the record that its header requests. Name resolution and the member checks
+/// of the type checker decide visibility through this one value.
+///
+/// The names in a template resolve where the template is written, so the
+/// members it reaches are judged by the package that wrote it too. Code that a
+/// package wrote and uses itself sees what `is_scope_visible_from` says. The
+/// code that a provider of another package wrote for a header may use the
+/// public items of the package that asked, the fields and variants of the
+/// record the header requests, and what the provider generated; the private
+/// and `pub(ingot)` items of the asking package are not its to use. The
+/// provider's own items are judged against the provider's package, so its
+/// `pub(ingot)` items are visible to its generated code.
+#[derive(Clone, Copy, Debug)]
+pub struct Viewer<'db> {
+    scope: ScopeId<'db>,
+    writer: Ingot<'db>,
+    requested: Option<AdtRef<'db>>,
+}
+
+impl<'db> Viewer<'db> {
+    /// Code that runs at `scope` and was written in the package of `scope`.
+    pub fn at(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Self {
+        Self {
+            scope,
+            writer: scope.ingot(db),
+            requested: None,
+        }
+    }
+
+    /// Code that runs at `scope` and was written by the package `writer`, for
+    /// the header that requests `requested`.
+    pub fn written_by(
+        scope: ScopeId<'db>,
+        writer: Ingot<'db>,
+        requested: Option<AdtRef<'db>>,
+    ) -> Self {
+        Self {
+            scope,
+            writer,
+            requested,
+        }
+    }
+
+    /// The place the code runs.
+    pub fn scope(self) -> ScopeId<'db> {
+        self.scope
+    }
+
+    /// Whether the code may use `target`, an item, a field, a variant or an
+    /// inherent method.
+    pub fn sees(self, db: &'db dyn HirAnalysisDb, target: ScopeId<'db>) -> bool {
+        if self.writer == target.ingot(db) {
+            // An item of the writer's package, judged against that package.
+            return is_scope_visible_to(db, target, self.scope, self.writer);
+        }
+        if target.syntax_top_mod(db).ingot(db) == self.writer {
+            // An item that the writer generated into the package it runs in.
+            return is_scope_visible_from(db, target, self.scope);
+        }
+        if target.data(db).vis.is_pub()
+            || matches!(target, ScopeId::Item(ItemKind::Func(_)))
+                && matches!(target.parent_item(db), Some(ItemKind::Trait(..)))
+        {
+            return true;
+        }
+        let Some(requested) = self.requested else {
+            return false;
+        };
+        match target {
+            ScopeId::Field(FieldParent::Struct(struct_), _) => requested == AdtRef::Struct(struct_),
+            ScopeId::Field(FieldParent::Variant(variant), _) | ScopeId::Variant(variant) => {
+                requested == AdtRef::Enum(variant.enum_)
+            }
+            _ => false,
+        }
     }
 }
 
