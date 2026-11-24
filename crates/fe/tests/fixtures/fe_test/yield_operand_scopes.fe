@@ -9,7 +9,7 @@ use core::ptr
 //
 // 1 the operand reaches its yield     6 the operand leaves early
 // 2 an operand binding is destroyed   7 a nested projection's slide runs
-// 3 an inner operand binding is too   8 a later yield's slide runs
+// 3 an inner operand binding is too   8 a later or nested slide runs
 // 4 a binding outside the operand is  9 the `yield` statement's slide runs
 // 5 the caller uses the grant
 fn log(_ trace: *u256, _ event: u256) {
@@ -238,6 +238,121 @@ fn abandoned(_ cell: mut Cell, _ trace: *u256, _ quit: bool) -> mut u256 {
     log(trace, 8)
 }
 
+fn consume(_ guard: own Guard) {}
+
+fn guard_if(_ trace: *u256, _ c: bool, _ event: u256) -> Option<Guard> {
+    if c { Option::Some(Guard { trace, event }) } else { Option::None }
+}
+
+// A `return` in the operand whose own value opens scopes, branches, or
+// is the empty variant.
+fn return_block(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
+    yield {
+        let _o = Guard { trace, event: 2 }
+        if c {
+            return {
+                let _r = Guard { trace, event: 3 }
+                mut cell.b
+            }
+        }
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+fn return_branch(_ cell: mut Cell, _ trace: *u256, _ c: bool, _ d: bool) -> mut u256 {
+    yield {
+        let _o = Guard { trace, event: 2 }
+        if c {
+            return if d { mut cell.b } else { mut cell.a }
+        }
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+fn return_none(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield {
+        let _o = Guard { trace, event: 2 }
+        if c {
+            return Option::None
+        }
+        Option::Some(mut cell.a)
+    }
+    log(trace, 9)
+}
+
+// A nested `yield` in an operand, its slide ended by a bare `return`.
+fn nested_yield(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
+    yield {
+        let _o = Guard { trace, event: 2 }
+        if c {
+            yield {
+                let _i = Guard { trace, event: 3 }
+                mut cell.b
+            }
+            log(trace, 8)
+            return
+        }
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+// `let .. else` and `if let` on a `Drop` scrutinee.
+fn let_else(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
+    yield {
+        let Option::Some(_g) = guard_if(trace, c, 2) else {
+            log(trace, 6)
+            return mut cell.b
+        }
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+fn if_let(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> mut u256 {
+    yield if let Option::Some(_g) = guard_if(trace, c, 3) {
+        mut cell.a
+    } else {
+        mut cell.b
+    }
+    log(trace, 9)
+}
+
+// A binding moved on one path: a flag decides at resume.
+fn moved(_ cell: mut Cell, _ trace: *u256, _ early: bool) -> mut u256 {
+    yield {
+        let g = Guard { trace, event: 2 }
+        if early {
+            consume(g)
+        }
+        mut cell.a
+    }
+    log(trace, 9)
+}
+
+// At compile time, a `return` in the operand runs no slide either.
+const fn pick(_ cell: mut Cell, _ early: bool) -> mut u256 {
+    yield {
+        if early {
+            return mut cell.b
+        }
+        mut cell.a
+    }
+    cell.b += 10
+}
+
+const fn picked(_ early: bool) -> u256 {
+    var cell = Cell { a: 0, b: 0 }
+    let x = mut pick(mut cell, early)
+    x += 1
+    cell.a * 100 + cell.b
+}
+
+const PICKED_EARLY: u256 = picked(true)
+const PICKED_LATE: u256 = picked(false)
+
 #[test]
 fn operand_bindings_end_before_the_slide() {
     let trace = new_trace()
@@ -372,4 +487,76 @@ fn loop_exits_from_the_operand() {
     bump(mut abandoned(mut cell, trace, false), trace)
     assert(read(trace) == 529)
     assert(cell.a == 2 && cell.b == 1)
+}
+
+#[test]
+fn a_return_of_a_block_or_branch_in_the_operand() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut return_block(mut cell, trace, true), trace)
+    assert(read(trace) == 532)
+    let trace = new_trace()
+    bump(mut return_branch(mut cell, trace, true, false), trace)
+    assert(read(trace) == 52)
+    assert(cell.a == 1 && cell.b == 1)
+}
+
+#[test]
+fn a_return_of_the_empty_variant_in_the_operand() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    match return_none(mut cell, trace, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 26)
+    let trace = new_trace()
+    match return_none(mut cell, trace, false) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 529)
+}
+
+#[test]
+fn a_nested_yield_in_the_operand() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut nested_yield(mut cell, trace, true), trace)
+    assert(read(trace) == 5382)
+    assert(cell.b == 1)
+}
+
+#[test]
+fn let_else_and_if_let_on_a_drop_scrutinee() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut let_else(mut cell, trace, true), trace)
+    assert(read(trace) == 529)
+    let trace = new_trace()
+    bump(mut let_else(mut cell, trace, false), trace)
+    assert(read(trace) == 65)
+    let trace = new_trace()
+    bump(mut if_let(mut cell, trace, true), trace)
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    bump(mut if_let(mut cell, trace, false), trace)
+    assert(read(trace) == 59)
+}
+
+#[test]
+fn a_binding_moved_on_one_path() {
+    var cell = Cell { a: 0, b: 0 }
+    let trace = new_trace()
+    bump(mut moved(mut cell, trace, true), trace)
+    assert(read(trace) == 259)
+    let trace = new_trace()
+    bump(mut moved(mut cell, trace, false), trace)
+    assert(read(trace) == 529)
+}
+
+#[test]
+fn a_return_in_the_operand_at_compile_time() {
+    assert(PICKED_EARLY == 1)
+    assert(PICKED_LATE == 110)
 }
