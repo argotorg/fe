@@ -6147,7 +6147,7 @@ impl<'db> TyChecker<'db> {
         };
         if let Some(label) = label
             && let Some(scope) = RecordLike::from_ty(target).record_field_scope(self.db, label)
-            && !is_scope_visible_from(self.db, scope, self.env.scope())
+            && !self.member_visible(scope, MemberSite::Expr(expr))
         {
             let diag = PathResDiag::Invisible(
                 expr.span(self.body()).into_field_expr().accessor().into(),
