@@ -2531,8 +2531,36 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    pub fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
+    /// Whether a call to this instance never returns whatever its body does:
+    /// it is a builtin that never returns, or its result or an input is
+    /// uninhabited. A provisional analysis asks it of the provisional input
+    /// types, under the instance's base assumptions.
+    pub fn is_intrinsically_never_returning(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        provisional: bool,
+    ) -> bool {
+        let scope = Some(self.normalization_scope(db));
+        let assumptions = if provisional {
+            semantic_instance_base_assumptions_for_key(db, self.key(db))
+        } else {
+            self.assumptions(db)
+        };
+        let uninhabited = |ty: TyId<'db>| ty.is_uninhabited_in(db, scope, assumptions);
+        self.is_nonreturning_builtin(db)
+            || uninhabited(self.normalized_result_ty(db))
+            || self
+                .key(db)
+                .typed_body(db)
+                .input_bindings()
+                .iter()
+                .any(|&binding| {
+                    uninhabited(if provisional {
+                        self.provisional_binding_ty(db, binding)
+                    } else {
+                        self.binding_ty(db, binding)
+                    })
+                })
     }
 
     fn is_nonreturning_builtin(self, db: &'db dyn HirAnalysisDb) -> bool {

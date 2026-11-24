@@ -636,6 +636,11 @@ fn format_terminator<'db>(db: &'db dyn MirDb, term: &RTerminator<'db>) -> String
             format_local_id(*offset),
             format_local_id(*len)
         ),
+        RTerminator::ReturnCode { offset, len } => format!(
+            "return_code {}, {}",
+            format_local_id(*offset),
+            format_local_id(*len)
+        ),
         RTerminator::Revert { offset, len } => format!(
             "revert {}, {}",
             format_local_id(*offset),

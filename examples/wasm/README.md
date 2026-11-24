@@ -38,7 +38,8 @@ This directory holds the pieces a host needs and the scripts that check them:
   (optional; `check.sh` needs it). Version 1.247.0 was used.
 
 The compiler emits the WebAssembly features multi-value, sign extension, for
-programs that copy memory, bulk memory, and for recursive functions that end in a call,
+programs that copy memory, bulk memory, for programs that swap the bytes of 128- or
+256-bit integers, fixed-width SIMD, and for recursive functions that end in a call,
 tail calls. Every current engine supports them.
 
 ## Build and run a program
@@ -398,7 +399,11 @@ cargo test -p fe --all-features \
   new instance after one. That discards what the module wrote to its memory, which a
   module does not rely on between calls.
 - **Memory.** Calls use a stack of 1 MiB in the module's memory and a call that does
-  not fit traps. `fe build --wasm-stack-size <bytes>` sets the size, which is rounded up
+  not fit traps. A tail call's frame replaces its caller's, and a struct, tuple or enum
+  of at most five integer fields is held in values rather than in the frame, so
+  functions that pass such a value on in tail calls, as an interpreter's handlers do,
+  run in constant stack. Deep recursion that does not end in tail calls may need more:
+  `fe build --wasm-stack-size <bytes>` sets the size, which is rounded up
   so that the stack ends on a 64 KiB page boundary. Dynamic allocation comes from a heap
   of size classes with free lists: a block that is freed is reused, a fallible
   allocation returns `None` when the request cannot be met, any other allocation

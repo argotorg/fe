@@ -1,0 +1,37 @@
+// Handlers that pass a cursor on to the next one in tail position, as fevm
+// dispatches opcodes. The cursor is a struct of five fields, which a module
+// holds as five values, so each handler's call replaces its frame in the
+// engine's stack and in the module's: a million steps run in the default
+// stack.
+use core::ops::WrappingAdd
+
+struct Cursor { pc: u32, steps: u32, acc: u64, step: u64, mask: u32 }
+impl Copy for Cursor {}
+
+fn next(var _ c: own Cursor) -> u64 {
+    if c.steps == 0 {
+        return c.acc
+    }
+    c.steps -= 1
+    c.pc = (c.pc + 1) & c.mask
+    match c.pc % 3 {
+        0 => add(c),
+        1 => double(c),
+        _ => next(c),
+    }
+}
+
+fn add(var _ c: own Cursor) -> u64 {
+    c.acc = c.acc.wrapping_add(c.step)
+    next(c)
+}
+
+fn double(var _ c: own Cursor) -> u64 {
+    c.acc = (c.acc << 1) & 0xffffffff
+    next(c)
+}
+
+#[unsafe(export)]
+pub fn run(steps: u32) -> u64 {
+    next(Cursor { pc: 0, steps, acc: 0, step: 3, mask: 0xffff })
+}

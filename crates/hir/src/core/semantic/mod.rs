@@ -52,7 +52,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -6376,11 +6376,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {

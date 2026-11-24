@@ -65,7 +65,9 @@ enum RuntimeTypeShape<'db> {
 impl<'db> RuntimeTypeModel<'db> {
     fn new(db: &'db dyn MirDb, ty: TyId<'db>, env: RuntimeTypeEnv<'db>) -> Self {
         let repr_ty = runtime_repr_ty_in_env(db, env, ty);
-        let shape = if let Some((kind, inner)) = repr_ty.as_borrow(db) {
+        let shape = if runtime_uninhabited_ty(db, repr_ty, env.scope, env.assumptions) {
+            RuntimeTypeShape::Other
+        } else if let Some((kind, inner)) = repr_ty.as_borrow(db) {
             RuntimeTypeShape::Borrow { kind, inner }
         } else if let Some((_, inner)) = repr_ty.as_capability(db) {
             RuntimeTypeShape::Capability { inner }
@@ -312,6 +314,15 @@ pub(crate) fn runtime_storage_ty_in_env<'db>(
     runtime_storage_ty(db, ty, env.scope, env.assumptions)
 }
 
+pub(crate) fn runtime_uninhabited_ty<'db>(
+    db: &'db dyn MirDb,
+    ty: TyId<'db>,
+    scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+) -> bool {
+    ty.is_uninhabited_in(db, scope, assumptions)
+}
+
 #[salsa::tracked(returns(copy), cycle_initial=runtime_zero_sized_ty_cycle_initial)]
 pub(super) fn runtime_zero_sized_ty<'db>(
     db: &'db dyn MirDb,
@@ -323,7 +334,7 @@ pub(super) fn runtime_zero_sized_ty<'db>(
     if repr_ty != ty {
         return runtime_zero_sized_ty(db, repr_ty, scope, assumptions);
     }
-    if repr_ty.is_never(db)
+    if runtime_uninhabited_ty(db, repr_ty, scope, assumptions)
         || matches!(
             repr_ty.base_ty(db).data(db),
             TyData::TyBase(hir::analysis::ty::ty_def::TyBase::Func(_))
@@ -993,5 +1004,279 @@ fn zoo(_ zoo: Zoo) {}
             ),
             "expected memory provider ref, got {class:#?}",
         );
+    }
+
+    #[test]
+    fn uninhabited_types_erasure_and_size_of_parity() {
+        const SOURCE: &str = r#"
+use core::option::Option
+use core::ptr::StorPtr
+use core::result::Result
+
+enum Empty {}
+enum AllEmpty {
+    A(!),
+    B(Empty),
+    C(u256, Empty),
+}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+struct MixedE {
+    a: u256,
+    b: Empty,
+}
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+
+fn uninhabited(
+    _ a: !,
+    _ b: Empty,
+    _ c: AllEmpty,
+    _ d: Mixed,
+    _ e: MixedE,
+    _ f: [Empty; 3],
+    _ g: ref Empty,
+    _ h: mut Empty,
+) {}
+
+fn inhabited(
+    _ a: [Empty; 0],
+    _ b: *Empty,
+    _ c: *!,
+    _ d: StorPtr<Empty>,
+    _ e: Option<Empty>,
+    _ f: Result<Empty, u256>,
+    _ g: Flipped,
+) {}
+"#;
+
+        for target in Target::ALL {
+            with_source(SOURCE, target, |db, top_mod| {
+                let raw = RuntimeMemoryLayout::raw(db);
+                for idx in 0..8 {
+                    let (ty, env) = param(db, top_mod, "uninhabited", idx);
+                    assert!(
+                        ty.is_uninhabited_in(db, env.scope, env.assumptions),
+                        "{target:?} uninhabited[{idx}] {}",
+                        ty.pretty_print(db)
+                    );
+                    assert_eq!(
+                        top_level_class_for_ty_in_env(db, env, ty, AddressSpace::Memory),
+                        None,
+                        "{target:?} uninhabited[{idx}] top-level should be erased"
+                    );
+                    let stored = stored_class_for_ty_in_env(db, env, ty);
+                    assert!(
+                        stored.is_runtime_zst(db),
+                        "{target:?} uninhabited[{idx}] stored class should be ZST, got {stored:?}"
+                    );
+                    assert_eq!(
+                        runtime_size_bytes(db, ty),
+                        Ok(Some(0)),
+                        "{target:?} uninhabited[{idx}] runtime_size_bytes"
+                    );
+                    assert_eq!(
+                        raw.class_size(&stored),
+                        Ok(0),
+                        "{target:?} uninhabited[{idx}] raw.class_size"
+                    );
+                }
+
+                // `Mixed` is uninhabited, NOT zero-sized in HIR.
+                let (mixed, _) = param(db, top_mod, "uninhabited", 3);
+                assert!(mixed.is_uninhabited(db));
+                assert!(!mixed.is_zero_sized(db));
+
+                for idx in 0..7 {
+                    let (ty, env) = param(db, top_mod, "inhabited", idx);
+                    assert!(
+                        !ty.is_uninhabited_in(db, env.scope, env.assumptions),
+                        "{target:?} inhabited[{idx}] {}",
+                        ty.pretty_print(db)
+                    );
+                    let stored = stored_class_for_ty_in_env(db, env, ty);
+                    assert_eq!(
+                        runtime_size_bytes(db, ty),
+                        Ok(raw.class_size(&stored).ok()),
+                        "{target:?} inhabited[{idx}] {}",
+                        ty.pretty_print(db)
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn uninhabited_mir_package_and_verifier_invariants() {
+        use crate::{
+            runtime::{EnumLayoutKey, RuntimeExitBehavior, package::runtime_instance_for_semantic},
+            verify::verify_runtime_body,
+        };
+
+        const SOURCE: &str = r#"
+use core::intrinsic::clear
+use core::ops::Drop
+use core::option::Option
+use core::result::Result
+
+enum Empty {}
+enum AllEmpty {
+    A(!),
+    B(Empty),
+}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+struct Owned {
+    x: u256,
+}
+impl Drop for Owned {
+    fn drop(own self) {}
+}
+struct MixedDrop {
+    owned: Owned,
+    never: !,
+}
+enum EnumWithDrop {
+    Live(Owned),
+    Dead(MixedDrop),
+}
+
+pub fn eliminate(_ e: Empty) -> u8 {
+    match e {}
+}
+
+pub fn coerce_never(_ x: !) -> u256 {
+    x
+}
+
+pub fn dead_proj(_ m: Mixed) -> u256 {
+    m.a
+}
+
+pub fn ref_empty(_ r: ref Empty) -> u256 {
+    1
+}
+
+pub fn dead_variant_proj(_ r: own Result<Mixed, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(m) => m.a
+    }
+}
+
+pub fn unwrap_ok(_ r: own Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+    }
+}
+
+pub fn unwrap_flipped(_ f: own Flipped) -> u256 {
+    match f {
+        Flipped::Ok(v) => v
+    }
+}
+
+pub fn raw_ptr_deref_dead(_ p: *Mixed) -> u256 {
+    unsafe { (*p).a }
+}
+
+pub fn clear_inhabited(var _ r: own Result<Empty, u256>, var _ arr: own [Empty; 0]) -> u256 {
+    unsafe {
+        clear(mut r)
+        clear(mut arr)
+    }
+    unwrap_ok(r)
+}
+
+pub fn drop_enum(_ e: own EnumWithDrop) -> u256 {
+    match e {
+        EnumWithDrop::Live(o) => o.x
+        EnumWithDrop::Dead(d) => d.owned.x
+    }
+}
+"#;
+
+        with_source(SOURCE, Target::Evm, |db, top_mod| {
+            let diagnostics = db.run_on_top_mod(top_mod);
+            assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(db));
+            let program: &dyn MirDb = db;
+            let mut instances = Vec::new();
+            for &func in top_mod.all_funcs(db) {
+                let name = func
+                    .name(db)
+                    .to_opt()
+                    .map(|n| n.data(db).to_string())
+                    .unwrap_or_default();
+                let sem_key = root_semantic_instance_key(db, BodyOwner::Func(func, None))
+                    .unwrap_or_else(|e| panic!("root semantic key for `{name}`: {e:?}"));
+                let semantic = SemanticInstance::new(db, sem_key);
+                let instance = runtime_instance_for_semantic(db, semantic);
+                let body = instance.body(db);
+                verify_runtime_body(db, &program, body)
+                    .unwrap_or_else(|e| panic!("failed verifying `{name}`: {e:?}"));
+                instances.push((name, instance));
+            }
+
+            for name in ["eliminate", "coerce_never", "dead_proj", "ref_empty"] {
+                let (_, instance) = instances
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .unwrap_or_else(|| panic!("missing function `{name}`"));
+                let sig = instance.interface_signature(db);
+                assert!(
+                    sig.params.is_empty(),
+                    "`{name}` uninhabited param should be erased, got {:?}",
+                    sig.params
+                );
+                assert_eq!(
+                    instance.exit_behavior(db),
+                    RuntimeExitBehavior::NeverReturns,
+                    "`{name}` should never return"
+                );
+            }
+
+            // Ensure no 0-variant enum layout appears anywhere in any verified function.
+            for (name, instance) in &instances {
+                let body = instance.body(db);
+                for local in &body.locals {
+                    if let crate::RuntimeCarrier::Value(class) = &local.carrier
+                        && let Some(layout) = class.aggregate_layout()
+                        && let Layout::Enum(enum_layout) = layout.data(db)
+                    {
+                        assert!(
+                            !enum_layout.variants.is_empty(),
+                            "found 0-variant enum layout in `{name}`",
+                        );
+                    }
+                }
+            }
+
+            // Verify MIR layout verifier explicitly rejects a hand-crafted 0-variant enum layout.
+            let empty_enum = LayoutId::new(
+                db,
+                LayoutKey::Enum(EnumLayoutKey {
+                    variants: Box::new([]),
+                }),
+            );
+            assert!(
+                crate::verify::verify_runtime_class_for_test(
+                    db,
+                    &program,
+                    &RuntimeClass::AggregateValue { layout: empty_enum },
+                )
+                .is_err(),
+                "MIR verifier must reject 0-variant Layout::Enum"
+            );
+        });
     }
 }

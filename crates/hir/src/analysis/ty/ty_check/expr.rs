@@ -375,10 +375,7 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(BodyDiag::TypeSizeOverflow { primary, ty });
                     return false;
                 }
-                // A type with parameters is laid out at each instance.
-                ConstIntrinsicKind::StorageSlots
-                    if !ty.has_param(self.db) && !ty.has_var(self.db) =>
-                {
+                ConstIntrinsicKind::StorageSlots => {
                     if let Err(error) = storage_slot_span(self.db, ty) {
                         self.push_diag(BodyDiag::NoStorageLayout {
                             primary,
@@ -456,6 +453,7 @@ impl<'db> TyChecker<'db> {
 
         let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
 
+        self.env.set_never_coercion(expr, false);
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
             Expr::Lit(LitKind::String(string_id)) => {
@@ -5310,6 +5308,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        let mut exhaustive = false;
         if !scrutinee_pat_ty.has_invalid(self.db)
             && arm_statuses.iter().all(|status| status.is_ready())
         {
@@ -5339,7 +5338,9 @@ impl<'db> TyChecker<'db> {
             }
 
             match analysis.exhaustiveness {
-                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {}
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {
+                    exhaustive = true;
+                }
                 crate::analysis::ty::pattern_analysis::MatchExhaustiveness::NonExhaustive(
                     missing_patterns,
                 ) => {
@@ -5362,7 +5363,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        if !arms.is_empty() && diverging_arms == arms.len() {
+        if (!arms.is_empty() || exhaustive) && diverging_arms == arms.len() {
             match_ty = TyId::never(self.db);
         }
 

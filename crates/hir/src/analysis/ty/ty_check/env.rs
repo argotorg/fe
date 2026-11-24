@@ -227,6 +227,8 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::StateIndex`).
     place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
+    /// The expressions of type `!` typed as their context's type.
+    never_coercions: FxHashSet<ExprId>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -397,6 +399,7 @@ impl<'db> TyCheckEnv<'db> {
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             place_entries: FxHashMap::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -1039,6 +1042,16 @@ impl<'db> TyCheckEnv<'db> {
         callable: super::PlaceEntryCalls<'db>,
     ) {
         self.place_entries.insert(expr, callable);
+    }
+
+    /// Records whether `expr`, of type `!`, is typed as its context's type;
+    /// a new check of `expr` starts without.
+    pub(super) fn set_never_coercion(&mut self, expr: ExprId, coerced: bool) {
+        if coerced {
+            self.never_coercions.insert(expr);
+        } else {
+            self.never_coercions.remove(&expr);
+        }
     }
 
     pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
@@ -1952,6 +1965,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             yield_shapes: self.yield_shapes,
             place_entries: self.place_entries,
+            never_coercions: self.never_coercions,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,

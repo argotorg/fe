@@ -1476,6 +1476,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashMap::default(),
+        never_coercions: FxHashSet::default(),
         unsafe_splits: FxHashSet::default(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
@@ -4110,6 +4111,14 @@ impl<'db> TyChecker<'db> {
     fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
         match typeable {
             Typeable::Expr(expr, mut typed_expr) => {
+                if typed_expr
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+                    && !ty.is_never(self.db)
+                {
+                    self.env.set_never_coercion(expr, true);
+                }
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
@@ -4795,6 +4804,9 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashMap<ExprId, PlaceEntryCalls<'db>>,
+        /// The expressions of type `!` whose recorded type is the type their
+        /// context expects.
+        pub(super) never_coercions: FxHashSet<ExprId>,
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
@@ -5800,6 +5812,12 @@ impl<'db> TypedBody<'db> {
         self.tables.place_entries.contains_key(&expr)
     }
 
+    /// Whether `expr` has type `!` and its recorded type, [`Self::expr_ty`],
+    /// is the type its context expects.
+    pub fn is_never_coerced(&self, expr: ExprId) -> bool {
+        self.tables.never_coercions.contains(&expr)
+    }
+
     pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
         self.tables.builtin_ops.get(&expr).copied()
     }
@@ -6691,6 +6709,19 @@ impl<'db> TypedBody<'db> {
         seen: &mut FxHashSet<Func<'db>>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
+        let projection = place
+            .projections
+            .iter()
+            .map(|projection| match projection {
+                // A value read through a raw pointer, or at a collection's
+                // entry, is not a part of the binding.
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
+                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+                PlaceProjection::Index { index_expr, .. } => {
+                    self.return_index_projection(db, body, *index_expr)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
         let PlaceBase::Binding(binding) = place.base;
         let sources = match binding {
             LocalBinding::Param {
@@ -6740,22 +6771,6 @@ impl<'db> TypedBody<'db> {
                 ..
             } => return None,
         };
-        if place.has_entry() {
-            return None;
-        }
-        let projection = place
-            .projections
-            .iter()
-            .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
-                PlaceProjection::Field { index, .. } => {
-                    Some(Some(ReturnProjectionStep::Field(*index)))
-                }
-                PlaceProjection::Index { index_expr, .. } => {
-                    Some(self.return_index_projection(db, body, *index_expr))
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)
     }
 
@@ -7455,6 +7470,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashMap::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),

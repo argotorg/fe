@@ -26,6 +26,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
+    core::semantic::ZeroInvalidReason,
     hir_def::{
         AssocTyDecl, CallableDef, FieldIndex, GenericParamOwner, ModeMarker, PathKind, Trait,
         TypeMode, params::FuncParamMode,
@@ -2535,12 +2536,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ContractFieldZeroInvalid { span, ty, invalid } => {
+            Self::ContractFieldZeroInvalid {
+                span,
+                ty,
+                invalid,
+                reason,
+            } => {
+                let (reason, note) = match reason {
+                    ZeroInvalidReason::UnsafeFields => (
+                        "has `unsafe` fields",
+                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant",
+                    ),
+                    ZeroInvalidReason::Uninhabited => (
+                        "is uninhabited",
+                        "state starts zeroed, and an uninhabited type has no valid values",
+                    ),
+                    ZeroInvalidReason::UninhabitedFirstVariant => (
+                        "has an uninhabited first variant",
+                        "state starts zeroed, and tag 0 selects an uninhabited variant",
+                    ),
+                };
                 let label = if ty == invalid {
-                    format!("`{}` has `unsafe` fields", ty.pretty_print(db))
+                    format!("`{}` {reason}", ty.pretty_print(db))
                 } else {
                     format!(
-                        "`{}` holds `{}`, which has `unsafe` fields",
+                        "`{}` holds `{}`, which {reason}",
                         ty.pretty_print(db),
                         invalid.pretty_print(db)
                     )
@@ -2556,9 +2576,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         message: label,
                         span: span.resolve(db),
                     }],
-                    notes: vec![
-                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant".to_string(),
-                    ],
+                    notes: vec![note.to_string()],
                     error_code,
                 }
             }

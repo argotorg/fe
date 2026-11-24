@@ -17,6 +17,7 @@ use crate::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
         ImplTrait, IntegerId, ModeMarker, TypeId as HirTypeId, TypeMode,
     },
+    core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
 use either::Either;
@@ -334,6 +335,7 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
 
     /// A collection entry type in contract state with no storage layout.

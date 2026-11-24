@@ -244,6 +244,18 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
 pub(super) struct BlockState<'db> {
     pub(super) stmts: Vec<SStmt<'db>>,
     pub(super) terminator: Option<STerminator<'db>>,
+    reach: BlockReach,
+}
+
+/// Whether lowering has reached a block.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BlockReach {
+    /// No edge lowered so far leads here.
+    Unreached,
+    /// The entry, or a terminator lowered so far, leads here.
+    Reached,
+    /// Entered unreached, and closed as dead code.
+    Dead,
 }
 
 struct SmirLowerInputs<'a, 'db> {
@@ -570,12 +582,41 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.blocks.push(BlockState {
             stmts: Vec::new(),
             terminator: None,
+            reach: if self.blocks.is_empty() {
+                BlockReach::Reached
+            } else {
+                BlockReach::Unreached
+            },
         });
         id
     }
 
+    /// Continues lowering in `block`. A block no edge leads to, such as the
+    /// arms of an `if` whose condition ended its block, is dead: it is closed
+    /// as unreachable, so nothing is lowered into it, as nothing is after a
+    /// statement that ends its block.
+    ///
+    /// The caller installs the terminator that leads to a live block before
+    /// entering it, or calls [`Self::mark_reached`] when that edge comes
+    /// after. An edge to a block already closed as dead panics: it would
+    /// have dropped live code.
     pub(super) fn switch_to(&mut self, block: SBlockId) {
         self.current = block;
+        if self.blocks[block.index()].reach == BlockReach::Unreached {
+            self.blocks[block.index()].reach = BlockReach::Dead;
+            self.set_synthetic_terminator(block, STerminatorKind::Unreachable);
+        }
+    }
+
+    /// Records that an edge leads to `block`, for an edge lowered after the
+    /// block is entered.
+    pub(super) fn mark_reached(&mut self, block: SBlockId) {
+        let reach = &mut self.blocks[block.index()].reach;
+        assert!(
+            *reach != BlockReach::Dead,
+            "an edge leads to {block:?}, which lowering entered unreached and closed as dead"
+        );
+        *reach = BlockReach::Reached;
     }
 
     pub(super) fn is_terminated(&self, block: SBlockId) -> bool {
@@ -604,6 +645,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         kind: STerminatorKind<'db>,
     ) {
         if self.blocks[block.index()].terminator.is_none() {
+            for successor in kind.successors() {
+                self.mark_reached(successor);
+            }
             self.blocks[block.index()].terminator = Some(STerminator { origin, kind });
         }
     }
@@ -770,7 +814,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             origin,
             STerminatorKind::Yield { value, resume },
         );
-        self.current = resume;
+        self.switch_to(resume);
         match self.slide {
             Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
             None => {
@@ -788,22 +832,31 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// carry their grants. A leaf yielding an access to a value is lowered
     /// as that value, of its own type: the grant of the frame temporary
     /// holding it is typed by the shape (`lower_yield_leaf`). A call that
-    /// never returns yields nothing, and joins the other leaves' grants.
+    /// never returns yields nothing, and joins the other leaves' grants. A
+    /// `!` expression typed as its context's type is lowered as the `!` it
+    /// is (`lower_expr`).
     pub(super) fn expr_ty(&self, expr: ExprId) -> TyId<'db> {
         match self.typed_body.yield_shape(expr) {
             Some(Shape::Access(..)) if self.is_yield_leaf(expr) && !self.never_returns(expr) => {
                 self.typed_body.expr_ty(self.db, expr)
             }
             Some(shape) => shape.carrier_ty(self.db),
+            None if self.typed_body.is_never_coerced(expr) => TyId::never(self.db),
             None => self.typed_body.expr_ty(self.db, expr),
         }
     }
 
     /// Whether `expr` calls something that never returns.
     fn never_returns(&self, expr: ExprId) -> bool {
-        self.typed_body
-            .callable_expr(expr)
-            .is_some_and(|callable| callable.ret_ty(self.db).is_never(self.db))
+        self.typed_body.callable_expr(expr).is_some_and(|callable| {
+            normalize_ty(
+                self.db,
+                callable.ret_ty(self.db),
+                self.body.scope(),
+                self.assumptions,
+            )
+            .is_never(self.db)
+        })
     }
 
     /// Whether the yield site `expr` yields itself, rather than through the
@@ -1044,15 +1097,23 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // every scope.
         self.push_drop_scope(false);
         let error = (kind == SumKind::Result).then(|| {
-            SOperand::synthetic(self.emit_expr_with_origin(
+            let error_ty = sum_ty.generic_args(self.db)[0];
+            let error = self.emit_expr_with_origin(
                 origin,
-                sum_ty.generic_args(self.db)[0],
+                error_ty,
                 SExpr::ExtractEnumField {
                     value: SOperand::synthetic(value),
                     variant: VariantIndex(failure),
                     field: FieldIndex(0),
                 },
-            ))
+            );
+            // An error of type `!` ends the path that would carry it out.
+            if normalize_ty(self.db, error_ty, self.body.scope(), self.assumptions)
+                .is_never(self.db)
+            {
+                self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            }
+            SOperand::synthetic(error)
         });
         let exit_ty = self.instance.normalized_result_ty(self.db);
         let exit = self.emit_expr_with_origin(
@@ -1149,6 +1210,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             .typed_body
             .yield_shape(expr)
             .filter(|_| self.is_yield_leaf(expr));
+        // A `!` expression typed as its context's type ends its block where it
+        // would produce its value, which no path defines. A place of type `!`
+        // is not read: lowering it evaluates what locates it.
+        if yield_leaf.is_none() && self.typed_body.is_never_coerced(expr) {
+            if self.try_lower_place(expr).is_none() {
+                self.lower_expr_inner(expr);
+            }
+            self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
+            return self.alloc_temp(self.typed_body.expr_ty(self.db, expr));
+        }
         let value = match yield_leaf {
             Some(shape) => {
                 self.yield_depth += 1;
@@ -1158,7 +1229,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
             None => self.lower_expr_inner(expr),
         };
-        if self.expr_ty(expr).is_never(self.db) && !self.is_terminated(self.current) {
+        let expr_ty = normalize_ty(
+            self.db,
+            self.expr_ty(expr),
+            self.body.scope(),
+            self.assumptions,
+        );
+        if expr_ty.is_never(self.db) && !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         }
         if let Some(shape) = yield_leaf
@@ -2579,12 +2656,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 Ok(Some(size)) => Some(BigInt::from(size)),
                 Ok(None) | Err(_) => None,
             },
-            ConstIntrinsicKind::StorageSlots if ty.has_param(self.db) || ty.has_var(self.db) => {
-                None
-            }
-            ConstIntrinsicKind::StorageSlots => {
-                storage_slot_span(self.db, ty).ok().map(BigInt::from)
-            }
+            ConstIntrinsicKind::StorageSlots => storage_slot_span(self.db, ty)
+                .ok()
+                .flatten()
+                .map(BigInt::from),
         };
         let Some(size) = size else {
             let caller = self.instance.key(self.db);
@@ -2744,7 +2819,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 let outer = self.slide.replace(slide);
                 let _ = self.lower_expr(*expr);
                 self.slide = outer;
-                self.current = slide;
+                self.switch_to(slide);
             }
             Stmt::Expr(expr) => {
                 let _ = self.lower_expr(*expr);

@@ -5483,28 +5483,40 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
                 Layout::Struct(data) => {
-                    let field_tys = self.aggregate_field_tys(ty, data.fields.len());
-                    let fields = data
-                        .fields
-                        .iter()
-                        .zip(field_tys)
-                        .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
-                        .collect();
+                    let fields: Box<[RLocalId]> = if data.fields.is_empty() {
+                        Box::default()
+                    } else {
+                        let field_tys = self.aggregate_field_tys(ty, data.fields.len());
+                        data.fields
+                            .iter()
+                            .zip(field_tys)
+                            .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
+                            .collect()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
                         fields,
                     }
                 }
                 Layout::Array(data) => {
-                    let elem_ty = self.aggregate_field_tys(ty, 1)[0];
-                    let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                    let fields: Box<[RLocalId]> = if data.len == 0 {
+                        Box::default()
+                    } else {
+                        let elem_ty = self.aggregate_field_tys(ty, 1)[0];
+                        let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                        vec![elem; data.len as usize].into_boxed_slice()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
-                        fields: vec![elem; data.len as usize].into_boxed_slice(),
+                        fields,
                     }
                 }
                 Layout::Enum(data) => {
-                    let classes = &data.variants[0].fields;
+                    let first = data
+                        .variants
+                        .first()
+                        .expect("zero value requires a non-empty enum layout");
+                    let classes = &first.fields;
                     let field_tys = self.enum_variant_field_tys(ty, VariantIndex(0), classes.len());
                     let fields = classes
                         .iter()
