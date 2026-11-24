@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/match_uninhabited.fe
+---
+error[8-0034]: non-exhaustive patterns: type `Mostly` is not covered
+   ┌─ match_uninhabited.fe:16:5
+   │
+16 │ ╭     match m {
+17 │ │         Mostly::A(v) => v
+18 │ │     }
+   │ ╰─────^ match expression does not cover all possible values
+   │
+   = Not covered: `Mostly::E`
+
+error[8-0035]: unreachable pattern
+   ┌─ match_uninhabited.fe:38:9
+   │
+38 │         Result::Err(_) => 1
+   │         ^^^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values
+
+error[8-0035]: unreachable pattern
+   ┌─ match_uninhabited.fe:45:9
+   │
+45 │         Mostly::B(_) => 1
+   │         ^^^^^^^^^^^^ this pattern is unreachable
+   │
+   = previous patterns already cover all possible values

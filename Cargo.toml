@@ -57,13 +57,13 @@ tracing-tree = "0.4.0"
 wasm-bindgen-test = "0.3"
 semver = "1.0.26"
 petgraph = "0.8"
-sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-cranelift = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-wasm = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
-sonatina-sp1 = { git = "https://github.com/fe-lang/sonatina", rev = "ed042b3a9a7d0314de29e738c0108d045e448685" }
+sonatina-ir = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-triple = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-codegen = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-cranelift = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-wasm = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-verifier = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
+sonatina-sp1 = { git = "https://github.com/fe-lang/sonatina", rev = "daca656deafba402682436079c91a3edc07af58f" }
 
 [profile.dev]
 # Set to 0 to make the build faster and debugging more difficult.

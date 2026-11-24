@@ -474,16 +474,16 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
         br v7 block6 block7;
 
     block2:
-        v28.i256 = call %keccak256 v2;
+        v27.i256 = call %keccak256 v2;
         jump block5;
 
     block3:
-        v31.@layout_1 = agg.make @layout_1 v15 v25;
-        obj.store v2 v31;
+        v30.@layout_1 = agg.make @layout_1 v15 v24;
+        obj.store v2 v30;
         jump block2;
 
     block4:
-        return v28;
+        return v27;
 
     block5:
         jump block4;
@@ -501,11 +501,11 @@ func inline(always) private %mapping_slot(v0.i256, v1.i256) -> i256 {
         v19.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v4;
         v20.i256 = add v15 v19;
         mstore v20 v0 i256;
-        (v23.i256, v24.i1) = uaddo v4 32.i256;
-        br v24 block6 block8;
+        (v22.i256, v23.i1) = uaddo v4 32.i256;
+        br v23 block6 block8;
 
     block8:
-        v25.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v23;
+        v24.i256 = call %core__lib__num__impl_trait_S_bdb7__downcast_unchecked__g7548_3491 v22;
         jump block3;
 }
 
@@ -852,16 +852,16 @@ func private %runtime() {
         unreachable;
 
     block54:
-        v70.i256 = call %core__lib__ptr__alloc_bytes_7e7d 0.i256;
-        v71.i256 = call %cast__gf0ab v70;
+        v69.i256 = call %core__lib__ptr__alloc_bytes_7e7d 0.i256;
+        v70.i256 = call %cast__gf0ab v69;
         jump block56;
 
     block55:
         jump block53;
 
     block56:
-        v75.@layout_1 = agg.make @layout_1 v71 0.i256;
-        obj.store v0 v75;
+        v74.@layout_1 = agg.make @layout_1 v70 0.i256;
+        obj.store v0 v74;
         jump block55;
 }
 

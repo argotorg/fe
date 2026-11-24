@@ -132,6 +132,18 @@ impl<'db> RuntimeSemanticBody<'db> {
                     block.statements.truncate(end + 1);
                     block.terminator.kind = NTerminatorKind::Unreachable;
                 }
+                ExecutableBlock::TrapsAfter(anchor) => {
+                    let keep = anchor.map_or(0, |anchor| {
+                        block
+                            .statements
+                            .iter()
+                            .position(|statement| statement.source == Some(anchor))
+                            .expect("a trap's anchor survives runtime normalization")
+                            + 1
+                    });
+                    block.statements.truncate(keep);
+                    block.terminator.kind = NTerminatorKind::Unreachable;
+                }
                 ExecutableBlock::Continues(feasible) => {
                     for (successor, feasible) in block
                         .terminator

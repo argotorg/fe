@@ -202,6 +202,17 @@ pub enum ContractLayoutPathSegment<'db> {
     EnumTag,
 }
 
+/// Why the all-zero representation is no value of a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum ZeroInvalidReason {
+    /// Its `unsafe` fields carry an invariant zero need not satisfy.
+    UnsafeFields,
+    /// It has no values.
+    Uninhabited,
+    /// Tag 0 selects its first variant, which is uninhabited.
+    UninhabitedFirstVariant,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ContractLayoutError<'db> {
     InvalidFieldType,
@@ -232,10 +243,11 @@ pub enum ContractLayoutError<'db> {
     PersistentUnderTransient {
         collection: TyId<'db>,
     },
-    /// A type whose all-zero representation is not a value, which a state
-    /// space holds until it is written.
+    /// A type whose all-zero representation is not a value, for `reason`,
+    /// which a state space holds until it is written.
     ZeroInvalidInState {
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
     /// A collection entry type that cannot be laid out, for `reason`.
     EntryLayout {
@@ -615,6 +627,11 @@ struct FieldWalker<'db> {
 }
 
 impl<'db> FieldWalker<'db> {
+    /// Whether `ty` has no values, so no slot or lane holds one.
+    fn is_uninhabited(&self, ty: TyId<'db>) -> bool {
+        ty.is_uninhabited_in(self.db, None, PredicateListId::empty_list(self.db))
+    }
+
     fn push_error(&mut self, error: ContractLayoutError<'db>) {
         if self.errors.contains(&error) {
             return;
@@ -686,7 +703,12 @@ impl<'db> FieldWalker<'db> {
                     )
                 })
                 .collect();
-            self.walk_sequence(items, path, dimensions, true)
+            let output = self.walk_sequence(items, path, dimensions, true);
+            if self.is_uninhabited(ty) {
+                WalkOutput::empty()
+            } else {
+                output
+            }
         } else if ty.as_closure(self.db).is_some() {
             // A closure lies in storage as a product of its captures, as MIR
             // stores it.
@@ -707,11 +729,19 @@ impl<'db> FieldWalker<'db> {
                     )
                 })
                 .collect();
-            self.walk_sequence(items, path, dimensions, true)
+            let output = self.walk_sequence(items, path, dimensions, true);
+            if self.is_uninhabited(ty) {
+                WalkOutput::empty()
+            } else {
+                output
+            }
         } else if ty.is_array(self.db) {
             self.walk_array(views, path, dimensions)
         } else if let Some(adt) = ty.adt_def(self.db) {
             let mut output = self.walk_adt(views, adt, path, dimensions);
+            if self.is_uninhabited(ty) {
+                return WalkOutput::empty();
+            }
             // A pinned type is reported at its place, which is its identity,
             // rather than by the slots its private fields take. It takes whole
             // slots, at least one even without fields: its root number derives
@@ -904,6 +934,9 @@ impl<'db> FieldWalker<'db> {
         let mut element_dimensions = dimensions.to_vec();
         element_dimensions.push(len);
         let mut output = self.walk_ty(element, &element_path, &element_dimensions);
+        if self.is_uninhabited(ty) {
+            return WalkOutput::empty();
+        }
         let Some(span) = output.span.checked_mul(len) else {
             self.push_error(ContractLayoutError::LayoutExtentOverflow);
             return WalkOutput::empty();
@@ -1126,9 +1159,9 @@ fn collect_field_plan<'db>(
         walker.push_error(ContractLayoutError::CallPointerInState { pointer });
     }
     if walker.errors.is_empty()
-        && let Some(invalid) = zero_invalid_in_state(db, scope, declared)
+        && let Some((invalid, reason)) = zero_invalid_in_state(db, scope, declared)
     {
-        walker.push_error(ContractLayoutError::ZeroInvalidInState { invalid });
+        walker.push_error(ContractLayoutError::ZeroInvalidInState { invalid, reason });
     }
     if walker.errors.is_empty()
         && let Some((entry, error)) = entry_layout_error(db, scope, declared)
@@ -1264,11 +1297,14 @@ const MAX_STATE_NESTING: usize = 64;
 
 /// The types a value of `ty` holds in state: its fields, its tuple or array
 /// elements, and a collection's entries (`StateIndex::Entry`), which lie
-/// outside its own slots.
+/// outside its own slots. With `zero`, only those its all-zero value holds:
+/// an enum's first variant's fields, and an array's element only if it has
+/// any.
 fn state_parts<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: TyId<'db>,
+    zero: bool,
 ) -> Vec<TyId<'db>> {
     let assumptions = PredicateListId::empty_list(db);
     let mut parts: Vec<_> = state_index_tys(db, scope, ty, assumptions)
@@ -1280,16 +1316,29 @@ fn state_parts<'db>(
         parts.extend(
             adt.fields(db)
                 .iter()
+                .take(if zero { 1 } else { usize::MAX })
                 .flat_map(|variant| variant.iter_types(db))
                 .map(|field| field.instantiate(db, args)),
         );
     } else if ty.is_tuple(db) || ty.is_array(db) {
-        parts.extend(
-            ty.generic_args(db)
-                .iter()
-                .copied()
-                .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_))),
-        );
+        // An empty array's all-zero value holds no element.
+        let empty = zero
+            && ty.is_array(db)
+            && ty.generic_args(db).get(1).is_some_and(|&len_ty| {
+                demand_concrete_array_length(db, len_ty, len_ty)
+                    .ok()
+                    .flatten()
+                    .and_then(|len| len.to_usize())
+                    == Some(0)
+            });
+        if !empty {
+            parts.extend(
+                ty.generic_args(db)
+                    .iter()
+                    .copied()
+                    .filter(|arg| !matches!(arg.data(db), TyData::ConstTy(_))),
+            );
+        }
     } else if ty.as_closure(db).is_some() {
         parts.extend(ty.field_types(db));
     }
@@ -1323,7 +1372,7 @@ fn persistent_under_transient<'db>(
             Some(AddressSpace::Transient) => transient = true,
             _ => {}
         }
-        state_parts(db, scope, ty)
+        state_parts(db, scope, ty, false)
             .into_iter()
             .find_map(|part| walk(db, scope, part, transient, depth + 1, seen))
     }
@@ -1353,7 +1402,7 @@ fn state_spaces<'db>(
         {
             spaces.push(space);
         }
-        for part in state_parts(db, scope, ty) {
+        for part in state_parts(db, scope, ty, false) {
             walk(db, scope, part, depth + 1, seen, spaces);
         }
     }
@@ -1386,7 +1435,7 @@ fn call_pointer_in_state<'db>(
         ) {
             return Some(ty);
         }
-        state_parts(db, scope, ty)
+        state_parts(db, scope, ty, false)
             .into_iter()
             .find_map(|part| walk(db, scope, part, depth + 1, seen))
     }
@@ -1395,14 +1444,15 @@ fn call_pointer_in_state<'db>(
 
 /// The first type a value of `ty` holds in state, in its own slots or in a
 /// collection's entries, whose all-zero representation is not a value: one
-/// with `unsafe` fields. A state space starts zeroed, so a slot no one wrote
-/// would read as such a value.
+/// with `unsafe` fields, an uninhabited type, or an enum whose first variant
+/// is uninhabited. A state space starts zeroed, so a slot no one wrote would
+/// read as such a value.
 fn zero_invalid_in_state<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     ty: TyId<'db>,
-) -> Option<TyId<'db>> {
-    fn walk<'db>(
+) -> Option<(TyId<'db>, ZeroInvalidReason)> {
+    fn walk_unsafe<'db>(
         db: &'db dyn HirAnalysisDb,
         scope: ScopeId<'db>,
         ty: TyId<'db>,
@@ -1415,11 +1465,42 @@ fn zero_invalid_in_state<'db>(
         if ty.adt_def(db).is_some_and(|adt| adt.has_unsafe_field(db)) {
             return Some(ty);
         }
-        state_parts(db, scope, ty)
+        state_parts(db, scope, ty, false)
             .into_iter()
-            .find_map(|part| walk(db, scope, part, depth + 1, seen))
+            .find_map(|part| walk_unsafe(db, scope, part, depth + 1, seen))
     }
-    walk(db, scope, ty, 0, &mut FxHashSet::default())
+
+    // Only the parts of the all-zero value matter: zero selects an enum's
+    // first variant, so a later uninhabited one (`Option<Empty>`,
+    // `Result<Empty, u256>`) is never zero-initialized.
+    fn walk_uninhabited<'db>(
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        ty: TyId<'db>,
+        depth: usize,
+        seen: &mut FxHashSet<TyId<'db>>,
+    ) -> Option<(TyId<'db>, ZeroInvalidReason)> {
+        let assumptions = PredicateListId::empty_list(db);
+        let ty = normalize_ty(db, ty, scope, assumptions);
+        if depth > MAX_STATE_NESTING || !seen.insert(ty) {
+            return None;
+        }
+        if ty.is_uninhabited_in(db, Some(scope), assumptions) {
+            return Some((ty, ZeroInvalidReason::Uninhabited));
+        }
+        if ty.as_enum(db).is_some()
+            && ty.is_enum_variant_uninhabited_in(db, 0, Some(scope), assumptions)
+        {
+            return Some((ty, ZeroInvalidReason::UninhabitedFirstVariant));
+        }
+        state_parts(db, scope, ty, true)
+            .into_iter()
+            .find_map(|part| walk_uninhabited(db, scope, part, depth + 1, seen))
+    }
+
+    walk_unsafe(db, scope, ty, 0, &mut FxHashSet::default())
+        .map(|ty| (ty, ZeroInvalidReason::UnsafeFields))
+        .or_else(|| walk_uninhabited(db, scope, ty, 0, &mut FxHashSet::default()))
 }
 
 /// The first collection entry type a value of `ty` holds in state that has no
@@ -1447,7 +1528,7 @@ fn entry_layout_error<'db>(
                 return Some((entry, error));
             }
         }
-        state_parts(db, scope, ty)
+        state_parts(db, scope, ty, false)
             .into_iter()
             .find_map(|part| walk(db, scope, part, depth + 1, seen))
     }

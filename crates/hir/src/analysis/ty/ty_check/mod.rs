@@ -1468,6 +1468,7 @@ fn typed_body_for_bodyless_func<'db>(
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashSet::default(),
+        never_coercions: FxHashSet::default(),
         unsafe_splits: FxHashSet::default(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
@@ -4055,6 +4056,14 @@ impl<'db> TyChecker<'db> {
     fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
         match typeable {
             Typeable::Expr(expr, mut typed_expr) => {
+                if typed_expr
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+                    && !ty.is_never(self.db)
+                {
+                    self.env.set_never_coercion(expr, true);
+                }
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
@@ -4626,6 +4635,9 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashSet<ExprId>,
+        /// The expressions of type `!` whose recorded type is the type their
+        /// context expects.
+        pub(super) never_coercions: FxHashSet<ExprId>,
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
@@ -5491,6 +5503,12 @@ impl<'db> TypedBody<'db> {
     /// whose elements are places (`core::ops::StateIndex`), a path step.
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains(&expr)
+    }
+
+    /// Whether `expr` has type `!` and its recorded type, [`Self::expr_ty`],
+    /// is the type its context expects.
+    pub fn is_never_coerced(&self, expr: ExprId) -> bool {
+        self.tables.never_coercions.contains(&expr)
     }
 
     pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
@@ -7142,6 +7160,7 @@ impl<'db> TypedBody<'db> {
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashSet::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
