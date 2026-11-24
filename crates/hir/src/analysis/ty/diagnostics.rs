@@ -1730,10 +1730,14 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedConstMismatch {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        /// The headers only may overlap (an unresolved associated type or
+        /// constant keeps them from being proved disjoint).
+        possible: bool,
         name: IdentId<'db>,
     },
     NamedAssociatedTypeMismatch {
         primary: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1743,6 +1747,7 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedTypeDisagreement {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1754,6 +1759,7 @@ pub enum TraitLowerDiag<'db> {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
     },
     ConflictTraitImpl {

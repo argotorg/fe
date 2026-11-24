@@ -5127,18 +5127,21 @@ impl<'db> ImplTrait<'db> {
                             }
                             NamedOutputMismatch::AssocType {
                                 ordinary: true,
+                                possible,
                                 name,
                                 expected,
                                 given,
                                 ..
                             } => TraitLowerDiag::NamedAssociatedTypeMismatch {
                                 primary: self,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
                             NamedOutputMismatch::AssocType {
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
@@ -5146,25 +5149,31 @@ impl<'db> ImplTrait<'db> {
                             } => TraitLowerDiag::NamedAssociatedTypeDisagreement {
                                 primary: self,
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
-                            NamedOutputMismatch::AssocConst { with, name } => {
-                                TraitLowerDiag::NamedAssociatedConstMismatch {
-                                    primary: self,
-                                    with,
-                                    name,
-                                }
-                            }
+                            NamedOutputMismatch::AssocConst {
+                                with,
+                                possible,
+                                name,
+                            } => TraitLowerDiag::NamedAssociatedConstMismatch {
+                                primary: self,
+                                with,
+                                possible,
+                                name,
+                            },
                             NamedOutputMismatch::Row {
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             } => TraitLowerDiag::NamedAssociatedRowMismatch {
                                 primary: self,
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             },
                         }

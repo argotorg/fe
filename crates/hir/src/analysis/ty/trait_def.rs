@@ -17,7 +17,7 @@ use crate::{
         },
         trait_resolution::{
             ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId, Selection,
-            match_chosen_header, match_header_args,
+            match_chosen_header, match_header_args, match_header_args_possible,
         },
         ty_check::{BodyOwner, ConstRef},
     },
@@ -1009,21 +1009,26 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
 pub(crate) enum NamedOutputMismatch<'db> {
     NoOrdinaryOutputs,
     /// An associated type; `with` is the implementation compared with.
+    /// `possible` is set when the headers only may overlap, as an unresolved
+    /// associated type or constant leaves open.
     AssocType {
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
     },
     AssocConst {
         with: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
     },
     /// An associated effect row.
     Row {
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
     },
 }
@@ -1123,14 +1128,14 @@ pub(crate) fn named_output_mismatch<'db>(
                 return None;
             }
             let other = complete_selected_impl(db, other)?;
-            let (own, other) = at_overlap(db, implementation.scope(), candidate, other)?;
-            Some((with, own, other))
+            let (own, other, possible) = at_overlap(db, implementation.scope(), candidate, other)?;
+            Some((with, own, other, possible))
         });
     // Agreement with every overlapping ordinary header implies agreement
     // between admitted named headers. Report the declaration that differs
     // from the ordinary result.
-    let at_representative = (representative, named_at_goal, ordinary_at_goal);
-    for (with, own, other) in std::iter::once(at_representative).chain(ordinary) {
+    let at_representative = (representative, named_at_goal, ordinary_at_goal, false);
+    for (with, own, other, possible) in std::iter::once(at_representative).chain(ordinary) {
         let assumptions = context
             .assumptions()
             .merge(db, own.instantiated_constraints(db))
@@ -1162,6 +1167,7 @@ pub(crate) fn named_output_mismatch<'db>(
                 return Some(NamedOutputMismatch::AssocType {
                     with,
                     ordinary: true,
+                    possible,
                     name,
                     expected,
                     given,
@@ -1173,7 +1179,11 @@ pub(crate) fn named_output_mismatch<'db>(
                 continue;
             };
             if !same_overlap_const(db, implementation.scope(), assumptions, name, own, other) {
-                return Some(NamedOutputMismatch::AssocConst { with, name });
+                return Some(NamedOutputMismatch::AssocConst {
+                    with,
+                    possible,
+                    name,
+                });
             }
         }
         for row in goal.def(db).rows(db) {
@@ -1194,6 +1204,7 @@ pub(crate) fn named_output_mismatch<'db>(
                 return Some(NamedOutputMismatch::Row {
                     with,
                     ordinary: true,
+                    possible,
                     name,
                 });
             }
@@ -1386,13 +1397,15 @@ fn canonical_overlap_const_instance<'db>(
 
 /// Two implementations instantiated at their overlap: each header with fresh
 /// variables, unified with the other. `None` when the headers cannot both
-/// match one goal.
+/// match one goal. The flag is set when the headers only may overlap, because
+/// an unresolved associated type or constant keeps them from being proved
+/// disjoint.
 fn at_overlap<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     own: ImplementorId<'db>,
     other: ImplementorId<'db>,
-) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>)> {
+) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>, bool)> {
     let mut table = PersistentUnificationTable::new(db);
     let own_fresh = table.instantiate_with_fresh_vars(own);
     let other_fresh = table.instantiate_with_fresh_vars(other);
@@ -1402,7 +1415,7 @@ fn at_overlap<'db>(
         .constraints(db)
         .merge(db, other_fresh.constraints(db))
         .extend_all_bounds(db);
-    match_header_args(
+    let possible = match_header_args_possible(
         db,
         &mut table,
         own_fresh.trait_(db),
@@ -1447,7 +1460,7 @@ fn at_overlap<'db>(
     };
     let own = resolved(own, own_fresh);
     let other = resolved(other, other_fresh);
-    Some((own, other))
+    Some((own, other, possible))
 }
 
 /// Represents the trait environment of an ingot, which maintain all trait

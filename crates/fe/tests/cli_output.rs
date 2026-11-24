@@ -6008,3 +6008,21 @@ fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
         );
     }
 }
+
+#[test]
+fn named_output_possible_overlap_is_refused() {
+    // The named header and the ordinary one overlap where `T::Out` is `u8`,
+    // and give different `Result` types there.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/named_output_possible_overlap.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+    assert!(output.contains("may overlap"), "{output}");
+
+    // The same shape with equal outputs is accepted and runs the named one.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_output_possible_overlap_agree.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}

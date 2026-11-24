@@ -2605,3 +2605,77 @@ const fn run() -> u256 {
         &[("run", 7)],
     );
 }
+
+#[test]
+fn open_constant_headers_may_overlap() {
+    let program = |first: &str, second: &str, owner: &str, element: &str| {
+        format!(
+            r#"
+trait HasN {{ const N: usize }}
+struct Z {{}}
+impl HasN for Z {{ const N: usize = 3 }}
+struct Wrap<T> {{}}
+struct Other<T> {{}}
+trait Tr<A> {{ fn n() -> u256 }}
+impl<T: HasN> Tr<[u8; T::N]> for Wrap<T> as P {{ fn n() -> u256 {{ 1 }} }}
+impl<T> Tr<[{element}; 3]> for {owner}<T> as Q {{ fn n() -> u256 {{ 2 }} }}
+fn f() {{ with ({first}, {second}) {{}} }}
+"#
+        )
+    };
+    for (first, second) in [("P", "Q"), ("Q", "P")] {
+        let codes = diagnostics(&program(first, second, "Wrap", "u8"));
+        assert!(
+            codes.contains(&"8-0160".to_string()),
+            "{first}, {second}: {codes:?}"
+        );
+    }
+    // A different element type or self type keeps the headers disjoint.
+    for (owner, element) in [("Wrap", "u16"), ("Other", "u8")] {
+        assert_eq!(
+            diagnostics(&program("P", "Q", owner, element)),
+            Vec::<String>::new(),
+            "{owner} with {element}"
+        );
+    }
+}
+
+#[test]
+fn possible_overlap_named_outputs_must_agree() {
+    let program = |named: &str, value: &str| {
+        format!(
+            r#"
+trait Source {{ type Out }}
+trait Extra {{}}
+struct Wrap<T> {{}}
+trait Output<A, B> {{
+    type Result
+    fn make() -> Self::Result
+}}
+impl<T> Output<u8, T> for Wrap<T> {{
+    type Result = u256
+    fn make() -> u256 {{ 1 }}
+}}
+impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> {{
+    type Result = {named}
+    fn make() -> {named} {{ {value} }}
+}}
+impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> as Named {{
+    type Result = {named}
+    fn make() -> {named} {{ {value} }}
+}}
+"#
+        )
+    };
+    // The second ordinary implementation gives `bool`, which the first does not.
+    let changed = program("bool", "true").replace(
+        "impl<T> Output<u8, T> for Wrap<T> {\n    type Result = u256\n    fn make() -> u256 { 1 }",
+        "impl<T> Output<u8, T> for Wrap<T> {\n    type Result = (u256, u256)\n    fn make() -> (u256, u256) { (1, 2) }",
+    );
+    assert_eq!(diagnostics(&changed), vec!["5-0005"]);
+    assert_eq!(
+        diagnostics(&program("u256", "2")),
+        Vec::<String>::new(),
+        "equal outputs agree"
+    );
+}

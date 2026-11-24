@@ -137,9 +137,10 @@ A named implementation of a trait with associated types, associated effect
 rows or associated constants requires a unique, source-declared ordinary
 implementation covering its header under its declared conditions. Named
 implementations must agree with other source-declared implementations, ordinary
-and named, on these outputs wherever their headers overlap. Output agreement
-does not depend on which implementation conditions happen to hold at an
-opening. Constants compare using the compiler's existing constant normalization;
+and named, on these outputs wherever their headers overlap, including where
+an unresolved associated type or constant leaves open whether they do. Output
+agreement does not depend on which implementation conditions happen to hold at
+an opening. Constants compare using the compiler's existing constant normalization;
 for example, `10` agrees with `5 + 5`, but not with `11`.
 
 ```fe

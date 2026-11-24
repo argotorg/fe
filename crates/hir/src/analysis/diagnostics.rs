@@ -6247,14 +6247,20 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             Self::NamedAssociatedConstMismatch {
                 primary,
                 with,
+                possible,
                 name,
             } => {
                 let mut diag = primary_diag(
                     Severity::Error,
                     "named implementation changes a type-readable associated constant",
                     format!(
-                        "`{}` must agree across implementations of this slot",
-                        name.data(db)
+                        "`{}` must agree across implementations of this slot{}",
+                        name.data(db),
+                        if *possible {
+                            " where their headers may overlap"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
@@ -6270,6 +6276,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             }
             Self::NamedAssociatedTypeMismatch {
                 primary,
+                possible,
                 name,
                 expected,
                 given,
@@ -6277,10 +6284,15 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 Severity::Error,
                 "named implementation changes an ordinary associated type",
                 format!(
-                    "`{}` must remain `{}`, but this implementation defines `{}`",
+                    "`{}` must remain `{}`, but this implementation defines `{}`{}",
                     name.data(db),
                     expected.pretty_print(db),
-                    given.pretty_print(db)
+                    given.pretty_print(db),
+                    if *possible {
+                        " (the headers may overlap)"
+                    } else {
+                        ""
+                    }
                 ),
                 primary.span().resolve(db),
                 error_code,
@@ -6288,6 +6300,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             Self::NamedAssociatedTypeDisagreement {
                 primary,
                 with,
+                possible,
                 name,
                 expected,
                 given,
@@ -6296,10 +6309,15 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                     Severity::Error,
                     "named implementations of one slot give different associated types",
                     format!(
-                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`",
+                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`{}",
                         name.data(db),
                         expected.pretty_print(db),
-                        given.pretty_print(db)
+                        given.pretty_print(db),
+                        if *possible {
+                            " (the headers may overlap)"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
@@ -6317,15 +6335,21 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 primary,
                 with,
                 ordinary,
+                possible,
                 name,
             } => {
                 let mut diag = primary_diag(
                     Severity::Error,
                     "named implementation changes an associated effect row or result space",
                     format!(
-                        "`{}` must be what the {} implementation of this slot gives",
+                        "`{}` must be what the {} implementation of this slot gives{}",
                         name.data(db),
-                        if *ordinary { "ordinary" } else { "other named" }
+                        if *ordinary { "ordinary" } else { "other named" },
+                        if *possible {
+                            " where their headers may overlap"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
