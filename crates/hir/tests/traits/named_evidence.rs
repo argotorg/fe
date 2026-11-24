@@ -4001,7 +4001,6 @@ const fn top_qualified() -> u256 {{ with (Loud) {{ qualified<W<Foo>>() }} }}
 }
 
 #[test]
-#[ignore = "fixed by the conditions cut"]
 fn concrete_component_condition() {
     values(
         &format!(
@@ -4112,7 +4111,6 @@ fn top() -> u256 {{ with (Loud) {{ caller<W<Foo>>() }} }}
 // A function item passed to a callable bound carries the proofs of its bounds
 // made where it is passed. Its `Foo: Show` is the component of `B`.
 #[test]
-#[ignore = "fixed by the conditions cut"]
 fn concrete_component_function_item_passed() {
     let source = format!(
         r#"{SHOWS}
@@ -4404,4 +4402,38 @@ const fn top_generic() -> u256 {{ relay_generic<Wrap<Item>>() }}
         ),
         &[("top", 100), ("top_generic", 100)],
     );
+}
+
+// A condition of a selected implementation that states `mut?` is read at the
+// mode of the use. The component of the received dictionary answers it at
+// `mut` as at `ref`: the write reaches the field the chosen implementation names.
+#[test]
+fn concrete_component_mut_condition() {
+    let program = |field: &str| {
+        format!(
+            r#"
+struct Item {{ a: u256, b: u256 }}
+struct Box<T> {{ v: T }}
+trait Pick {{ const fn slot(mut? self) -> mut? u256 }}
+impl Pick for Item {{ const fn slot(mut? self) -> mut? u256 {{ mut? self.a }} }}
+impl Pick for Item as Alt {{ const fn slot(mut? self) -> mut? u256 {{ mut? self.b }} }}
+trait Wrap {{ const fn wrap(mut? self) -> mut? u256 }}
+impl<T: mut? Pick> Wrap for Box<T> {{
+    const fn wrap(mut? self) -> mut? u256 {{ mut? self.v.slot() }}
+}}
+struct P<T> {{}}
+trait Tr {{ type A: Pick }}
+impl<T: Pick> Tr for P<T> {{ type A = T }}
+const fn caller<B: Tr<A = Item>>() -> u256 {{
+    var bx = Box<Item> {{ v: Item {{ a: 1, b: 2 }} }}
+    bx.wrap() = 9
+    bx.v.{field}
+}}
+const fn chosen() -> u256 {{ with (Alt) {{ caller<P<Item>>() }} }}
+const fn ordinary() -> u256 {{ caller<P<Item>>() }}
+"#
+        )
+    };
+    values(&program("b"), &[("chosen", 9), ("ordinary", 2)]);
+    values(&program("a"), &[("chosen", 1), ("ordinary", 9)]);
 }

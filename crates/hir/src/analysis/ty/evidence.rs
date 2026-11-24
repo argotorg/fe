@@ -405,10 +405,24 @@ impl<'db> DeferredProofBounds<'db> {
     ) -> Self {
         let slots = cx.assumptions().extend_all_bounds(db);
         let schema = BoundSchemaId::context(db, slots);
+        // The components of the slots' dictionaries follow the slots, in the
+        // table's order, so a goal a component answers reads the entry the
+        // projection of its path gives, after the instance binds them.
         let entries = EvidenceList::of(
             db,
             (0..slots.list(db).len())
                 .map(|index| Some(schema.assumption(db, index)))
+                .chain(concrete_components(db, slots).components().map(|member| {
+                    schema.slot(db, member.root as usize).map(|slot| {
+                        EvidenceId::new(
+                            db,
+                            Evidence::Assumption(BoundSlotRef {
+                                component: Some(ComponentPath::new(db, member.path.clone())),
+                                ..slot
+                            }),
+                        )
+                    })
+                }))
                 .collect(),
         );
         Self {
@@ -436,6 +450,12 @@ impl<'db> DeferredProofBounds<'db> {
         if let Some((index, application)) = source_cx.matching_choice(db, self.source_goal) {
             return Ok(SourceProof::Choice(index, application));
         }
+        // A closed goal that a component of the captured dictionaries answers.
+        if is_closed_goal(db, self.source_goal)
+            && let Some(proof) = self.component_proof(db, cx)
+        {
+            return Ok(SourceProof::Bound(proof));
+        }
         let exact = self.source_slots.list(db).contains(&self.source_goal);
         if !exact
             && let Selection::Unique(resolved) =
@@ -457,6 +477,22 @@ impl<'db> DeferredProofBounds<'db> {
             None if exact => Err(()),
             None => Ok(SourceProof::Open),
         }
+    }
+
+    /// The entry of the component of the captured slots that is the same
+    /// implementation as the source goal.
+    fn component_proof(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
+    ) -> Option<EvidenceId<'db>> {
+        let slots = self.source_slots;
+        let scope = cx.normalization_scope_for_trait_inst(db, self.source_goal);
+        let (position, _) = concrete_components(db, slots)
+            .components()
+            .enumerate()
+            .find(|(_, member)| same_identity(db, scope, member.goal, self.source_goal))?;
+        self.entries.get(db, slots.list(db).len() + position)
     }
 
     fn proof_for(
@@ -763,6 +799,7 @@ pub(crate) fn complete_deferred_evidence<'db>(
                         cx.with_assumptions(bounds.applied_slots),
                         *goal,
                         Some(*bounds),
+                        None,
                     )
                     .evidence(),
                     None => prove(db, cx, *goal),
@@ -1189,6 +1226,26 @@ pub(crate) fn prove_outcome<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> ProofOutcome<'db> {
+    let dict = solve_cx.assumptions().extend_all_bounds(db);
+    prove_outcome_in(
+        db,
+        solve_cx,
+        goal,
+        has_concrete_components(db, dict).then_some(dict),
+    )
+}
+
+/// As `prove_outcome`, for a goal that is a condition of an implementation
+/// selected in a body whose dictionaries hold components: `solve_cx` is the
+/// context selection uses, which a closed goal strips of its assumptions, and
+/// `dict` is the extended list of the body's slots, which still answers a goal
+/// that one of its concrete components is.
+fn prove_outcome_in<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+    dict: Option<PredicateListId<'db>>,
+) -> ProofOutcome<'db> {
     let goal = settle_function_item_providers(db, goal);
     // Inference variables belong to the checker's unification table. Header
     // matching uses its own table and must only receive settled proof inputs.
@@ -1207,7 +1264,7 @@ pub(crate) fn prove_outcome<'db>(
     if !solve_cx.has_matching_choice(db, goal)
         && let Some(slot) = slot_answering(
             db,
-            solve_cx.assumptions().extend_all_bounds(db),
+            dict.unwrap_or_else(|| solve_cx.assumptions().extend_all_bounds(db)),
             solve_cx.normalization_scope_for_trait_inst(db, goal),
             goal,
         )
@@ -1220,7 +1277,7 @@ pub(crate) fn prove_outcome<'db>(
     } else {
         solve_cx
     };
-    prove_in(db, solve_cx, goal, None)
+    prove_in(db, solve_cx, goal, None, dict)
 }
 
 /// Why a goal is refused.
@@ -1297,19 +1354,16 @@ pub(crate) fn declared_bound_evidence<'db>(
         subst,
         assumptions,
         |_, goal, direct| {
-            // Without a lexical choice, a closed goal that no slot and no
-            // component of the dictionaries answers is left to the instance.
-            // Only a use under a choice reports a refused slot.
+            // Without a lexical choice, a closed goal that no slot answers is
+            // left to the instance, unless the dictionaries hold components:
+            // a component answers the goal, or a condition of the
+            // implementation it selects, and only the body's own context
+            // reads them. Only a use under a choice reports a refused slot.
             if direct
                 && is_closed_goal(db, goal)
                 && solve_cx.choices().is_none()
-                && slot_answering(
-                    db,
-                    assumptions,
-                    solve_cx.normalization_scope_for_trait_inst(db, goal),
-                    goal,
-                )
-                .is_none()
+                && !has_concrete_components(db, assumptions)
+                && !assumptions.list(db).contains(&goal)
             {
                 return None;
             }
@@ -1911,6 +1965,7 @@ fn prove_in<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
     bounds: Option<DeferredProofBounds<'db>>,
+    dict: Option<PredicateListId<'db>>,
 ) -> ProofOutcome<'db> {
     if !proof_inputs_settled(collect_flags(db, goal)) {
         return ProofOutcome::Deferred;
@@ -1987,7 +2042,15 @@ fn prove_in<'db>(
             ProofOutcome::Unavailable
         };
     };
-    prove_selected(db, solve_cx, goal, bounds, source_conditions, resolved)
+    prove_selected(
+        db,
+        solve_cx,
+        goal,
+        bounds,
+        source_conditions,
+        resolved,
+        dict,
+    )
 }
 
 fn proof_inputs_settled(flags: TyFlags) -> bool {
@@ -2004,7 +2067,7 @@ fn prove_deferred_candidates<'db>(
     let mut proof = None;
     let mut deferred = false;
     for candidate in candidates {
-        match prove_selected(db, solve_cx, goal, Some(bounds), None, candidate) {
+        match prove_selected(db, solve_cx, goal, Some(bounds), None, candidate, None) {
             ProofOutcome::Proven(candidate) => {
                 if proof.replace(candidate).is_some() {
                     return ProofOutcome::Unavailable;
@@ -2027,6 +2090,7 @@ fn prove_selected<'db>(
     bounds: Option<DeferredProofBounds<'db>>,
     chosen_source_conditions: Option<PredicateListId<'db>>,
     resolved: ResolvedImplInstance<'db>,
+    dict: Option<PredicateListId<'db>>,
 ) -> ProofOutcome<'db> {
     if !proof_inputs_settled(collect_flags(db, resolved)) {
         return ProofOutcome::Deferred;
@@ -2093,6 +2157,7 @@ fn prove_selected<'db>(
                                             source_goal,
                                             ..bounds
                                         }),
+                                        dict,
                                     )
                                     .evidence();
                                 }
@@ -2102,7 +2167,7 @@ fn prove_selected<'db>(
                             } else {
                                 solve_cx
                             };
-                            prove(db, cx, cond)
+                            prove_outcome_in(db, cx, cond, dict).evidence()
                         })
                         .collect::<Option<_>>()?,
                 }
@@ -2846,6 +2911,7 @@ fn prove_cycle_initial<'db>(
     _solve_cx: TraitSolveCx<'db>,
     _goal: TraitInstId<'db>,
     _bounds: Option<DeferredProofBounds<'db>>,
+    _dict: Option<PredicateListId<'db>>,
 ) -> ProofOutcome<'db> {
     ProofOutcome::Unavailable
 }
@@ -2894,7 +2960,9 @@ mod schema_tests {
             );
             let bounds = DeferredProofBounds::capture(&db, goal, cx);
             assert_eq!(
-                prove_in(&db, cx, goal, Some(bounds)).evidence().is_some(),
+                prove_in(&db, cx, goal, Some(bounds), None)
+                    .evidence()
+                    .is_some(),
                 expected
             );
         }

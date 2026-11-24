@@ -1412,6 +1412,14 @@ impl<'db> ComponentTable<'db> {
         }
     }
 
+    /// The concrete members that a path reaches, in walk order: the ones a
+    /// reference can name.
+    pub(crate) fn components(&self) -> impl Iterator<Item = &Component<'db>> {
+        self.members
+            .iter()
+            .filter(|member| member.concrete && !member.path.is_empty())
+    }
+
     /// The concrete members of each trait, as positions in `members`.
     pub(crate) fn buckets(&self) -> impl Iterator<Item = &[u32]> {
         self.by_trait.iter().map(|(_, members)| members.as_slice())
