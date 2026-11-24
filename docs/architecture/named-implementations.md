@@ -97,6 +97,13 @@ and a body that stays deferred by its canonical semantic form. A written
 type, alias or anonymous constant whose formation reads a choice is refused
 (`type_choice_read`, `const_requirements`).
 
+The same comparison runs at a concrete goal that a proof answers through a
+named implementation at any depth (`concrete_goal_output_mismatch`,
+`trait_def`). `SemanticInstance::output_agreement_diagnostic` applies it to
+every proof a body's uses carry, and to its callees that receive a named
+implementation in a dictionary, before the body is lowered. The codec proofs
+that `entry_codec_callees` completes after admission are checked there.
+
 An overlap used to compare outputs binds the structural arguments first.
 It then uses the declared equalities from both implementations to normalize
 the projected arguments at that application.

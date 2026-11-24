@@ -111,6 +111,9 @@ fn admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBodyAdmission<'db> {
+    if let Some(diag) = instance.output_agreement_diagnostic(db) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = match instance.admitted_body(db) {
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
@@ -127,6 +130,9 @@ fn runtime_admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBodyAdmission<'db> {
+    if let Some(diag) = instance.output_agreement_diagnostic(db) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = match instance.admitted_body(db) {
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),
@@ -147,6 +153,9 @@ fn provisional_admitted_semantic_body_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> SemanticBodyAdmission<'db> {
+    if let Some(diag) = instance.output_agreement_diagnostic(db) {
+        return SemanticBodyAdmission::Rejected(diag);
+    }
     let raw = match instance.admitted_provisional_body(db) {
         Ok(body) => body,
         Err(error) => return admission_failure(db, instance, error),

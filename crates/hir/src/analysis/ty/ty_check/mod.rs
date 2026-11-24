@@ -4974,6 +4974,18 @@ impl<'db> SemanticExprLowering<'db> {
     }
 
     /// Every callable the expression records.
+    pub(super) fn callables(&self) -> impl Iterator<Item = &Callable<'db>> {
+        match self {
+            Self::SumShape { method, panic, .. } => [Some(method), panic.as_ref()],
+            Self::Call { callable }
+            | Self::CodeRegionIntrinsic { callable, .. }
+            | Self::ConstIntrinsic { callable, .. } => [Some(callable), None],
+        }
+        .into_iter()
+        .flatten()
+    }
+
+    /// Every callable the expression records.
     pub(super) fn callables_mut(&mut self) -> impl Iterator<Item = &mut Callable<'db>> {
         match self {
             Self::SumShape { method, panic, .. } => [Some(method), panic.as_mut()],
@@ -5293,7 +5305,8 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Replaces the assumptions the body's evidence names with `bound`'s
-    /// proofs of them: an instance's own.
+    /// proofs of them: an instance's own. `for_each_use_evidence` must walk
+    /// the same tables.
     pub(crate) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) {
         if bound.entries.entries(db).is_empty() {
             return;
@@ -5320,6 +5333,41 @@ impl<'db> TypedBody<'db> {
         for const_ref in tables.const_refs.values_mut().flatten() {
             if let ConstRef::TraitConst { evidence, .. } = const_ref {
                 evidence.bind(db, bound);
+            }
+        }
+    }
+
+    /// Visits every callable of the body that carries evidence, with the
+    /// expression it belongs to: the calls, indexing and loops. It walks the
+    /// tables `bind_evidence` writes, and the two must be kept in step.
+    pub(crate) fn for_each_callable(&self, mut visit: impl FnMut(ExprId, &Callable<'db>)) {
+        let tables = &self.tables;
+        for (expr, lowering) in tables.semantic_expr_lowering.iter() {
+            for callable in lowering.iter().flat_map(SemanticExprLowering::callables) {
+                visit(expr, callable);
+            }
+        }
+        for (&expr, calls) in &tables.place_entries {
+            for callable in std::iter::once(&calls.locate).chain(&calls.codec) {
+                visit(expr, callable);
+            }
+        }
+        for plan in tables.for_loop_plans.values().flatten() {
+            for call in &plan.calls {
+                visit(plan.base, &call.callable);
+            }
+        }
+    }
+
+    /// Visits the evidence of every use of the body, with the expression it
+    /// belongs to: the callables of `for_each_callable`, and the constants
+    /// the body reads. This walks the tables `bind_evidence` writes, and the
+    /// two must be kept in step.
+    pub(crate) fn for_each_use_evidence(&self, mut visit: impl FnMut(ExprId, &UseEvidence<'db>)) {
+        self.for_each_callable(|expr, callable| visit(expr, &callable.use_evidence()));
+        for (expr, const_ref) in self.tables.const_refs.iter() {
+            if let Some(ConstRef::TraitConst { evidence, .. }) = const_ref {
+                visit(expr, evidence);
             }
         }
     }

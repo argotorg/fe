@@ -6026,3 +6026,134 @@ fn named_output_possible_overlap_is_refused() {
     let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
     assert_eq!(exit, 0, "{output}");
 }
+
+const OUTPUT_AGREEMENT_A: &str = r#"pub trait Marker {}
+pub trait Foo {
+    type Out
+    fn make() -> Self::Out
+}
+impl<T: Marker> Foo for T {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+pub impl<T: Marker> Foo for T as NamedInA {
+    type Out = u8
+    fn make() -> u8 { 2 }
+}
+"#;
+
+fn write_output_agreement_ingots(root: &Path, b_source: &str) {
+    for (path, content) in [
+        ("a/fe.toml", "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n"),
+        ("a/src/lib.fe", OUTPUT_AGREEMENT_A),
+        (
+            "b/fe.toml",
+            "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n\n[dependencies]\na = { path = \"../a\" }\n",
+        ),
+        ("b/src/lib.fe", b_source),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+}
+
+#[test]
+fn named_output_agreement_across_ingots() {
+    // An ordinary implementation in a downstream ingot gives `S` other
+    // outputs than the upstream named implementation a use chooses.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = (u256, u256)
+    fn make() -> (u256, u256) { (1, 2) }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> (u256, u256) { with (NamedInA, FakeMarker) { call<S>() } }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["check", b.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("call<S>()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the use is accepted and runs the named implementation.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> u8 { with (NamedInA, FakeMarker) { call<S>() } }
+
+#[test]
+fn t() { assert(boom() == 2) }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", b.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_condition_cannot_change_ordinary_outputs() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // An ordinary blanket implementation whose condition holds only through a
+    // choice, beside an ordinary implementation with other outputs.
+    let path = fixtures.join("named_condition_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn gen"), "{output}");
+    assert!(output.contains("<T as Foo>::make()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // No ordinary implementation defines the outputs at the goal.
+    let path = fixtures.join("named_condition_no_ordinary_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains("no ordinary implementation defines its associated outputs"),
+        "{output}"
+    );
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // The same in a generic body whose instance picks the choice.
+    let path = fixtures.join("named_condition_generic_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn g"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the blanket implementation runs.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("agree.fe");
+    let agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe"))
+        .unwrap()
+        .replace(
+            "impl Foo for S {\n    type Out = u8\n    fn make() -> u8 { 2 }\n}",
+            "impl Foo for S {\n    type Out = u256\n    fn make() -> u256 { 2 }\n}",
+        )
+        .replace("fn boom() -> u8", "fn boom() -> u256")
+        .replace("assert(boom() == 2)", "assert(boom() == 1)");
+    fs::write(&path, agreeing).unwrap();
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}

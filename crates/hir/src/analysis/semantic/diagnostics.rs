@@ -19,7 +19,7 @@ use crate::{
         },
         ty::ty_check::{BodyOwner, SmirLoweringIssue},
     },
-    hir_def::{Body, ExprId, Partial},
+    hir_def::{Body, ExprId, ImplTrait, Partial},
     span::LazySpan,
 };
 
@@ -193,6 +193,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
             SemanticDiagnosticKind::UnencodablePanic => 18,
+            SemanticDiagnosticKind::ChoiceOutputDisagreement => 20,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -245,6 +246,9 @@ impl SemanticDiagnosticKind {
             Self::InstanceLimit => format!("instantiation limit exceeded in `{item}`"),
             Self::ConstDestructor => format!("compile-time destructor in `{item}`"),
             Self::UnencodablePanic => format!("panic value without revert data in `{item}`"),
+            Self::ChoiceOutputDisagreement => {
+                format!("implementation outputs disagree in `{item}`")
+            }
         }
     }
 }
@@ -266,6 +270,7 @@ impl<'db> SemanticDiagnosticSpan<'db> {
                 resolve_local_source_span(db, instance, local)
             }
             Self::HirExpr { body, expr } => expr.span(body).resolve(db),
+            Self::ImplTrait(implementation) => implementation.span().resolve(db),
         }
     }
 }
@@ -373,6 +378,8 @@ pub enum SemanticDiagnosticSpan<'db> {
         body: Body<'db>,
         expr: ExprId,
     },
+    /// The declaration of an implementation.
+    ImplTrait(ImplTrait<'db>),
 }
 
 #[salsa::interned]
@@ -433,4 +440,8 @@ pub enum SemanticDiagnosticKind {
     /// A call reaching `panic_with_value` with a type that has no Sol encoding,
     /// on a target where that encoding is the panic's revert data.
     UnencodablePanic,
+    /// A proof that answers a concrete goal through a chosen implementation,
+    /// or through one whose conditions a choice answers, whose associated
+    /// outputs are not those ordinary normalization gives the goal.
+    ChoiceOutputDisagreement,
 }

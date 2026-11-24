@@ -143,6 +143,12 @@ agreement does not depend on which implementation conditions happen to hold at
 an opening. Constants compare using the compiler's existing constant normalization;
 for example, `10` agrees with `5 + 5`, but not with `11`.
 
+Agreement is also checked where a choice answers a concrete goal, including an
+ordinary implementation whose conditions hold only through a choice and
+implementations in other ingots: the implementation that answers must give the
+outputs that ordinary normalization gives the goal, and a goal with outputs
+needs an ordinary implementation there. A use that breaks this is rejected.
+
 ```fe
 trait Size { const N: usize }
 impl Size for Item { const N: usize = 3 }

@@ -22,9 +22,9 @@ use super::{
     normalize::normalize_ty,
     subst::substitute_complete,
     trait_def::{
-        ImplementorId, ImplementorOrigin, ResolvedImplInstance, TraitInstId,
-        instantiate_selected_choice, instantiate_selected_impl, ordinary_trait_impl_candidates,
-        resolve_trait_impl_instance,
+        ImplementorId, ImplementorOrigin, NamedOutputMismatch, ResolvedImplInstance, TraitInstId,
+        concrete_goal_output_mismatch, instantiate_selected_choice, instantiate_selected_impl,
+        ordinary_trait_impl_candidates, resolve_trait_impl_instance,
     },
     trait_lower::lower_impl_trait,
     trait_resolution::{
@@ -734,6 +734,37 @@ fn evidence_has_named_impl<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId
         }
         Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => false,
     }
+}
+
+/// The first implementation in `proof`, applied at a concrete goal, whose
+/// outputs differ from those ordinary normalization gives that goal (see
+/// `concrete_goal_output_mismatch`), with the mismatch. A proof that selects
+/// no named implementation holds the implementations ordinary resolution
+/// finds, so it has none.
+#[salsa::tracked(returns(clone))]
+pub(crate) fn proof_output_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    proof: EvidenceId<'db>,
+) -> Option<(ResolvedImplInstance<'db>, NamedOutputMismatch<'db>)> {
+    if !proof.has_named_impl(db) {
+        return None;
+    }
+    let Evidence::Impl {
+        selected,
+        instantiated,
+        conds,
+    } = proof.data(db)
+    else {
+        return None;
+    };
+    let own = ResolvedImplInstance::new(*selected, *instantiated, instantiated.trait_inst(db));
+    if let Some(mismatch) = concrete_goal_output_mismatch(db, scope, own) {
+        return Some((own, mismatch));
+    }
+    conds
+        .iter()
+        .find_map(|&cond| proof_output_mismatch(db, scope, cond))
 }
 
 #[salsa::tracked(returns(copy))]
