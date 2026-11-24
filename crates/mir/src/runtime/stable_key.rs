@@ -550,9 +550,12 @@ fn lexical_scope_identity_in_mode<'db>(
 
 fn child_body_ordinal<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Option<usize> {
     let parent = scope.parent(db)?;
-    scope
-        .scope_graph(db)
-        .children(parent)
+    // A lazy function body roots its own graph. In the module graph it
+    // follows any anonymous bodies lowered as part of the signature.
+    let lazy_body = (scope.scope_graph(db).root == scope).then_some(scope);
+    parent
+        .children(db)
+        .chain(lazy_body)
         .filter(|child| matches!(child, ScopeId::Item(ItemKind::Body(_))))
         .position(|child| child == scope)
 }
@@ -911,11 +914,59 @@ mod tests {
     use hir::{
         analysis::{
             semantic::{SemanticInstance, root_semantic_instance_key},
-            ty::ty_check::BodyOwner,
+            ty::{ty_check::BodyOwner, ty_def::TyId},
         },
         hir_def::ItemKind,
-        test_db::HirAnalysisTestDb,
+        test_db::{HirAnalysisTestDb, find_func},
     };
+
+    #[test]
+    fn anonymous_constant_identity_agrees_across_body_lowering_modes() {
+        let traces = |item: &str| {
+            let mut db = HirAnalysisTestDb::default();
+            let source = format!(
+                "fn sample() -> [u256; {{ 1 + 2 }}] {{\n\
+                    {item}\n\
+                    let _first = [1 as u256; {{ 1 + 2 }}]\n\
+                    [2 as u256; {{ 2 + 1 }}]\n\
+                }}"
+            );
+            let file = db.new_stand_alone("stable_key_anonymous_constants.fe".into(), &source);
+            let (module, _) = db.top_mod(file);
+            let func = find_func(&db, module, "sample");
+            let body = func.body(&db).unwrap();
+            assert_eq!(body.scope_graph(&db).root == body.scope(), item.is_empty());
+            let bodies: Vec<_> = body
+                .scope_graph(&db)
+                .items_dfs()
+                .filter_map(|item| match item {
+                    ItemKind::Body(child)
+                        if child != body
+                            && child.scope().is_transitive_child_of(&db, body.scope()) =>
+                    {
+                        Some(child)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(bodies.len(), 2);
+            bodies
+                .into_iter()
+                .map(|body| {
+                    body_owner_trace_identity(
+                        &db,
+                        BodyOwner::AnonConstBody {
+                            body,
+                            expected: TyId::usize(&db),
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let lazy = traces("");
+        assert_ne!(lazy[0], lazy[1]);
+        assert_eq!(lazy, traces("struct Local {}"));
+    }
 
     fn assert_trace_has_no_fingerprint(trace: &str) {
         for segment in trace.split('$') {
