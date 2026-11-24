@@ -15,7 +15,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
         ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, diagnostics::PathResDiag,
-        resolve_path, resolve_path_with_minter, resolve_path_with_observer_and_minter,
+        resolve_path_with_minter, resolve_path_with_observer_and_minter,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
         trait_arg_path_diag,
     },
@@ -159,7 +159,17 @@ pub(crate) fn path_arg_diags<'db>(
                         return Vec::new();
                     };
                     let span = span.into_assoc_type_arg();
-                    let trait_ = match resolve_path(db, path, scope, assumptions, false) {
+                    // The trait is named as a trait position names it, which
+                    // looks past an associated type of an enclosing trait that
+                    // shadows its name.
+                    let trait_ = match resolve_trait_path_with_observer_and_minter(
+                        db,
+                        path,
+                        scope,
+                        assumptions,
+                        &mut |_, _| {},
+                        &LoweringContext::for_const_bodies(ConstBodyLowering::Eager),
+                    ) {
                         Ok(PathRes::Trait(inst)) => Some(inst.def(db)),
                         _ => None,
                     };

@@ -324,3 +324,36 @@ fn associated_bindings_of_a_predicate_are_order_independent() {
         predicate([(b, unit), (a, bool_ty)])
     );
 }
+
+#[test]
+fn shadowed_family_trait_keeps_its_associated_shape_checks() {
+    // Inside `Holder`, the associated type `Driver` shadows the trait `Driver`.
+    // A family names the trait as a bound does, so its shape binding without a
+    // mode is reported in both places.
+    let reports = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "shadowed_family_trait.fe".into(),
+            &format!(
+                "trait Driver {{\n    shape Step\n}}\nstruct Family<P: * -> Constraint> {{}}\n{body}"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.run_on_top_mod(module)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>()
+    };
+    let missing_mode = |messages: &[String]| {
+        messages
+            .iter()
+            .filter(|message| *message == "an associated shape needs a mode here")
+            .count()
+    };
+    let plain = reports("fn f(_ x: Family<trait Driver<Step = u256>>) {}\n");
+    let shadowed = reports(
+        "trait Holder {\n    type Driver: Driver\n    fn f(_ x: Family<trait Driver<Step = u256>>)\n}\n",
+    );
+    assert_eq!(missing_mode(&plain), 1, "{plain:?}");
+    assert_eq!(missing_mode(&shadowed), 1, "{shadowed:?}");
+}
