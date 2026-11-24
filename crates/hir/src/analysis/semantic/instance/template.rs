@@ -88,6 +88,11 @@ impl<'db> GenericSubst<'db> {
             BodyOwner::AnonConstBody { body, .. } if !args.is_empty() => {
                 lexical_const_body_owner(db, body)
             }
+            // The default's text is the trait's, but the value is the
+            // implementation's: its parameters are the generic ones.
+            BodyOwner::InheritedConst { implementation, .. } if !args.is_empty() => {
+                Some(implementation.into())
+            }
             _ => None,
         };
         if let Some(generic_owner) = generic_owner {

@@ -942,10 +942,15 @@ impl<'db> TyVisitor<'db> for NamedTraits<'db> {
                 ..
             } => match (const_def, template_ty.or(*ty)) {
                 (Some(const_def), _) => self.read_body(BodyOwner::Const(*const_def)),
-                (None, Some(expected)) => self.read_body(BodyOwner::AnonConstBody {
-                    body: *body,
-                    expected,
-                }),
+                (None, Some(expected)) => self.read_body(
+                    const_ty
+                        .data(self.db)
+                        .unevaluated_owner(expected)
+                        .unwrap_or(BodyOwner::AnonConstBody {
+                            body: *body,
+                            expected,
+                        }),
+                ),
                 // The type of the expression is not known here, so inference
                 // cannot be asked; the body is read as written.
                 (None, None) => self.read_written(*body),

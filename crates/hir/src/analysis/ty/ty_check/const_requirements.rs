@@ -1473,7 +1473,7 @@ fn anon_const_position_check<'db>(
                 })
                 .cloned(),
         );
-    } else if let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed) {
+    } else if let ConstBodyFailure::AtPosition(_) = const_body_failure(db, owner, diags, typed) {
         check.diags = diags.clone();
     }
     check

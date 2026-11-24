@@ -1444,7 +1444,7 @@ pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
     let instance = match const_ref {
         ConstRef::Const(const_) => semantic_const_key_for_const(db, const_),
         ConstRef::TraitConst { use_, .. } => {
-            let (body, ty, subst, evidence) = const_ref.trait_const_body(db)?;
+            let (owner, _, subst, evidence) = const_ref.trait_const_body(db)?;
             let evidence = if collect_flags(db, evidence).contains(TyFlags::HAS_PROJECTION) {
                 normalize_ty(db, evidence, use_.origin_scope(), use_.assumptions())
             } else {
@@ -1453,7 +1453,7 @@ pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
             let subst = GenericSubst::complete(db, subst);
             Some(SemanticInstanceKey::with_evidence_policy(
                 db,
-                BodyOwner::AnonConstBody { body, expected: ty },
+                owner,
                 subst,
                 EffectProviderSubst::empty(db),
                 ImplEnv::new(

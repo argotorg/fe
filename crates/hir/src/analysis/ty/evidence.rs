@@ -43,7 +43,7 @@ use super::{
 };
 use crate::{
     analysis::{HirAnalysisDb, semantic::GenericSubst},
-    hir_def::{Body, CallableDef, Func, ItemKind, scope_graph::ScopeId},
+    hir_def::{Body, CallableDef, Func, ImplTrait, ItemKind, scope_graph::ScopeId},
 };
 
 /// Declaration that owns the numbering of a proof basis. A method adapter's
@@ -57,6 +57,9 @@ pub enum BoundOwner<'db> {
         mode: Option<BorrowKind>,
     },
     ConstBasis(Body<'db>),
+    /// The default of a trait's constant, checked for the implementation that
+    /// inherits it.
+    InheritedConstBasis(ImplTrait<'db>, Body<'db>),
     ImplementationConditions(ImplementorId<'db>),
     Context,
 }
@@ -99,6 +102,11 @@ impl<'db> BoundOwner<'db> {
                 || PredicateListId::empty_list(db),
                 |adaptation| adaptation.source.slots(db),
             ),
+            Self::InheritedConstBasis(implementation, body) => {
+                inherited_const_evidence(db, implementation, body)
+                    .source
+                    .slots(db)
+            }
             Self::ImplementationConditions(selected) => {
                 selected.constraints(db).extend_all_bounds(db)
             }
@@ -2491,6 +2499,31 @@ pub(crate) fn impl_const_evidence<'db>(
     ))
 }
 
+/// How the default `body` of a trait's constant, checked for the
+/// implementation `implementation` that inherits it, proves the assumptions it
+/// is checked under (the implementation's own bounds) from the
+/// implementation's conditions: as for a value the implementation writes.
+#[salsa::tracked]
+pub(crate) fn inherited_const_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    body: Body<'db>,
+) -> BoundAdaptation<'db> {
+    let declared =
+        super::trait_resolution::constraint::collect_constraints(db, implementation.into())
+            .instantiate_identity();
+    basis_proofs(
+        db,
+        implementation.scope(),
+        BoundOwner::InheritedConstBasis(implementation, body),
+        collect_candidate_constraints(db, implementation.into())
+            .instantiate_identity()
+            .extend_all_bounds(db),
+        declared,
+        declared.extend_all_bounds(db),
+    )
+}
+
 /// Proofs, in `scope`, of the entries of `signature`, a body's assumptions,
 /// that the body declares (`declared`), from the assumptions `basis`, each
 /// naming the assumptions it uses by their positions in `basis` itself. A
@@ -2625,6 +2658,26 @@ pub(crate) fn impl_const_bound_evidence<'db>(
     };
     let supplied = expanded_condition_evidence(db, selection, assumptions);
     instantiate_proofs(db, proofs, subst, supplied)
+}
+
+/// The proofs that the default `body` of a trait's constant, checked for
+/// `implementation`, receives when its `selection` proof selects that
+/// implementation: from the selection's proofs of its conditions.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn inherited_const_bound_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+    body: Body<'db>,
+    selection: EvidenceId<'db>,
+    subst: GenericSubst<'db>,
+    assumptions: PredicateListId<'db>,
+) -> EvidenceList<'db> {
+    let proofs = inherited_const_evidence(db, implementation, body);
+    let Some(subst) = subst.mapping(db).as_ref() else {
+        return EvidenceList::none(db);
+    };
+    let supplied = expanded_condition_evidence(db, selection, assumptions);
+    instantiate_proofs(db, &proofs, subst, supplied)
 }
 
 /// The evidence an instance runs with, and the first goal whose dictionaries

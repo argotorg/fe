@@ -146,6 +146,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                         ty,
                         template_ty,
                         const_def,
+                        inherited_by,
                         capture,
                         policy,
                     } => {
@@ -156,6 +157,7 @@ impl<'db> TyFoldable<'db> for TyId<'db> {
                             ty,
                             template_ty: *template_ty,
                             const_def: *const_def,
+                            inherited_by: *inherited_by,
                             capture,
                             policy: *policy,
                         }

@@ -525,6 +525,7 @@ fn collect_semantic_access_with_blocked<'db>(
     }
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
+    let mut seen_inherited_sites = FxHashSet::default();
     let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
     for (mut pending, judge) in [(trusted, trust.as_ref()), (untrusted, None)] {
@@ -601,7 +602,25 @@ fn collect_semantic_access_with_blocked<'db>(
                 }
                 SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
                 SemanticAccessCheckResult::Err(diag) => {
-                    if seen_diags.insert(*diag) {
+                    // The body of a default is walked once for each
+                    // implementation that inherits it, and its text is one:
+                    // an error in it is reported once, where the trait wrote
+                    // it.
+                    let inherited_site = {
+                        let diag = diag.diag(db);
+                        match &diag.primary.span {
+                            SemanticDiagnosticSpan::Origin {
+                                owner: owner @ BodyOwner::InheritedConst { .. },
+                                origin,
+                            } => owner.body(db).map(|body| {
+                                (diag.kind, body, *origin, diag.primary.message.clone())
+                            }),
+                            _ => None,
+                        }
+                    };
+                    if seen_diags.insert(*diag)
+                        && inherited_site.is_none_or(|site| seen_inherited_sites.insert(site))
+                    {
                         diags.push(Box::new(*diag));
                     }
                 }
