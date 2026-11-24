@@ -56,7 +56,6 @@ use crate::{
         },
     },
     hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
-    span::HirOrigin,
 };
 
 use self::{
@@ -434,8 +433,8 @@ fn collect_semantic_access_with_blocked<'db>(
         // `#[abi]`) are the compiler's: the type checker reports no body
         // errors for them either, and a read of one is followed as before.
         let written = match item {
-            ItemKind::ImplTrait(impl_trait) => matches!(impl_trait.origin(db), HirOrigin::Raw(_)),
-            ItemKind::Trait(trait_) => matches!(trait_.origin(db), HirOrigin::Raw(_)),
+            ItemKind::ImplTrait(impl_trait) => impl_trait.origin(db).generated().is_none(),
+            ItemKind::Trait(trait_) => trait_.origin(db).generated().is_none(),
             _ => true,
         };
         if written {

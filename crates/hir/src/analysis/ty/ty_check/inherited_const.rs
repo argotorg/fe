@@ -25,7 +25,6 @@ use crate::{
     },
     core::semantic::TraitAssocConstView,
     hir_def::{Body, IdentId, ImplTrait, Trait, scope_graph::ScopeId},
-    span::HirOrigin,
 };
 
 use super::{BodyOwner, check_anon_const_body, diag_depends_on_param_instantiation, infer_body};
@@ -138,7 +137,7 @@ pub(crate) fn inherited_const_bodies<'db>(
     let trait_ = implementor.trait_def(db);
     // A trait that the compiler generates is not checked where it is written
     // (`check_trait_const_default_bodies`), nor for its implementations.
-    if !matches!(trait_.origin(db), HirOrigin::Raw(_)) {
+    if trait_.origin(db).generated().is_some() {
         return Vec::new();
     }
     trait_

@@ -436,19 +436,20 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let generated_origin = match impl_trait.origin(db) {
-        crate::span::HirOrigin::Raw(_) => None,
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
-            Some("generated `#[event]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
-            Some("generated `#[error]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::AbiStruct(_)) => {
-            Some("generated `#[abi]` implementation")
-        }
-        _ => return Vec::new(),
+    // A written implementation is checked and reports. A generated one is
+    // checked for the constants it holds but reports no body errors, except
+    // that a `msg` item is not checked at all.
+    let origin = impl_trait.origin(db);
+    let generated_origin = match origin.generated() {
+        None if matches!(origin, crate::span::HirOrigin::Raw(_)) => None,
+        Some(generated) => match generated.const_diag_label() {
+            Some(label) => Some((generated, label)),
+            None => return Vec::new(),
+        },
+        None => return Vec::new(),
     };
+    let reports_body_errors =
+        generated_origin.is_none_or(|(generated, _)| generated.reports_body_errors());
     let policy = if generated_origin.is_some() {
         ConstUsePolicy::RequireValue
     } else {
@@ -469,11 +470,11 @@ pub fn check_impl_trait_const_bodies<'db>(
             continue;
         }
         let body_diags = &check_anon_const_body(db, body, expected_ty).0;
-        if generated_origin.is_none() {
+        if reports_body_errors {
             diags.extend(body_diags.iter().cloned());
         }
         if body_diags.is_empty() {
-            let context = generated_origin.map(|origin| ConstDiagContext {
+            let context = generated_origin.map(|(_, origin)| ConstDiagContext {
                 const_name: name.map_or_else(
                     || "<associated const>".to_string(),
                     |name| name.data(db).clone(),
@@ -498,7 +499,7 @@ pub fn check_impl_trait_const_bodies<'db>(
     }
     // The defaults the implementation inherits whose declared type mentions a
     // parameter of the trait are checked as the implementation's own.
-    if generated_origin.is_none() {
+    if reports_body_errors {
         diags.extend(inherited_const::check_inherited_defaults(db, impl_trait));
     }
     diags
@@ -513,7 +514,7 @@ pub fn check_trait_const_default_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    if !matches!(trait_.origin(db), crate::span::HirOrigin::Raw(_)) {
+    if trait_.origin(db).generated().is_some() {
         return Vec::new();
     }
 
