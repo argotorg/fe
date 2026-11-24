@@ -2775,31 +2775,46 @@ impl<'db> TyChecker<'db> {
                     _ => None,
                 })
             {
-                // An operand that names a value and a derive provider type has
-                // two meanings, and none is chosen silently. A value alone
-                // is checked as any other operand.
-                if let Some(value_span) = self.with_operand_value(*path, binding.value) {
-                    if let Some((_, provider_span)) = self.with_operand_provider_type(*path) {
-                        ambiguous_opening = true;
-                        let name = path
-                            .ident(self.db)
-                            .to_opt()
-                            .expect("provider path identifier");
-                        let mut candidates = Vec::new();
-                        candidates.extend(provider_span.map(|span| (span, false)));
-                        candidates.extend(value_span.map(|span| (span, false)));
-                        self.push_diag(PathResDiag::Ambiguous(
-                            binding.value.span(self.body()).into(),
-                            name,
-                            candidates,
-                        ));
-                        self.env.named_impl_operands.insert(binding.value);
-                        self.env
-                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                // A local binding shadows a type of the same name, as it does
+                // in any expression. Otherwise an operand that names a value
+                // item and a derive provider type has two meanings, and none
+                // is chosen silently. A value alone is checked as any other
+                // operand.
+                let shadowed = path.is_bare_ident(self.db)
+                    && self
+                        .env
+                        .visible_binding(
+                            path.local_ident(self.db)
+                                .unwrap_or_else(|| path.ident(self.db).unwrap()),
+                        )
+                        .is_some();
+                if !shadowed {
+                    if let Some(value_span) = self.with_operand_value(*path, binding.value) {
+                        if let Some((_, provider_span)) = self.with_operand_provider_type(*path) {
+                            ambiguous_opening = true;
+                            let name = path
+                                .ident(self.db)
+                                .to_opt()
+                                .expect("provider path identifier");
+                            let mut candidates = Vec::new();
+                            candidates.extend(provider_span.map(|span| (span, false)));
+                            candidates.extend(value_span.map(|span| (span, false)));
+                            self.push_diag(PathResDiag::Ambiguous(
+                                binding.value.span(self.body()).into(),
+                                name,
+                                candidates,
+                            ));
+                            self.env.named_impl_operands.insert(binding.value);
+                            self.env.type_expr(
+                                binding.value,
+                                ExprProp::new(TyId::unit(self.db), false),
+                            );
+                            continue;
+                        }
+                    } else if self.try_open_derive_provider(binding.value, provider_ty, alias_scope)
+                    {
                         continue;
                     }
-                } else if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
-                    continue;
                 }
             }
             let value_prop = self.check_expr_unknown(binding.value);
