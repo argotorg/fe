@@ -782,16 +782,15 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                         self.assumptions,
                     ));
                 }
-                if self.diags.len() == before
-                    && let Some(diag) = err.into_diag(
-                        self.db,
-                        path,
-                        span.clone().path(),
-                        crate::analysis::name_resolution::ExpectedPathKind::Trait,
-                    )
-                {
-                    self.diags.push(diag);
+                if self.diags.len() > before {
+                    return;
                 }
+                self.diags.extend(err.into_diag(
+                    self.db,
+                    path,
+                    span.clone().path(),
+                    crate::analysis::name_resolution::ExpectedPathKind::Trait,
+                ));
             }
         }
 
