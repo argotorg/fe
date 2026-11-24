@@ -122,8 +122,9 @@ premise can change when the element becomes packed.
   choice.
 - Compiler-generated ordinary implementations do not serve as output
   representatives and are not compared.
-- There are no evidence values, `prove` expressions or constraint kinds in
-  the language.
+- There are no evidence values or `prove` expressions in the language. The
+  `Constraint` kind and trait families (`trait Name`) describe goals as type
+  arguments and have no values.
 - Inside a block, a generic function whose own bound fixes a bounded associated
   type to a concrete type (`C: Collection<Cursor = usize>`) is refused, because
   that bound's implied slot is not kept in the function's assumptions.
