@@ -2677,7 +2677,7 @@ pub(crate) fn inherited_const_bound_evidence<'db>(
         return EvidenceList::none(db);
     };
     let supplied = expanded_condition_evidence(db, selection, assumptions);
-    instantiate_proofs(db, &proofs, subst, supplied)
+    instantiate_proofs(db, proofs, subst, supplied)
 }
 
 /// The evidence an instance runs with, and the first goal whose dictionaries
