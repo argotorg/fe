@@ -49,8 +49,8 @@ use crate::analysis::{
             lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
         trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
-            is_goal_satisfiable,
+            ChoiceEntry, GoalSatisfiability, PredicateListId, TraitSolveCx,
+            constraint::collect_constraints, is_goal_satisfiable,
         },
         ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
         ty_error::emit_invalid_ty_error,
@@ -2633,6 +2633,37 @@ fn select_assoc_const_candidate<'db>(
                 }
                 cx.rollback_to(snapshot);
             }
+        }
+        // An implementation opened by `with`, or the named implementation whose
+        // body this is, is a candidate as it is for a method: whatever the
+        // receiver is, its parameters are fresh variables here, and a receiver
+        // that does not unify with its self type rejects it. It asserts nothing:
+        // the goal it answers is solved under the choices where the use is
+        // checked. A named implementation is not among the ordinary
+        // implementations of its type, so without this `Self::SIDES` written in
+        // the implementation, by its provider or by hand, names nothing.
+        let chosen = choices
+            .map(|choices| choices.items(db).clone())
+            .unwrap_or_default();
+        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
+            let implementation = choice.implementation();
+            let declared = implementation.trait_(db);
+            if declared.def(db).const_(db, name).is_none() {
+                continue;
+            }
+            let snapshot = cx.snapshot();
+            let inst = cx.instantiate_with_fresh_vars(declared);
+            if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
+                let inst = cx.try_extract::<TraitInstId<'db>>(inst).unwrap_or_else(|| {
+                    unresolved.insert(identity(declared));
+                    declared
+                });
+                matches.entry(identity(inst)).or_insert(inst);
+                if is_enclosing_impl(db, implementation, scope) {
+                    enclosing.insert(identity(inst));
+                }
+            }
+            cx.rollback_to(snapshot);
         }
     });
     // Like method selection: a sole applicable candidate is used, but among
