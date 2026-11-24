@@ -7160,7 +7160,6 @@ fn test_cli_report_records_a_generation_error() {
     }
 }
 
-
 #[test]
 fn named_output_possible_overlap_is_refused() {
     // The named header and the ordinary one overlap where `T::Out` is `u8`,

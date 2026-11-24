@@ -3353,8 +3353,8 @@ fn plain<B: Tr>() {}
             trait_named(&db, module, "Tr"),
             vec![adt_ty(&db, module, "W", &[foo])],
         );
-        let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
+        let dictionary = prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal)
+            .expect("W<Foo> implements Tr");
         let expected = dictionary.conds(&db)[0];
         let supplied = BoundEvidence {
             schema,
@@ -3444,8 +3444,8 @@ fn plain<B: Tr>() {}
         );
         // Under an implementation's conditions it is found as well.
         let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
-        let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
+        let dictionary = prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal)
+            .expect("W<Foo> implements Tr");
         assert!(dictionary.unresolved_component(&db).is_none());
         let Evidence::Impl {
             selected,
@@ -3484,8 +3484,8 @@ fn plain<B: Tr>() {}
         let foo = adt_ty(&db, module, "Foo", &[]);
         let w_foo = adt_ty(&db, module, "W", &[foo]);
         let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
-        let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
+        let dictionary = prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal)
+            .expect("W<Foo> implements Tr");
         assert_eq!(
             implied_bound_evidence(
                 &db,
@@ -3555,9 +3555,11 @@ fn ctx<B: Tr<A = Foo>, C: Tr<A = Foo>>() {}
         let w_foo = adt_ty(&db, module, "W", &[foo]);
         let goal =
             TraitInstId::new_simple(&db, tx, vec![adt_ty(&db, module, "Pair", &[w_foo, w_foo])]);
-        let Selection::Unique(resolved) =
-            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal)
-        else {
+        let Selection::Unique(resolved) = resolve_trait_impl_instance(
+            &db,
+            TraitSolveCx::new(&db, module.scope(), Tier::All),
+            goal,
+        ) else {
             panic!("Pair<W<Foo>, W<Foo>> implements Tx")
         };
         let (_, aliased) = source_conditions(&db, resolved.selected(), bounds)
