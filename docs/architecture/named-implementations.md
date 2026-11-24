@@ -106,6 +106,9 @@ instance fails internally, the first disagreement in the instances it calls
 (only those within the instance limits) is reported instead
 (`callee_output_disagreement`). The codec proofs that `entry_codec_callees`
 completes after admission are checked there.
+The other two places that complete a deferred codec proof after admission
+(`semantic_callee_key_with_assumptions` and `instance_evidence`) do not
+compare outputs. No program that reaches a disagreement there was found.
 
 An overlap used to compare outputs binds the structural arguments first.
 It then uses the declared equalities from both implementations to normalize
