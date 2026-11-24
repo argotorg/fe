@@ -172,3 +172,34 @@ fn a_generated_constant_without_items_is_lawful() {
     .expect("a constant with no items changes no authored meaning");
     assert_eq!(value_of(&output, "run"), "7");
 }
+
+/// A written implementation of a deciding trait is decided by its whole
+/// header: a const expression in its type names `Size` as a bound would, so a
+/// generated `impl Size for Key` could change which types the written
+/// `impl Copy` covers, and is refused.
+#[test]
+fn a_trait_named_in_the_type_of_a_deciding_implementation_is_decided() {
+    let cause = refused_for(
+        &header_naming_size("impl Copy for Boxed<{ <Key as Size>::N }> {}"),
+        "could change whether a value is copied or moved for `Boxed",
+    );
+    assert!(cause.contains("names `Size`"), "{cause}");
+}
+
+/// The same program whose written `Copy` implementation names no trait in its
+/// header is lawful.
+#[test]
+fn a_generated_implementation_named_by_no_deciding_header_is_lawful() {
+    prepare(&header_naming_size("impl Copy for Boxed<1> {}"))
+        .unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+fn header_naming_size(copy_impl: &str) -> String {
+    format!(
+        "{HEAD}use core::marker::Copy\n\
+         trait Size {{ const N: usize }}\nstruct Key {{}}\nstruct Boxed<const N: usize> {{}}\n{copy_impl}\n\
+         struct Gen {{}}\n\
+         impl DeriveInherent for Gen {{ const fn derive(_ record: Record) -> Code<Item> {{ quote {{ pub fn carrier() -> u256 {{ impl Size for Key {{ const N: usize = 1 }}\n 0 }} }} }} }}\n\
+         struct G {{}}\nimpl G with (Gen)\n"
+    )
+}
