@@ -20,22 +20,14 @@ pub(super) fn lower_derive_slot<'db, O: Clone + Into<DesugaredOrigin>>(
     let db = builder.db();
     let provider = builder.path_from_root(builder.roots().std, &["derive", provider_name]);
     let top_mod = builder.top_mod();
-    let url = top_mod.file(db).url(db);
-    let plan = db
-        .generation_inputs()
-        .requests(db)
-        .iter()
-        .find(|plan| {
-            Some(&plan.target_file) == url.as_ref()
-                && plan.request_impl == Some(range)
-                && plan.request_slot == Some(slot)
-        })
-        .cloned();
+    let plan = common::generation::file_generation(db, top_mod.file(db))
+        .as_ref()
+        .and_then(|generation| generation.slots.get(&(range, slot)));
     let idx = builder.ctxt().next_impl_trait_idx();
     builder.with_item_scope(TrackedItemVariant::ImplTrait(idx), |builder, id| {
         let mut types = Vec::new();
         let mut consts = authored_consts(builder.ctxt());
-        if let Some(plan) = &plan {
+        if let Some(plan) = plan {
             super::item::lower_trait_derive_members(
                 builder.ctxt(),
                 &plan.code,

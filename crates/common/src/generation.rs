@@ -300,6 +300,7 @@ mod tests {
             target_file,
             scoped_impl: None,
             request_impl,
+            request_slot: None,
             code: FrozenCode::Empty { kind },
         };
         let first_members = plan(first_url, Some(range), FrozenCodeKind::Item);
@@ -326,5 +327,34 @@ mod tests {
             file_generation(&db, first).as_ref().unwrap().members[&range],
             first_members
         );
+    }
+
+    #[test]
+    fn a_short_form_is_filed_by_slot_and_is_not_a_written_header() {
+        let mut db = TestDatabase::default();
+        let url = Url::parse("file:///short.fe").unwrap();
+        let file = db.workspace().touch(&mut db, url.clone(), None);
+        let range = TextRange::empty(1.into());
+        let plan = |request_slot, kind| FrozenGenerationRequest {
+            target_file: url.clone(),
+            scoped_impl: None,
+            request_impl: Some(range),
+            request_slot,
+            code: FrozenCode::Empty { kind },
+        };
+        let header = plan(None, FrozenCodeKind::Item);
+        let first = plan(Some(0), FrozenCodeKind::Expr);
+        let second = plan(Some(1), FrozenCodeKind::Pat);
+        db.generation_inputs().set_requests(&mut db).to(vec![
+            first.clone(),
+            second.clone(),
+            header.clone(),
+        ]);
+
+        let output = file_generation(&db, file).as_ref().unwrap();
+        assert_eq!(output.members[&range], header);
+        assert_eq!(output.slots[&(range, 0)], first);
+        assert_eq!(output.slots[&(range, 1)], second);
+        assert!(output.items.is_empty());
     }
 }
