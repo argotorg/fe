@@ -1351,6 +1351,14 @@ fn run_lsif(path: &Utf8PathBuf, output: Option<&Utf8PathBuf>) {
     if had_init_diagnostics {
         eprintln!("Warning: ingot had initialization diagnostics");
     }
+    // Index the program that generation produces, so that the members a header
+    // publishes and their references are covered, as in `fe check`.
+    if let Err(error) =
+        driver::generation::prepare_ingots_in_place(&mut db, std::slice::from_ref(&ingot_url))
+    {
+        eprintln!("Error preparing generated code: {error}");
+        std::process::exit(1);
+    }
 
     let result = if let Some(output_path) = output {
         let file = match std::fs::File::create(output_path.as_std_path()) {

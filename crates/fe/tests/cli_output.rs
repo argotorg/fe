@@ -5256,6 +5256,53 @@ fn broken( {\n",
 }
 
 #[test]
+fn test_cli_lsif_indexes_the_members_a_header_generates() {
+    // `S::arity` is written in a quotation and published into `S` by the
+    // header. The index covers it and the call that names it, as `fe check`
+    // and `fe doc` do.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("app");
+    fs::create_dir_all(root.join("src")).expect("src dir");
+    fs::write(
+        root.join("fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("fe.toml");
+    let source = "use core::derive::DeriveInherent\n\
+use core::meta::{Code, Item, Record, field_count}\n\
+struct Count {}\n\
+impl DeriveInherent for Count {\n\
+    const fn derive(_ record: Record) -> Code<Item> {\n\
+        let n = field_count(record)\n\
+        quote { pub fn arity() -> usize { ${n} } }\n\
+    }\n\
+}\n\
+pub struct S { a: u256 }\n\
+impl S with (Count)\n\
+pub fn user() -> usize { S::arity() }\n";
+    fs::write(root.join("src/lib.fe"), source).expect("lib.fe");
+    let root = root.to_str().expect("UTF-8 path");
+
+    let lsif = temp.path().join("out.lsif");
+    let (output, exit_code) = run_fe_main(&["lsif", root, "-o", lsif.to_str().expect("UTF-8")]);
+    assert_eq!(exit_code, 0, "fe lsif failed:\n{output}");
+    let lsif = fs::read_to_string(&lsif).expect("read lsif");
+    // The name in the quotation and the call `S::arity()` are ranges of the
+    // index: each ends five characters after the name starts.
+    let ends = |line: usize| {
+        let text = source.lines().nth(line).expect("line of the source");
+        let start = text.find("arity").expect("arity on the line");
+        format!(r#""end":{{"character":{},"line":{line}}}"#, start + 5)
+    };
+    for range in [ends(6), ends(11)] {
+        assert!(
+            lsif.contains(&range),
+            "the LSIF index has no range {range}:\n{lsif}"
+        );
+    }
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_does_not_trust_a_package_by_its_name() {
     // The package `evil` calls itself `std` in its fe.toml. A package is
     // trusted as `core` or `std` only if it is the embedded library or is
