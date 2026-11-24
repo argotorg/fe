@@ -1744,16 +1744,19 @@ impl<'db> ItemCode<'db> {
                                 // A type written without the record's parameters keeps its
                                 // written form; one over them is the instantiated type.
                                 if field.ty(db) != authored_field.ty(db) {
-                                    return Ok(FrozenHoleValue::Type(freeze_ty(
+                                    let ty = crate::analysis::ty::normalize::normalize_ty(
                                         db,
-                                        crate::analysis::ty::normalize::normalize_ty(
-                                            db,
-                                            field.ty(db),
-                                            record.scope(),
-                                            crate::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
-                                        ),
-                                    )?));
+                                        field.ty(db),
+                                        record.scope(),
+                                        crate::analysis::ty::trait_resolution::PredicateListId::empty_list(db),
+                                    );
+                                    budget.charge_type(db, ty)?;
+                                    return Ok(FrozenHoleValue::Type(freeze_ty(db, ty)?));
                                 }
+                                // The reference to the field is spelled out as the
+                                // field's type where it is lowered, so it costs the
+                                // nodes of that type.
+                                budget.charge_type(db, field.ty(db))?;
                                 Ok(FrozenHoleValue::FieldType(field.freeze(db)?))
                             }
                         },
@@ -1904,12 +1907,15 @@ impl<'db> ItemCode<'db> {
                 // A type hole spends the quotation's node limit on the type it
                 // splices, whichever form of reflected type carries it.
                 if slot == HoleSlot::Type
-                    && let SemConstValue::Meta {
-                        value: MetaValue::TypeRef { ty, .. } | MetaValue::FieldTypes { ty, .. },
-                        ..
-                    } = value.value(db)
+                    && let SemConstValue::Meta { value: meta, .. } = value.value(db)
                 {
-                    budget.charge_type(db, *ty)?;
+                    match meta {
+                        MetaValue::TypeRef { ty, .. } | MetaValue::FieldTypes { ty, .. } => {
+                            budget.charge_type(db, *ty)?;
+                        }
+                        MetaValue::FieldType(field) => budget.charge_type(db, field.ty(db))?,
+                        MetaValue::Record(_) | MetaValue::Field(_) => {}
+                    }
                 }
             }
 
