@@ -33,7 +33,7 @@ use super::{
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
     fold::{TyFoldable, TyFolder},
-    generic_defaults::DefaultApplication,
+    generic_defaults::{DefaultApplication, default_mentions_self},
     normalize::normalize_ty,
     shape::Shape,
     trait_def::{AssocBinding, TraitInstId, TraitRefId},
@@ -1382,6 +1382,40 @@ pub struct TraitFamilyId<'db> {
     pub mode: ModeMarker,
 }
 
+/// The arguments a family of `def` stores for the `written` ones: the written
+/// arguments followed by every trailing default that does not depend on the
+/// subject, stopping at the first default that does. `trait Fixed` and
+/// `trait Fixed<4>` for `trait Fixed<const N: usize = 4>` are the same family,
+/// while `trait Hash` for `trait Hash<Rhs = Self>` is not `trait Hash<u8>`: its
+/// last argument is the subject, which is known only when the family applies.
+fn canonical_family_arguments<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: Trait<'db>,
+    written: Vec<TyId<'db>>,
+) -> Vec<TyId<'db>> {
+    let owner = GenericParamOwner::Trait(def);
+    let count = def.params(db).len().saturating_sub(1);
+    let stop = (written.len()..count)
+        .find(|&idx| *default_mentions_self(db, owner, idx))
+        .unwrap_or(count);
+    if written.len() >= stop {
+        return written;
+    }
+    let lowering = LoweringContext::deferred();
+    match def.param_set(db).complete_args(
+        db,
+        &[def.self_param(db)],
+        &written,
+        DefaultApplication::StructuralMetadata(&lowering),
+    ) {
+        Ok(mut completed) if completed.len() >= written.len() => {
+            completed.truncate(stop.max(written.len()));
+            completed
+        }
+        _ => written,
+    }
+}
+
 impl<'db> TraitFamilyId<'db> {
     pub fn new(
         db: &'db dyn HirAnalysisDb,
@@ -1391,6 +1425,7 @@ impl<'db> TraitFamilyId<'db> {
         mode: ModeMarker,
     ) -> Self {
         associated.sort_by(|lhs, _, rhs, _| lhs.canonical_cmp(db, rhs));
+        let arguments = canonical_family_arguments(db, def, arguments);
         Self::intern(db, def, arguments, associated, mode)
     }
 

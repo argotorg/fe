@@ -187,3 +187,36 @@ fn impls_over_families_with_projections_overlap_in_coherence() {
         0
     );
 }
+
+#[test]
+fn omitted_and_written_defaults_name_one_family() {
+    let header = "trait Fixed<const N: usize = 4> {}\ntrait Kind<T = u8> {}\ntrait Hash<Rhs = Self> {}\nstruct ForField<P: * -> Constraint, A> {}\n";
+    let diagnostics = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_defaults.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes.run_on_module(&db, module).len()
+    };
+
+    // A default that does not mention the subject is part of the family.
+    assert_eq!(
+        diagnostics(
+            "fn c1(_ x: ForField<trait Fixed, u8>) -> ForField<trait Fixed<4>, u8> { x }\n\
+             fn c2(_ x: ForField<trait Kind, u8>) -> ForField<trait Kind<u8>, u8> { x }\n"
+        ),
+        0
+    );
+    // A different written argument, or a default that names the subject, is a
+    // different family.
+    assert_ne!(
+        diagnostics(
+            "fn c3(_ x: ForField<trait Fixed<5>, u8>) -> ForField<trait Fixed, u8> { x }\n"
+        ),
+        0
+    );
+    assert_ne!(
+        diagnostics("fn c4(_ x: ForField<trait Hash<u8>, u8>) -> ForField<trait Hash, u8> { x }\n"),
+        0
+    );
+}
