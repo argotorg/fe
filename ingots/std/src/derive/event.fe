@@ -48,6 +48,9 @@ impl Derive<trait Event> for StructEvent {
             i += 1
         }
 
+        // `emit` has room for three topics after the event signature.
+        assert!(topics <= 3)
+
         let emit = if topics == 0 {
             quote(log, data) { log.log1(data: data, topic0: Self::TOPIC0) }
         } else if topics == 1 {
