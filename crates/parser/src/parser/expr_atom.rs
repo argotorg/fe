@@ -642,6 +642,8 @@ struct PatternShape {
     /// Generic argument lists open after a path: an `_` inside one is an
     /// inferred argument, not a wildcard.
     generic_depth: usize,
+    /// Qualified paths `<T as Trait>` that are open: their `as` is not a cast.
+    qualified_depth: usize,
 }
 
 impl PatternShape {
@@ -678,8 +680,20 @@ impl PatternShape {
             }
             Ident | SelfTypeKw | SelfKw | SuperKw | IngotKw => (true, true),
             Gt => {
-                self.generic_depth = self.generic_depth.saturating_sub(1);
+                if self.generic_depth > 0 {
+                    self.generic_depth -= 1;
+                } else {
+                    self.qualified_depth = self.qualified_depth.saturating_sub(1);
+                }
                 (true, true)
+            }
+            // The `as` of a qualified path `<T as Trait>` names a trait; elsewhere
+            // it is a cast.
+            AsKw => {
+                if self.qualified_depth == 0 {
+                    self.expression_only = true;
+                }
+                (false, false)
             }
             Int | String | Byte | TrueKw | FalseKw | RParen | RBrace => (true, false),
             Underscore => {
@@ -725,6 +739,9 @@ impl PatternShape {
             Lt => {
                 if self.after_path {
                     self.generic_depth += 1;
+                } else if !self.after_operand {
+                    // A `<` where an operand starts opens a qualified path.
+                    self.qualified_depth += 1;
                 }
                 (false, false)
             }

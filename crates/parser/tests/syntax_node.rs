@@ -301,3 +301,27 @@ mod wasm {
         assert_eq!(normalize_newlines(fixture.content()), cst.to_string());
     }
 }
+
+#[test]
+fn a_qualified_path_in_a_quoted_pattern_keeps_it_a_pattern() {
+    // A quote body that holds pattern-only syntax is a pattern, for every path
+    // form that patterns accept. The `as` of a qualified path is not a cast.
+    for (body, is_pattern) in [
+        ("Self::Out { x: _ }", true),
+        ("<S as T>::Out { x: _ }", true),
+        ("<S<u8> as T>::Out { x: _ }", true),
+        ("<S as T>::f()", false),
+        ("x as u8", false),
+    ] {
+        let source = format!("const C: Code<Pat> = quote {{ {body} }}\n");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(
+            root.descendants()
+                .any(|node| node.kind() == SyntaxKind::QuotePat),
+            is_pattern,
+            "{source}"
+        );
+    }
+}
