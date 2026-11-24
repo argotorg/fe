@@ -424,3 +424,43 @@ pub const fn run() -> u256 { <S as Tr>::v() + S::INHERENT_C + S::inherent_v() }
         );
     }
 }
+
+/// A trait written with its default omitted and the same trait with the
+/// default written are one family. A provider registered for one spelling
+/// serves a header that uses the other, for a constant default as for a type
+/// default.
+#[test]
+fn written_const_default_selects_the_omitted_family() {
+    let source = |param: &str, written: &str| {
+        format!(
+            "use core::derive::Derive
+use core::meta::{{Record, Code, Item}}
+trait Sized2<{param}> {{ const fn n() -> usize }}
+struct P {{}}
+impl Derive<trait Sized2> for P {{
+    const fn derive(_ record: Record) -> Code<Item> {{
+        quote {{ const fn n() -> usize {{ 2 }} }}
+    }}
+}}
+struct S {{}}
+impl {written} for S with (P)
+const fn run() -> usize {{ S::n() }}
+"
+        )
+    };
+    for (param, written) in [
+        // The written constant default against the omitted provider family.
+        ("const N: usize = 2", "Sized2<2>"),
+        // Controls: the omitted spelling and a type default.
+        ("const N: usize = 2", "Sized2"),
+        ("T = u8", "Sized2<u8>"),
+        // The default and the written argument are different expressions of
+        // one value.
+        ("const N: usize = { 1 + 1 }", "Sized2<2>"),
+        ("const N: usize = 2", "Sized2<{ 1 + 1 }>"),
+    ] {
+        let output = prepare(&source(param, written))
+            .unwrap_or_else(|error| panic!("`{written}` with `{param}` does not prepare: {error}"));
+        assert_eq!(value_of(&output, "run"), "2", "`{written}` with `{param}`");
+    }
+}
