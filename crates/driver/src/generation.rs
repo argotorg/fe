@@ -1216,8 +1216,8 @@ fn run_scoped_request<'db>(
     Ok(output)
 }
 
-fn evaluate_scoped_request<'db>(
-    db: &'db DriverDataBase,
+fn evaluate_scoped_request(
+    db: &DriverDataBase,
     demand: ScopedDeriveDemand,
 ) -> Result<FrozenGenerationRequest, GenerationError> {
     run_scoped_request(db, check_scoped_request(db, demand)?)

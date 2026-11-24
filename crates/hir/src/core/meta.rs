@@ -2560,15 +2560,6 @@ fn impl_trait_syntax<'db>(
     Some((module, ptr.to_node(root.syntax())))
 }
 
-/// An explicit derive header `impl Tr for T with (P)`. Every member under it
-/// is generated from the provider's quotations, not authored here.
-pub(crate) fn is_derive_request(
-    db: &dyn HirAnalysisDb,
-    request: crate::hir_def::ImplTrait<'_>,
-) -> bool {
-    impl_trait_syntax(db, request).is_some_and(|(_, ast)| ast.derive_provider().is_some())
-}
-
 /// A header-only request is not an implementation before its output plan exists:
 /// preparation has not given it members yet, and a program is not accepted
 /// until it has. The header is still a fact. In the input view of a
