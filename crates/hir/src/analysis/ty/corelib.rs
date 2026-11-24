@@ -228,7 +228,7 @@ define_runtime_intrinsics! {
     FromLittleEndian => (Core, ["num", "from_le"]),
     SwapBytes => (Core, ["num", "swap_bytes"]),
     BlackBox => (Core, ["hint", "black_box"]),
-    Sha256Compress => (Std, ["native", "sha256_compress"]),
+    Sha256Compress => (Core, ["hash", "sha256_compress"]),
     Byte => (Std, ["evm", "ops", "byte"]),
     SignExtend => (Std, ["evm", "ops", "signextend"]),
     Address => (Std, ["evm", "ops", "address"]),

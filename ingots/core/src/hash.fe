@@ -8,7 +8,9 @@
 //! target. On the EVM, `std::evm::crypto::sha256` costs far less gas. On
 //! targets without a hash instruction, the compiler also calls `keccak_raw`,
 //! `keccak_packed` and `keccak_words` for `std::evm::ops::keccak256`,
-//! `core::intrinsic::__keccak256` and `core::intrinsic::__keccak_words`.
+//! `core::intrinsic::__keccak256` and `core::intrinsic::__keccak_words`, and
+//! on the EVM, which has no SHA-256 compression, `sha256_compress_routine`
+//! for `sha256_compress`.
 
 use super::assert
 use super::bytes::PackedBytes
@@ -236,6 +238,16 @@ pub trait HashInput {
 impl<const N: usize> HashInput for [u8; N] {
     fn input_len(self) -> usize { N }
     fn input_byte(self, _ index: usize) -> u8 { self[index] }
+    fn input_lane(self, _ index: usize) -> u64 {
+        (self[index] as u64)
+            | (self[index + 1] as u64) << 8
+            | (self[index + 2] as u64) << 16
+            | (self[index + 3] as u64) << 24
+            | (self[index + 4] as u64) << 32
+            | (self[index + 5] as u64) << 40
+            | (self[index + 6] as u64) << 48
+            | (self[index + 7] as u64) << 56
+    }
 }
 
 impl HashInput for MemBuffer {
@@ -434,20 +446,30 @@ impl Sha256 {
     fn advance(mut self, _ bytes: usize) {
         self.position += bytes
         if self.position == 64 {
-            sha256_compress(mut self.state, self.words)
+            self.state = sha256_compress(self.state, self.words)
             self.position = 0
         }
     }
 
+    // The 0x80 byte, zeros, and the bit count in the last two words, a block
+    // more when they do not fit after the message.
     fn pad(mut self) {
         let bits = self.len << 3
-        self.absorb_byte(0x80)
-        while self.position != 56 {
-            self.absorb_byte(0)
+        let word = self.position / 4
+        // The word's `position % 4` message bytes, then 0x80 and zeros. Its
+        // bits above those bytes, from the previous block, shift out.
+        let shift: u32 = ((3 - self.position % 4) * 8).downcast_truncate()
+        self.words[word] = ((self.words[word] << 8) | 0x80) << shift
+        for index in (word + 1)..16 {
+            self.words[index] = 0
+        }
+        if word >= 14 {
+            self.state = sha256_compress(self.state, self.words)
+            self.words = [0; 16]
         }
         self.words[14] = (bits >> 32).downcast_truncate()
         self.words[15] = bits.downcast_truncate()
-        sha256_compress(mut self.state, self.words)
+        self.state = sha256_compress(self.state, self.words)
     }
 
     /// Apply SHA-256 padding and return the digest as a big-endian word,
@@ -503,11 +525,21 @@ fn rotate_right(_ value: u32, by: u32) -> u32 {
     (value >> by) | (value << (32 - by))
 }
 
-fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
+extern {
+    /// One SHA-256 compression: `state` after the 64 rounds of the sixteen
+    /// message words of `block`, which the caller has read big-endian. Native
+    /// code uses the SHA instructions where the host has them (the x86-64 SHA
+    /// extensions); elsewhere it runs in software.
+    pub fn sha256_compress(_ state: [u32; 8], _ block: [u32; 16]) -> [u32; 8]
+}
+
+// `sha256_compress` in Fe, which the compiler calls for it on the EVM.
+fn sha256_compress_routine(_ initial: [u32; 8], _ block: [u32; 16]) -> [u32; 8] {
+    var state = initial
     var w: [u32; 64] = [0; 64]
     var t: usize = 0
     while t < 16 {
-        w[t] = words[t]
+        w[t] = block[t]
         t += 1
     }
     while t < 64 {
@@ -551,6 +583,7 @@ fn sha256_compress(_ state: mut [u32; 8], _ words: [u32; 16]) {
     state[5] = state[5].wrapping_add(f)
     state[6] = state[6].wrapping_add(g)
     state[7] = state[7].wrapping_add(h)
+    state
 }
 
 // Keccak-f[1600], indexed x + 5*y. Constants and round definition:

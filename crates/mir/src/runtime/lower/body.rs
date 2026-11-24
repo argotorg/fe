@@ -3054,9 +3054,7 @@ impl<'db> RmirEmitter<'db> {
             return None;
         };
 
-        if self.target() != Target::Evm
-            && let Some(ret) = self.lower_keccak_routine_call(bb, semantic, func, args)
-        {
+        if let Some(ret) = self.lower_hash_routine_call(bb, semantic, func, args) {
             return Some(ret);
         }
         if let Some(ret) = self.lower_intrinsic_keccak256_call(bb, semantic, func, args) {
@@ -4189,18 +4187,23 @@ impl<'db> RmirEmitter<'db> {
     }
 
     /// Calls the `core::hash` routine for a hash intrinsic, on a target with
-    /// no hash instruction. The routine takes the intrinsic's parameters.
-    fn lower_keccak_routine_call(
+    /// no instruction for it: Keccak-256 outside the EVM, and the SHA-256
+    /// compression on it. The routine takes the intrinsic's parameters.
+    fn lower_hash_routine_call(
         &mut self,
         bb: RBlockId,
         semantic: SemanticInstance<'db>,
         func: Func<'db>,
         args: &[NOperand],
     ) -> Option<RLocalId> {
-        let path = match runtime_builtin_func_kind(self.db, func)? {
-            RuntimeBuiltinFuncKind::Keccak256 => "core::hash::keccak_raw",
-            RuntimeBuiltinFuncKind::IntrinsicKeccak256 => "core::hash::keccak_packed",
-            RuntimeBuiltinFuncKind::IntrinsicKeccakWords => "core::hash::keccak_words",
+        let path = match (
+            runtime_builtin_func_kind(self.db, func)?,
+            self.target() == Target::Evm,
+        ) {
+            (RuntimeBuiltinFuncKind::Keccak256, false) => "core::hash::keccak_raw",
+            (RuntimeBuiltinFuncKind::IntrinsicKeccak256, false) => "core::hash::keccak_packed",
+            (RuntimeBuiltinFuncKind::IntrinsicKeccakWords, false) => "core::hash::keccak_words",
+            (RuntimeBuiltinFuncKind::Sha256Compress, true) => "core::hash::sha256_compress_routine",
             _ => return None,
         };
         let routine = resolve_lib_func_path(self.db, func.scope(), path)
@@ -4291,7 +4294,7 @@ impl<'db> RmirEmitter<'db> {
         Some(ret)
     }
 
-    /// Compresses `std::native::sha256_compress`'s state array by its block
+    /// Compresses `core::hash::sha256_compress`'s state array by its block
     /// array, each read as an array value.
     fn lower_sha256_compress(
         &mut self,
