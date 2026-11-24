@@ -2228,11 +2228,12 @@ impl<'db> TyChecker<'db> {
             self.env.type_expr(value, ExprProp::invalid(self.db));
             return true;
         };
+        let viewer = self.viewer(MemberSite::Expr(value));
         for scope in [alias_scope, provider_ty.as_scope(self.db)]
             .into_iter()
             .flatten()
         {
-            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+            if !viewer.sees(self.db, scope) {
                 self.env
                     .generation_demands
                     .refuse(key, "scoped derive provider path is not visible");
@@ -2260,7 +2261,7 @@ impl<'db> TyChecker<'db> {
                 self.db,
                 *path,
                 value.span(body).into_path_expr().path(),
-                self.env.scope(),
+                self.viewer(MemberSite::Expr(value)),
                 self.env.assumptions(),
                 false,
             );
@@ -2491,7 +2492,7 @@ impl<'db> TyChecker<'db> {
                         }
                         // A derive provider type of the same name is a third
                         // meaning of the operand, and none is chosen silently.
-                        if let Some((_, provider_span)) = self.with_operand_provider_type(path) {
+                        if let Some((_, provider_span)) = self.with_operand_provider_type(path, binding.value) {
                             ambiguous_opening = true;
                             if implementation
                                 .scope()
@@ -2824,7 +2825,7 @@ impl<'db> TyChecker<'db> {
                         .is_some();
                 if !shadowed {
                     if let Some(value_span) = self.with_operand_value(*path, binding.value) {
-                        if let Some((_, provider_span)) = self.with_operand_provider_type(*path) {
+                        if let Some((_, provider_span)) = self.with_operand_provider_type(*path, binding.value) {
                             ambiguous_opening = true;
                             let name = path
                                 .ident(self.db)
@@ -3204,6 +3205,7 @@ impl<'db> TyChecker<'db> {
     fn with_operand_provider_type(
         &self,
         path: PathId<'db>,
+        operand: ExprId,
     ) -> Option<(TyId<'db>, Option<DynLazySpan<'db>>)> {
         use super::super::trait_resolution::generation::provider_hints;
         let (ty, alias_scope) = match crate::analysis::name_resolution::resolve_path(
@@ -3221,8 +3223,9 @@ impl<'db> TyChecker<'db> {
             }
             _ => return None,
         };
+        let viewer = self.viewer(MemberSite::Expr(operand));
         for scope in [alias_scope, ty.as_scope(self.db)].into_iter().flatten() {
-            if !is_scope_visible_from(self.db, scope, self.env.scope()) {
+            if !viewer.sees(self.db, scope) {
                 return None;
             }
         }

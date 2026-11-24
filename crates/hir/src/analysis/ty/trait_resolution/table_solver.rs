@@ -227,6 +227,7 @@ pub(super) fn match_choice_entry<'db>(
             super::ChosenImpl {
                 template: implementation,
                 applied: Some(implementation),
+                inherited: None,
             }
         }
     };

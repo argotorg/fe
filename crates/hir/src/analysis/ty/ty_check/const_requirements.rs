@@ -2109,7 +2109,7 @@ pub(crate) fn type_admission_instances<'db>(
             if visited_declarations.insert(declaration) {
                 for entry in written_types(db, declaration.into()) {
                     match entry {
-                        WrittenEntry::ConstBodies(bodies) => {
+                        WrittenEntry::ConstBodies(bodies, _) => {
                             for &(body, expected) in bodies {
                                 let owner = BodyOwner::AnonConstBody { body, expected };
                                 if diags_allow_evaluation(db, &infer_body(db, owner).0) {
@@ -3058,7 +3058,7 @@ fn type_choice_read<'db>(
                         self.db,
                         typed.call_effect_args(expr).unwrap_or(&[]).to_vec(),
                     );
-                    let requests = callable.record_bound_evidence(self.db, cx, &effect_args);
+                    let (_, requests) = callable.record_bound_evidence(self.db, cx, &effect_args);
                     let unavailable = if requests.is_empty() {
                         ProofOutcome::Unavailable
                     } else {

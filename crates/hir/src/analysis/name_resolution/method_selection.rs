@@ -435,7 +435,6 @@ fn assemble_method_candidates<'db>(
     assumptions: PredicateListId<'db>,
     choices: Option<ChosenImpls<'db>>,
     filter: TraitFilter<'db>,
-    choices: Option<ChosenImpls<'db>>,
     tier: Tier,
 ) -> AssembledCandidates<'db> {
     CandidateAssembler {
@@ -446,7 +445,6 @@ fn assemble_method_candidates<'db>(
         assumptions,
         choices,
         filter,
-        choices,
         tier,
         candidates: AssembledCandidates::default(),
     }
@@ -466,7 +464,6 @@ struct CandidateAssembler<'db, 'a> {
     /// The implementations opened by the enclosing `with` blocks.
     choices: Option<ChosenImpls<'db>>,
     filter: TraitFilter<'db>,
-    choices: Option<ChosenImpls<'db>>,
     /// Whether the methods and implementations generated in the ingot of
     /// `scope` are candidates.
     tier: Tier,
