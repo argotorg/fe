@@ -924,7 +924,11 @@ fn provisional_call_site<'db>(
     }
 }
 
-#[salsa::tracked(returns(copy))]
+/// The first use in the body of `instance` whose outputs disagree with
+/// ordinary normalization. It is also asked from `callee_output_disagreement`,
+/// where an instance can reach itself again through a constant that is
+/// computed under its own choice, so a cycle starts from no disagreement.
+#[salsa::tracked(returns(copy), cycle_initial = output_agreement_cycle_initial)]
 fn output_agreement_diagnostic_query<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -958,6 +962,14 @@ fn output_agreement_diagnostic_query<'db>(
             });
     });
     found
+}
+
+fn output_agreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
 }
 
 /// The first disagreement with ordinary normalization (see
