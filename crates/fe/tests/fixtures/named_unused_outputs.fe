@@ -1,0 +1,19 @@
+// A goal whose trait has an output, answered only through a choice that
+// answers an ordinary blanket implementation's condition. The output is never
+// used. Expected: 16-0020, because no ordinary implementation defines the
+// goal's outputs.
+trait Marker {}
+trait Foo {
+    type Out
+    fn n() -> u256
+}
+impl<T: Marker> Foo for T {
+    type Out = u8
+    fn n() -> u256 { 1 }
+}
+struct S {}
+impl Marker for S as FakeMarker {}
+fn gen<T: Marker>() -> u256 { <T as Foo>::n() }
+fn boom() -> u256 { with (FakeMarker) { gen<S>() } }
+#[test]
+fn t() { assert(boom() == 1) }

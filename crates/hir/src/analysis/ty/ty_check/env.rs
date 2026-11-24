@@ -43,7 +43,7 @@ use crate::analysis::{
             model::EffectRequirementDecl,
             rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
-        evidence::{BoundOwner, BoundSchemaId, prove_outcome},
+        evidence::{BoundOwner, BoundSchemaId, Refusal, RefusedGoal, prove_outcome},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
@@ -230,6 +230,8 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::StateIndex`).
     place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
+    /// The expressions of type `!` typed as their context's type.
+    never_coercions: FxHashSet<ExprId>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -401,6 +403,7 @@ impl<'db> TyCheckEnv<'db> {
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             place_entries: FxHashMap::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -897,19 +900,11 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    /// The facts in scope: the bounds the owner declares. An implementation
+    /// opened by `with` is a candidate for goals, in `solve_cx`, and asserts
+    /// nothing here.
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        let Some(choices) = self.choices else {
-            return self.assumptions;
-        };
-        let mut assumptions = self.assumptions.list(self.db).clone();
-        assumptions.extend(
-            choices
-                .items(self.db)
-                .iter()
-                .filter_map(|entry| entry.implementation())
-                .map(|choice| choice.implementation().trait_inst(self.db)),
-        );
-        PredicateListId::new(self.db, assumptions).extend_all_bounds(self.db)
+        self.assumptions
     }
 
     pub(super) fn solve_cx(&self) -> TraitSolveCx<'db> {
@@ -1057,6 +1052,16 @@ impl<'db> TyCheckEnv<'db> {
         callable: super::PlaceEntryCalls<'db>,
     ) {
         self.place_entries.insert(expr, callable);
+    }
+
+    /// Records whether `expr`, of type `!`, is typed as its context's type;
+    /// a new check of `expr` starts without.
+    pub(super) fn set_never_coercion(&mut self, expr: ExprId, coerced: bool) {
+        if coerced {
+            self.never_coercions.insert(expr);
+        } else {
+            self.never_coercions.remove(&expr);
+        }
     }
 
     pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
@@ -1774,6 +1779,31 @@ impl<'db> TyCheckEnv<'db> {
                 ),
             )
         };
+        let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
+        {
+            Refusal::Differs { a, .. } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
+                        span,
+                        primary_goal: refused.goal,
+                        root: a,
+                    },
+                ),
+            ),
+            Refusal::ConditionsDiffer { a, b } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ConditionsDiffer {
+                        span,
+                        primary_goal: refused.goal,
+                        a,
+                        b,
+                    },
+                ),
+            ),
+            Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
+                failed_proof(refused.goal, span)
+            }
+        };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx =
@@ -1842,11 +1872,11 @@ impl<'db> TyCheckEnv<'db> {
             };
             for callable in lowering.callables_mut() {
                 callable.record_evidence(self.db, solve_cx);
-                callable.record_bound_evidence(self.db, solve_cx, &effect_args);
+                let refused = callable.record_bound_evidence(self.db, solve_cx, &effect_args);
                 callable.qualify_evidence(self.db, self.owner);
                 if solve_cx.choices().is_some() {
-                    for goal in callable.missing_bound_evidence(self.db) {
-                        diags.push(failed_proof(goal, expr.span(self.body).into()));
+                    for refused in refused {
+                        diags.push(refused_proof(refused, expr.span(self.body).into()));
                     }
                 }
                 if solve_cx.choices().is_some()
@@ -1873,12 +1903,13 @@ impl<'db> TyCheckEnv<'db> {
                     .iter()
                     .map(|arg| arg.clone().fold_with(self.db, &mut prober))
                     .collect();
-                call.callable
+                let refused = call
+                    .callable
                     .record_bound_evidence(self.db, solve_cx, &effect_args);
                 call.callable.qualify_evidence(self.db, self.owner);
                 if solve_cx.choices().is_some() {
-                    for goal in call.callable.missing_bound_evidence(self.db) {
-                        diags.push(failed_proof(goal, stmt.span(self.body).into()));
+                    for refused in refused {
+                        diags.push(refused_proof(refused, stmt.span(self.body).into()));
                     }
                 }
                 if solve_cx.choices().is_some()
@@ -1905,9 +1936,8 @@ impl<'db> TyCheckEnv<'db> {
                     diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
                 }
             }
-            let missing = const_ref.record_bound_evidence(self.db, choices);
-            for goal in missing {
-                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            for refused in const_ref.record_bound_evidence(self.db, choices) {
+                diags.push(refused_proof(refused, expr.span(self.body).into()));
             }
             const_ref.qualify_evidence(self.db, self.owner);
         }
@@ -1948,12 +1978,14 @@ impl<'db> TyCheckEnv<'db> {
             result_ty,
             signature,
             bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
+            refused_bound: None,
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
             yield_shapes: self.yield_shapes,
             place_entries: self.place_entries,
             unsafe_ops: Vec::new(),
+            never_coercions: self.never_coercions,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,

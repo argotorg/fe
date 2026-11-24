@@ -214,15 +214,15 @@ func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@la
         call %impl_AbiFrame__store_word v1 v2 v11;
         v15.@layout_3 = call %slice v3 0.i256 v6;
         call %encode__gf13e v0 v15;
-        v17.@layout_3 = call %tail v3 v6;
-        return v17;
+        v16.@layout_3 = call %tail v3 v6;
+        return v16;
 
     block3:
         jump block4;
 
     block4:
-        v21.@layout_3 = call %slice v1 v2 32.i256;
-        call %encode__gf13e v0 v21;
+        v20.@layout_3 = call %slice v1 v2 32.i256;
+        call %encode__gf13e v0 v20;
         return v3;
 }
 

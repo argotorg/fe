@@ -1,0 +1,14 @@
+// `Left::Out` requires `Right<Back = Self>` and `Right::Back` requires
+// `Left<Out = Self>`, so the two bounds of `call` imply each other. `R`'s
+// `Right` implementation is fixed where `impl Left for L` is declared, so the
+// block choice `Alt` cannot replace it.
+struct L {}
+struct R {}
+trait Left { type Out: Right<Back = Self> }
+trait Right { type Back: Left<Out = Self> }
+impl Left for L { type Out = R }
+impl Right for R { type Back = L }
+impl Right for R as Alt { type Back = L }
+fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 { 1 }
+fn plain() -> u256 { call<L, R>() }
+fn chosen() -> u256 { with (Alt) { call<L, R>() } }

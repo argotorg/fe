@@ -978,6 +978,9 @@ impl super::Parse for ImplScope {
                     Some(SyntaxKind::Colon2 | SyntaxKind::Lt)
                 ) {
                     parser.error("an impl name is a single identifier");
+                    // The rest of the written path is part of this report,
+                    // not an unexpected token of the impl header.
+                    let _ = parser.parse(ImplNameTailScope::default());
                 }
             } else {
                 parser.error("expected a name for the impl after `as`");
@@ -1025,6 +1028,58 @@ impl super::Parse for ImplScope {
             } else {
                 parser.parse(ImplItemListScope::default())?;
             }
+        }
+        Ok(())
+    }
+}
+
+// What follows the identifier of a malformed impl name: the remaining `::`
+// segments and generic arguments of a path.
+define_scope! { ImplNameTailScope, Error }
+impl super::Parse for ImplNameTailScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // Inside generic arguments, a braced expression is part of them.
+        let (mut angles, mut braces) = (0usize, 0usize);
+        while let Some(kind) = parser.current_kind() {
+            let consumed = match kind {
+                SyntaxKind::Colon2 | SyntaxKind::Ident => true,
+                SyntaxKind::Lt => {
+                    angles += 1;
+                    true
+                }
+                _ if angles == 0 => false,
+                SyntaxKind::Gt if braces == 0 => {
+                    angles -= 1;
+                    true
+                }
+                SyntaxKind::LBrace => {
+                    braces += 1;
+                    true
+                }
+                SyntaxKind::RBrace if braces > 0 => {
+                    braces -= 1;
+                    true
+                }
+                // Only what starts the next item or ends the block can end
+                // an unclosed list.
+                SyntaxKind::RBrace
+                | SyntaxKind::FnKw
+                | SyntaxKind::StructKw
+                | SyntaxKind::EnumKw
+                | SyntaxKind::TraitKw
+                | SyntaxKind::ImplKw
+                | SyntaxKind::ContractKw
+                | SyntaxKind::ModKw
+                | SyntaxKind::UseKw
+                | SyntaxKind::PubKw => false,
+                _ => true,
+            };
+            if !consumed {
+                break;
+            }
+            parser.bump();
         }
         Ok(())
     }

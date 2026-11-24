@@ -81,9 +81,14 @@ impl<'db> TyChecker<'db> {
 
         match pat_data {
             Pat::WildCard => {
-                let ty_var = self.table.new_var(TyVarSort::General, &Kind::Star);
+                let expected_resolved = expected.fold_with(self.db, &mut self.table);
+                let ty = if expected_resolved.is_never(self.db) {
+                    expected_resolved
+                } else {
+                    self.table.new_var(TyVarSort::General, &Kind::Star)
+                };
                 let analysis = self.ready_wildcard(expected, None);
-                self.finish_pat_check(pat, expected, ty_var, analysis)
+                self.finish_pat_check(pat, expected, ty, analysis)
             }
 
             Pat::Rest => {
@@ -261,8 +266,11 @@ impl<'db> TyChecker<'db> {
                 failed_goals.push(use_.inst());
             }
         }
-        let missing = cref.record_bound_evidence(self.db, choices);
-        failed_goals.extend(missing);
+        failed_goals.extend(
+            cref.record_bound_evidence(self.db, choices)
+                .into_iter()
+                .map(|refused| refused.goal),
+        );
         cref.qualify_evidence(self.db, self.env.owner());
         // The reference stays with the body, as for a constant read in an
         // expression, so that what the pattern names can be followed later.
@@ -346,7 +354,7 @@ impl<'db> TyChecker<'db> {
                     ConstRef::TraitConst { use_, .. } => {
                         collect_flags(self.db, use_.inst()).contains(TyFlags::HAS_PARAM)
                     }
-                    ConstRef::InherentConst(use_) => use_.receiver_ty().has_param(self.db),
+                    ConstRef::InherentConst { use_, .. } => use_.receiver_ty().has_param(self.db),
                 };
                 self.push_diag(if generic {
                     BodyDiag::GenericConstPattern { primary }
@@ -740,7 +748,7 @@ impl<'db> TyChecker<'db> {
                     recv_ty,
                     name,
                 ) {
-                    let cref = ConstRef::InherentConst(InherentConstUse::new(
+                    let cref = ConstRef::inherent(InherentConstUse::new(
                         self.env.scope(),
                         self.env.assumptions(),
                         impl_,

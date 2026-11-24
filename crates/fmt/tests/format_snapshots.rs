@@ -310,3 +310,16 @@ mod strings {
     let reformatted = format_str(&formatted, &Config::default()).expect("reformat should succeed");
     assert_eq!(reformatted, formatted, "formatting is not stable");
 }
+
+#[test]
+fn trailing_comment_stays_on_its_list_element_line() {
+    let source = "fn g() -> u256 {\n    f(\n        1, // one\n        2, // two\n    )\n}\n";
+    let config = Config::default();
+    let formatted = format_str(source, &config).expect("format should succeed");
+
+    assert_eq!(formatted, source);
+    assert_eq!(
+        formatted,
+        format_str(&formatted, &config).expect("reformat should succeed"),
+    );
+}

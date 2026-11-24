@@ -72,8 +72,8 @@ use super::{
     type_info::{
         RuntimeTypeEnv, deref_transport_class_in_env, provider_class_for_target_in_env,
         runtime_array_len, runtime_interface_ty_in_env, runtime_repr_ty_in_env,
-        runtime_zero_sized_transport_ty, runtime_zero_sized_ty, scalar_class_for_ty_in_env,
-        stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        runtime_uninhabited_ty, runtime_zero_sized_transport_ty, runtime_zero_sized_ty,
+        scalar_class_for_ty_in_env, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
     },
 };
 
@@ -1749,6 +1749,9 @@ pub(crate) fn runtime_zero_sized_effect_value_is_inert<'db>(
     scope: Option<hir::hir_def::scope_graph::ScopeId<'db>>,
     assumptions: PredicateListId<'db>,
 ) -> bool {
+    if runtime_uninhabited_ty(db, ty, scope, assumptions) {
+        return true;
+    }
     let ty = runtime_repr_ty_in_env(db, RuntimeTypeEnv::new(scope, assumptions), ty);
     if let Some((_, inner)) = ty.as_borrow(db) {
         return runtime_zero_sized_effect_value_is_inert(db, inner, scope, assumptions);
@@ -2183,6 +2186,9 @@ pub(crate) fn desired_runtime_param_plan<'db>(
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let scope = env.scope;
     let assumptions = env.assumptions;
+    if runtime_uninhabited_ty(db, binding_ty, scope, assumptions) {
+        return RuntimeParamPlan::Erased;
+    }
     if let Some(class) =
         runtime_class_for_explicit_root_provider_param(db, env, binding, binding_ty)
     {
@@ -2755,6 +2761,9 @@ pub(crate) fn default_return_class<'db>(
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let result_ty = semantic_return_ty(db, semantic);
+    if runtime_uninhabited_ty(db, result_ty, env.scope, env.assumptions) {
+        return None;
+    }
     let return_borrow_provider = result_ty
         .as_borrow(db)
         .and(typed_body.return_borrow_provider());
@@ -2777,6 +2786,9 @@ pub(crate) fn desired_runtime_return_plan<'db>(
     let typed_body = semantic.key(db).typed_body(db);
     let env = RuntimeTypeEnv::for_semantic(db, semantic);
     let ty = semantic_return_ty(db, semantic);
+    if runtime_uninhabited_ty(db, ty, env.scope, env.assumptions) {
+        return RuntimeVisibleReturnPlan::Erased;
+    }
     let return_borrow_provider = ty.as_borrow(db).and(typed_body.return_borrow_provider());
     let default_space = return_borrow_provider.unwrap_or(AddressSpace::Memory);
     if return_borrow_provider.is_some() {

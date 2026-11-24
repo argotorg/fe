@@ -64,6 +64,7 @@ use crate::{
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
+pub(crate) use callable::supply_direct_effect_evidence;
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{
     CallParam, Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
@@ -102,7 +103,7 @@ use super::{
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
-        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, UseEvidence,
+        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, RefusedGoal, UseEvidence,
         declared_bound_evidence, impl_const_bound_evidence, instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
@@ -135,7 +136,8 @@ use crate::analysis::ty::{
     closure::{CallableTrait, CallableValue},
     const_ty::{
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
-        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
+        inherent_const_body_and_impl_args, inherent_const_decl_ty, invalid_cause_from_eval_failure,
+        origin_expr_for_const_eval_diag, root_ctfe_error,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
@@ -242,7 +244,7 @@ pub(crate) fn const_type_diag<'db>(
 ) -> Option<TyDiagCollection<'db>> {
     // A constant is a value, so its type has kind `*`.
     if !ty.has_invalid(db) && !ty.is_star_kind(db) {
-        return Some(TyLowerDiag::ExpectedStarKind(span.into()).into());
+        return Some(TyLowerDiag::ExpectedStarKind(span).into());
     }
     if let Some(view) = ty.is_view(db).then_some(ty).or_else(|| ty.view_part(db)) {
         return Some(
@@ -1733,11 +1735,13 @@ fn typed_body_for_bodyless_func<'db>(
             BoundOwner::Body(BodyOwner::func_at(db, func, mode)),
             assumptions,
         ),
+        refused_bound: None,
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashMap::default(),
+        never_coercions: FxHashSet::default(),
         unsafe_splits: FxHashSet::default(),
         unsafe_ops: Vec::new(),
         product_args: FxHashSet::default(),
@@ -2109,7 +2113,8 @@ impl<'db> TyChecker<'db> {
                 idx,
                 &key,
                 TraitSolveCx::new(self.db, func.scope(), Tier::All)
-                    .with_assumptions(self.env.assumptions()),
+                    .with_assumptions(self.env.assumptions())
+                    .with_choices(self.env.choices),
             ) {
                 self.push_diag(diag);
             } else if let Some(root_ty) = root_ty {
@@ -4442,6 +4447,14 @@ impl<'db> TyChecker<'db> {
     fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
         match typeable {
             Typeable::Expr(expr, mut typed_expr) => {
+                if typed_expr
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+                    && !ty.is_never(self.db)
+                {
+                    self.env.set_never_coercion(expr, true);
+                }
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
@@ -4797,13 +4810,27 @@ pub enum ConstRef<'db> {
         use_: AssocConstUse<'db>,
         evidence: UseEvidence<'db>,
     },
-    InherentConst(InherentConstUse<'db>),
+    /// A constant of an inherent implementation. Its value is checked under
+    /// the implementation's bounds, so a use passes proofs of them, as a call
+    /// passes proofs of the bounds its callee declares.
+    InherentConst {
+        use_: InherentConstUse<'db>,
+        evidence: UseEvidence<'db>,
+    },
 }
 
 impl<'db> ConstRef<'db> {
     pub(super) fn qualify_evidence(&mut self, db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) {
-        if let Self::TraitConst { evidence, .. } = self {
+        if let Self::TraitConst { evidence, .. } | Self::InherentConst { evidence, .. } = self {
             evidence.qualify(db, owner);
+        }
+    }
+
+    /// An inherent constant use with no recorded evidence.
+    pub fn inherent(use_: InherentConstUse<'db>) -> Self {
+        Self::InherentConst {
+            use_,
+            evidence: UseEvidence::default(),
         }
     }
 
@@ -4858,7 +4885,10 @@ impl<'db> ConstRef<'db> {
         &mut self,
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
-    ) -> Vec<TraitInstId<'db>> {
+    ) -> Vec<RefusedGoal<'db>> {
+        if let ConstRef::InherentConst { use_, evidence } = self {
+            return Self::record_inherent_bound_evidence(db, *use_, evidence, choices);
+        }
         let ConstRef::TraitConst { use_, evidence, .. } = self else {
             return Default::default();
         };
@@ -4890,10 +4920,55 @@ impl<'db> ConstRef<'db> {
                 BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
                 signature,
             ),
-            entries: recorded,
+            entries: recorded.proofs,
         });
         if choices.is_some() {
-            recorded.missing_bound_goals(db, signature, &subst)
+            recorded.refused_goals(db, signature, &subst)
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+impl<'db> ConstRef<'db> {
+    /// Proves, in the use's context, the bounds the body of an inherent
+    /// constant declares, instantiated for the use, as a call records the
+    /// bounds of its callee. Returns the dictionaries lexical selection
+    /// misses.
+    fn record_inherent_bound_evidence(
+        db: &'db dyn HirAnalysisDb,
+        use_: InherentConstUse<'db>,
+        evidence: &mut UseEvidence<'db>,
+        choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
+    ) -> Vec<RefusedGoal<'db>> {
+        let (Some((body, impl_args)), Some(expected)) = (
+            inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name()),
+            inherent_const_decl_ty(db, use_.impl_(), use_.name()),
+        ) else {
+            return Vec::new();
+        };
+        let Ok(subst) = CompleteSubst::for_owner(db, use_.impl_().into(), impl_args) else {
+            return Vec::new();
+        };
+        let declared = const_body_assumptions(db, body.scope());
+        let signature = declared.extend_all_bounds(db);
+        let recorded = declared_bound_evidence(
+            db,
+            declared,
+            signature,
+            &subst,
+            use_.solve_cx(db).with_choices(choices),
+        );
+        evidence.bounds = Some(BoundEvidence {
+            schema: BoundSchemaId::new(
+                db,
+                BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
+                signature,
+            ),
+            entries: recorded.proofs,
+        });
+        if choices.is_some() {
+            recorded.refused_goals(db, signature, &subst)
         } else {
             Vec::new()
         }
@@ -4911,7 +4986,10 @@ impl<'db> TyVisitable<'db> for ConstRef<'db> {
                 use_.visit_with(visitor);
                 evidence.visit_with(visitor);
             }
-            ConstRef::InherentConst(use_) => use_.visit_with(visitor),
+            ConstRef::InherentConst { use_, evidence } => {
+                use_.visit_with(visitor);
+                evidence.visit_with(visitor);
+            }
         }
     }
 }
@@ -4927,7 +5005,10 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
                 use_: use_.fold_with(db, folder),
                 evidence: evidence.fold_with(db, folder),
             },
-            ConstRef::InherentConst(use_) => ConstRef::InherentConst(use_.fold_with(db, folder)),
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.fold_with(db, folder),
+                evidence: evidence.fold_with(db, folder),
+            },
         }
     }
 }
@@ -5054,6 +5135,9 @@ mod typed_body_tables {
         /// `TypedBody::signature`.
         pub(super) signature: PredicateListId<'db>,
         pub(super) bound_schema: BoundSchemaId<'db>,
+        /// A closed goal the dictionaries an instance of the body received
+        /// refuse; see `instance_evidence`.
+        pub(super) refused_bound: Option<RefusedGoal<'db>>,
         pub(super) assumptions: PredicateListId<'db>,
         pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
@@ -5061,6 +5145,9 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashMap<ExprId, PlaceEntryCalls<'db>>,
+        /// The expressions of type `!` whose recorded type is the type their
+        /// context expects.
+        pub(super) never_coercions: FxHashSet<ExprId>,
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
@@ -5315,6 +5402,18 @@ impl<'db> SemanticExprLowering<'db> {
                 method: callable, ..
             } => callable,
         }
+    }
+
+    /// Every callable the expression records.
+    pub(super) fn callables(&self) -> impl Iterator<Item = &Callable<'db>> {
+        match self {
+            Self::SumShape { method, panic, .. } => [Some(method), panic.as_ref()],
+            Self::Call { callable }
+            | Self::CodeRegionIntrinsic { callable, .. }
+            | Self::ConstIntrinsic { callable, .. } => [Some(callable), None],
+        }
+        .into_iter()
+        .flatten()
     }
 
     /// Every callable the expression records.
@@ -5644,7 +5743,8 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Replaces the assumptions the body's evidence names with `bound`'s
-    /// proofs of them: an instance's own.
+    /// proofs of them: an instance's own. `for_each_use_evidence` must walk
+    /// the same tables.
     pub(crate) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) {
         if bound.entries.entries(db).is_empty() {
             return;
@@ -5674,8 +5774,48 @@ impl<'db> TypedBody<'db> {
             .chain(tables.pat_const_refs.values_mut())
             .flatten()
         {
-            if let ConstRef::TraitConst { evidence, .. } = const_ref {
+            if let ConstRef::TraitConst { evidence, .. }
+            | ConstRef::InherentConst { evidence, .. } = const_ref
+            {
                 evidence.bind(db, bound);
+            }
+        }
+    }
+
+    /// Visits every callable of the body that carries evidence, with the
+    /// expression it belongs to: the calls, indexing and loops. It walks the
+    /// tables `bind_evidence` writes, and the two must be kept in step.
+    pub(crate) fn for_each_callable(&self, mut visit: impl FnMut(ExprId, &Callable<'db>)) {
+        let tables = &self.tables;
+        for (expr, lowering) in tables.semantic_expr_lowering.iter() {
+            for callable in lowering.iter().flat_map(SemanticExprLowering::callables) {
+                visit(expr, callable);
+            }
+        }
+        for (&expr, calls) in &tables.place_entries {
+            for callable in std::iter::once(&calls.locate).chain(&calls.codec) {
+                visit(expr, callable);
+            }
+        }
+        for plan in tables.for_loop_plans.values().flatten() {
+            for call in &plan.calls {
+                visit(plan.base, &call.callable);
+            }
+        }
+    }
+
+    /// Visits the evidence of every use of the body, with the expression it
+    /// belongs to: the callables of `for_each_callable`, and the constants
+    /// the body reads. This walks the tables `bind_evidence` writes, and the
+    /// two must be kept in step.
+    pub(crate) fn for_each_use_evidence(&self, mut visit: impl FnMut(ExprId, &UseEvidence<'db>)) {
+        self.for_each_callable(|expr, callable| visit(expr, &callable.use_evidence()));
+        for (expr, const_ref) in self.tables.const_refs.iter() {
+            if let Some(
+                ConstRef::TraitConst { evidence, .. } | ConstRef::InherentConst { evidence, .. },
+            ) = const_ref
+            {
+                visit(expr, evidence);
             }
         }
     }
@@ -5937,6 +6077,20 @@ impl<'db> TypedBody<'db> {
         self.tables.expr_choices[expr]
     }
 
+    /// The choices in force at a position written in `expr`, the innermost
+    /// expression around it, or, for one in no expression, in `scope`. An
+    /// expression can hold more choices than the block around it: an operand
+    /// of a `with` list is under the operands before it.
+    pub(super) fn choices_at(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: Option<ExprId>,
+        scope: ScopeId<'db>,
+    ) -> Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>> {
+        expr.and_then(|expr| self.expr_choices(expr))
+            .or_else(|| self.choices_in_scope(db, scope))
+    }
+
     pub(super) fn choices_in_scope(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -5971,6 +6125,17 @@ impl<'db> TypedBody<'db> {
         self.tables.signature
     }
 
+    /// A closed goal the dictionaries an instance of this body received refuse,
+    /// which rejects the instance.
+    pub(crate) fn refused_bound(&self) -> Option<RefusedGoal<'db>> {
+        self.tables.refused_bound
+    }
+
+    pub(crate) fn with_refused_bound(mut self, refused: RefusedGoal<'db>) -> Self {
+        self.tables_mut().refused_bound = Some(refused);
+        self
+    }
+
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
         self.expr_prop(db, expr).ty
     }
@@ -6002,6 +6167,12 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains_key(&expr)
+    }
+
+    /// Whether `expr` has type `!` and its recorded type, [`Self::expr_ty`],
+    /// is the type its context expects.
+    pub fn is_never_coerced(&self, expr: ExprId) -> bool {
+        self.tables.never_coercions.contains(&expr)
     }
 
     pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
@@ -6909,6 +7080,19 @@ impl<'db> TypedBody<'db> {
         seen: &mut FxHashSet<Func<'db>>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
+        let projection = place
+            .projections
+            .iter()
+            .map(|projection| match projection {
+                // A value read through a raw pointer, or at a collection's
+                // entry, is not a part of the binding.
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
+                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+                PlaceProjection::Index { index_expr, .. } => {
+                    self.return_index_projection(db, body, *index_expr)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
         let PlaceBase::Binding(binding) = place.base;
         let sources = match binding {
             LocalBinding::Param {
@@ -6958,22 +7142,6 @@ impl<'db> TypedBody<'db> {
                 ..
             } => return None,
         };
-        if place.has_entry() {
-            return None;
-        }
-        let projection = place
-            .projections
-            .iter()
-            .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
-                PlaceProjection::Field { index, .. } => {
-                    Some(Some(ReturnProjectionStep::Field(*index)))
-                }
-                PlaceProjection::Index { index_expr, .. } => {
-                    Some(self.return_index_projection(db, body, *index_expr))
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)
     }
 
@@ -7666,12 +7834,14 @@ impl<'db> TypedBody<'db> {
                 BoundOwner::Context,
                 PredicateListId::empty_list(db),
             ),
+            refused_bound: None,
             signature: PredicateListId::empty_list(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashMap::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             unsafe_ops: Vec::new(),
             product_args: FxHashSet::default(),

@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/name_resolution.rs
+expression: diags
+input_file: fixtures/name_resolution/impl_name_ambiguous.fe
+---
+error[2-0001]: `Dup` conflicts with other definitions
+   ┌─ impl_name_ambiguous.fe:13:8
+   │
+13 │ use a::Dup
+   │        ^^^ `Dup` is defined here
+14 │ use b::Dup
+   │        --- `Dup` is redefined here
+
+error[2-0004]: `Dup` is ambiguous
+   ┌─ impl_name_ambiguous.fe:17:11
+   │
+ 4 │     pub impl P for Foo as Dup {}
+   │                           --- candidate 1
+   ·
+10 │     pub impl P for Foo as Dup {}
+   │                           --- candidate 2
+   ·
+17 │     with (Dup) {}
+   │           ^^^ `Dup` is ambiguous

@@ -53,7 +53,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -3070,7 +3070,7 @@ fn selector_signature_from_expr<'db>(
                 visited,
             )
         }
-        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
+        crate::analysis::ty::ty_check::ConstRef::InherentConst { use_, .. } => {
             // Follow the inherent const's value body so a selector that
             // delegates to `Selectors::TRANSFER` resolves the underlying
             // `sol("...")` signature, mirroring the top-level `Const` branch.
@@ -4703,7 +4703,7 @@ impl<'db> ImplTrait<'db> {
                 if cand_impl_trait == self {
                     continue;
                 }
-                if does_impl_trait_conflict(db, cand_view, implementor)
+                if does_impl_trait_conflict(db, self.scope(), cand_view, implementor)
                     && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
                         db,
                         cand_impl_trait,
@@ -5202,18 +5202,21 @@ impl<'db> ImplTrait<'db> {
                             }
                             NamedOutputMismatch::AssocType {
                                 ordinary: true,
+                                possible,
                                 name,
                                 expected,
                                 given,
                                 ..
                             } => TraitLowerDiag::NamedAssociatedTypeMismatch {
                                 primary: self,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
                             NamedOutputMismatch::AssocType {
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
@@ -5221,25 +5224,31 @@ impl<'db> ImplTrait<'db> {
                             } => TraitLowerDiag::NamedAssociatedTypeDisagreement {
                                 primary: self,
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
-                            NamedOutputMismatch::AssocConst { with, name } => {
-                                TraitLowerDiag::NamedAssociatedConstMismatch {
-                                    primary: self,
-                                    with,
-                                    name,
-                                }
-                            }
+                            NamedOutputMismatch::AssocConst {
+                                with,
+                                possible,
+                                name,
+                            } => TraitLowerDiag::NamedAssociatedConstMismatch {
+                                primary: self,
+                                with,
+                                possible,
+                                name,
+                            },
                             NamedOutputMismatch::Row {
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             } => TraitLowerDiag::NamedAssociatedRowMismatch {
                                 primary: self,
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             },
                         }
@@ -6442,11 +6451,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {

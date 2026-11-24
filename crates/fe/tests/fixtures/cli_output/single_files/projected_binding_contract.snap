@@ -1,0 +1,7 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/projected_binding_contract.fe
+---
+
+=== EXIT CODE: 0 ===

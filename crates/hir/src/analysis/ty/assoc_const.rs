@@ -152,6 +152,10 @@ impl<'db> InherentConstUse<'db> {
     pub fn name(self) -> IdentId<'db> {
         self.name
     }
+
+    pub fn solve_cx(self, db: &'db dyn HirAnalysisDb) -> TraitSolveCx<'db> {
+        TraitSolveCx::new(db, self.origin_scope).with_assumptions(self.assumptions)
+    }
 }
 
 impl<'db> TyVisitable<'db> for InherentConstUse<'db> {

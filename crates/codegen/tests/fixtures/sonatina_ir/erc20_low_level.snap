@@ -23,9 +23,9 @@ func private %abi_encode_string(v0.i256, v1.i256) {
         v8.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_89bf v4;
         v9.i256 = add v8 32.i256;
         call %store_word v9 v1;
-        v12.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_89bf v4;
-        v14.i256 = add v12 64.i256;
-        call %store_word v14 v0;
+        v11.i256 = call %core__lib__ptr__impl_MemBuffer_2cdf__ptr_89bf v4;
+        v13.i256 = add v11 64.i256;
+        call %store_word v13 v0;
         jump block3;
 
     block2:
@@ -33,16 +33,16 @@ func private %abi_encode_string(v0.i256, v1.i256) {
         unreachable;
 
     block3:
-        v20.i256 = extract_value v4 0.i256;
-        v22.i256 = extract_value v4 1.i256;
+        v18.i256 = extract_value v4 0.i256;
+        v20.i256 = extract_value v4 1.i256;
         jump block5;
 
     block4:
         jump block2;
 
     block5:
-        v26.@layout_3 = agg.make @layout_3 v20 v22;
-        obj.store v2 v26;
+        v24.@layout_3 = agg.make @layout_3 v18 v20;
+        obj.store v2 v24;
         jump block4;
 }
 
@@ -494,18 +494,18 @@ func private %init() {
         unreachable;
 
     block3:
-        v11.objref<i256> = obj.proj v0 0.i256;
-        v12.i256 = obj.load v11;
-        v14.objref<i256> = obj.proj v0 1.i256;
-        v15.i256 = obj.load v14;
+        v10.objref<i256> = obj.proj v0 0.i256;
+        v11.i256 = obj.load v10;
+        v13.objref<i256> = obj.proj v0 1.i256;
+        v14.i256 = obj.load v13;
         jump block5;
 
     block4:
         jump block2;
 
     block5:
-        v19.@layout_3 = agg.make @layout_3 v12 v15;
-        obj.store v1 v19;
+        v18.@layout_3 = agg.make @layout_3 v11 v14;
+        obj.store v1 v18;
         jump block4;
 }
 
@@ -589,16 +589,16 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_2) -> i256 
         br v7 block6 block7;
 
     block2:
-        v28.i256 = call %keccak256 v2;
+        v27.i256 = call %keccak256 v2;
         jump block5;
 
     block3:
-        v31.@layout_3 = agg.make @layout_3 v15 v25;
-        obj.store v2 v31;
+        v30.@layout_3 = agg.make @layout_3 v15 v24;
+        obj.store v2 v30;
         jump block2;
 
     block4:
-        return v28;
+        return v27;
 
     block5:
         jump block4;
@@ -616,11 +616,11 @@ func inline(always) private %mapping_slot__g7bf4(v0.i256, v1.@layout_2) -> i256 
         v19.i256 = call %downcast_unchecked v4;
         v20.i256 = add v15 v19;
         mstore v20 v0 i256;
-        (v23.i256, v24.i1) = uaddo v4 32.i256;
-        br v24 block6 block8;
+        (v22.i256, v23.i1) = uaddo v4 32.i256;
+        br v23 block6 block8;
 
     block8:
-        v25.i256 = call %downcast_unchecked v23;
+        v24.i256 = call %downcast_unchecked v22;
         jump block3;
 }
 
@@ -635,16 +635,16 @@ func inline(always) private %mapping_slot__g67a8(v0.i256, v1.@layout_0) -> i256 
         br v7 block6 block7;
 
     block2:
-        v28.i256 = call %keccak256 v2;
+        v27.i256 = call %keccak256 v2;
         jump block5;
 
     block3:
-        v31.@layout_3 = agg.make @layout_3 v15 v25;
-        obj.store v2 v31;
+        v30.@layout_3 = agg.make @layout_3 v15 v24;
+        obj.store v2 v30;
         jump block2;
 
     block4:
-        return v28;
+        return v27;
 
     block5:
         jump block4;
@@ -662,11 +662,11 @@ func inline(always) private %mapping_slot__g67a8(v0.i256, v1.@layout_0) -> i256 
         v19.i256 = call %downcast_unchecked v4;
         v20.i256 = add v15 v19;
         mstore v20 v0 i256;
-        (v23.i256, v24.i1) = uaddo v4 32.i256;
-        br v24 block6 block8;
+        (v22.i256, v23.i1) = uaddo v4 32.i256;
+        br v23 block6 block8;
 
     block8:
-        v25.i256 = call %downcast_unchecked v23;
+        v24.i256 = call %downcast_unchecked v22;
         jump block3;
 }
 

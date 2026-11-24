@@ -2569,7 +2569,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                         }
                     })
                 }
-                ConstRef::InherentConst(use_) => {
+                ConstRef::InherentConst { use_, .. } => {
                     let use_ = if let Some(subst) = capture.complete(db) {
                         InherentConstUse::new(
                             use_.origin_scope(),

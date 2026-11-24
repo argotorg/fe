@@ -4,7 +4,7 @@ use super::{
     const_expr::ConstExpr,
     const_ty::ConstTyData,
     fold::TyFoldable,
-    normalize::normalize_from_assumptions,
+    normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{BorrowKind, TyData, TyFlags, TyId},
     visitor::{TyVisitable, TyVisitor, walk_ty},
@@ -23,7 +23,7 @@ use crate::analysis::{
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, ModeMarker, scope_graph::ScopeId},
+    hir_def::{HirIngot, IdentId, ModeMarker, scope_graph::ScopeId},
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
@@ -36,19 +36,81 @@ mod table_solver;
 
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
-    match_header_args, match_prepared_header, match_prepared_type,
+    match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
 
+/// How many associated types below the first concrete bound a derivation is
+/// followed, and how many bounds beyond the slots the walk keeps.
+pub(crate) const COMPONENT_DEPTH_LIMIT: u32 = 4;
+const COMPONENT_MEMBER_LIMIT: usize = 1024;
+
+/// The arguments a named implementation declared inside a generic item
+/// inherits from it: the item's own generic parameters, as they stand where
+/// the implementation is opened. Folding a choice by the arguments a body is
+/// instantiated with substitutes them.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct InheritedArgs<'db> {
+    pub args: Vec<TyId<'db>>,
+}
+
+impl<'db> TyFoldable<'db> for InheritedArgs<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        folder: &mut F,
+    ) -> Self {
+        Self::new(db, self.args(db).clone().fold_with(db, folder))
+    }
+}
+
+impl<'db> TyVisitable<'db> for InheritedArgs<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.args(visitor.db()).as_slice().visit_with(visitor);
+    }
+}
+
 /// A template, optionally applied to explicit lexical arguments. Applied
 /// arguments belong to the caller and must never be freshened as impl binders.
+/// An unapplied local template keeps the arguments it inherits from its
+/// enclosing item, so that substituting the choice substitutes them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ChosenImpl<'db> {
     pub template: ImplementorId<'db>,
     pub applied: Option<ImplementorId<'db>>,
+    pub inherited: Option<InheritedArgs<'db>>,
 }
 impl<'db> ChosenImpl<'db> {
+    /// A template with the arguments it inherits from the item it is
+    /// declared in, if it is a named implementation declared in a generic
+    /// item.
+    pub fn unapplied(db: &'db dyn HirAnalysisDb, template: ImplementorId<'db>) -> Self {
+        let inherited = match template.origin(db) {
+            super::trait_def::ImplementorOrigin::Hir(owner)
+                if owner.selection_name(db).is_some() =>
+            {
+                crate::hir_def::GenericParamOwner::from(owner)
+                    .parent(db)
+                    .map(|parent| {
+                        InheritedArgs::new(
+                            db,
+                            super::ty_lower::collect_generic_params(db, parent)
+                                .params(db)
+                                .to_vec(),
+                        )
+                    })
+            }
+            _ => None,
+        };
+        Self {
+            template,
+            applied: None,
+            inherited,
+        }
+    }
+
     pub fn implementation(self) -> ImplementorId<'db> {
         self.applied.unwrap_or(self.template)
     }
@@ -59,16 +121,10 @@ impl<'db> ChosenImpl<'db> {
         self.applied.unwrap_or_else(|| {
             let db = table.db;
             if let super::trait_def::ImplementorOrigin::Hir(owner) = self.template.origin(db) {
-                let inherited = crate::hir_def::GenericParamOwner::from(owner)
-                    .parent(db)
-                    .filter(|_| owner.selection_name(db).is_some())
-                    .map(|parent| {
-                        super::ty_lower::collect_generic_params(db, parent)
-                            .params(db)
-                            .to_vec()
-                    })
+                let mut params = self
+                    .inherited
+                    .map(|inherited| inherited.args(db).clone())
                     .unwrap_or_default();
-                let mut params = inherited;
                 params.extend(table.instantiate_with_fresh_vars(
                     self.template.params(db)[params.len()..].to_vec(),
                 ));
@@ -88,6 +144,9 @@ impl<'db> TyFoldable<'db> for ChosenImpl<'db> {
         Self {
             template: self.template,
             applied: self.applied.map(|applied| applied.fold_with(db, folder)),
+            inherited: self
+                .inherited
+                .map(|inherited| inherited.fold_with(db, folder)),
         }
     }
 }
@@ -100,6 +159,9 @@ impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
     fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
         if let Some(applied) = self.applied {
             applied.visit_with(visitor);
+        }
+        if let Some(inherited) = self.inherited {
+            inherited.visit_with(visitor);
         }
     }
 }
@@ -154,10 +216,7 @@ impl<'db> ChosenImpls<'db> {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChoiceEntry::Impl(ChosenImpl {
-            template: implementation,
-            applied: None,
-        }));
+        items.push(ChoiceEntry::Impl(ChosenImpl::unapplied(db, implementation)));
         Self::new(db, items)
     }
     pub fn push_applied(
@@ -172,6 +231,7 @@ impl<'db> ChosenImpls<'db> {
         items.push(ChoiceEntry::Impl(ChosenImpl {
             template,
             applied: Some(applied),
+            inherited: None,
         }));
         Self::new(db, items)
     }
@@ -1326,56 +1386,122 @@ impl<'db> PredicateListId<'db> {
     /// - Super trait bounds
     /// - Associated type bounds from trait definitions
     pub fn extend_all_bounds(self, db: &'db dyn HirAnalysisDb) -> Self {
-        extend_all_bounds_query(db, self)
+        self.bound_walk(db).list
     }
 
-    fn extend_all_bounds_uncached(self, db: &'db dyn HirAnalysisDb) -> Self {
+    /// As `extend_all_bounds`, with the derivations the walk followed.
+    pub(crate) fn bound_walk(self, db: &'db dyn HirAnalysisDb) -> &'db BoundWalk<'db> {
+        bound_walk_query(db, self)
+    }
+
+    /// As `extend_all_bounds`, but a bound an equality makes concrete is kept,
+    /// with the derivations the walk followed. It is evidence an implementation
+    /// proves, never an assumption, so only the projection of an implementation's
+    /// own components reads it.
+    pub(crate) fn bound_walk_keeping_concrete(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> &'db BoundWalk<'db> {
+        bound_walk_keeping_concrete_query(db, self)
+    }
+
+    /// The derivations among the members of this list, as positions in it:
+    /// the walk of the list records each bound's derivation from the bound
+    /// whose trait declares it. A list that is not its own extension (a slot
+    /// layout that is a prefix, or a concatenation) keeps the edges whose two
+    /// ends it holds; an edge names the first position of an equal member.
+    pub(crate) fn implied_edges(self, db: &'db dyn HirAnalysisDb) -> &'db [BoundEdge<'db>] {
+        implied_edges_query(db, self)
+    }
+
+    fn walk_bounds(self, db: &'db dyn HirAnalysisDb, keep_concrete: bool) -> BoundWalk<'db> {
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
+        let mut edges: Vec<BoundEdge<'db>> = Vec::new();
+        let mut truncated: Vec<u32> = Vec::new();
+        let mut capped = false;
+        let slots = all_predicates.len();
 
-        let mut worklist: Vec<TraitInstId<'db>> = self.list(db).to_vec();
+        // Each entry says how many associated types the predicate lies below the
+        // first concrete bound that derived it: none for a bound no concrete
+        // bound derives, and a concrete bound's own bounds one more. A kept
+        // concrete bound is expanded through associated types to a depth limit.
+        // The plain walk meets no concrete bound, and takes the entries last
+        // first, as it always has; the walk that keeps them takes them first
+        // first, so that a bound is first met by the shortest derivation.
+        let mut worklist: std::collections::VecDeque<(TraitInstId<'db>, u32)> =
+            self.list(db).iter().map(|&pred| (pred, 0)).collect();
 
-        while let Some(pred) = worklist.pop() {
+        while let Some((pred, depth)) = if keep_concrete {
+            worklist.pop_front()
+        } else {
+            worklist.pop_back()
+        } {
+            let below_concrete = keep_concrete && is_concrete_bound(db, pred);
             let hir_trait = pred.def(db);
-            let evidence = PredicateListId::new(db, vec![pred]);
+            let parent = all_predicates
+                .get_index_of(&pred)
+                .and_then(|index| u32::try_from(index).ok())
+                .expect("a predicate on the worklist is in the list");
+            let mut record = |child: usize, step: BoundStep<'db>| {
+                let edge = BoundEdge {
+                    parent,
+                    child: u32::try_from(child).expect("predicate position"),
+                    step,
+                };
+                if !edges.contains(&edge) {
+                    edges.push(edge);
+                }
+            };
             // 1. Collect super traits
-            for super_trait in hir_trait.super_traits(db) {
-                let inst = normalize_from_assumptions(
-                    db,
-                    super_trait.instantiate(db, pred.args(db)),
-                    hir_trait.scope(),
-                    evidence,
-                );
+            for index in 0..hir_trait.super_traits(db).len() {
+                let step = BoundStep::Super(index as u32);
+                let Some(inst) = step_bound(db, pred, step) else {
+                    continue;
+                };
                 if predicate_has_recursive_assoc_projection(db, inst) {
                     continue;
                 }
-
-                if all_predicates.insert(inst) {
+                let (child, inserted) = all_predicates.insert_full(inst);
+                record(child, step);
+                if inserted {
                     // New predicate added, add to worklist for further processing
-                    worklist.push(inst);
+                    worklist.push_back((inst, depth));
                 }
             }
 
             // 2. Collect associated type bounds
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
+            if below_concrete && depth >= COMPONENT_DEPTH_LIMIT {
+                // The bounds below this one are not followed. A program whose
+                // dictionaries hold a named implementation is refused for it.
+                if hir_trait.assoc_types(db).any(|trait_type| {
+                    trait_type.name(db).is_some_and(|assoc| {
+                        TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc)
+                            .assoc_type_bounds(db, trait_type)
+                            .count()
+                            > 0
+                    })
+                }) {
+                    truncated.push(parent);
+                }
+                continue;
+            }
             for trait_type in hir_trait.assoc_types(db) {
                 // Get the associated type name
-                let Some(assoc_ty_name) = trait_type.name(db) else {
+                let Some(assoc) = trait_type.name(db) else {
                     continue;
                 };
-
-                // Keep the entire bound in declaration coordinates until every
-                // formal, including non-Self trait parameters, is instantiated.
-                let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc_ty_name);
-
-                for bound in assoc_ty.assoc_type_bounds(db, trait_type) {
-                    let trait_inst = normalize_from_assumptions(
-                        db,
-                        Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
-                        hir_trait.scope(),
-                        evidence,
-                    );
+                let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+                for index in 0..assoc_ty.assoc_type_bounds(db, trait_type).count() {
+                    let step = BoundStep::AssocBound {
+                        assoc,
+                        index: index as u32,
+                    };
+                    let Some(trait_inst) = step_bound(db, pred, step) else {
+                        continue;
+                    };
                     // An equality can make the bound a concrete one,
                     // `[u256; 3]: Collection` from `H: Holds<Base = [u256; 3]>`.
                     // An implementation proves that, so it is not assumed: as
@@ -1383,41 +1509,442 @@ impl<'db> PredicateListId<'db> {
                     // would be a second candidate for every method of the impl.
                     // A bound still generic in an argument or a binding,
                     // `Reader: Read<T>`, is evidence no implementation gives.
-                    let concrete = |ty: &TyId<'db>| {
-                        !ty.has_invalid(db) && !ty.has_param(db) && !ty.has_projection(db)
-                    };
-                    let concrete = trait_inst.args(db).iter().all(concrete)
-                        && trait_inst.assoc_type_bindings(db).values().all(concrete);
-                    if concrete || predicate_has_recursive_assoc_projection(db, trait_inst) {
+                    let concrete = is_concrete_bound(db, trait_inst);
+                    if (concrete && !keep_concrete)
+                        || predicate_has_recursive_assoc_projection(db, trait_inst)
+                    {
                         continue;
                     }
-                    if all_predicates.insert(trait_inst) {
-                        worklist.push(trait_inst);
+                    // A kept concrete bound is extended through its associated
+                    // types to a depth, `Item: Pick` from `Item: Middle`, which
+                    // ends the walk where a concrete bound names a type that
+                    // grows with each step.
+                    let (child, inserted) = all_predicates.insert_full(trait_inst);
+                    record(child, step);
+                    if inserted {
+                        let below = if below_concrete { depth + 1 } else { 0 };
+                        worklist.push_back((trait_inst, below));
+                        if keep_concrete && all_predicates.len() - slots > COMPONENT_MEMBER_LIMIT {
+                            // Every bound still waiting is left unfollowed.
+                            capped = true;
+                            worklist.clear();
+                        }
                     }
                 }
             }
         }
 
-        Self::new(db, all_predicates.into_iter().collect::<Vec<_>>())
+        BoundWalk {
+            list: Self::new(db, all_predicates.into_iter().collect::<Vec<_>>()),
+            edges,
+            truncated,
+            capped,
+        }
+    }
+}
+
+/// Whether `bound` names no type parameter, projection or invalid type, in an
+/// argument or an associated-type binding. An equality can make a bound that
+/// an associated type declares concrete: `Foo: Show` from `B: Tr<A = Foo>`.
+fn is_concrete_bound<'db>(db: &'db dyn HirAnalysisDb, bound: TraitInstId<'db>) -> bool {
+    let concrete =
+        |ty: &TyId<'db>| !ty.has_invalid(db) && !ty.has_param(db) && !ty.has_projection(db);
+    bound.args(db).iter().all(concrete) && bound.assoc_type_bindings(db).values().all(concrete)
+}
+
+/// Whether the bounds in `slots` can derive a concrete bound. A concrete
+/// child of a slot needs an associated type that the parent's own equalities
+/// make concrete, so a list in which no bound states an equality has none.
+pub(crate) fn has_concrete_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+) -> bool {
+    slots
+        .list(db)
+        .iter()
+        .any(|pred| !pred.assoc_type_bindings(db).is_empty())
+}
+
+/// A member of the walk of a list of slots that is not one of the slots.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct Component<'db> {
+    pub(crate) goal: TraitInstId<'db>,
+    /// Whether the goal is concrete. Other members only carry a derivation
+    /// that continues through them.
+    pub(crate) concrete: bool,
+    /// The position of the slot the member's first derivation starts from,
+    /// and the steps from that slot's dictionary to the member's.
+    pub(crate) root: u32,
+    pub(crate) path: Vec<BoundStep<'db>>,
+    /// Every derivation that enters the member, as the position in the walk
+    /// of the bound it is read from and the step that reads it.
+    pub(crate) entering: Vec<(u32, BoundStep<'db>)>,
+    /// Whether the walk did not follow the associated-type bounds of the
+    /// member, at its depth limit.
+    pub(crate) truncated: bool,
+}
+
+/// The concrete bounds a list of slots derives and are not slots, with where
+/// each is read from. A body proves a goal on a concrete type that one of its
+/// bounds implies by the component of that bound's dictionary (the
+/// projection commit's rule, applied through the steps that name it), never
+/// by selecting an implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct ComponentTable<'db> {
+    /// The number of slots; the walk position of `members[0]`.
+    pub(crate) slots: u32,
+    /// The members of the walk of the slots after the slots, in walk order.
+    pub(crate) members: Vec<Component<'db>>,
+    /// The concrete members of each trait, as positions in `members`.
+    by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)>,
+    /// Whether the walk reached its member limit. The bounds it had not yet
+    /// followed were dropped without a record, so no member is known to be
+    /// complete: the whole table counts as truncated.
+    pub(crate) capped: bool,
+}
+
+impl<'db> ComponentTable<'db> {
+    fn empty() -> Self {
+        Self {
+            slots: 0,
+            members: Vec::new(),
+            by_trait: Vec::new(),
+            capped: false,
+        }
+    }
+
+    /// The concrete members that a path reaches, in walk order: the ones a
+    /// reference can name.
+    pub(crate) fn components(&self) -> impl Iterator<Item = &Component<'db>> {
+        self.members
+            .iter()
+            .filter(|member| member.concrete && !member.path.is_empty())
+    }
+
+    /// The concrete members of each trait, as positions in `members`.
+    pub(crate) fn buckets(&self) -> impl Iterator<Item = &[u32]> {
+        self.by_trait.iter().map(|(_, members)| members.as_slice())
+    }
+
+    /// The concrete members of `trait_`, in walk order.
+    pub(crate) fn of_trait(
+        &self,
+        trait_: crate::hir_def::Trait<'db>,
+    ) -> impl Iterator<Item = (usize, &Component<'db>)> {
+        self.by_trait
+            .iter()
+            .find(|(candidate, _)| *candidate == trait_)
+            .into_iter()
+            .flat_map(|(_, members)| members.iter())
+            .map(|&member| (member as usize, &self.members[member as usize]))
+    }
+
+    /// The canonical member that is the same implementation as `goal`: the
+    /// first, in walk order, of the concrete members of its trait that
+    /// `same_identity` equates with it, however the associated-type equalities
+    /// of the two are spelled. Every reader of a component finds it here, so
+    /// that one identity has one reference.
+    pub(crate) fn answering(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        scope: ScopeId<'db>,
+        goal: TraitInstId<'db>,
+    ) -> Option<(usize, &Component<'db>)> {
+        self.of_trait(goal.def(db))
+            .find(|(_, member)| same_identity(db, scope, member.goal, goal))
+    }
+}
+
+/// Whether two goals are one implementation's: the same trait at the same
+/// arguments, after normalizing them in `scope`. Associated-type equalities and
+/// the mode are not part of it, since a proof names no goal (`Evidence::Impl`).
+pub(crate) fn same_identity<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    a: TraitInstId<'db>,
+    b: TraitInstId<'db>,
+) -> bool {
+    a == b
+        || (a.def(db) == b.def(db)
+            && a.args(db).len() == b.args(db).len()
+            && a.args(db).iter().zip(b.args(db)).all(|(&x, &y)| {
+                let empty = PredicateListId::empty_list(db);
+                x == y || normalize_ty(db, x, scope, empty) == normalize_ty(db, y, scope, empty)
+            }))
+}
+
+/// The components of the extended list of slots `slots`: one walk of the whole
+/// list that keeps the concrete bounds the plain walk drops (`Foo: Show` from
+/// `B: Tr<A = Foo>`), with each member's canonical address, the slot and steps
+/// of its first derivation. Empty unless a slot states an equality.
+#[salsa::tracked(returns(ref), cycle_initial = component_table_cycle_initial)]
+pub(crate) fn concrete_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slots: PredicateListId<'db>,
+) -> ComponentTable<'db> {
+    if !has_concrete_components(db, slots) {
+        return ComponentTable::empty();
+    }
+    let walk = slots.bound_walk_keeping_concrete(db);
+    let (slot_list, list) = (slots.list(db), walk.list.list(db));
+    // The walk's list starts with the list it was given, so a position below
+    // the number of slots is that slot.
+    if !list.starts_with(slot_list) {
+        return ComponentTable::empty();
+    }
+    let n = slot_list.len();
+    let mut entering: Vec<Vec<(u32, BoundStep<'db>)>> = vec![Vec::new(); list.len()];
+    for edge in &walk.edges {
+        if let Some(into) = entering.get_mut(edge.child as usize) {
+            into.push((edge.parent, edge.step));
+        }
+    }
+    let mut members: Vec<Component<'db>> = Vec::with_capacity(list.len() - n);
+    for (position, &goal) in list.iter().enumerate().skip(n) {
+        let entering = std::mem::take(&mut entering[position]);
+        // The first derivation is the one that found the member, so its
+        // parent comes earlier in the walk.
+        let (root, path) = match entering.first() {
+            Some(&(parent, step)) if (parent as usize) < n => (parent, vec![step]),
+            Some(&(parent, step)) if (parent as usize) < position => {
+                let from = &members[parent as usize - n];
+                let mut path = from.path.clone();
+                path.push(step);
+                (from.root, path)
+            }
+            // The walk records a member's first derivation when it inserts
+            // the member, from a bound already in the list.
+            _ => {
+                debug_assert!(
+                    false,
+                    "the walk's member at position {position} has no derivation from an earlier bound"
+                );
+                (0, Vec::new())
+            }
+        };
+        members.push(Component {
+            goal,
+            concrete: is_concrete_bound(db, goal),
+            root,
+            path,
+            entering,
+            truncated: walk.truncated.contains(&(position as u32)),
+        });
+    }
+    let mut by_trait: Vec<(crate::hir_def::Trait<'db>, Vec<u32>)> = Vec::new();
+    for (position, member) in members.iter().enumerate() {
+        if !member.concrete || member.path.is_empty() {
+            continue;
+        }
+        let trait_ = member.goal.def(db);
+        match by_trait
+            .iter_mut()
+            .find(|(candidate, _)| *candidate == trait_)
+        {
+            Some((_, positions)) => positions.push(position as u32),
+            None => by_trait.push((trait_, vec![position as u32])),
+        }
+    }
+    ComponentTable {
+        slots: n as u32,
+        members,
+        by_trait,
+        capped: walk.capped,
+    }
+}
+
+fn component_table_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _slots: PredicateListId<'db>,
+) -> ComponentTable<'db> {
+    ComponentTable::empty()
+}
+
+/// One derivation step of the bound walk: how a bound is read from the
+/// dictionary of the bound that implies it. The coordinates are those of the
+/// parent predicate's trait, so a step names the same component of every
+/// dictionary of that trait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) enum BoundStep<'db> {
+    /// The supertrait at this position among the parent trait's supertraits.
+    Super(u32),
+    /// The bound at `index` among those declared on the associated type
+    /// `assoc` of the parent trait.
+    AssocBound { assoc: IdentId<'db>, index: u32 },
+}
+
+/// A derivation recorded by the walk, in positions of the extended list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct BoundEdge<'db> {
+    pub(crate) parent: u32,
+    pub(crate) child: u32,
+    pub(crate) step: BoundStep<'db>,
+}
+
+/// An extended predicate list with the derivations that produced it. Every
+/// derivation is recorded, including one whose child already existed.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct BoundWalk<'db> {
+    pub(crate) list: PredicateListId<'db>,
+    pub(crate) edges: Vec<BoundEdge<'db>>,
+    /// The positions in `list` of the bounds whose associated-type bounds the
+    /// walk that keeps concrete bounds did not follow, at its depth limit.
+    pub(crate) truncated: Vec<u32>,
+    /// Whether the walk stopped at its member limit, which leaves every bound
+    /// that had not yet been followed unfollowed.
+    pub(crate) capped: bool,
+}
+
+impl<'db> BoundWalk<'db> {
+    /// Whether any bound's associated-type bounds were left unfollowed.
+    pub(crate) fn is_truncated(&self) -> bool {
+        self.capped || !self.truncated.is_empty()
+    }
+
+    /// The steps from the first predicate to the member at `target`, along
+    /// the shortest chain of recorded derivations.
+    pub(crate) fn path_to(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        target: usize,
+    ) -> Option<Vec<BoundStep<'db>>> {
+        let len = self.list.list(db).len();
+        let mut via: Vec<Option<(usize, BoundStep<'db>)>> = vec![None; len];
+        let mut seen = vec![false; len];
+        let mut queue = std::collections::VecDeque::new();
+        *seen.first_mut()? = true;
+        queue.push_back(0usize);
+        while let Some(at) = queue.pop_front() {
+            if at == target {
+                break;
+            }
+            for edge in self.edges.iter().filter(|edge| edge.parent as usize == at) {
+                let child = edge.child as usize;
+                if child < len && !seen[child] {
+                    seen[child] = true;
+                    via[child] = Some((at, edge.step));
+                    queue.push_back(child);
+                }
+            }
+        }
+        if !*seen.get(target)? {
+            return None;
+        }
+        let mut steps = Vec::new();
+        let mut at = target;
+        while let Some((parent, step)) = via[at] {
+            steps.push(step);
+            at = parent;
+        }
+        steps.reverse();
+        Some(steps)
+    }
+}
+
+/// The bound that `step` derives from `pred`, in the coordinates of `pred`'s
+/// arguments, normalized by `pred`'s own equalities. The walk and every
+/// projection read a derivation through this one computation. A bound that an
+/// equality makes concrete is returned as it is: dropping it is the walk's
+/// decision.
+pub(crate) fn step_bound<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: TraitInstId<'db>,
+    step: BoundStep<'db>,
+) -> Option<TraitInstId<'db>> {
+    let hir_trait = pred.def(db);
+    let evidence = PredicateListId::new(db, vec![pred]);
+    match step {
+        BoundStep::Super(index) => {
+            let super_trait = hir_trait
+                .super_traits(db)
+                .get_index(index as usize)
+                .copied()?;
+            Some(normalize_from_assumptions(
+                db,
+                super_trait.instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
+            ))
+        }
+        BoundStep::AssocBound { assoc, index } => {
+            let trait_type = hir_trait
+                .assoc_types(db)
+                .find(|trait_type| trait_type.name(db) == Some(assoc))?;
+            // Keep the entire bound in declaration coordinates until every
+            // formal, including non-Self trait parameters, is instantiated.
+            let formal_trait =
+                TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
+            let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+            let bound = assoc_ty
+                .assoc_type_bounds(db, trait_type)
+                .nth(index as usize)?;
+            Some(normalize_from_assumptions(
+                db,
+                Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
+            ))
+        }
     }
 }
 
 // Normalizing implied bounds can resolve traits under assumptions that lead
 // back here. Iterate from the unextended list; extension only adds bounds.
-#[salsa::tracked(returns(copy), cycle_initial = extend_all_bounds_cycle_initial)]
-fn extend_all_bounds_query<'db>(
+#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
+fn bound_walk_query<'db>(
     db: &'db dyn HirAnalysisDb,
     predicates: PredicateListId<'db>,
-) -> PredicateListId<'db> {
-    predicates.extend_all_bounds_uncached(db)
+) -> BoundWalk<'db> {
+    predicates.walk_bounds(db, false)
 }
 
-fn extend_all_bounds_cycle_initial<'db>(
+#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
+fn bound_walk_keeping_concrete_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    predicates: PredicateListId<'db>,
+) -> BoundWalk<'db> {
+    predicates.walk_bounds(db, true)
+}
+
+fn bound_walk_cycle_initial<'db>(
     _db: &'db dyn HirAnalysisDb,
     _: salsa::Id,
     predicates: PredicateListId<'db>,
-) -> PredicateListId<'db> {
-    predicates
+) -> BoundWalk<'db> {
+    BoundWalk {
+        list: predicates,
+        edges: Vec::new(),
+        truncated: Vec::new(),
+        capped: false,
+    }
+}
+
+#[salsa::tracked(returns(ref))]
+fn implied_edges_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    layout: PredicateListId<'db>,
+) -> Vec<BoundEdge<'db>> {
+    let walk = layout.bound_walk(db);
+    if walk.list == layout {
+        return walk.edges.clone();
+    }
+    let members = walk.list.list(db);
+    let position = |at: u32| {
+        let member = members.get(at as usize)?;
+        let at = layout.list(db).iter().position(|slot| slot == member)?;
+        u32::try_from(at).ok()
+    };
+    walk.edges
+        .iter()
+        .filter_map(|edge| {
+            Some(BoundEdge {
+                parent: position(edge.parent)?,
+                child: position(edge.child)?,
+                step: edge.step,
+            })
+        })
+        .collect()
 }
 
 fn predicate_has_recursive_assoc_projection<'db>(

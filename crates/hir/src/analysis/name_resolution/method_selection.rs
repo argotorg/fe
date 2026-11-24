@@ -17,8 +17,8 @@ use crate::analysis::{
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
-            ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
-            goal_query_has_solution, is_goal_query_satisfiable,
+            CanonicalGoalQuery, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
+            TraitSolveCx, goal_query_has_solution, is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -70,6 +70,12 @@ enum AssembledTraitMethodCand<'db> {
         inst: TraitInstId<'db>,
         method: Func<'db>,
     },
+    /// An implementation opened by `with`. It is a candidate for the call, as
+    /// an ordinary implementation is, and asserts nothing.
+    Chosen {
+        choice: ChosenImpl<'db>,
+        method: Func<'db>,
+    },
 }
 
 impl<'db> AssembledTraitMethodCand<'db> {
@@ -77,6 +83,9 @@ impl<'db> AssembledTraitMethodCand<'db> {
         match self {
             AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_def(db),
             AssembledTraitMethodCand::Assumption { inst, .. } => inst.def(db),
+            AssembledTraitMethodCand::Chosen { choice, .. } => {
+                choice.implementation().trait_def(db)
+            }
         }
     }
 
@@ -84,6 +93,7 @@ impl<'db> AssembledTraitMethodCand<'db> {
         match self {
             AssembledTraitMethodCand::Impl { implementor, .. } => implementor.trait_(db),
             AssembledTraitMethodCand::Assumption { inst, .. } => inst,
+            AssembledTraitMethodCand::Chosen { choice, .. } => choice.implementation().trait_(db),
         }
     }
 }
@@ -137,9 +147,19 @@ pub(crate) fn select_method_candidate<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
+    trait_: Option<Trait<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
-    select_method_candidate_with_choices(db, receiver, method_name, scope, assumptions, None, None)
-        .result
+    select_method_candidate_with_choices(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        choices,
+        trait_,
+    )
+    .result
 }
 
 pub(crate) fn select_method_candidate_with_choices<'db>(
@@ -148,8 +168,8 @@ pub(crate) fn select_method_candidate_with_choices<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    trait_: Option<Trait<'db>>,
     choices: Option<ChosenImpls<'db>>,
+    trait_: Option<Trait<'db>>,
 ) -> MethodSelectionOutcome<'db> {
     let filter = trait_.map_or(TraitFilter::Any, TraitFilter::Trait);
     select_filtered_method(
@@ -158,8 +178,8 @@ pub(crate) fn select_method_candidate_with_choices<'db>(
         method_name,
         scope,
         assumptions,
-        filter,
         choices,
+        filter,
     )
 }
 
@@ -177,6 +197,7 @@ pub(crate) fn select_callable_value_method<'db>(
     receiver: &Canonicalized<'db, TyId<'db>>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
 ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
     let select = |name: &str| {
         let name = IdentId::new(db, name.to_string());
@@ -186,8 +207,8 @@ pub(crate) fn select_callable_value_method<'db>(
             name,
             scope,
             assumptions,
+            choices,
             TraitFilter::CallableTraits,
-            None,
             Tier::All,
         )
         .result
@@ -204,8 +225,8 @@ fn select_filtered_method<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    filter: TraitFilter<'db>,
 ) -> MethodSelectionOutcome<'db> {
     // Which method a name selects, inherent or of some trait, is one
     // procedure. Inside the ingot that generates them, generated items only
@@ -219,8 +240,8 @@ fn select_filtered_method<'db>(
             method_name,
             scope,
             assumptions,
-            filter,
             choices,
+            filter,
             tier,
         )
     };
@@ -260,8 +281,8 @@ pub(crate) fn select_method_candidate_in<'db>(
         method_name,
         scope,
         assumptions,
-        TraitFilter::Any,
         choices,
+        TraitFilter::Any,
         tier,
     )
 }
@@ -273,8 +294,8 @@ fn select_filtered_method_in<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
-    filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    filter: TraitFilter<'db>,
     tier: Tier,
 ) -> MethodSelectionOutcome<'db> {
     let receiver_ty = receiver.original();
@@ -282,16 +303,24 @@ fn select_filtered_method_in<'db>(
         return MethodSelectionOutcome::of(Err(MethodSelectionError::ReceiverTypeMustBeKnown));
     }
 
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter, tier);
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        choices,
+        filter,
+        tier,
+    );
     MethodSelector {
         db,
         receiver,
         scope,
         candidates,
         assumptions,
-        filter,
         choices,
+        filter,
         tier,
         unsatisfied: Default::default(),
     }
@@ -310,12 +339,14 @@ enum TraitFilter<'db> {
     CallableTraits,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_trait_method_candidates<'db>(
     db: &'db dyn HirAnalysisDb,
     receiver: &Canonicalized<'db, TyId<'db>>,
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     trait_: Trait<'db>,
     tier: Tier,
 ) -> Result<AmbiguousTraitMethods<'db>, MethodSelectionError<'db>> {
@@ -326,8 +357,16 @@ pub(crate) fn select_trait_method_candidates<'db>(
 
     let filter = TraitFilter::Trait(trait_);
     // The caller names the trait and decides which tier to ask.
-    let candidates =
-        assemble_method_candidates(db, receiver, method_name, scope, assumptions, filter, tier);
+    let candidates = assemble_method_candidates(
+        db,
+        receiver,
+        method_name,
+        scope,
+        assumptions,
+        choices,
+        filter,
+        tier,
+    );
 
     let selector = MethodSelector {
         db,
@@ -335,8 +374,8 @@ pub(crate) fn select_trait_method_candidates<'db>(
         scope,
         candidates,
         assumptions,
+        choices,
         filter,
-        choices: None,
         tier,
         unsatisfied: Default::default(),
     };
@@ -359,6 +398,7 @@ fn assemble_method_candidates<'db>(
     method_name: IdentId<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     filter: TraitFilter<'db>,
     tier: Tier,
 ) -> AssembledCandidates<'db> {
@@ -368,6 +408,7 @@ fn assemble_method_candidates<'db>(
         method_name,
         scope,
         assumptions,
+        choices,
         filter,
         tier,
         candidates: AssembledCandidates::default(),
@@ -385,6 +426,8 @@ struct CandidateAssembler<'db, 'a> {
     scope: ScopeId<'db>,
     /// The assumptions for the type bound in the current scope.
     assumptions: PredicateListId<'db>,
+    /// The implementations opened by the enclosing `with` blocks.
+    choices: Option<ChosenImpls<'db>>,
     filter: TraitFilter<'db>,
     /// Whether the methods and implementations generated in the ingot of
     /// `scope` are candidates.
@@ -473,6 +516,18 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                 }
             }
         }
+
+        // An implementation opened by `with` is a candidate whatever the
+        // receiver is: its parameters are fresh variables in the check, and a
+        // receiver that does not unify with its self type rejects it.
+        let chosen = self
+            .choices
+            .map(|choices| choices.items(self.db).clone())
+            .unwrap_or_default();
+        for choice in chosen {
+            self.insert_chosen_trait_method_cand(choice);
+        }
+
         self.receiver.with_materialized(self.db, |cx| {
             let receiver = cx.query();
             for &pred in self.assumptions.list(self.db) {
@@ -519,6 +574,18 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
                     implementor,
                     method: trait_method,
                 });
+        }
+    }
+
+    fn insert_chosen_trait_method_cand(&mut self, choice: ChosenImpl<'db>) {
+        let trait_def = choice.implementation().trait_def(self.db);
+        if !self.allow_trait(trait_def) {
+            return;
+        }
+        if let Some(&method) = trait_def.method_defs(self.db).get(&self.method_name) {
+            self.candidates
+                .traits
+                .insert(AssembledTraitMethodCand::Chosen { choice, method });
         }
     }
 
@@ -573,8 +640,8 @@ struct MethodSelector<'db, 'a> {
     scope: ScopeId<'db>,
     candidates: AssembledCandidates<'db>,
     assumptions: PredicateListId<'db>,
-    filter: TraitFilter<'db>,
     choices: Option<ChosenImpls<'db>>,
+    filter: TraitFilter<'db>,
     /// Whether the candidates are checked with the implementations generated
     /// in the ingot of `scope`.
     tier: Tier,
@@ -584,6 +651,14 @@ struct MethodSelector<'db, 'a> {
 }
 
 impl<'db, 'a> MethodSelector<'db, 'a> {
+    /// The context a candidate's conditions are confirmed in: the facts in
+    /// scope, with the implementations opened by `with` as candidates.
+    fn solve_cx(&self) -> TraitSolveCx<'db> {
+        TraitSolveCx::new(self.db, self.scope, self.tier)
+            .with_assumptions(self.assumptions)
+            .with_choices(self.choices)
+    }
+
     fn select(self) -> MethodSelectionOutcome<'db> {
         let result = match self.select_inherent_method() {
             Some(res) => res,
@@ -864,11 +939,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
     /// the same trait instance once constants are evaluated. An
     /// implementation's header, as candidates are lowered, keeps an array
     /// length such as the `3` of `[u256; 3]` deferred, while the header of a
-    /// chosen or opened implementation, which `with` adds as an assumption,
-    /// holds its value: the two name one instance. Which implementation
-    /// answers it is decided when the call's goal is solved under the
-    /// choices, not here. Different instances, such as `Get<[u8; 3]>` and
-    /// `Get<[u8; 4]>`, stay apart.
+    /// chosen or opened implementation holds its value: the two name one
+    /// instance. Which implementation answers it is decided when the call's
+    /// goal is solved under the choices, not here. Different instances, such
+    /// as `Get<[u8; 3]>` and `Get<[u8; 4]>`, stay apart.
     fn merge_equal_instances(
         &self,
         checked: Vec<(AssembledTraitMethodCand<'db>, TraitCandidateCheck<'db>)>,
@@ -952,9 +1026,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             return false;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
-            .with_assumptions(self.assumptions)
-            .with_choices(self.choices);
+        let solve_cx = self.solve_cx();
         let query = solve_cx.query(self.db, candidate_inst);
         let confirmed = Canonical::new(self.db, confirmed_inst);
         let mut table = UnificationTable::new(self.db);
@@ -985,7 +1057,20 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
             AssembledTraitMethodCand::Impl {
                 implementor,
                 method,
-            } => self.check_impl_cand(implementor, method),
+            } => {
+                let mut table = UnificationTable::new(self.db);
+                let receiver_ty = self.receiver.canonical().extract_identity(&mut table);
+                let implementor = table.instantiate_with_fresh_vars(implementor);
+                self.check_implementor(table, receiver_ty, implementor, method)
+            }
+            AssembledTraitMethodCand::Chosen { choice, method } => {
+                let mut table = UnificationTable::new(self.db);
+                let receiver_ty = self.receiver.canonical().extract_identity(&mut table);
+                // The choice's own arguments are kept as they are: those it
+                // inherits from an enclosing item are not freshened.
+                let implementor = choice.instantiate(&mut table);
+                self.check_implementor(table, receiver_ty, implementor, method)
+            }
             AssembledTraitMethodCand::Assumption { inst, method } => {
                 match self.check_inst(inst, method) {
                     MethodCandidate::TraitMethod(cand) => TraitCandidateCheck::Confirmed(cand),
@@ -998,23 +1083,22 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         }
     }
 
-    fn check_impl_cand(
+    /// Checks the receiver against `implementor`, an implementation
+    /// instantiated in `table`, and confirms its conditions.
+    fn check_implementor(
         &self,
+        mut table: UnificationTable<'db>,
+        receiver_ty: TyId<'db>,
         implementor: ImplementorId<'db>,
         method: Func<'db>,
     ) -> TraitCandidateCheck<'db> {
-        let mut table = UnificationTable::new(self.db);
-        let receiver_ty = self.receiver.canonical().extract_identity(&mut table);
-        let implementor = table.instantiate_with_fresh_vars(implementor);
         let impl_ty = table.instantiate_to_term(implementor.self_ty(self.db));
         let receiver_ty = table.instantiate_to_term(receiver_ty);
         if table.unify(impl_ty, receiver_ty).is_err() {
             return TraitCandidateCheck::Rejected;
         }
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
-            .with_assumptions(self.assumptions)
-            .with_choices(self.choices);
+        let solve_cx = self.solve_cx();
         let mut needs_confirmation = false;
         let mut unsatisfied = false;
         for &constraint in implementor.constraints(self.db).list(self.db) {
@@ -1080,9 +1164,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         // whose signatures don't mention those args (e.g. `AbiDecoder<A>::read_word`).
         let receiver_is_ty_param = receiver_is_ty_param_like(self.db, self.receiver.original());
 
-        let solve_cx = TraitSolveCx::new(self.db, self.scope, self.tier)
-            .with_assumptions(self.assumptions)
-            .with_choices(self.choices);
+        let solve_cx = self.solve_cx();
         let query = solve_cx.query(self.db, inst);
         let inst = if receiver_is_ty_param {
             inst
@@ -1146,7 +1228,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .list(self.db)
                 .iter()
                 .chain(&shapes)
-                .map(|inst| inst.def(self.db)),
+                .map(|inst| inst.def(self.db))
+                .chain(
+                    self.choices
+                        .iter()
+                        .flat_map(|choices| choices.items(self.db))
+                        .map(|choice| choice.implementation().trait_def(self.db)),
+                ),
         )
     }
 }

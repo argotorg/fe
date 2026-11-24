@@ -1,0 +1,5 @@
+impl P for Foo as Bar::Baz {}
+
+impl P for Foo as Bar<u8> { fn run() {} }
+
+fn after() {}

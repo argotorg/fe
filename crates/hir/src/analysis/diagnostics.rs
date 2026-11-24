@@ -26,6 +26,7 @@ use crate::analysis::{
 };
 use crate::{
     ParserError, SpannedHirDb,
+    core::semantic::ZeroInvalidReason,
     hir_def::{
         AssocTyDecl, CallableDef, FieldIndex, GenericParamOwner, ModeMarker, PathKind, Trait,
         TypeMode, params::FuncParamMode,
@@ -2007,7 +2008,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         span: span.resolve(db),
                     }],
                     notes: declared_by
-                        .into_iter()
+                        .iter()
                         .map(|declared_by| {
                             let declared_by = trait_name(*declared_by);
                             format!("`{name}` is declared by `{declared_by}`; bind it on that trait")
@@ -2585,12 +2586,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ContractFieldZeroInvalid { span, ty, invalid } => {
+            Self::ContractFieldZeroInvalid {
+                span,
+                ty,
+                invalid,
+                reason,
+            } => {
+                let (reason, note) = match reason {
+                    ZeroInvalidReason::UnsafeFields => (
+                        "has `unsafe` fields",
+                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant",
+                    ),
+                    ZeroInvalidReason::Uninhabited => (
+                        "is uninhabited",
+                        "state starts zeroed, and an uninhabited type has no valid values",
+                    ),
+                    ZeroInvalidReason::UninhabitedFirstVariant => (
+                        "has an uninhabited first variant",
+                        "state starts zeroed, and tag 0 selects an uninhabited variant",
+                    ),
+                };
                 let label = if ty == invalid {
-                    format!("`{}` has `unsafe` fields", ty.pretty_print(db))
+                    format!("`{}` {reason}", ty.pretty_print(db))
                 } else {
                     format!(
-                        "`{}` holds `{}`, which has `unsafe` fields",
+                        "`{}` holds `{}`, which {reason}",
                         ty.pretty_print(db),
                         invalid.pretty_print(db)
                     )
@@ -2606,9 +2626,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         message: label,
                         span: span.resolve(db),
                     }],
-                    notes: vec![
-                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant".to_string(),
-                    ],
+                    notes: vec![note.to_string()],
                     error_code,
                 }
             }
@@ -5233,6 +5251,33 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::TooFewWithGenericArgs {
+                primary,
+                def_span,
+                given,
+                expected,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "too few generic arguments".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: match expected {
+                            1 => format!("expected 1 generic argument, but {given} given"),
+                            _ => format!("expected {expected} generic arguments, but {given} given"),
+                        },
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: "implementation defined here".to_string(),
+                        span: def_span.resolve(db),
+                    },
+                ],
+                notes: vec![],
+                error_code,
+            },
+
             Self::CallArgNumMismatch {
                 primary,
                 def_span,
@@ -6364,14 +6409,20 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             Self::NamedAssociatedConstMismatch {
                 primary,
                 with,
+                possible,
                 name,
             } => {
                 let mut diag = primary_diag(
                     Severity::Error,
                     "named implementation changes a type-readable associated constant",
                     format!(
-                        "`{}` must agree across implementations of this slot",
-                        name.data(db)
+                        "`{}` must agree across implementations of this slot{}",
+                        name.data(db),
+                        if *possible {
+                            " where their headers may overlap"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
@@ -6387,6 +6438,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             }
             Self::NamedAssociatedTypeMismatch {
                 primary,
+                possible,
                 name,
                 expected,
                 given,
@@ -6394,10 +6446,15 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 Severity::Error,
                 "named implementation changes an ordinary associated type",
                 format!(
-                    "`{}` must remain `{}`, but this implementation defines `{}`",
+                    "`{}` must remain `{}`, but this implementation defines `{}`{}",
                     name.data(db),
                     expected.pretty_print(db),
-                    given.pretty_print(db)
+                    given.pretty_print(db),
+                    if *possible {
+                        " (the headers may overlap)"
+                    } else {
+                        ""
+                    }
                 ),
                 primary.span().resolve(db),
                 error_code,
@@ -6405,6 +6462,7 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
             Self::NamedAssociatedTypeDisagreement {
                 primary,
                 with,
+                possible,
                 name,
                 expected,
                 given,
@@ -6413,10 +6471,15 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                     Severity::Error,
                     "named implementations of one slot give different associated types",
                     format!(
-                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`",
+                        "`{}` is `{}` in another implementation of this slot, but this implementation defines `{}`{}",
                         name.data(db),
                         expected.pretty_print(db),
-                        given.pretty_print(db)
+                        given.pretty_print(db),
+                        if *possible {
+                            " (the headers may overlap)"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
@@ -6434,15 +6497,21 @@ impl DiagnosticVoucher for TraitLowerDiag<'_> {
                 primary,
                 with,
                 ordinary,
+                possible,
                 name,
             } => {
                 let mut diag = primary_diag(
                     Severity::Error,
                     "named implementation changes an associated effect row or result space",
                     format!(
-                        "`{}` must be what the {} implementation of this slot gives",
+                        "`{}` must be what the {} implementation of this slot gives{}",
                         name.data(db),
-                        if *ordinary { "ordinary" } else { "other named" }
+                        if *ordinary { "ordinary" } else { "other named" },
+                        if *possible {
+                            " where their headers may overlap"
+                        } else {
+                            ""
+                        }
                     ),
                     primary.span().resolve(db),
                     error_code,
@@ -6679,6 +6748,40 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                     error_code,
                 }
             }
+
+            Self::ConditionsDiffer {
+                span,
+                primary_goal,
+                a,
+                b,
+            } => primary_diag(
+                severity,
+                "trait bound is not satisfied",
+                format!(
+                    "`{}`: `{}` and `{}` supply different implementations",
+                    primary_goal.pretty_print(db, true),
+                    a.pretty_print(db, true),
+                    b.pretty_print(db, true)
+                ),
+                span.resolve(db),
+                error_code,
+            ),
+
+            Self::ImplementationDiffers {
+                span,
+                primary_goal,
+                root,
+            } => primary_diag(
+                severity,
+                "trait bound is not satisfied",
+                format!(
+                    "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
+                    primary_goal.pretty_print(db, true),
+                    root.pretty_print(db, true)
+                ),
+                span.resolve(db),
+                error_code,
+            ),
 
             Self::InfiniteBoundRecursion(span, msg) => primary_diag(
                 severity,

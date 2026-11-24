@@ -627,8 +627,7 @@ impl<'db> TyChecker<'db> {
 
     /// The base `ty` drives if it is a driver or a producer.
     fn driver_base(&mut self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
-            .with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let base = IdentId::new(self.db, "Base".to_string());
         let projection = ["Driver", "Producer"].into_iter().find_map(|name| {
             let trait_def = self.loop_family_trait(name)?;
@@ -655,8 +654,7 @@ impl<'db> TyChecker<'db> {
     /// `Base`, which the receiver has.
     fn chain_base(&mut self, expr: ExprId, ty: TyId<'db>) -> Option<(ExprId, TyId<'db>)> {
         let traits = ["Driver", "Producer"].map(|name| self.loop_family_trait(name));
-        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
-            .with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let base = AssocBinding::of(IdentId::new(self.db, "Base".to_string()));
         let mut receiver = expr;
         while let Partial::Present(Expr::MethodCall(next, ..)) = receiver.data(self.db, self.body())
@@ -804,8 +802,8 @@ impl<'db> TyChecker<'db> {
             IdentId::new(self.db, method.to_string()),
             self.env.scope(),
             self.env.assumptions(),
+            self.env.choices,
             Some(trait_def),
-            None,
         )
         .result
         {

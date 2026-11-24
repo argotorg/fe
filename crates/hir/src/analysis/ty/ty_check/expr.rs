@@ -418,10 +418,7 @@ impl<'db> TyChecker<'db> {
                     self.push_diag(BodyDiag::TypeSizeOverflow { primary, ty });
                     return false;
                 }
-                // A type with parameters is laid out at each instance.
-                ConstIntrinsicKind::StorageSlots
-                    if !ty.has_param(self.db) && !ty.has_var(self.db) =>
-                {
+                ConstIntrinsicKind::StorageSlots => {
                     if let Err(error) = storage_slot_span(self.db, ty) {
                         self.push_diag(BodyDiag::NoStorageLayout {
                             primary,
@@ -499,6 +496,7 @@ impl<'db> TyChecker<'db> {
 
         let expected = normalize_ty(self.db, expected, self.env.scope(), self.env.assumptions());
 
+        self.env.set_never_coercion(expr, false);
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
             Expr::ItemQuote(holes) => 'quote: {
@@ -1401,8 +1399,7 @@ impl<'db> TyChecker<'db> {
         let mut args = vec![ty];
         args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
         let goal = TraitInstId::new_simple(self.db, trait_def, args);
-        let solve_cx = TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
-            .with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let implemented = !matches!(
             is_goal_satisfiable(self.db, solve_cx, goal),
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -2338,7 +2335,7 @@ impl<'db> TyChecker<'db> {
                     }
                     ImplNameRes::NotVisible { name, definition } => {
                         self.push_diag(PathResDiag::Invisible(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             name,
                             definition,
                         ));
@@ -2347,16 +2344,16 @@ impl<'db> TyChecker<'db> {
                             .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                         continue;
                     }
-                    ImplNameRes::Ambiguous => {
+                    ImplNameRes::Ambiguous(candidates) => {
                         ambiguous_opening = true;
                         // An ambiguous implementation name cannot become an
                         // effect operand merely because selection failed.
                         self.push_diag(PathResDiag::Ambiguous(
-                            binding.value.span(self.body()).into(),
+                            self.with_operand_name_span(path, binding.value),
                             path.ident(self.db)
                                 .to_opt()
                                 .expect("implementation path identifier"),
-                            Vec::new(),
+                            candidates,
                         ));
                         self.env.named_impl_operands.insert(binding.value);
                         self.env
@@ -2420,6 +2417,7 @@ impl<'db> TyChecker<'db> {
                                 .to_vec()
                         })
                         .unwrap_or_default();
+                    let written = args.len();
                     let args =
                         match super::super::ty_lower::collect_generic_params(self.db, owner.into())
                             .complete_args(
@@ -2449,10 +2447,14 @@ impl<'db> TyChecker<'db> {
                         };
                     let expected = implementation.params(self.db).len() - inherited.len();
                     if args.len() != expected {
-                        self.push_diag(BodyDiag::TooManyCallGenericArgs {
+                        // Completion refuses too many arguments, so these are
+                        // too few, and no choice can stand for the operand:
+                        // the block's meaning is left open.
+                        ambiguous_opening = true;
+                        self.push_diag(BodyDiag::TooFewWithGenericArgs {
                             primary: binding.value.span(self.body()).into(),
-                            def_span: owner.span().into(),
-                            given: args.len(),
+                            def_span: owner.span().selection_name().into(),
+                            given: written,
                             expected,
                         });
                         self.env.named_impl_operands.insert(binding.value);
@@ -2628,6 +2630,10 @@ impl<'db> TyChecker<'db> {
         }
 
         if ambiguous_opening {
+            // An operand with two meanings, or with arguments that name no
+            // implementation, leaves the block's meaning open: its body is
+            // not checked, so that it reports nothing the operand would have
+            // provided.
             self.env.effect_env_mut().pop_frame();
             self.env.choices = outer_choices;
             return ExprProp::invalid(self.db);
@@ -2730,6 +2736,18 @@ impl<'db> TyChecker<'db> {
             }
             _ => true,
         }
+    }
+
+    /// The span of the last segment of the `with` operand `operand`, written
+    /// as the path `path`: the name a diagnostic about the operand points at.
+    fn with_operand_name_span(&self, path: PathId<'db>, operand: ExprId) -> DynLazySpan<'db> {
+        operand
+            .span(self.body())
+            .into_path_expr()
+            .path()
+            .segment(path.segment_index(self.db))
+            .ident()
+            .into()
     }
 
     /// Whether the `with` operand `operand`, written as `path`, names a value
@@ -2848,6 +2866,7 @@ impl<'db> TyChecker<'db> {
             &canonical,
             self.env.scope(),
             self.env.assumptions(),
+            self.env.choices,
         ) {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
@@ -2931,6 +2950,7 @@ impl<'db> TyChecker<'db> {
                     &Canonicalized::new(self.db, field_ty),
                     self.env.scope(),
                     self.env.assumptions(),
+                    self.env.choices,
                 ),
                 Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
             )
@@ -3511,12 +3531,7 @@ impl<'db> TyChecker<'db> {
                 // A row of an instance no implementation satisfies is the
                 // unsatisfied bound's error, reported once.
                 None if matches!(
-                    is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope(), Tier::All)
-                            .with_assumptions(self.env.assumptions()),
-                        row.inst,
-                    ),
+                    is_goal_satisfiable(self.db, self.env.solve_cx(), row.inst),
                     GoalSatisfiability::UnSat(_)
                 ) => {}
                 None => self.push_diag(match self.env.late_closure() {
@@ -4421,11 +4436,17 @@ impl<'db> TyChecker<'db> {
 
         let receiver_tys = self.receiver_candidates(receiver_prop.ty);
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
-        let mut candidate =
-            self.select_method_in_scope(&canonical_r_ty, method_name, method_assumptions, None);
+        let mut candidate = self.select_method_in_scope(
+            &canonical_r_ty,
+            method_name,
+            method_assumptions,
+            method_choices,
+            None,
+        );
         if matches!(
             candidate,
             Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
@@ -4436,6 +4457,7 @@ impl<'db> TyChecker<'db> {
                     &fallback_canonical,
                     method_name,
                     method_assumptions,
+                    method_choices,
                     None,
                 );
 
@@ -4793,6 +4815,7 @@ impl<'db> TyChecker<'db> {
         receiver: &Canonicalized<'db, TyId<'db>>,
         method_name: IdentId<'db>,
         assumptions: PredicateListId<'db>,
+        choices: Option<ChosenImpls<'db>>,
         trait_: Option<Trait<'db>>,
     ) -> Result<MethodCandidate<'db>, MethodSelectionError<'db>> {
         let outcome = select_method_candidate_with_choices(
@@ -4801,8 +4824,8 @@ impl<'db> TyChecker<'db> {
             method_name,
             self.env.scope(),
             assumptions,
+            choices,
             trait_,
-            self.env.choices,
         );
         outcome.result
     }
@@ -5288,7 +5311,7 @@ impl<'db> TyChecker<'db> {
                     ) {
                         self.env.register_const_ref(
                             expr,
-                            ConstRef::InherentConst(InherentConstUse::new(
+                            ConstRef::inherent(InherentConstUse::new(
                                 self.env.scope(),
                                 self.env.assumptions(),
                                 impl_,
@@ -5827,6 +5850,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        let mut exhaustive = false;
         if !scrutinee_pat_ty.has_invalid(self.db)
             && arm_statuses.iter().all(|status| status.is_ready())
         {
@@ -5856,7 +5880,9 @@ impl<'db> TyChecker<'db> {
             }
 
             match analysis.exhaustiveness {
-                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {}
+                crate::analysis::ty::pattern_analysis::MatchExhaustiveness::Exhaustive => {
+                    exhaustive = true;
+                }
                 crate::analysis::ty::pattern_analysis::MatchExhaustiveness::NonExhaustive(
                     missing_patterns,
                 ) => {
@@ -5879,7 +5905,7 @@ impl<'db> TyChecker<'db> {
             }
         }
 
-        if !arms.is_empty() && diverging_arms == arms.len() {
+        if (!arms.is_empty() || exhaustive) && diverging_arms == arms.len() {
             match_ty = TyId::never(self.db);
         }
 
@@ -5989,6 +6015,7 @@ impl<'db> TyChecker<'db> {
         tier: Tier,
     ) -> OpsSelection<'db> {
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
         let mut candidates = Vec::new();
         let mut error = None;
         for &candidate_ty in lhs_candidates {
@@ -5999,6 +6026,7 @@ impl<'db> TyChecker<'db> {
                 op.trait_method(self.db),
                 self.env.scope(),
                 method_assumptions,
+                method_choices,
                 trait_def,
                 tier,
             ) {
@@ -6092,6 +6120,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
         let mut checked_rhs_ty = None;
 
         let (method, inst) = if let Some(rhs_expr) = rhs_expr {
@@ -6229,6 +6258,7 @@ impl<'db> TyChecker<'db> {
                 &c_lhs_ty,
                 op.trait_method(self.db),
                 method_assumptions,
+                method_choices,
                 Some(trait_def),
             );
             if matches!(
@@ -6241,6 +6271,7 @@ impl<'db> TyChecker<'db> {
                         &c_candidate_ty,
                         op.trait_method(self.db),
                         method_assumptions,
+                        method_choices,
                         Some(trait_def),
                     );
                     if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
