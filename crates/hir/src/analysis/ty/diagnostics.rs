@@ -17,6 +17,7 @@ use crate::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
         ImplTrait, IntegerId, ModeMarker, TypeId as HirTypeId, TypeMode,
     },
+    core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
 use either::Either;
@@ -342,6 +343,7 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
 
     /// A collection entry type in contract state with no storage layout.
@@ -1229,6 +1231,16 @@ pub enum BodyDiag<'db> {
         expected: usize,
     },
 
+    /// Fewer generic arguments naming an implementation in `with` than it
+    /// has parameters without a default. Unlike a call, the operand has no
+    /// arguments left to infer.
+    TooFewWithGenericArgs {
+        primary: DynLazySpan<'db>,
+        def_span: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
     CallArgNumMismatch {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
@@ -1694,6 +1706,7 @@ impl<'db> BodyDiag<'db> {
             Self::VariadicArgLabel(_) => 160,
             Self::InvalidVariadicArg { .. } => 161,
             Self::ImmutableContractEffectMutBinding { .. } => 162,
+            Self::TooFewWithGenericArgs { .. } => 163,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,
@@ -1739,10 +1752,14 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedConstMismatch {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        /// The headers only may overlap (an unresolved associated type or
+        /// constant keeps them from being proved disjoint).
+        possible: bool,
         name: IdentId<'db>,
     },
     NamedAssociatedTypeMismatch {
         primary: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1752,6 +1769,7 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedTypeDisagreement {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1763,6 +1781,7 @@ pub enum TraitLowerDiag<'db> {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
     },
     ConflictTraitImpl {
@@ -1826,6 +1845,23 @@ pub enum TraitConstraintDiag<'db> {
         actual: TyId<'db>,
     },
 
+    /// The goal is implemented, but the implementation chosen at this use is not
+    /// the one the dictionary of `root` holds for it.
+    ImplementationDiffers {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        root: TraitInstId<'db>,
+    },
+
+    /// The goal is implemented, but two conditions of the implementation chosen
+    /// for the bound hold it from different dictionaries.
+    ConditionsDiffer {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        a: TraitInstId<'db>,
+        b: TraitInstId<'db>,
+    },
+
     TraitBoundNotSat {
         span: DynLazySpan<'db>,
         primary_goal: TraitInstId<'db>,
@@ -1846,7 +1882,9 @@ impl TraitConstraintDiag<'_> {
             Self::KindMismatch { .. } => 0,
             Self::TraitArgNumMismatch { .. } => 1,
             Self::TraitArgKindMismatch { .. } => 2,
-            Self::TraitBoundNotSat { .. } => 3,
+            Self::TraitBoundNotSat { .. }
+            | Self::ImplementationDiffers { .. }
+            | Self::ConditionsDiffer { .. } => 3,
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,

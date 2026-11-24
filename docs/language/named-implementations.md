@@ -62,6 +62,10 @@ implementation appear in one `with` or either enclosing block, and when
 another function forwards the same effect. An unbounded helper that supplies
 its own provider still uses its ordinary dictionary.
 
+A function passed as a value to a callable bound, as in `run(helper<u256>)`,
+carries proofs of its own bounds made where it is passed, as the closure
+`|| helper<u256>()` would.
+
 ## Supertraits: one dictionary per bound
 
 An implied supertrait dictionary comes from its subtrait's proof. An unrelated
@@ -137,10 +141,17 @@ A named implementation of a trait with associated types, associated effect
 rows or associated constants requires a unique, source-declared ordinary
 implementation covering its header under its declared conditions. Named
 implementations must agree with other source-declared implementations, ordinary
-and named, on these outputs wherever their headers overlap. Output agreement
-does not depend on which implementation conditions happen to hold at an
-opening. Constants compare using the compiler's existing constant normalization;
+and named, on these outputs wherever their headers overlap, including where
+an unresolved associated type or constant leaves open whether they do. Output
+agreement does not depend on which implementation conditions happen to hold at
+an opening. Constants compare using the compiler's existing constant normalization;
 for example, `10` agrees with `5 + 5`, but not with `11`.
+
+Agreement is also checked where a choice answers a concrete goal, including an
+ordinary implementation whose conditions hold only through a choice and
+implementations in other ingots: the implementation that answers must give the
+outputs that ordinary normalization gives the goal, and a goal with outputs
+needs an ordinary implementation there. A use that breaks this is rejected.
 
 ```fe
 trait Size { const N: usize }

@@ -3901,7 +3901,10 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "mutex_lock_slot_no_transient_collision",
     "named_storage_codecs",
     "named_storage_deferred_codec",
+    "named_storage_entry_codec_identity",
     "named_storage_evidence",
+    "named_storage_local_generic_choice",
+    "named_storage_local_generic_codec",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -6007,4 +6010,375 @@ fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
             "unrelated choice cannot reject ordinary generic codec: {output}"
         );
     }
+}
+
+#[test]
+fn named_output_possible_overlap_is_refused() {
+    // The named header and the ordinary one overlap where `T::Out` is `u8`,
+    // and give different `Result` types there.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/named_output_possible_overlap.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+    assert!(output.contains("may overlap"), "{output}");
+
+    // The same shape with equal outputs is accepted and runs the named one.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_output_possible_overlap_agree.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+const OUTPUT_AGREEMENT_A: &str = r#"pub trait Marker {}
+pub trait Foo {
+    type Out
+    fn make() -> Self::Out
+}
+impl<T: Marker> Foo for T {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+pub impl<T: Marker> Foo for T as NamedInA {
+    type Out = u8
+    fn make() -> u8 { 2 }
+}
+"#;
+
+fn write_output_agreement_ingots(root: &Path, b_source: &str) {
+    for (path, content) in [
+        ("a/fe.toml", "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n"),
+        ("a/src/lib.fe", OUTPUT_AGREEMENT_A),
+        (
+            "b/fe.toml",
+            "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n\n[dependencies]\na = { path = \"../a\" }\n",
+        ),
+        ("b/src/lib.fe", b_source),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+}
+
+#[test]
+fn named_output_agreement_across_ingots() {
+    // An ordinary implementation in a downstream ingot gives `S` other
+    // outputs than the upstream named implementation a use chooses.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = (u256, u256)
+    fn make() -> (u256, u256) { (1, 2) }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> (u256, u256) { with (NamedInA, FakeMarker) { call<S>() } }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["check", b.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("call<S>()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the use is accepted and runs the named implementation.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> u8 { with (NamedInA, FakeMarker) { call<S>() } }
+
+#[test]
+fn t() { assert(boom() == 2) }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", b.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_condition_cannot_change_ordinary_outputs() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // An ordinary blanket implementation whose condition holds only through a
+    // choice, beside an ordinary implementation with other outputs.
+    let path = fixtures.join("named_condition_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn gen"), "{output}");
+    assert!(output.contains("<T as Foo>::make()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+    assert!(
+        output.contains("`S: Foo` is answered here by `impl<T: Marker> Foo for T`"),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+
+    // No ordinary implementation defines the outputs at the goal.
+    let path = fixtures.join("named_condition_no_ordinary_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains("no ordinary implementation defines its associated outputs"),
+        "{output}"
+    );
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // The same in a generic body whose instance picks the choice.
+    let path = fixtures.join("named_condition_generic_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn g"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the blanket implementation runs.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("agree.fe");
+    let agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe"))
+        .unwrap()
+        .replace(
+            "impl Foo for S {\n    type Out = u8\n    fn make() -> u8 { 2 }\n}",
+            "impl Foo for S {\n    type Out = u256\n    fn make() -> u256 { 2 }\n}",
+        )
+        .replace("fn boom() -> u8", "fn boom() -> u256")
+        .replace("assert(boom() == 2)", "assert(boom() == 1)");
+    fs::write(&path, agreeing).unwrap();
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_entry_codec_identity() {
+    // Two reads of one entry of a generic collection, one under a codec
+    // choice and one without, run their own codecs. Two reads under the same
+    // choice share a dispatch.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_storage_entry_codec_identity.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_local_generic_choice() {
+    // A named implementation declared inside a generic function applies, with
+    // the function's own arguments, to a codec proof that completes at the
+    // instance. The control has a header that matches at check time.
+    for fixture in [
+        "named_storage_local_generic_choice.fe",
+        "named_storage_local_generic_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn concrete_component_runtime() {
+    // A goal on a concrete type that the dictionary of a pinned bound holds
+    // reads that dictionary: in a function, an implementation's method, a
+    // closure and a function item. A named implementation with a generic
+    // condition opens in a function whose bound pins the condition's
+    // associated type. A `for` loop and the call it sits beside read one
+    // iteration, and an indexing read and a call read one lane codec.
+    for fixture in [
+        "concrete_component_call_bound.fe",
+        "concrete_component_impl_method.fe",
+        "concrete_component_pinned_named_condition.fe",
+        "concrete_component_closure_item.fe",
+        "concrete_component_loop_plan.fe",
+        "concrete_component_entry_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn named_function_item_and_spliced_row_forms() {
+    // A function item passed to a callable bound runs with the proofs of its
+    // bounds made where it is passed, in the forms of a trait method, a
+    // method with its own bound, a function with an effect passed under
+    // several providers, and a relay through a generic body. A spliced row
+    // supplies its components in the forms of two components, a direct effect
+    // before the row, a supertrait of the key trait and two generic bodies.
+    for (fixture, passed) in [
+        ("named_function_item_trait_method.fe", 7),
+        ("named_function_item_forms.fe", 6),
+        ("named_function_item_providers.fe", 1),
+        ("named_function_item_method_bound.fe", 3),
+        ("named_function_item_relay_by_choice.fe", 3),
+        ("named_function_item_relay_named_only.fe", 3),
+        ("named_spliced_row_forms.fe", 7),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(
+            output.contains(&format!("test result: ok. {passed} passed; 0 failed")),
+            "{fixture}: {output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
+    // Two implementations of a foreign trait overlap through an implementation
+    // of a foreign bound that the checking ingot declares, which the trait's
+    // own ingot cannot see.
+    let conflicting = fe_test_runner_fixture_dir("overlap_foreign_trait");
+    let (output, exit_code) = run_fe_main(&["check", conflicting.to_str().expect("utf8")]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("conflicting trait implementations"),
+        "{output}"
+    );
+
+    // Where one of them names a type the bound does not cover, they stay disjoint.
+    let disjoint = fe_test_runner_fixture_dir("overlap_foreign_trait_disjoint");
+    let (output, exit_code) = run_fe_main(&["check", disjoint.to_str().expect("utf8")]);
+    assert_eq!(exit_code, 0, "{output}");
+}
+
+/// Runs `fe` and fails the test, killing the process, if it has not finished
+/// within `limit`. A compiler that does not stop is the failure under test.
+fn run_fe_main_within(args: &[&str], limit: std::time::Duration) -> (String, i32) {
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let dir = tempdir().expect("tempdir");
+    let stdout = fs::File::create(dir.path().join("stdout")).expect("stdout file");
+    let stderr = fs::File::create(dir.path().join("stderr")).expect("stderr file");
+    let mut child = Command::new(fe_binary())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to spawn fe {args:?}"));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for fe") {
+            break Some(status);
+        }
+        if start.elapsed() > limit {
+            child.kill().expect("kill fe");
+            child.wait().expect("reap fe");
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let read = |name: &str| {
+        normalize_output(&String::from_utf8_lossy(
+            &fs::read(dir.path().join(name)).expect("read output"),
+        ))
+    };
+    let output = format!("{}{}", read("stdout"), read("stderr"));
+    let Some(status) = status else {
+        panic!("fe {args:?} did not finish within {limit:?}: {output}");
+    };
+    (output, status.code().unwrap_or(-1))
+}
+
+#[test]
+fn named_polymorphic_recursion_reaches_the_instance_limit() {
+    // The recursive call's dictionary holds a named implementation, and every
+    // instance of `deep` is new. The instance limit ends the chain, as it does
+    // for the same recursion without a choice or with the choice inside the
+    // body.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for name in [
+        "named_polyrec_control.fe",
+        "named_polyrec_local_choice.fe",
+        "named_polyrec_named.fe",
+    ] {
+        let path = fixtures.join(name);
+        let (output, exit) = run_fe_main_within(
+            &["check", path.to_str().unwrap()],
+            std::time::Duration::from_secs(120),
+        );
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(output.contains("16-0016"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_condition_answered_goal_needs_ordinary_outputs() {
+    // A goal with outputs, answered only through a choice, is refused even
+    // where the program reads no output: no ordinary implementation defines
+    // the outputs the type checker would assume for it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_unused_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains(
+            "`S: Foo` is answered here by `impl<T: Marker> Foo for T`, but no ordinary implementation defines its associated outputs at `S: Foo`"
+        ),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+}
+
+#[test]
+fn named_constant_computed_under_its_own_choice() {
+    // The constant of a named implementation runs a method of the same
+    // implementation under `with`. Checking the constant checks the
+    // computation, which uses the implementation again.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let limit = std::time::Duration::from_secs(120);
+    let path = fixtures.join("named_const_cycle.fe");
+    let (output, exit) =
+        run_fe_main_within(&["test", "--jobs", "1", path.to_str().unwrap()], limit);
+    assert_eq!(exit, 0, "{output}");
+
+    let path = fixtures.join("named_const_cycle_disagree.fe");
+    let (output, exit) = run_fe_main_within(&["check", path.to_str().unwrap()], limit);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+}
+
+#[test]
+fn named_output_walk_does_not_follow_a_body_with_errors() {
+    // `boom` fails internally because `gen<S>` under a named choice disagrees
+    // with ordinary normalization, so admission looks for a disagreement in the
+    // instances `boom` calls. The body of `deep` has an unresolved name, and
+    // its calls are not followed: `deep` calls itself at an ever-growing type,
+    // and no instance limit is reported for a body with errors.
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_walk_blocked_body.fe");
+    let (output, exit) = run_fe_main_within(
+        &["check", path.to_str().unwrap()],
+        std::time::Duration::from_secs(120),
+    );
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("8-0012"), "{output}");
+    assert!(!output.contains("16-"), "{output}");
 }

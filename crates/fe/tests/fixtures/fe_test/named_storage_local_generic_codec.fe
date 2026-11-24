@@ -1,0 +1,59 @@
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{Address, Call, Evm, Wei}
+
+struct Tagged<T> {}
+impl<T> LaneCodec<u32> for Tagged<T> {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+struct Counters<C> {}
+impl<C> Pinned for Counters<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Counters<C> {
+    type Key = u256
+    type Entry = u32
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+fn read_local<T>(c: Counters<Tagged<T>>) -> u256 {
+    impl LaneCodec<u32> for Tagged<T> as Local {
+        const BITS: u256 = 32
+        fn get(_ word: u256, offset: u256) -> u32 {
+            with (<Tagged<T> as LaneCodec<u32>>) { Tagged<T>::get(word, offset: offset) + 1 }
+        }
+        fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+            with (<Tagged<T> as LaneCodec<u32>>) { Tagged<T>::set(word, offset: offset, value: value) }
+        }
+    }
+    let b = with (Local) { c[1] }
+    b as u256
+}
+fn fill<C>(c: mut Counters<C>) { c[1] = 6 }
+
+msg M {
+    #[selector = 1]
+    Run -> u256,
+}
+pub contract K {
+    mut c: Counters<Tagged<u8>>
+    recv M {
+        Run -> u256 uses (mut c) {
+            fill(c: mut c)
+            read_local(c: c)
+        }
+    }
+}
+#[test]
+fn local_read() uses (evm: mut Evm) {
+    let k = evm.create2<K>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u256 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Run {})
+    assert!(raw == 7)
+}

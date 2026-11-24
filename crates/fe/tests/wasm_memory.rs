@@ -1214,6 +1214,26 @@ program_test!(tail_recursion, "tail_recursion", {
     ]
 });
 
+program_test!(tail_dispatch, "tail_dispatch", {
+    // A million handler calls: each takes the cursor as values and replaces
+    // its caller's frame.
+    vec![Export::new("run", &[("steps", U32)], U64).product(
+        &[vec![0, 1, 2, 3, 10, 1_000_000]],
+        |a| {
+            let (mut pc, mut acc) = (0u32, 0u64);
+            for _ in 0..a[0] {
+                pc = (pc + 1) & 0xffff;
+                match pc % 3 {
+                    0 => acc = acc.wrapping_add(3),
+                    1 => acc = (acc << 1) & 0xffff_ffff,
+                    _ => {}
+                }
+            }
+            Some(i128::from(acc))
+        },
+    )]
+});
+
 program_test!(guarded_faults, "guarded_faults", {
     let inputs = [vec![0, 7, 100], vec![0, 1, 3], vec![0, 3]];
     vec![

@@ -375,7 +375,7 @@ fn verify_terminator<'db>(
             tag,
             enum_layout,
             cases,
-            ..
+            default,
         } => {
             let class = runtime_value_class(body, *tag)?;
             let RuntimeClass::Scalar(scalar) = class else {
@@ -387,11 +387,23 @@ fn verify_terminator<'db>(
             ) {
                 return Err(VerifyError::InvalidEnumTag(*enum_layout));
             }
+            let crate::runtime::Layout::Enum(layout) = program.layout(*enum_layout) else {
+                return Err(VerifyError::InvalidEnumTag(*enum_layout));
+            };
+            if layout.variants.is_empty() {
+                return Err(VerifyError::InvalidEnumTag(*enum_layout));
+            }
             let mut seen = FxHashSet::default();
             for (variant, _) in cases {
-                if variant.enum_layout != *enum_layout || !seen.insert(variant.index) {
+                if variant.enum_layout != *enum_layout
+                    || usize::from(variant.index) >= layout.variants.len()
+                    || !seen.insert(variant.index)
+                {
                     return Err(VerifyError::InvalidVariant(*enum_layout, variant.index));
                 }
+            }
+            if default.is_none() && seen.len() != layout.variants.len() {
+                return Err(VerifyError::InvalidEnumTag(*enum_layout));
             }
             Ok(())
         }
@@ -400,6 +412,11 @@ fn verify_terminator<'db>(
         }
         RTerminator::ReturnData { offset, len } | RTerminator::Revert { offset, len } => {
             verify_address_operand(db, body, *offset, AddressSpace::Memory)?;
+            verify_word_value(body, *len)?;
+            Ok(())
+        }
+        RTerminator::ReturnCode { offset, len } => {
+            verify_word_value(body, *offset)?;
             verify_word_value(body, *len)?;
             Ok(())
         }

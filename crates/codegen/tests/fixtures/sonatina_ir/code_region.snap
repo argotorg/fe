@@ -346,18 +346,18 @@ func private %init() {
         unreachable;
 
     block11:
-        v32.objref<i256> = obj.proj v1 0.i256;
-        v33.i256 = obj.load v32;
-        v34.objref<i256> = obj.proj v1 1.i256;
-        v35.i256 = obj.load v34;
+        v31.objref<i256> = obj.proj v1 0.i256;
+        v32.i256 = obj.load v31;
+        v33.objref<i256> = obj.proj v1 1.i256;
+        v34.i256 = obj.load v33;
         jump block13;
 
     block12:
         jump block10;
 
     block13:
-        v39.@layout_2 = agg.make @layout_2 v33 v35;
-        obj.store v3 v39;
+        v38.@layout_2 = agg.make @layout_2 v32 v34;
+        obj.store v3 v38;
         jump block12;
 }
 

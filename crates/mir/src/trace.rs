@@ -438,6 +438,7 @@ fn runtime_terminator_display(terminator: &RTerminator<'_>) -> String {
         } => format!("match_enum {tag:?}, {enum_layout:?}, {cases:?}, default {default:?}"),
         RTerminator::TerminalCall { callee, args } => format!("tail_call {callee:?}({args:?})"),
         RTerminator::ReturnData { offset, len } => format!("return_data {offset:?}, {len:?}"),
+        RTerminator::ReturnCode { offset, len } => format!("return_code {offset:?}, {len:?}"),
         RTerminator::Revert { offset, len } => format!("revert {offset:?}, {len:?}"),
         RTerminator::RevertEmpty => "revert_empty".to_string(),
         RTerminator::Panic { code } => format!("panic {code:?}"),
@@ -571,6 +572,7 @@ fn terminator_edges(from: RBlockId, terminator: &RTerminator<'_>) -> Vec<Runtime
         }],
         RTerminator::TerminalCall { .. }
         | RTerminator::ReturnData { .. }
+        | RTerminator::ReturnCode { .. }
         | RTerminator::Revert { .. }
         | RTerminator::RevertEmpty
         | RTerminator::Panic { .. }

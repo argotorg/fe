@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: "diagnostics(db, fixture.path(), fixture.content())"
+input_file: fixtures/semantic_access/implied_bound_supertrait_conflict.fe
+---
+error[16-0019]: conflicting implementations of a bound in `fn target`
+   ┌─ implied_bound_supertrait_conflict.fe:11:4
+   │
+11 │ fn target<T: Sub + Price>() -> u256 { T::price() }
+   │    ^^^^^^ `Item: Price`: `Item: Sub` and `Item: Price` supply different implementations

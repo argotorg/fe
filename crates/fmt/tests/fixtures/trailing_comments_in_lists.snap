@@ -1,0 +1,21 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/trailing_comments_in_lists.fe
+---
+fn f(a: u256, b: u256) -> u256 {
+    a + b
+}
+
+fn call_with_trailing_comments() -> u256 {
+    let y: u256 = f(
+        1, // one
+        2, // two
+    )
+    let z: u256 = f(
+        // leading
+        1, // one
+        2, // two, no comma
+    )
+    y + z
+}

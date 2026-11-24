@@ -97,6 +97,19 @@ and a body that stays deferred by its canonical semantic form. A written
 type, alias or anonymous constant whose formation reads a choice is refused
 (`type_choice_read`, `const_requirements`).
 
+The same comparison runs at a concrete goal that a proof answers through a
+named implementation at any depth (`concrete_goal_output_mismatch`,
+`trait_def`). `SemanticInstance::output_agreement_diagnostic` applies it to
+every proof a body's uses carry before the body is lowered. A callee's own
+uses are checked when the callee is admitted. Where the admission of an
+instance fails internally, the first disagreement in the instances it calls
+(only those within the instance limits) is reported instead
+(`callee_output_disagreement`). The codec proofs that `entry_codec_callees`
+completes after admission are checked there.
+The other two places that complete a deferred codec proof after admission
+(`semantic_callee_key_with_assumptions` and `instance_evidence`) do not
+compare outputs. No program that reaches a disagreement there was found.
+
 An overlap used to compare outputs binds the structural arguments first.
 It then uses the declared equalities from both implementations to normalize
 the projected arguments at that application.
@@ -128,3 +141,12 @@ premise can change when the element becomes packed.
 - Inside a block, a generic function whose own bound fixes a bounded associated
   type to a concrete type (`C: Collection<Cursor = usize>`) is refused, because
   that bound's implied slot is not kept in the function's assumptions.
+- Inside a call cycle, which of several real disagreements in the callees is
+  reported can depend on the order in which they are checked.
+- The message "no ordinary implementation defines its associated outputs" is
+  also given where the ordinary implementation of the goal is ambiguous, in
+  the check at a concrete goal and in the check of a named implementation's
+  header.
+- The runtime lowering error "runtime call requires a selected implementation"
+  is not attributed to a callee whose outputs disagree with ordinary
+  normalization.

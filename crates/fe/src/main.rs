@@ -336,9 +336,10 @@ pub enum Command {
         #[arg(long, value_name = "NAME")]
         link_lib: Vec<String>,
         /// Size in bytes of the stack of a WebAssembly module, which holds the
-        /// frames of its calls (default: 1048576, 1 MiB). It is rounded up so
-        /// that the stack ends on a 64 KiB page boundary. Requires `--backend
-        /// wasm`.
+        /// frames of the calls in progress (default: 1048576, 1 MiB). A call
+        /// whose frame does not fit traps, so deep recursion that does not end
+        /// in tail calls may need more. It is rounded up so that the stack ends
+        /// on a 64 KiB page boundary. Requires `--backend wasm`.
         #[arg(long, value_name = "BYTES", value_parser = value_parser!(u32).range(1..))]
         wasm_stack_size: Option<u32>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).

@@ -109,6 +109,25 @@ pub enum PathResDiag<'db> {
     },
 }
 
+/// The definitions an ambiguous name could mean, each with whether it came
+/// from an implicit import.
+pub(crate) fn ambiguity_candidates<'db>(
+    db: &'db dyn HirAnalysisDb,
+    cands: &[NameRes<'db>],
+) -> Vec<(DynLazySpan<'db>, bool)> {
+    cands
+        .iter()
+        .filter_map(|name| {
+            let span = name.kind.name_span(db)?;
+            let from_implicit = name
+                .derivation
+                .use_stmt()
+                .is_some_and(|use_| use_.is_synthetic_use(db));
+            Some((span, from_implicit))
+        })
+        .collect()
+}
+
 impl<'db> PathResDiag<'db> {
     /// Returns the top-level module where the diagnostic is located.
     pub fn top_mod(&self, db: &'db dyn HirAnalysisDb) -> TopLevelMod<'db> {
@@ -145,18 +164,7 @@ impl<'db> PathResDiag<'db> {
         ident: IdentId<'db>,
         cands: ThinVec<NameRes<'db>>,
     ) -> Self {
-        let cands = cands
-            .into_iter()
-            .filter_map(|name| {
-                let span = name.kind.name_span(db)?;
-                let from_implicit = name
-                    .derivation
-                    .use_stmt()
-                    .is_some_and(|use_| use_.is_synthetic_use(db));
-                Some((span, from_implicit))
-            })
-            .collect();
-        Self::Ambiguous(span, ident, cands)
+        Self::Ambiguous(span, ident, ambiguity_candidates(db, &cands))
     }
 
     pub fn local_code(&self) -> u16 {

@@ -13,7 +13,8 @@ use crate::{
 };
 
 use super::type_info::{
-    RuntimeTypeEnv, runtime_array_len, runtime_repr_ty_in_env, stored_class_for_ty_in_env,
+    RuntimeTypeEnv, runtime_array_len, runtime_repr_ty_in_env, runtime_uninhabited_ty,
+    stored_class_for_ty_in_env,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +29,16 @@ pub(crate) fn layout_for_ty_in_env<'db>(
     ty: TyId<'db>,
 ) -> LayoutId<'db> {
     let ty = runtime_repr_ty_in_env(db, env, ty);
+    if runtime_uninhabited_ty(db, ty, env.scope, env.assumptions) {
+        return LayoutId::new(
+            db,
+            LayoutKey::Struct(StructLayout {
+                fields: Box::new([]),
+                pinned: false,
+                lane_bytes: None,
+            }),
+        );
+    }
     if ty.as_enum(db).is_some() {
         return LayoutId::new(db, LayoutKey::Enum(enum_layout_key(db, env, ty)));
     }

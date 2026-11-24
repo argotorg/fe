@@ -1,0 +1,6 @@
+[ingot]
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+dep = { path = "../overlap_foreign_trait_vendor/dep" }

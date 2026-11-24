@@ -392,7 +392,7 @@ impl<'db> ImportResolver<'db> {
                 }
                 let segments = use_path(db, use_)?;
                 let idx = segments.len() - 1;
-                let domain = NameDomain::TYPE | NameDomain::VALUE;
+                let domain = NameDomain::TYPE | NameDomain::VALUE | NameDomain::IMPL;
                 let mut bucket = self.lookup(use_, target, idx, &segments[idx], domain, forced)?;
                 bucket.set_derivation(NameDerivation::NamedImported(use_));
                 Ok(Resolved::Bucket(bucket))

@@ -45,7 +45,7 @@ fn token_piece_basic<'a>(
         }
         ImplKw => TokenPiece::new(text),
         ForKw => TokenPiece::new(text).space_before(),
-        Eq | Arrow => TokenPiece::new(text).spaces(),
+        AsKw | Eq | Arrow => TokenPiece::new(text).spaces(),
         _ => return None,
     })
 }

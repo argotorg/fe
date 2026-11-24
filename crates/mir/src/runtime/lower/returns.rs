@@ -696,22 +696,6 @@ fn retarget_declaration_return_transport<'db>(
     } else {
         source_root
     };
-    // Forwarded type provenance may name the containing slot. Loading a stored
-    // native carrier returns its value, not the address of that carrier's slot.
-    if let RuntimeClass::Ref {
-        pointee: target_pointee,
-        ..
-    } = &target
-        && let Some(stored) = source.deref_target(db)
-        && let RuntimeClass::Ref {
-            pointee,
-            kind: RefKind::Native,
-            ..
-        } = &stored
-        && pointee == target_pointee
-    {
-        return stored;
-    }
     match (target, source) {
         (
             target @ RuntimeClass::Ref {
@@ -1672,6 +1656,118 @@ fn at_fwd(_ xs: mut [Pair; 2], _ i: usize) -> mut Pair {
                 }],
             }]
         );
+    }
+
+    #[test]
+    fn values_loaded_through_raw_pointers_are_not_forwarded() {
+        let mut db = DriverDataBase::default();
+        let file_url =
+            Url::parse("file:///values_loaded_through_raw_pointers_are_not_forwarded.fe").unwrap();
+        db.workspace().touch(
+            &mut db,
+            file_url.clone(),
+            Some(
+                r#"
+struct Pair {
+    a: u256,
+    b: *u256,
+}
+
+unsafe fn load(_ slot: **u256) -> *u256 {
+    *slot
+}
+
+unsafe fn load_twice(_ slot: ***u256) -> *u256 {
+    let inner = *slot
+    *inner
+}
+
+unsafe fn load_pair(_ slot: **Pair) -> Pair {
+    *(*slot)
+}
+
+unsafe fn load_field(_ pair: Pair) -> u256 {
+    *pair.b
+}
+
+unsafe fn pointer_field(_ pair: *Pair) -> *u256 {
+    pair.b
+}
+
+fn field(_ pair: Pair) -> *u256 {
+    pair.b
+}
+
+unsafe fn field_and_load(_ pair: Pair) -> (*u256, u256) {
+    (pair.b, *pair.b)
+}
+
+unsafe fn borrow(_ pair: *Pair) -> ref Pair {
+    ref *pair
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = db
+            .workspace()
+            .get(&db, &file_url)
+            .expect("file should be loaded");
+        let top_mod = db.top_mod(file);
+        let typed_body = |name| {
+            semantic_instance_for_named_func(&db, top_mod, name)
+                .key(&db)
+                .typed_body(&db)
+        };
+        // A value read through a pointer is not a part of the parameter the
+        // pointer came from, so it takes its type's class.
+        for name in [
+            "load",
+            "load_twice",
+            "load_pair",
+            "load_field",
+            "pointer_field",
+        ] {
+            let typed_body = typed_body(name);
+            assert_eq!(typed_body.forwarded_return_sources(&db), [], "`{name}`");
+            assert_eq!(
+                typed_body.return_provenance(&db),
+                ReturnProvenance::Fresh,
+                "`{name}`"
+            );
+            let semantic = semantic_instance_for_named_func(&db, top_mod, name);
+            let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+            assert_eq!(
+                declaration_runtime_return_class(&db, key),
+                default_return_class(&db, semantic),
+                "`{name}`"
+            );
+        }
+        // A pointer that is a field of the parameter is a part of it.
+        let field = ReturnSource {
+            result_projection: Vec::new(),
+            origin: CallableInputOrigin::ValueParam(0),
+            projection: vec![ReturnProjectionStep::Field(1)],
+        };
+        assert_eq!(
+            typed_body("field_and_load").forwarded_return_sources(&db),
+            [ReturnSource {
+                result_projection: vec![ReturnProjectionStep::Field(0)],
+                ..field.clone()
+            }]
+        );
+        assert_eq!(typed_body("field").forwarded_return_sources(&db), [field]);
+        // A borrow of a pointer's target keeps its raw transport.
+        assert_eq!(typed_body("borrow").forwarded_return_sources(&db), []);
+        let semantic = semantic_instance_for_named_func(&db, top_mod, "borrow");
+        let key = runtime_instance_for_semantic(&db, semantic).key(&db);
+        assert!(matches!(
+            declaration_runtime_return_class(&db, key),
+            Some(RuntimeClass::RawAddr {
+                space: AddressSpace::Memory,
+                ..
+            })
+        ));
     }
 
     #[test]

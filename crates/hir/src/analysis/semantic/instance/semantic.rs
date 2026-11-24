@@ -30,7 +30,9 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            evidence::{EvidenceList, instance_evidence},
+            evidence::{
+                EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
+            },
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -43,9 +45,13 @@ use crate::{
             },
             shape::Shape,
             subst::substitute_complete,
-            trait_def::{MethodArgMapError, TraitInstId},
+            trait_def::{
+                ImplementorId, ImplementorOrigin, MethodArgMapError, NamedOutputMismatch,
+                ResolvedImplInstance, TraitInstId,
+            },
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+                COMPONENT_DEPTH_LIMIT, GoalSatisfiability, PredicateListId, TraitSolveCx,
+                is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
@@ -520,9 +526,12 @@ pub fn instantiated_typed_body<'db>(
                 crate::analysis::ty::evidence::implied_bound_evidence(
                     db,
                     proof,
+                    row.goal,
                     goal,
+                    key.impl_env(db).normalization_scope(db),
                     body.assumptions(),
                 )
+                .proof()
             }
         });
     }
@@ -530,14 +539,29 @@ pub fn instantiated_typed_body<'db>(
     let evidence = instance_evidence(
         db,
         goals,
+        body.bound_schema().basis_slots(db),
         supplied,
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
     let bound = crate::analysis::ty::evidence::BoundEvidence {
         schema: body.bound_schema(),
-        entries: evidence,
+        entries: evidence.proofs,
     };
     body.bind_evidence(db, bound);
+    if let Some(goal) = evidence.refused {
+        body = body.with_refused_bound(goal);
+    }
+    // A component reference the instance's dictionaries did not resolve
+    // names no dictionary: the instance is refused, not given a value.
+    if body.refused_bound().is_none() {
+        let mut unresolved = None;
+        body.for_each_use_evidence(|_, evidence| {
+            unresolved = unresolved.or_else(|| evidence.unresolved_component(db));
+        });
+        if let Some(goal) = unresolved {
+            body = body.with_refused_bound(goal);
+        }
+    }
     if let Some(defining_body) = body.body() {
         body = body.fold_with(
             db,
@@ -919,6 +943,217 @@ fn provisional_call_site<'db>(
         provider_pairs: provider_pairs.into(),
         drops_receiver,
     }
+}
+
+/// The first use in the body of `instance` whose outputs disagree with
+/// ordinary normalization. It is also asked from `callee_output_disagreement`,
+/// where an instance can reach itself again through a constant that is
+/// computed under its own choice, so a cycle starts from no disagreement.
+#[salsa::tracked(returns(copy), cycle_initial = output_agreement_cycle_initial)]
+fn output_agreement_diagnostic_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    let scope = instance.normalization_scope(db);
+    let typed = instance.key(db).typed_body(db);
+    let mut found = None;
+    typed.for_each_use_evidence(|expr, evidence| {
+        if found.is_some() {
+            return;
+        }
+        let rows = evidence
+            .bounds
+            .iter()
+            .flat_map(|bounds| bounds.entries.rows(db).iter().filter_map(|row| row.proof));
+        let proofs = evidence
+            .dispatch_proof()
+            .into_iter()
+            .chain(
+                evidence
+                    .bounds
+                    .iter()
+                    .flat_map(|bounds| bounds.entries.entries(db).iter().flatten().copied()),
+            )
+            .chain(rows);
+        found = proofs
+            .filter_map(|proof| proof_output_mismatch(db, scope, proof))
+            .next()
+            .map(|(own, mismatch)| {
+                output_disagreement_diagnostic(db, instance, expr, own, mismatch)
+            });
+    });
+    found
+}
+
+fn output_agreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
+}
+
+/// The first disagreement with ordinary normalization (see
+/// `output_agreement_diagnostic_query`) in an instance that `instance` calls,
+/// directly or through other calls. Only instances within the instance limits
+/// are followed, and the calls of a body with lowering issues are not
+/// (`walk_may_follow_calls`), so the walk ends for recursion that grows its
+/// generic arguments.
+///
+/// Inside a call cycle, which of several real disagreements is reported can
+/// depend on the order in which the queries are asked. A later fix is to take
+/// the one with the smallest source position.
+#[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
+fn callee_output_disagreement_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    instance_calls(db, instance)
+        .into_iter()
+        .map(|(_, callee)| SemanticInstance::new(db, callee.key))
+        .filter(|&callee| callee != instance && instance_limit_violation(db, callee).is_none())
+        .find_map(|callee| {
+            output_agreement_diagnostic_query(db, callee).or_else(|| {
+                walk_may_follow_calls(db, callee)
+                    .then(|| callee_output_disagreement_query(db, callee))
+                    .flatten()
+            })
+        })
+}
+
+fn callee_output_disagreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
+}
+
+/// The header of an implementation as written, `impl<T: Marker> Foo for T`:
+/// its parameters with the bounds on them, then the other bounds in a `where`
+/// clause. The trait is printed without the associated types the
+/// implementation defines.
+fn implementation_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    let params = implementor.params(db);
+    let bounds = implementor.constraints(db).list(db);
+    let generics = params
+        .iter()
+        .map(|&param| {
+            let name = param.pretty_print(db).to_string();
+            let own = bounds
+                .iter()
+                .filter(|bound| bound.self_ty(db) == param)
+                .map(|bound| bound.pretty_print(db, false))
+                .collect::<Vec<_>>();
+            if own.is_empty() {
+                name
+            } else {
+                format!("{name}: {}", own.join(" + "))
+            }
+        })
+        .collect::<Vec<_>>();
+    let generics = if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", generics.join(", "))
+    };
+    let others = bounds
+        .iter()
+        .filter(|bound| !params.contains(&bound.self_ty(db)))
+        .map(|bound| bound.pretty_print(db, true))
+        .collect::<Vec<_>>();
+    let clause = if others.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", others.join(", "))
+    };
+    let header = implementor.trait_(db).without_assoc_bindings(db);
+    format!(
+        "impl{generics} {} for {}{clause}",
+        header.pretty_print(db, false),
+        header.self_ty(db).pretty_print(db)
+    )
+}
+
+/// How an implementation is named in a message: its name, or its header.
+fn implementation_label<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    match implementor.origin(db) {
+        ImplementorOrigin::Hir(implementation) => match implementation.selection_name(db) {
+            Some(name) => format!("`{}`", name.data(db)),
+            None => format!("`{}`", implementation_header(db, implementor)),
+        },
+        _ => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
+    }
+}
+
+fn output_disagreement_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    expr: ExprId,
+    own: ResolvedImplInstance<'db>,
+    mismatch: NamedOutputMismatch<'db>,
+) -> SemanticDiagnosticId<'db> {
+    let goal = own
+        .trait_inst()
+        .without_assoc_bindings(db)
+        .pretty_print(db, true);
+    let answers = implementation_label(db, own.selected());
+    let with_label = |with: crate::hir_def::ImplTrait<'db>| {
+        crate::analysis::ty::trait_lower::lower_impl_trait(db, with)
+            .map(|implementor| implementation_label(db, implementor))
+            .unwrap_or_else(|| "its implementation".to_string())
+    };
+    let message = match mismatch {
+        NamedOutputMismatch::NoOrdinaryOutputs => format!(
+            "`{goal}` is answered here by {answers}, but no ordinary implementation defines its associated outputs at `{goal}`"
+        ),
+        NamedOutputMismatch::AssocType {
+            with,
+            name,
+            expected,
+            given,
+            ..
+        } => format!(
+            "`{goal}` is answered here by {answers}, whose `{}` is `{}`, but ordinary normalization of `{goal}` gives `{}` (from {})",
+            name.data(db),
+            given.pretty_print(db),
+            expected.pretty_print(db),
+            with_label(with)
+        ),
+        NamedOutputMismatch::AssocConst { with, name, .. } => format!(
+            "`{goal}` is answered here by {answers}, whose constant `{}` differs from the one ordinary normalization of `{goal}` gives (from {})",
+            name.data(db),
+            with_label(with)
+        ),
+        NamedOutputMismatch::Row { with, name, .. } => format!(
+            "`{goal}` is answered here by {answers}, whose effect row `{}` differs from the one ordinary normalization of `{goal}` gives (from {})",
+            name.data(db),
+            with_label(with)
+        ),
+    };
+    let owner = instance.key(db).owner(db);
+    let mut diagnostic = SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::ChoiceOutputDisagreement,
+        message,
+        SemanticDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Expr(expr),
+        },
+    );
+    if let ImplementorOrigin::Hir(implementation) = own.selected().origin(db) {
+        diagnostic.push_secondary(
+            "the implementation that answers here".to_string(),
+            SemanticDiagnosticSpan::ImplTrait(implementation),
+        );
+    }
+    SemanticDiagnosticId::new(db, diagnostic)
 }
 
 fn provisional_call_site_diagnostic<'db>(
@@ -1768,6 +2003,46 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
+    /// The first use in this instance's body whose proof answers a concrete
+    /// goal through an implementation whose outputs differ from those
+    /// ordinary normalization gives the goal (see
+    /// `concrete_goal_output_mismatch`). The type checker reasons about the
+    /// outputs of such a goal as ordinary normalization gives them, so a use
+    /// that disagrees cannot be lowered. It is checked once per instance,
+    /// before the body is lowered.
+    pub(crate) fn output_agreement_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        output_agreement_diagnostic_query(db, self)
+    }
+
+    /// The first disagreement with ordinary normalization in an instance this
+    /// one calls, directly or through other calls. A body is checked against the
+    /// outputs of its callees as ordinary normalization gives them, so a callee
+    /// that disagrees can make the body fail verification. Admission asks for it
+    /// only after such a failure.
+    pub(crate) fn callee_output_disagreement(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        callee_output_disagreement_query(db, self)
+    }
+
+    /// The disagreement in `proof`, a proof this instance's body completed
+    /// after admission, as a diagnostic at `expr`.
+    fn proof_output_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+        proof: EvidenceId<'db>,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        let (own, mismatch) = proof_output_mismatch(db, self.normalization_scope(db), proof)?;
+        Some(output_disagreement_diagnostic(
+            db, self, expr, own, mismatch,
+        ))
+    }
+
     /// Codec calls belonging to one checked entry. A codec is only required
     /// after the ordinary associated layout says this entry is packed. The
     /// callable may defer an obligation that becomes closed on substitution;
@@ -1834,6 +2109,14 @@ impl<'db> SemanticInstance<'db> {
                 && callable.complete_deferred_evidence(db).is_none()
             {
                 return Err(failed_choice());
+            }
+            // The proof was completed here, after admission checked the
+            // body's use evidence.
+            if calls.codec_choices.is_some()
+                && let Some(proof) = callable.evidence()
+                && let Some(diagnostic) = self.proof_output_diagnostic(db, expr, proof)
+            {
+                return Err(diagnostic);
             }
             let callee =
                 semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
@@ -2078,6 +2361,40 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Result<(), SemanticBodyAdmissionError<'db>> {
         let typed_body = self.key(db).typed_body(db);
+        if let Some(refused) = typed_body.refused_bound() {
+            let goal = refused.goal.pretty_print(db, true);
+            let message = match refused.reason {
+                Refusal::Differs { a, b } | Refusal::ConditionsDiffer { a, b } => format!(
+                    "`{goal}`: `{}` and `{}` supply different implementations",
+                    a.pretty_print(db, true),
+                    b.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: Some(root) } => format!(
+                    "`{goal}`: the dictionary of `{}` has no such component",
+                    root.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: None } => {
+                    format!("`{goal}`: no dictionary supplies it")
+                }
+                Refusal::TooDeep { root } => format!(
+                    "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
+                    root.pretty_print(db, true)
+                ),
+            };
+            return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                SemanticDiagnosticId::new(
+                    db,
+                    SemanticDiagnostic::new(
+                        self,
+                        SemanticDiagnosticKind::ConflictingDictionaries,
+                        message,
+                        SemanticDiagnosticSpan::ItemName {
+                            owner: self.key(db).owner(db),
+                        },
+                    ),
+                ),
+            ));
+        }
         let causes = typed_body.smir_lowering_issues(db).into_boxed_slice();
         if causes.iter().copied().any(SmirLoweringIssue::is_incomplete) {
             return Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes));
@@ -2214,8 +2531,36 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    pub fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
+    /// Whether a call to this instance never returns whatever its body does:
+    /// it is a builtin that never returns, or its result or an input is
+    /// uninhabited. A provisional analysis asks it of the provisional input
+    /// types, under the instance's base assumptions.
+    pub fn is_intrinsically_never_returning(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        provisional: bool,
+    ) -> bool {
+        let scope = Some(self.normalization_scope(db));
+        let assumptions = if provisional {
+            semantic_instance_base_assumptions_for_key(db, self.key(db))
+        } else {
+            self.assumptions(db)
+        };
+        let uninhabited = |ty: TyId<'db>| ty.is_uninhabited_in(db, scope, assumptions);
+        self.is_nonreturning_builtin(db)
+            || uninhabited(self.normalized_result_ty(db))
+            || self
+                .key(db)
+                .typed_body(db)
+                .input_bindings()
+                .iter()
+                .any(|&binding| {
+                    uninhabited(if provisional {
+                        self.provisional_binding_ty(db, binding)
+                    } else {
+                        self.binding_ty(db, binding)
+                    })
+                })
     }
 
     fn is_nonreturning_builtin(self, db: &'db dyn HirAnalysisDb) -> bool {
@@ -2313,6 +2658,19 @@ fn unencodable_call_panic<'db>(
     .then_some(ty)
 }
 
+/// Whether a walk over the calls of instances may follow the calls of
+/// `instance`. A body with lowering issues has no instance limit to end a
+/// chain of calls, and an instance past the instance limits is rejected as
+/// itself, so neither has its calls followed.
+fn walk_may_follow_calls<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> bool {
+    instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+        && instance_limit_violation(db, instance).is_none()
+}
+
 /// The type `instance`, or any instance it calls, panics with that can't be
 /// revert data. An instance past the instance limits is rejected as itself,
 /// and its calls need not end, so this does not follow them.
@@ -2321,13 +2679,7 @@ fn unencodable_panic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<TyId<'db>> {
-    if !instance
-        .key(db)
-        .typed_body(db)
-        .smir_lowering_issues(db)
-        .is_empty()
-        || instance_limit_violation(db, instance).is_some()
-    {
+    if !walk_may_follow_calls(db, instance) {
         return None;
     }
     instance_calls(db, instance)
