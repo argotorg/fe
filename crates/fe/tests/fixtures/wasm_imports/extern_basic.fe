@@ -8,14 +8,17 @@
 //mock:     zero.wrapping_sub(a) }
 //mock: fn host_zero() -> i32 { 0 }
 
+#[unsafe(export)]
 pub fn product(a: i32, b: i32) -> i32 {
     unsafe { host_mul(a, b) }
 }
 
+#[unsafe(export)]
 pub fn negated(a: i64) -> i64 {
     unsafe { host_neg(a) }
 }
 
+#[unsafe(export)]
 pub fn combined(a: i32, b: i32, c: i32) -> i32 {
     unsafe { host_mul(host_mul(a, b), c) + host_zero() }
 }

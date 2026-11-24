@@ -1,0 +1,137 @@
+// Word reads must exclude bytes outside each 24-byte block and span.
+use core::abi::DynString
+use core::ptr::MemBuffer
+use core::text
+
+#[test]
+fn base58_roundtrips_all_block_tails_and_unaligned_spans() {
+    var data = MemBuffer::new(160)
+    for i in 0 .. 160 {
+        data[i] = (i * 73 + 17).downcast_truncate()
+    }
+    for offset in 0 .. 8 {
+        for len in 0 .. 74 {
+            let input = data.slice(offset, len)
+            let encoded = text::base58(input)
+            assert!(text::decode_base58(encoded).unwrap().span() == input)
+        }
+    }
+}
+
+#[test]
+fn base58_handles_leading_zeroes_and_exact_allocation_ends() {
+    for len in 0 .. 74 {
+        var input = MemBuffer::new(len)
+        let zeros = text::base58(input.span())
+        assert!(zeros.len() == len)
+        for i in 0 .. len {
+            assert!(zeros.byte_at(i) == b'1')
+        }
+        assert!(text::decode_base58(zeros).unwrap().span() == input.span())
+        if len > 0 {
+            input[len - 1] = 255
+            let encoded = text::base58(input.span())
+            assert!(
+                text::decode_base58(encoded).unwrap().span() == input.span(),
+            )
+            input[0] = 128
+            let encoded = text::base58(input.span())
+            assert!(
+                text::decode_base58(encoded).unwrap().span() == input.span(),
+            )
+        }
+    }
+}
+
+fn check_vector(_ hex: DynString, _ expected: DynString) {
+    let data = text::decode_hex(hex).unwrap()
+    assert!(text::base58(data.span()) == expected)
+}
+
+#[test]
+fn base58_matches_independent_vectors_at_block_boundaries() {
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffff",
+        "6HgC8KRBEhXYbF4riJyJFLSHt32XBnGv",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57",
+        "MnnKvsS2LixkpWBWdtQKDKaeww8H1Rx",
+    )
+    check_vector(
+        "0000808080808080808080808080808080808080808080",
+        "118uJcBywRgR26uXyPp8csFKUDVx9u1",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffff",
+        "QLbz7JHiBTspS962RLKV8GndWFwiEaqKL",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0",
+        "2am54YmbSv4D6QfoPoosuPP1YVTu7euAX",
+    )
+    check_vector(
+        "000080808080808080808080808080808080808080808080",
+        "11bsriKUKDvy1s4shuh2dJnCX8AnSGZD",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "2n1XR4oJkmBdJMxhBGQGb96gQ88xUzxLFyG",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9",
+        "7z1WvfDq3PBANsUFmfbugDn9Pzdj2NHF5S",
+    )
+    check_vector(
+        "00008080808080808080808080808080808080808080808080",
+        "113ewURNXZS5CEoz6oZZgBFUVqxeBYXfCB",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "38QCEV3JxdU8LcBi8vBGbMWTneYyJSGaykXWHgSqovg91yHicMSrXuDUawyKPgFFc",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f",
+        "9NBWfPDisEGu94KSpfa9zwpT5AZ7NUzRVQbqduPALvBkpQrJhAJRggB6MLriyE8N",
+    )
+    check_vector(
+        "0000808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+        "114BQtATsgdHLJ1FLxfM85pdFRCWbUzLbgyiVt4XGZJ89nGFJhropcciHUCD8nHM",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "APfNaWmCGXxjPYJGZwiKpdX3EUk7VxXnyV7eGd74S7ukPHSnf3F7dPU4kqdaB6DuXt",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78",
+        "dvVPvR59nhbB8ZeQyPFLikxS5PAj7pYT6PAmftCpEukUQGGd6G3ux7uYcneUFAwXm",
+    )
+    check_vector(
+        "000080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+        "11F2xQpmchu96A46K6gFpGHCzdoodCY5W7TLAUNYbfYaZknJ99LqfACdDh2UZLsBV",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "iT2NEvN4jZez6V9DiQVQ5EBarVTHgp6uvK6KVxMk9sVpVMapWtuJFcATaVeRRY3xsNW",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78c1",
+        "3oy6LAmFKni9qiP68osCJ3K1fgLqvu6qpAkr8Ad19WPpswgPxJDRriHUvYxUPFYsgpY",
+    )
+    check_vector(
+        "00008080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+        "1124wda9qvbX8hkxeSt4GPcSXwPTanmvAsVVDaop6U18P9aEvewpZmRcJs1fWdkgVJo",
+    )
+    check_vector(
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "HgL4wMZaYouGnRPDjDsuZPBp8kKakqxnMoWDqcpLjsjTGVqYYmdCm24fu6KvuvPbLhansCFEmVoWdvEpwiPrATTwepGhpmZ1msjL",
+    )
+    check_vector(
+        "115aa3ec357ec71059a2eb347dc60f58a1ea337cc50e57a0e9327bc40d569fe8317ac30c559ee73079c20b549de62f78c10a539ce52e77c009529be42d76bf08519ae32c75be075099",
+        "28aKnh6bgQK4nqRGgE72VeLHLuJGpeJhiPBTZCr7YKet9fgMrCyVZt9JyKyDNzThfVLpYjVb3WquMYg1y3Qd2cydDGD4qHSB4pUg",
+    )
+    check_vector(
+        "00008080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080808080",
+        "11Rvbm9DngpGc6oZjsAJiZTvoETL7PmXfm6hFN5e8mWpNRqHZkQc722VijsEwnqfj2T4gYawRNaqJ7GeARTp3kDjDf4s74LcvmD",
+    )
+}

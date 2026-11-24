@@ -60,9 +60,9 @@ impl LspDiagnostics for DriverDataBase {
             // (to clear any previous diagnostics)
             let file_diags = result.entry(url.clone()).or_default();
 
-            // Add warning for standalone files (files outside of a proper ingot)
+            // Note files outside of an ingot, which cannot see other files
             if is_standalone {
-                file_diags.push(standalone_file_warning());
+                file_diags.push(standalone_file_hint());
             }
 
             let t_file = std::time::Instant::now();
@@ -194,8 +194,9 @@ impl<'a> cs_files::Files<'a> for LspDb<'a> {
     }
 }
 
-/// Creates a warning diagnostic for standalone files (files outside of a proper ingot).
-fn standalone_file_warning() -> Diagnostic {
+/// Creates a hint for standalone files (files outside of an ingot). A standalone file
+/// is a valid way to work, so the note is a hint and not a warning.
+fn standalone_file_hint() -> Diagnostic {
     Diagnostic {
         range: Range {
             start: Position {
@@ -207,7 +208,7 @@ fn standalone_file_warning() -> Diagnostic {
                 character: 0,
             },
         },
-        severity: Some(DiagnosticSeverity::WARNING),
+        severity: Some(DiagnosticSeverity::HINT),
         code: None,
         source: Some("fe".to_string()),
         message: "This file is not part of an ingot and should be considered isolated from other .fe files."

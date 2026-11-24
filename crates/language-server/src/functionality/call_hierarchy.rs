@@ -359,6 +359,48 @@ fn main_func() -> i32 {
         assert_eq!(target_names, vec!["helper_a", "helper_b"]);
     }
 
+    /// A call of a closure runs its `Fn` method without naming it, so it is
+    /// no outgoing or incoming call of that method. A call that names `call`
+    /// is.
+    #[test]
+    fn test_closure_calls() {
+        let mut db = DriverDataBase::default();
+        let code = r#"fn helper() -> i32 {
+    1
+}
+
+fn main_func() -> i32 {
+    let g = |x: i32| x
+    g(helper())
+}
+
+fn explicit() -> i32 {
+    let g = |x: i32| x
+    g.call(2)
+}
+"#;
+        let file = db.workspace().touch(
+            &mut db,
+            Url::parse("file:///test.fe").unwrap(),
+            Some(code.to_string()),
+        );
+        let top_mod = map_file_to_mod(&db, file);
+        let at = |needle: &str| {
+            find_func_at(&db, top_mod, code.find(needle).unwrap() as u32)
+                .unwrap_or_else(|| panic!("no function at `{needle}`"))
+        };
+        let outgoing: Vec<_> = find_outgoing_calls(&db, at("main_func"))
+            .into_iter()
+            .map(|(func, _)| func)
+            .collect();
+        assert_eq!(outgoing, [at("helper")]);
+        let incoming: Vec<_> = find_incoming_calls(&db, at("call("), top_mod)
+            .into_iter()
+            .map(|(func, _)| func)
+            .collect();
+        assert_eq!(incoming, [at("explicit")]);
+    }
+
     #[test]
     fn test_no_incoming_calls() {
         let mut db = DriverDataBase::default();

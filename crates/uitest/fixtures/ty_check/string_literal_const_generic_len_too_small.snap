@@ -67,5 +67,5 @@ error[8-0031]: type annotation is needed
 54 │     width("abcdefghijklmnopqrstuvwxyz123456")
    │     ^^^^^
    │     │
-   │     type annotation is needed
-   │     consider giving `: fn width<_>` here
+   │     cannot infer the const parameter `N` of `width`
+   │     consider giving it explicitly: `width<N>`

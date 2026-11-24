@@ -87,9 +87,9 @@ impl Erc20 {
     }
 }
 
-fn do_init() uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn do_init() uses (erc20: mut Erc20, ctx: Ctx) {
     if !erc20.set_owner_once(owner: ctx.caller()) {
-        ops.revert(data: ptr::MemSpan::empty())
+        revert_empty()
     }
 }
 
@@ -101,7 +101,7 @@ fn allowance(owner: Address, spender: Address) -> u256 uses (erc20: Erc20) {
     erc20.allowances.get(key: (owner, spender))
 }
 
-fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
     erc20.transfer(from: ctx.caller(), to: to, amount: amount)
     1
 }
@@ -111,12 +111,12 @@ fn approve(spender: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: 
     1
 }
 
-fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn transfer_from(from: Address, to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
     erc20.transfer_from(spender: ctx.caller(), owner: from, to: to, amount: amount)
     1
 }
 
-fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx, ops: RawOps) {
+fn mint(to: Address, amount: u256) -> u256 uses (erc20: mut Erc20, ctx: Ctx) {
     erc20.mint(caller: ctx.caller(), to: to, amount: amount)
     erc20.supply = erc20.supply + amount
     1

@@ -9,6 +9,7 @@ fn widen(b: Box2, by: i32) -> Box2 {
     Box2 { lo: b.lo - by, hi: b.hi + by }
 }
 
+#[unsafe(export)]
 pub fn alternate_boxes(n: u32) -> i32 {
     var a = Box2 { lo: 0, hi: 1 }
     var b = Box2 { lo: 10, hi: 20 }
@@ -22,6 +23,7 @@ pub fn alternate_boxes(n: u32) -> i32 {
     a.lo * 1000 + a.hi * 10 + b.lo - b.hi
 }
 
+#[unsafe(export)]
 pub fn pick_by_parity(n: u32) -> i32 {
     var best = Box2 { lo: 0, hi: 0 }
     var i: u32 = 0
@@ -40,6 +42,7 @@ pub fn pick_by_parity(n: u32) -> i32 {
     best.lo * 100 + best.hi
 }
 
+#[unsafe(export)]
 pub fn array_phi(n: u32) -> i32 {
     var cur: [i32; 3] = [1, 2, 3]
     var prev: [i32; 3] = [0, 0, 0]

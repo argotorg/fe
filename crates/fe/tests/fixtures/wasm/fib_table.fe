@@ -9,11 +9,13 @@ fn build() -> [u64; 40] {
     t
 }
 
+#[unsafe(export)]
 pub fn fib(n: u32) -> u64 {
     let t = build()
     t[n as usize]
 }
 
+#[unsafe(export)]
 pub fn sum_to(n: u32) -> u64 {
     let t = build()
     var s: u64 = 0

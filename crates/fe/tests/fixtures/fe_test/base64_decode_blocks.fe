@@ -1,0 +1,98 @@
+// Exercise the full-quartet loop, padded tail and canonical unused bits.
+use core::abi::DynString
+use core::ptr::MemBuffer
+use core::text
+
+#[test]
+fn base64_roundtrips_across_quartet_and_word_boundaries() {
+    var data = MemBuffer::new(260)
+    for i in 0 .. 260 {
+        data[i] = i.downcast_truncate()
+    }
+    for offset in 0 .. 4 {
+        for len in 0 .. 100 {
+            let input = data.slice(offset, len)
+            let encoded = text::base64(input)
+            let decoded = text::decode_base64(encoded).unwrap()
+            assert!(decoded.len() == len)
+            assert!(decoded.span() == input)
+            assert!(
+                text::decode_base64(encoded.span()).unwrap().span() == input,
+            )
+        }
+    }
+    let encoded = text::base64(data.span())
+    assert!(
+        text::decode_base64(encoded).unwrap().span() == data.span(),
+    )
+}
+
+fn alphabet(_ byte: u8) -> bool {
+    (byte >= b'A' && byte <= b'Z')
+        || (byte >= b'a' && byte <= b'z')
+        || (byte >= b'0' && byte <= b'9')
+        || byte == b'+'
+        || byte == b'/'
+}
+
+#[test]
+fn base64_checks_every_byte_in_every_full_quartet_position() {
+    // A later non-padding quartet ensures '=' is invalid at every position.
+    for position in 0 .. 8 {
+        for value in 0 .. 256 {
+            let byte: u8 = value.downcast_truncate()
+            var input = MemBuffer::from_span(("AAAAAAAAAAAA").span())
+            input[position] = byte
+            assert!(
+                text::decode_base64(input.span()).is_some() == alphabet(byte),
+            )
+        }
+    }
+}
+
+#[test]
+fn base64_checks_every_byte_before_padding() {
+    for value in 0 .. 256 {
+        let byte: u8 = value.downcast_truncate()
+        var one = MemBuffer::from_span(("AAAAAA==").span())
+        var two = MemBuffer::from_span(("AAAAAAAAAAA=").span())
+        one[4] = byte
+        two[8] = byte
+        assert!(
+            text::decode_base64(one.span()).is_some() == alphabet(byte),
+        )
+        assert!(
+            text::decode_base64(two.span()).is_some() == alphabet(byte),
+        )
+        one[4] = b'A'
+        one[5] = byte
+        // Only 0, 16, 32 and 48 leave the low four bits unused.
+        let canonical = byte == b'A' || byte == b'Q' || byte == b'g' || byte == b'w'
+        assert!(text::decode_base64(one.span()).is_some() == canonical)
+    }
+    let digits: DynString = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    for digit in 0 .. 64 {
+        var two = MemBuffer::from_span(("AAAAAAA=").span())
+        two[6] = digits.byte_at(digit)
+        assert!(
+            text::decode_base64(two.span()).is_some() == (digit % 4 == 0),
+        )
+    }
+}
+
+#[test]
+fn base64_rejects_misplaced_padding_and_truncated_groups() {
+    assert!(text::decode_base64("A").is_none())
+    assert!(text::decode_base64("AA").is_none())
+    assert!(text::decode_base64("AAA").is_none())
+    assert!(text::decode_base64("AAAAA").is_none())
+    assert!(text::decode_base64("AAAA===A").is_none())
+    assert!(text::decode_base64("AAAA====").is_none())
+    assert!(text::decode_base64("AAAAA===").is_none())
+    assert!(text::decode_base64("AAAAAA=A").is_none())
+    assert!(text::decode_base64("AA==AAAA").is_none())
+    assert!(text::decode_base64("AAA=AAAA").is_none())
+    assert!(text::decode_base64("AAAAAB==").is_none())
+    assert!(text::decode_base64("AAAAAAB=").is_none())
+    assert!(text::decode_base64("").unwrap().len() == 0)
+}

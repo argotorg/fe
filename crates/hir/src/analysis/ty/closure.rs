@@ -82,7 +82,8 @@ pub(crate) fn callable_params<'db>(
 /// `unsafe fn` and a projection are not callable values: a variant is made
 /// rather than called, an `unsafe fn` may only be called in an `unsafe`
 /// context, and a projection grants accesses rather than returning a value.
-/// Nor is a function with a spread.
+/// Nor is a function with a spread, or a variadic one, whose extra
+/// arguments no parameter list has.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CallableValue<'db> {
     Closure(ClosureTy<'db>),
@@ -103,6 +104,7 @@ impl<'db> CallableValue<'db> {
             && !func.is_projection(db)
             && !func.is_raw_place(db)
             && !func.is_maybe_mut(db)
+            && !func.is_variadic(db)
             && CallableDef::Func(*func).spread(db).is_none())
         .then_some(Self::Func(*func, args))
     }

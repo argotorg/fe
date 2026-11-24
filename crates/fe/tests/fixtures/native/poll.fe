@@ -1,0 +1,457 @@
+use core::{MemBuffer, MemVec}
+use std::io::{Display, Error, ErrorKind, Read, Stdout, Write}
+use std::net::{
+    Event, Events, Interest, IpAddr, Ipv4Addr, Net, Pollable, Poller, Shutdown, SocketAddr, TcpListener, TcpStream,
+    Token, UdpSocket,
+}
+use std::time::Duration
+
+extern {
+    fn setsockopt(_ fd: i32, _ level: i32, _ name: i32, _ value: *u8, _ len: u32) -> i32
+}
+
+// The socket option level and the send and receive buffer sizes.
+#[cfg(target_os = "linux")]
+const SOL_SOCKET: i32 = 1
+#[cfg(target_os = "linux")]
+const SO_SNDBUF: i32 = 7
+#[cfg(target_os = "linux")]
+const SO_RCVBUF: i32 = 8
+#[cfg(target_os = "macos")]
+const SOL_SOCKET: i32 = 0xffff
+#[cfg(target_os = "macos")]
+const SO_SNDBUF: i32 = 0x1001
+#[cfg(target_os = "macos")]
+const SO_RCVBUF: i32 = 0x1002
+
+// A connection of the one-process echo server.
+enum Conn {
+    Listener(TcpListener),
+    // A server's end, and the bytes it has read of a line.
+    Server(TcpStream, MemBuffer),
+    // A client's end, whether its connection is made, and the bytes it has
+    // read.
+    Client(TcpStream, bool, MemBuffer),
+}
+
+impl Pollable for Conn {
+    fn raw_fd(self) -> i32 {
+        match self {
+            Conn::Listener(ref listener) => listener.as_raw_fd(),
+            Conn::Server(ref stream, _) => stream.as_raw_fd(),
+            Conn::Client(ref stream, _, _) => stream.as_raw_fd(),
+        }
+    }
+}
+
+// What handling an event leaves for the poller to do once its source is
+// free again.
+struct Next {
+    accepted: MemVec<TcpStream>,
+    interest: Option<Interest>,
+    done: bool,
+}
+
+pub fn main() -> i32 uses (out: mut Stdout, net: mut Net) {
+    report("serve", serve())
+    report("reregister", reregister())
+    report("kept", kept())
+    report("hangup", hangup())
+    report("refused", refused())
+    report("stale interest", stale_interest())
+    report("half close", half_close())
+    println!("done")
+    0
+}
+
+// Three non-blocking clients each send a line to a server on one poller,
+// which sends it back.
+fn serve() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var poller: Poller<Conn> = Poller::new()?
+    var listener = net.listen(loopback())?
+    listener.set_nonblocking(true)?
+    let addr = listener.local_addr()?
+    poller.add(Conn::Listener(listener), Interest::READABLE)?
+    for _ in 0..3 {
+        poller.add(Conn::Client(net.connect_nonblocking(addr)?, false, MemBuffer::empty()), Interest::WRITABLE)?
+    }
+    var events = Events::with_capacity(4)
+    var echoed: MemVec<MemBuffer> = MemVec::new()
+    var waits: u32 = 0
+    while echoed.len() < 3 {
+        if poller.wait(mut events, Option::Some(Duration::from_secs(5)))? == 0 {
+            println!("serve: timed out")
+            return Result::Ok(())
+        }
+        waits += 1
+        for i in 0..events.len() {
+            handle(mut poller, events.get(i), mut echoed)?
+        }
+    }
+    // The clients sent lines of the same text, in no particular order.
+    for ref line in echoed.as_slice() {
+        println!("serve: client got ", line)
+    }
+    println!("serve: more than one wait: ", waits > 1)
+    Result::Ok(())
+}
+
+fn handle(_ poller: mut Poller<Conn>, _ event: Event, _ echoed: mut MemVec<MemBuffer>) -> Result<Error, ()> {
+    let token = event.token()
+    var next = Next { accepted: MemVec::new(), interest: Option::None, done: false }
+    match poller.get(token) {
+        Option::Some(mut conn) => match conn {
+            Conn::Listener(mut listener) => {
+                while true {
+                    match listener.accept() {
+                        Result::Ok((stream, _)) => next.accepted.push(stream),
+                        Result::Err(error) => {
+                            if would_block(error) {
+                                break
+                            }
+                            return Result::Err(error)
+                        }
+                    }
+                }
+            }
+            Conn::Server(mut stream, mut line) => {
+                let open = read_available(mut stream, mut line)?
+                if line.len() > 0 && line[line.len() - 1] == b'\n' {
+                    stream.write_all(format!("echo ", line).span())?
+                    line.clear()
+                }
+                next.done = !open
+            }
+            Conn::Client(mut stream, mut connected, mut got) => {
+                if !connected {
+                    // The connection is made, or has failed.
+                    match stream.take_error()? {
+                        Option::Some(error) => return Result::Err(error),
+                        Option::None => {}
+                    }
+                    connected = true
+                    stream.write_all(format!("hello\n").span())?
+                    next.interest = Option::Some(Interest::READABLE)
+                } else {
+                    read_available(mut stream, mut got)?
+                    if got.len() > 0 && got[got.len() - 1] == b'\n' {
+                        echoed.push(MemBuffer::from_span(got.span().head(got.len() - 1)))
+                        next.done = true
+                    }
+                }
+            }
+        },
+        // A source an earlier event of this wait removed.
+        Option::None => return Result::Ok(()),
+    }
+    while !next.accepted.is_empty() {
+        var stream = next.accepted.swap_remove(0)
+        stream.set_nonblocking(true)?
+        poller.add(Conn::Server(stream, MemBuffer::empty()), Interest::READABLE)?
+    }
+    match next.interest {
+        Option::Some(interest) => poller.set_interest(token, interest)?,
+        Option::None => {}
+    }
+    if next.done {
+        poller.remove(token)
+    }
+    Result::Ok(())
+}
+
+// Reads what the non-blocking `stream` holds into `buffer`: false at the end
+// of the stream.
+fn read_available(_ stream: mut TcpStream, _ buffer: mut MemBuffer) -> Result<Error, bool> {
+    var chunk = MemBuffer::new(64)
+    while true {
+        match stream.read(chunk.span()) {
+            Result::Ok(count) => {
+                if count == 0 {
+                    return Result::Ok(false)
+                }
+                buffer.extend_from(chunk.span().head(count))
+            }
+            Result::Err(error) => {
+                if would_block(error) {
+                    return Result::Ok(true)
+                }
+                return Result::Err(error)
+            }
+        }
+    }
+    Result::Ok(true)
+}
+
+// A source that `get` replaces is waited on once it is registered again;
+// `set_interest` and `remove` act on the replacement.
+fn reregister() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var poller: Poller<UdpSocket> = Poller::new()?
+    var sender = net.bind_udp(loopback())?
+    let token = poller.add(net.bind_udp(loopback())?, Interest::READABLE)?
+    let replacement = net.bind_udp(loopback())?
+    let addr = replacement.local_addr()?
+    sender.send_to(format!("x").span(), addr)?
+    match poller.get(token) {
+        Option::Some(mut socket) => socket = replacement,
+        Option::None => {}
+    }
+    var events = Events::with_capacity(4)
+    println!("reregister: events before: ", poller.wait(mut events, Option::Some(Duration::from_millis(50)))?)
+    poller.reregister(token)?
+    let count = poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    println!("reregister: events after: ", count, ", readable: ", events.get(0).is_readable(), ", its token: ", events.get(0).token() == token)
+    // Readable and writable both, which macOS reports as two events.
+    poller.set_interest(token, Interest::BOTH)?
+    let count = poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    var readable = false
+    var writable = false
+    for i in 0..count {
+        readable = readable || events.get(i).is_readable()
+        writable = writable || events.get(i).is_writable()
+    }
+    println!("reregister: both: ", readable, " ", writable)
+    let removed = poller.remove(token)
+    println!("reregister: removed the replacement: ", removed.unwrap().local_addr()? == addr)
+    println!("reregister: then get: ", poller.get(token).is_none(), ", remove: ", poller.remove(token).is_none())
+    failure("reregister: then set_interest", poller.set_interest(token, Interest::READABLE))
+    Result::Ok(())
+}
+
+// A source that `get` replaces and the caller keeps stays open, and so
+// registered: `reregister` and `remove` end the wait for it.
+fn kept() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var poller: Poller<UdpSocket> = Poller::new()?
+    var sender = net.bind_udp(loopback())?
+    let token = poller.add(net.bind_udp(loopback())?, Interest::READABLE)?
+    let second = net.bind_udp(loopback())?
+    let first = match poller.get(token) {
+        Option::Some(mut socket) => core::mem::replace(mut socket, second),
+        Option::None => return Result::Ok(()),
+    }
+    // The kept source has a datagram to read from here on.
+    sender.send_to(format!("x").span(), first.local_addr()?)?
+    var events = Events::with_capacity(4)
+    println!("kept: events before: ", poller.wait(mut events, Option::Some(Duration::from_secs(5)))?)
+    poller.reregister(token)?
+    println!("kept: events after reregister: ", poller.wait(mut events, Option::Some(Duration::from_millis(50)))?)
+    // The second source is registered now. Kept too, and never replaced
+    // in the queue, it is still registered when its token is removed.
+    let third = net.bind_udp(loopback())?
+    let second = match poller.get(token) {
+        Option::Some(mut socket) => core::mem::replace(mut socket, third),
+        Option::None => return Result::Ok(()),
+    }
+    sender.send_to(format!("x").span(), second.local_addr()?)?
+    println!("kept: events before: ", poller.wait(mut events, Option::Some(Duration::from_secs(5)))?)
+    let removed = poller.remove(token)
+    println!("kept: events after remove: ", poller.wait(mut events, Option::Some(Duration::from_millis(50)))?)
+    println!("kept: removed the third: ", removed.is_some())
+    Result::Ok(())
+}
+
+// A connection whose peer closes is readable, at its end, and a hangup.
+fn hangup() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    let client = net.connect(listener.local_addr()?)?
+    let (stream, _) = listener.accept()?
+    var poller: Poller<TcpStream> = Poller::new()?
+    poller.add(stream, Interest::READABLE)?
+    core::mem::drop(client)
+    var events = Events::with_capacity(4)
+    poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    println!("hangup: readable: ", events.get(0).is_readable(), ", hangup: ", events.get(0).is_hangup())
+    Result::Ok(())
+}
+
+// A non-blocking connection to a port that was a listener's fails, which the
+// poller reports as an error once the connection is no longer in progress.
+fn refused() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    let addr = net.listen(loopback())?.local_addr()?
+    let stream = match net.connect_nonblocking(addr) {
+        Result::Ok(stream) => stream,
+        // A host may refuse at once.
+        Result::Err(error) => {
+            println!("refused: ", kind_name(error.kind()))
+            return Result::Ok(())
+        }
+    }
+    var poller: Poller<TcpStream> = Poller::new()?
+    let token = poller.add(stream, Interest::WRITABLE)?
+    var events = Events::with_capacity(4)
+    poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    core::assert(events.get(0).is_error() || events.get(0).is_hangup())
+    match poller.get(token) {
+        Option::Some(mut stream) => match stream.take_error()? {
+            Option::Some(error) => println!("refused: ", kind_name(error.kind())),
+            Option::None => println!("refused: no error"),
+        },
+        Option::None => {}
+    }
+    Result::Ok(())
+}
+
+// `set_interest` of a source that `get` replaced, with no `reregister`,
+// leaves alone the source that took its old descriptor's number.
+fn stale_interest() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var poller: Poller<UdpSocket> = Poller::new()?
+    var sender = net.bind_udp(loopback())?
+    let a = poller.add(net.bind_udp(loopback())?, Interest::READABLE)?
+    let old = poller.get(a).unwrap().as_raw_fd()
+    let replacement = net.bind_udp(loopback())?
+    match poller.get(a) {
+        Option::Some(mut socket) => socket = replacement,
+        Option::None => {}
+    }
+    // A new descriptor takes the lowest free number, so sockets fill any
+    // free numbers below the old one first.
+    var held: MemVec<UdpSocket> = MemVec::new()
+    var taker = net.bind_udp(loopback())?
+    var tries: u32 = 0
+    while taker.as_raw_fd() != old && tries < 1000 {
+        held.push(taker)
+        taker = net.bind_udp(loopback())?
+        tries += 1
+    }
+    core::assert(taker.as_raw_fd() == old)
+    let taker_addr = taker.local_addr()?
+    let b = poller.add(taker, Interest::READABLE)?
+    poller.set_interest(a, Interest::READABLE)?
+    sender.send_to(format!("x").span(), taker_addr)?
+    var events = Events::with_capacity(4)
+    let count = poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    var as_b = false
+    var as_a = false
+    for i in 0..count {
+        as_b = as_b || events.get(i).token() == b
+        as_a = as_a || events.get(i).token() == a
+    }
+    println!("stale interest: the new source's event: ", as_b, ", as the replaced one's: ", as_a)
+    Result::Ok(())
+}
+
+// A stream waited for writes alone, whose peer has shut down its writes and
+// whose send buffer is full, has no event; waited for reads too, it is
+// readable, at the end of the stream, and a hangup.
+fn half_close() -> Result<Error, ()> uses (out: mut Stdout, net: mut Net) {
+    var listener = net.listen(loopback())?
+    var client = net.connect(listener.local_addr()?)?
+    let (stream, _) = listener.accept()?
+    var stream = stream
+    stream.set_nonblocking(true)?
+    client.shutdown(Shutdown::Write)?
+    // Buffers of a fixed size, which the host doesn't grow as they fill.
+    set_buffer(stream.as_raw_fd(), name: SO_SNDBUF)
+    set_buffer(client.as_raw_fd(), name: SO_RCVBUF)
+    // The client never reads, so its receive buffer fills too. The host
+    // moves bytes on to it, and acknowledges them, a moment after a write
+    // fails, so the stream is full once a write fails after a pause longer
+    // than a delayed acknowledgement.
+    let chunk = MemBuffer::new(65536)
+    var settled = false
+    var rounds: u32 = 0
+    while !settled && rounds < 100 {
+        var taken: u32 = 0
+        var blocked = false
+        while !blocked {
+            match stream.write(chunk.span()) {
+                Result::Ok(_) => taken += 1,
+                Result::Err(error) => {
+                    if !would_block(error) {
+                        return Result::Err(error)
+                    }
+                    blocked = true
+                }
+            }
+        }
+        settled = taken == 0
+        if !settled {
+            pause(Duration::from_millis(250))?
+        }
+        rounds += 1
+    }
+    core::assert(settled)
+    var poller: Poller<TcpStream> = Poller::new()?
+    let token = poller.add(stream, Interest::WRITABLE)?
+    var events = Events::with_capacity(4)
+    println!("half close: events of a writer: ", poller.wait(mut events, Option::Some(Duration::from_millis(100)))?)
+    poller.set_interest(token, Interest::BOTH)?
+    let count = poller.wait(mut events, Option::Some(Duration::from_secs(5)))?
+    var readable = false
+    var writable = false
+    var hangup = false
+    for i in 0..count {
+        readable = readable || events.get(i).is_readable()
+        writable = writable || events.get(i).is_writable()
+        hangup = hangup || events.get(i).is_hangup()
+    }
+    println!("half close: waited for both: readable ", readable, ", writable ", writable, ", hangup ", hangup)
+    client.set_nodelay(true)?
+    Result::Ok(())
+}
+
+// Sets the buffer `name` of the socket `fd` to 64 KiB.
+fn set_buffer(_ fd: i32, name: i32) {
+    var size = MemBuffer::new(4)
+    size.write_le<i32>(offset: 0, value: 65536)
+    core::assert(unsafe { setsockopt(fd, SOL_SOCKET, name, size.ptr(), 4) } == 0)
+}
+
+// Waits for `time` on a poller with nothing to wait for.
+fn pause(_ time: Duration) -> Result<Error, ()> {
+    var idle: Poller<UdpSocket> = Poller::new()?
+    var events = Events::with_capacity(1)
+    idle.wait(mut events, Option::Some(time))?
+    Result::Ok(())
+}
+
+fn loopback() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0)
+}
+
+fn would_block(_ error: Error) -> bool {
+    match error.kind() {
+        ErrorKind::WouldBlock => true,
+        _ => false,
+    }
+}
+
+fn report<T: Display>(_ label: T, _ result: Result<Error, ()>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => {}
+        Result::Err(error) => println!(label, " failed: ", kind_name(error.kind()), " (", error, ")"),
+    }
+}
+
+// Prints `label` and the kind of `result`'s error, or `ok`.
+fn failure<L: Display, T>(_ label: L, _ result: Result<Error, T>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => println!(label, ": ok"),
+        Result::Err(error) => println!(label, ": ", kind_name(error.kind())),
+    }
+}
+
+fn kind_name(_ kind: ErrorKind) -> String<20> {
+    match kind {
+        ErrorKind::NotFound => "NotFound",
+        ErrorKind::PermissionDenied => "PermissionDenied",
+        ErrorKind::AlreadyExists => "AlreadyExists",
+        ErrorKind::NotADirectory => "NotADirectory",
+        ErrorKind::IsADirectory => "IsADirectory",
+        ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::WouldBlock => "WouldBlock",
+        ErrorKind::TimedOut => "TimedOut",
+        ErrorKind::ConnectionRefused => "ConnectionRefused",
+        ErrorKind::ConnectionReset => "ConnectionReset",
+        ErrorKind::ConnectionAborted => "ConnectionAborted",
+        ErrorKind::NotConnected => "NotConnected",
+        ErrorKind::AddrInUse => "AddrInUse",
+        ErrorKind::AddrNotAvailable => "AddrNotAvailable",
+        ErrorKind::NetworkUnreachable => "NetworkUnreachable",
+        ErrorKind::HostUnreachable => "HostUnreachable",
+        ErrorKind::BrokenPipe => "BrokenPipe",
+        ErrorKind::UnexpectedEof => "UnexpectedEof",
+        ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
+        ErrorKind::Other => "Other",
+    }
+}

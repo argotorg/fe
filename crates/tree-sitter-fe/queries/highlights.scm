@@ -194,4 +194,5 @@
 
 [
   "#"
+  "..."
 ] @punctuation.special

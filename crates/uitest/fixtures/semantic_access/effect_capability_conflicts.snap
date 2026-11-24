@@ -1,0 +1,20 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/effect_capability_conflicts.fe
+---
+error[16-0001]: access conflict in `fn P::recv[0][0]`
+   ┌─ effect_capability_conflicts.fe:34:24
+   │
+34 │             with (a) { write_then_read8() }
+   │                   -    ^^^^^^^^^^^^^^^^^^ the effects `x` and `storage` of `write_then_read8` reach one place, and `x` is `mut`
+   │                   │
+   │                   `x` is provided here
+
+error[16-0001]: access conflict in `fn P::recv[0][1]`
+   ┌─ effect_capability_conflicts.fe:38:24
+   │
+38 │             with (a) { bump_maybe_halt(halt) }
+   │                   -    ^^^^^^^^^^^^^^^^^^^^^ the effects `x` and `raw` of `bump_maybe_halt` reach one place, and both are `mut`
+   │                   │
+   │                   `x` is provided here

@@ -3,14 +3,17 @@ const SQUARES: [u64; 6] = [0, 1, 4, 9, 16, 25]
 const SIGNS: [i8; 4] = [1, -1, 1, -1]
 const LIMIT: u32 = 8
 
+#[unsafe(export)]
 pub fn prime(i: u32) -> u32 {
     PRIMES[i as usize]
 }
 
+#[unsafe(export)]
 pub fn square(i: u32) -> u64 {
     SQUARES[i as usize]
 }
 
+#[unsafe(export)]
 pub fn sign_sum(n: u32) -> i32 {
     var s: i32 = 0
     var i: usize = 0
@@ -21,6 +24,7 @@ pub fn sign_sum(n: u32) -> i32 {
     s
 }
 
+#[unsafe(export)]
 pub fn sum_primes(n: u32) -> u32 {
     var i: usize = 0
     var s: u32 = 0
@@ -31,6 +35,7 @@ pub fn sum_primes(n: u32) -> u32 {
     s
 }
 
+#[unsafe(export)]
 pub fn largest_below(x: u32) -> u32 {
     var best: u32 = 0
     var i: usize = 0

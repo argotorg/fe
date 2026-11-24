@@ -14,6 +14,7 @@ const PROGRAM: [[u8; 2]; 10] = [
     [0, 0],   // halt
 ]
 
+#[unsafe(export)]
 pub fn run(input: i32, steps: u32) -> i32 {
     var stack: [i32; 8] = [0; 8]
     var sp: usize = 0

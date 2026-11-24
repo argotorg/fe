@@ -10,7 +10,7 @@ use sonatina_ir::{
         cast::Zext,
         cmp::{Eq, Ne},
         control_flow::{BrTable, Jump, Phi, PhiArgs, Unreachable},
-        data::{ConstLoad, InsertValue, ObjAlloc, ObjLoad, ObjMaterializeStack, ObjStore},
+        data::{AggMake, ConstLoad, ObjAlloc, ObjLoad, ObjMaterializeStack, ObjStore},
         evm::EvmSignExtend,
         logic::{And, Not, Or},
     },
@@ -67,15 +67,13 @@ impl<'db, I: LoweringInstSet + 'static> FunctionLowerer<'_, 'db, '_, I> {
             ObjAlloc::new(self.module.inst_set(), ty),
             self.fb.module_builder.objref_type(ty),
         );
-        let mut value = self.fb.make_undef_value(ty);
-        for (idx, word) in [reference.addr, reference.layout].into_iter().enumerate() {
-            let word = self.coerce_value_to_ty(word, Type::I256)?;
-            let idx = self.index_value(idx as u64);
-            value = self.fb.insert_inst(
-                InsertValue::new(self.module.inst_set(), value, idx, word),
-                ty,
-            );
-        }
+        let words = [reference.addr, reference.layout]
+            .into_iter()
+            .map(|word| self.coerce_value_to_ty(word, Type::I256))
+            .collect::<Result<_, _>>()?;
+        let value = self
+            .fb
+            .insert_inst(AggMake::new(self.module.inst_set(), ty, words), ty);
         self.fb
             .insert_inst_no_result(ObjStore::new(self.module.inst_set(), descriptor, value));
         let ptr_ty = self.fb.ptr_type(ty);

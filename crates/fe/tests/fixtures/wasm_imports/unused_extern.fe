@@ -3,6 +3,7 @@ extern {
     fn also_unused(_ a: u64)
 }
 
+#[unsafe(export)]
 pub fn double(x: i32) -> i32 {
     x * 2
 }

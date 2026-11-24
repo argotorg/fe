@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/variadic_outside_extern.fe
+---
+error[12-0006]: `...` outside an `extern` function
+  ┌─ variadic_outside_extern.fe:6:20
+  │
+6 │ fn plain(_ a: i32, ...) {}
+  │                    ^^^ only an `extern` function takes variadic arguments
+
+error[12-0006]: `...` outside an `extern` function
+  ┌─ variadic_outside_extern.fe:9:22
+  │
+9 │     let f = |a: i32, ...| a
+  │                      ^^^ only an `extern` function takes variadic arguments
+
+error[12-0006]: `...` outside an `extern` function
+   ┌─ variadic_outside_extern.fe:13:19
+   │
+13 │     init(a: u256, ...) {}
+   │                   ^^^ only an `extern` function takes variadic arguments
+
+error[3-0095]: a variadic `extern` function is only supported on the native target
+  ┌─ variadic_outside_extern.fe:3:30
+  │
+3 │     fn printf(_ format: *u8, ...) -> i32
+  │                              ^^^ variadic arguments

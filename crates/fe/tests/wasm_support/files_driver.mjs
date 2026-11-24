@@ -7,11 +7,12 @@
 // is a string (text), a number, or { "u64": "decimal" }. Standard output is one
 // JSON object: { "results": [...], "after": [...], "opened", "closed", "open" }.
 // A result is { kind: "reply", ... }, { kind: "value", value }, { kind: "none" },
-// { kind: "contract", message } when the host refused the module's behaviour, or
-// { kind: "trap", message } when the module trapped. `after[i]` is the arena top
-// and the number of open handles after call i.
+// { kind: "contract", message } when the host refused the module's behaviour,
+// { kind: "revert", reason } when the module panicked with a code or reverted,
+// or { kind: "trap", message } when the module trapped. `after[i]` is the arena
+// top and the number of open handles after call i.
 import fs from "node:fs";
-import { ContractError, instantiate } from "../../../../examples/wasm/host.mjs";
+import { ContractError, GuestRevert, instantiate } from "../../../../examples/wasm/host.mjs";
 
 const request = JSON.parse(fs.readFileSync(0, "utf8"));
 const bytes = fs.readFileSync(request.wasm);
@@ -39,6 +40,8 @@ for (const call of request.calls) {
   } catch (error) {
     if (error instanceof ContractError) {
       result = { kind: "contract", message: error.message };
+    } else if (error instanceof GuestRevert) {
+      result = { kind: "revert", reason: error.reason };
     } else if (error instanceof WebAssembly.RuntimeError) {
       result = { kind: "trap", message: error.message };
     } else {

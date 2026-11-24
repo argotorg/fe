@@ -1,0 +1,137 @@
+use core::hash::fold_hash
+use core::map::HashMap
+use std::io::Display
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr}
+
+// Whether `value`'s text is `text`.
+fn shows<T: Display>(_ value: T, _ text: String<31>) -> bool {
+    format!(value).span() == text
+}
+
+// Whether `text` parses as an IPv6 address whose text is `shown`.
+fn v6_shows(_ text: String<31>, _ shown: String<31>) -> bool {
+    match Ipv6Addr::parse(text) {
+        Option::Some(ip) => shows(ip, shown),
+        Option::None => false,
+    }
+}
+
+#[test]
+fn ipv4_addresses() {
+    assert!(shows(Ipv4Addr::LOCALHOST, "127.0.0.1"))
+    assert!(shows(Ipv4Addr::UNSPECIFIED, "0.0.0.0"))
+    let ip = Ipv4Addr::new(192, 168, 0, 255)
+    assert!(ip.to_bits() == 0xc0a800ff && Ipv4Addr::from_bits(0xc0a800ff) == ip)
+    assert!(shows(ip, "192.168.0.255"))
+    assert!(Ipv4Addr::parse("192.168.0.255").unwrap() == ip)
+    assert!(Ipv4Addr::parse(format!("10.0.0.1")).unwrap() == Ipv4Addr::new(10, 0, 0, 1))
+    assert!(Ipv4Addr::parse("0.0.0.0").unwrap() == Ipv4Addr::UNSPECIFIED)
+    assert!(Ipv4Addr::parse("").is_none())
+    assert!(Ipv4Addr::parse("1.2.3").is_none())
+    assert!(Ipv4Addr::parse("1.2.3.4.5").is_none())
+    assert!(Ipv4Addr::parse("1.2.3.4 ").is_none())
+    assert!(Ipv4Addr::parse("256.0.0.1").is_none())
+    assert!(Ipv4Addr::parse("01.2.3.4").is_none())
+    assert!(Ipv4Addr::parse("1.2.3.1000").is_none())
+    assert!(Ipv4Addr::parse("1..2.3").is_none())
+    assert!(Ipv4Addr::parse("+1.2.3.4").is_none())
+}
+
+#[test]
+fn ipv6_addresses() {
+    assert!(shows(Ipv6Addr::LOCALHOST, "::1"))
+    assert!(shows(Ipv6Addr::UNSPECIFIED, "::"))
+    let ip = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)
+    assert!(ip.to_bits() == 0x20010db8000000000000000000000001)
+    assert!(Ipv6Addr::from_bits(0x20010db8000000000000000000000001) == ip)
+    assert!(Ipv6Addr::parse("2001:DB8:0000:0:0:0:0:1").unwrap() == ip)
+    assert!(v6_shows("2001:db8::1", "2001:db8::1"))
+    assert!(v6_shows("::", "::"))
+    assert!(v6_shows("1::", "1::"))
+    assert!(v6_shows("1:2:3:4:5:6:7::", "1:2:3:4:5:6:7:0"))
+    assert!(v6_shows("::2:3:4:5:6:7:8", "0:2:3:4:5:6:7:8"))
+    // The longest run of zeros, or the first of equal runs, and never one alone.
+    assert!(v6_shows("1:0:0:2:0:0:0:3", "1:0:0:2::3"))
+    assert!(v6_shows("1:0:0:2:3:0:0:4", "1::2:3:0:0:4"))
+    assert!(v6_shows("1:0:2:3:4:5:6:7", "1:0:2:3:4:5:6:7"))
+    // An IPv4 tail; only an IPv4-mapped address shows one.
+    assert!(v6_shows("::ffff:192.0.2.1", "::ffff:192.0.2.1"))
+    assert!(v6_shows("::FFFF:c000:201", "::ffff:192.0.2.1"))
+    assert!(v6_shows("64:ff9b::192.0.2.1", "64:ff9b::c000:201"))
+    assert!(v6_shows("1:2:3:4:5:6:1.2.3.4", "1:2:3:4:5:6:102:304"))
+    assert!(Ipv6Addr::parse("").is_none())
+    assert!(Ipv6Addr::parse(":").is_none())
+    assert!(Ipv6Addr::parse(":::").is_none())
+    assert!(Ipv6Addr::parse(":1::").is_none())
+    assert!(Ipv6Addr::parse("1:2:3:4:5:6:7").is_none())
+    assert!(Ipv6Addr::parse("1:2:3:4:5:6:7:8:9").is_none())
+    assert!(Ipv6Addr::parse("1::2::3").is_none())
+    assert!(Ipv6Addr::parse("12345::").is_none())
+    assert!(Ipv6Addr::parse("g::").is_none())
+    assert!(Ipv6Addr::parse("1.2.3.4::").is_none())
+    assert!(Ipv6Addr::parse("::1.2.3.4:5").is_none())
+    assert!(Ipv6Addr::parse("1:2:3:4:5:6:7:1.2.3.4").is_none())
+    assert!(Ipv6Addr::parse("fe80::1%2").is_none())
+}
+
+#[test]
+fn ip_addresses() {
+    let v4 = IpAddr::parse("127.0.0.1").unwrap()
+    assert!(v4 == IpAddr::V4(Ipv4Addr::LOCALHOST))
+    assert!(shows(v4, "127.0.0.1"))
+    let v6 = IpAddr::parse("::1").unwrap()
+    assert!(v6 == IpAddr::V6(Ipv6Addr::LOCALHOST))
+    assert!(shows(v6, "::1"))
+    assert!(v4 != v6)
+    assert!(IpAddr::parse("localhost").is_none())
+}
+
+#[test]
+fn socket_addresses() {
+    let v4 = SocketAddr::parse("127.0.0.1:8080").unwrap()
+    assert!(v4 == SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080))
+    assert!(v4.port() == 8080 && v4.ip() == IpAddr::V4(Ipv4Addr::LOCALHOST) && v4.scope_id() == 0)
+    assert!(shows(v4, "127.0.0.1:8080"))
+    let v6 = SocketAddr::parse("[::1]:443").unwrap()
+    assert!(v6 == SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 443))
+    assert!(shows(v6, "[::1]:443"))
+    let scoped = SocketAddr::parse("[fe80::1%4294967295]:0").unwrap()
+    assert!(scoped.scope_id() == 4294967295 && scoped.port() == 0)
+    assert!(scoped == SocketAddr::new_v6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1), 0, scope_id: 4294967295))
+    assert!(shows(scoped, "[fe80::1%4294967295]:0"))
+    assert!(scoped != SocketAddr::new(IpAddr::V6(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1)), 0))
+    assert!(shows(SocketAddr::parse("0.0.0.0:65535").unwrap(), "0.0.0.0:65535"))
+    assert!(SocketAddr::parse("127.0.0.1").is_none())
+    assert!(SocketAddr::parse("127.0.0.1:").is_none())
+    assert!(SocketAddr::parse("127.0.0.1:65536").is_none())
+    assert!(SocketAddr::parse("127.0.0.1:80x").is_none())
+    assert!(SocketAddr::parse("::1:80").is_none())
+    assert!(SocketAddr::parse("[::1]").is_none())
+    assert!(SocketAddr::parse("[::1]80").is_none())
+    assert!(SocketAddr::parse("[127.0.0.1]:80").is_none())
+    assert!(SocketAddr::parse("[fe80::1%]:80").is_none())
+    assert!(SocketAddr::parse("[fe80::1%eth0]:80").is_none())
+    assert!(SocketAddr::parse("[fe80::1%4294967296]:80").is_none())
+}
+
+#[test]
+fn socket_addresses_are_map_keys() {
+    let v4 = SocketAddr::parse("127.0.0.1:80").unwrap()
+    let v6 = SocketAddr::parse("[::1]:80").unwrap()
+    let scoped = SocketAddr::parse("[::1%2]:80").unwrap()
+    var peers: HashMap<SocketAddr, u32> = HashMap::new()
+    assert!(peers.insert(v4, 1).is_none())
+    assert!(peers.insert(v6, 2).is_none())
+    assert!(peers.insert(scoped, 3).is_none())
+    assert!(peers.insert(SocketAddr::parse("127.0.0.1:80").unwrap(), 4).unwrap() == 1)
+    assert!(peers.len() == 3)
+    assert!(peers.get(v4).unwrap() == 4)
+    assert!(peers.get(scoped).unwrap() == 3)
+    assert!(!peers.contains_key(SocketAddr::parse("127.0.0.1:81").unwrap()))
+    // Equal addresses hash alike, and the bits of an IPv4 address in IPv6
+    // make a different address.
+    assert!(fold_hash(v6) == fold_hash(SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 80)))
+    let v4_bits = IpAddr::V4(Ipv4Addr::from_bits(1))
+    let v6_bits = IpAddr::V6(Ipv6Addr::from_bits(1))
+    assert!(v4_bits != v6_bits && fold_hash(v4_bits) != fold_hash(v6_bits))
+}

@@ -69,13 +69,6 @@ pub(crate) fn normalized_body_error_to_diag<'db>(
             ),
             SemanticDiagnosticSpan::LocalSourceOrBody { instance, local },
         ),
-        NormalizeError::MissingProviderAddressSpace(provider) => (
-            format!("normalized provider has no address space: {provider:?}"),
-            SemanticDiagnosticSpan::Origin {
-                owner,
-                origin: SemOrigin::Body(owner),
-            },
-        ),
         NormalizeError::UnresolvedCapabilityConst(ty) => (
             format!(
                 "constant holding a capability has no resolved value: {}",

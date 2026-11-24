@@ -1,6 +1,9 @@
 #![cfg(target_os = "linux")]
-/// glibc's x86-64 layouts and values.
-use core::MemSpan
+/// glibc's Linux layouts and values, on x86-64 and AArch64.
+use core::{MemBuffer, MemSpan, Option, Result}
+use ingot::io::Error
+use ingot::time::Instant
+use super::{EVENT_ERROR, EVENT_HANGUP, EVENT_READABLE, EVENT_WRITABLE, Fd, check_call, poll_millis, retry, socket}
 
 extern {
     fn __errno_location() -> *i32
@@ -10,9 +13,29 @@ pub fn errno_location() -> *i32 {
     unsafe { __errno_location() }
 }
 
+// `errno` values, the same on x86-64 and AArch64.
+pub const EAGAIN: i32 = 11
+pub const EINPROGRESS: i32 = 115
+pub const ECONNREFUSED: i32 = 111
+pub const ECONNRESET: i32 = 104
+pub const ECONNABORTED: i32 = 103
+pub const ENOTCONN: i32 = 107
+pub const EADDRINUSE: i32 = 98
+pub const EADDRNOTAVAIL: i32 = 99
+pub const ETIMEDOUT: i32 = 110
+pub const ENETUNREACH: i32 = 101
+pub const EHOSTUNREACH: i32 = 113
+
 // `struct stat` and `struct dirent`.
+#[cfg(target_arch = "x86_64")]
 pub fn stat_mode(_ stat: MemSpan) -> u32 {
     stat.read_le<u32>(24)
+}
+
+// AArch64 uses the kernel's generic `struct stat`, where `st_mode` follows `st_ino`.
+#[cfg(target_arch = "aarch64")]
+pub fn stat_mode(_ stat: MemSpan) -> u32 {
+    stat.read_le<u32>(16)
 }
 
 pub fn stat_size(_ stat: MemSpan) -> u64 {
@@ -47,10 +70,174 @@ pub fn close_other_fds(_ actions: *u8, _ attr: *u8) -> i32 {
 
 // `open` flags.
 pub const O_CREAT: i32 = 0x40
+pub const O_EXCL: i32 = 0x80
 pub const O_TRUNC: i32 = 0x200
+pub const O_APPEND: i32 = 0x400
+pub const O_CLOEXEC: i32 = 0x80000
+pub const O_NONBLOCK: i32 = 0x800
+
+// `fcntl`'s command to copy a descriptor to the lowest free number from its
+// argument on, close-on-exec.
+pub const F_DUPFD_CLOEXEC: i32 = 1030
 
 // The bytes a write to a pipe that `poll` finds writable takes at once.
 pub const PIPE_BUF: usize = 4096
 
 // The bytes in a unit of `struct rusage`'s `ru_maxrss`.
 pub const MAXRSS_UNIT: u64 = 1024
+
+extern {
+    fn accept4(_ fd: i32, _ addr: *u8, _ len: *u32, _ flags: i32) -> i32
+}
+
+// Socket values, the same on x86-64 and AArch64.
+pub const AF_INET6: i32 = 10
+pub const SOL_SOCKET: i32 = 1
+pub const SO_REUSEADDR: i32 = 2
+pub const SO_ERROR: i32 = 4
+pub const SO_BROADCAST: i32 = 6
+pub const SO_RCVTIMEO: i32 = 20
+pub const SO_SNDTIMEO: i32 = 21
+const SOCK_CLOEXEC: i32 = 0x80000
+
+// The flags of each `send`: `MSG_NOSIGNAL`, so that a write to a closed
+// connection raises no `SIGPIPE`.
+pub const SEND_FLAGS: i32 = 0x4000
+// The flag of a receive or send that doesn't wait.
+pub const MSG_DONTWAIT: i32 = 0x40
+
+/// The first 16 bits of a socket address of `domain`: its family.
+pub fn sockaddr_header(_ domain: i32) -> u16 {
+    domain.downcast_truncate()
+}
+
+/// The domain of a socket address whose first 16 bits are `header`.
+pub fn sockaddr_domain(_ header: u16) -> i32 {
+    header as i32
+}
+
+/// A new socket of `domain` and `kind`, close-on-exec.
+pub fn new_socket(_ domain: i32, _ kind: i32) -> Result<Error, Fd> {
+    let fd = unsafe { socket(domain, kind | SOCK_CLOEXEC, 0) }
+    check_call(fd)?
+    Result::Ok(unsafe { Fd { fd } })
+}
+
+/// A connection that the listening socket `fd` accepts, blocking and
+/// close-on-exec. The peer's address goes to `addr`, whose length is at
+/// `len`.
+pub fn accept_socket(_ fd: i32, _ addr: *u8, _ len: *u32) -> Result<Error, Fd> {
+    let accepted = retry(|| unsafe { accept4(fd, addr, len, SOCK_CLOEXEC) } as isize)?
+    Result::Ok(unsafe { Fd { fd: accepted.downcast_unchecked() } })
+}
+
+/// Keeps a write to the socket `fd` whose connection is closed from
+/// raising `SIGPIPE`: nothing to do, since each `send` has `MSG_NOSIGNAL`.
+pub fn no_sigpipe(_ fd: i32) -> Result<Error, ()> {
+    Result::Ok(())
+}
+
+extern {
+    fn epoll_create1(_ flags: i32) -> i32
+    fn epoll_ctl(_ epfd: i32, _ op: i32, _ fd: i32, _ event: *u8) -> i32
+    fn epoll_wait(_ epfd: i32, _ events: *u8, _ max: i32, _ timeout: i32) -> i32
+}
+
+// `epoll` values, the same on x86-64 and AArch64.
+const EPOLL_CLOEXEC: i32 = 0x80000
+const EPOLL_CTL_ADD: i32 = 1
+const EPOLL_CTL_DEL: i32 = 2
+const EPOLL_CTL_MOD: i32 = 3
+const EPOLLIN: u32 = 0x1
+const EPOLLOUT: u32 = 0x4
+const EPOLLERR: u32 = 0x8
+const EPOLLHUP: u32 = 0x10
+const EPOLLRDHUP: u32 = 0x2000
+
+// A `struct epoll_event`: 32 bits of events, then 64 of user data, which
+// x86-64 packs right after them and AArch64 aligns to 8 bytes.
+#[cfg(target_arch = "x86_64")]
+pub const EVENT_SIZE: usize = 12
+#[cfg(target_arch = "x86_64")]
+const EVENT_DATA: usize = 4
+#[cfg(target_arch = "aarch64")]
+pub const EVENT_SIZE: usize = 16
+#[cfg(target_arch = "aarch64")]
+const EVENT_DATA: usize = 8
+
+/// A new event queue for a poller, close-on-exec: an `epoll` instance.
+pub fn new_queue() -> Result<Error, Fd> {
+    let fd = unsafe { epoll_create1(EPOLL_CLOEXEC) }
+    check_call(fd)?
+    Result::Ok(unsafe { Fd { fd } })
+}
+
+/// Makes `queue` report the `interest` events, readable and writable, of
+/// `fd` with `data`, level-triggered, and its hangups and errors. `added`
+/// says that `queue` has `fd` already. The peer's half-close comes with
+/// reads alone, as on macOS, since for a source that only writes it would
+/// come at every wait; `EPOLLHUP` and `EPOLLERR` come anyway.
+pub fn queue_set(_ queue: i32, _ fd: i32, data: u64, interest: u8, added: bool) -> Result<Error, ()> {
+    var events: u32 = 0
+    if interest & EVENT_READABLE != 0 {
+        events = events | EPOLLIN | EPOLLRDHUP
+    }
+    if interest & EVENT_WRITABLE != 0 {
+        events = events | EPOLLOUT
+    }
+    var event = MemBuffer::new(EVENT_SIZE)
+    event.write_le<u32>(offset: 0, value: events)
+    event.write_le<u64>(offset: EVENT_DATA, value: data)
+    check_call(unsafe { epoll_ctl(queue, if added { EPOLL_CTL_MOD } else { EPOLL_CTL_ADD }, fd, event.ptr()) })
+}
+
+/// Takes `fd` out of `queue`.
+pub fn queue_remove(_ queue: i32, _ fd: i32) -> Result<Error, ()> {
+    // Linux before 2.6.9 reads an event, which it ignores.
+    let event = MemBuffer::new(EVENT_SIZE)
+    check_call(unsafe { epoll_ctl(queue, EPOLL_CTL_DEL, fd, event.ptr()) })
+}
+
+/// Waits until `queue` has events, or `deadline` has passed if there is
+/// one, and writes up to `capacity` of them at `events`: how many. A signal
+/// doesn't end the wait early.
+pub fn queue_wait(_ queue: i32, _ events: *u8, _ capacity: usize, _ deadline: Option<Instant>) -> Result<Error, usize> {
+    let max: i32 = if capacity < 0x7fffffff { capacity.downcast_unchecked() } else { 0x7fffffff }
+    retry(|| unsafe { epoll_wait(queue, events, max, poll_millis(deadline)) } as isize)
+}
+
+/// The user data of event `index` of `events`.
+pub fn event_data(_ events: MemSpan, _ index: usize) -> u64 {
+    events.read_le<u64>(index * EVENT_SIZE + EVENT_DATA)
+}
+
+/// The kinds of event `index` of `events`: `EVENT_READABLE` and its
+/// relatives.
+pub fn event_kinds(_ events: MemSpan, _ index: usize) -> u8 {
+    let flags = events.read_le<u32>(index * EVENT_SIZE)
+    var kinds: u8 = 0
+    if flags & EPOLLIN != 0 {
+        kinds = kinds | EVENT_READABLE
+    }
+    if flags & EPOLLOUT != 0 {
+        kinds = kinds | EVENT_WRITABLE
+    }
+    if flags & (EPOLLHUP | EPOLLRDHUP) != 0 {
+        kinds = kinds | EVENT_HANGUP
+    }
+    if flags & EPOLLERR != 0 {
+        kinds = kinds | EVENT_ERROR
+    }
+    kinds
+}
+
+// `getaddrinfo` results: the host name is unknown, it has no address
+// (glibc declares `EAI_NODATA` only for `_GNU_SOURCE`, but its resolver may
+// return it), and a call failed with `errno`.
+pub const EAI_NONAME: i32 = -2
+pub const EAI_NODATA: i32 = -5
+pub const EAI_SYSTEM: i32 = -11
+
+// The offset of a `struct addrinfo`'s address, after its canonical name on
+// macOS and before it on Linux.
+pub const ADDRINFO_ADDR: usize = 24

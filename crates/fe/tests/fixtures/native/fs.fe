@@ -1,7 +1,16 @@
 use core::MemBuffer
 use std::env::Args
-use std::fs::{FileType, Fs}
-use std::io::{Display, Error, ErrorKind, Stdout}
+use std::fs::{File, FileType, Fs, OpenOptions}
+use std::io::{BufReader, Display, Error, ErrorKind, Read, Stdout, Write}
+
+extern {
+    fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
+}
+
+// `fcntl`'s command to read a descriptor's flags, and the close-on-exec
+// flag, the same on Linux and macOS.
+const F_GETFD: i32 = 1
+const FD_CLOEXEC: i32 = 1
 
 // Runs each `std::fs` operation in the directory named by the first
 // argument, which holds a symbolic link `link` to `a/b/c/file`.
@@ -26,6 +35,10 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: mut Fs) {
         Result::Ok(path) => println!("canonicalize a/b/../b/./c/file: ", path),
         Result::Err(error) => failed("canonicalize", error),
     }
+    match files(dir) {
+        Result::Ok(_) => {}
+        Result::Err(error) => failed("files", error),
+    }
 
     read("missing", fs.read(format!(dir, "/missing")))
     read("a", fs.read(format!(dir, "/a")))
@@ -37,7 +50,64 @@ pub fn main() -> i32 uses (out: mut Stdout, args: Args, fs: mut Fs) {
     var nul = format!(dir, "/a")
     nul.push(0)
     read("a\\0", fs.read(nul))
+    opened("open missing", fs.open(format!(dir, "/missing")))
+    opened("create a", fs.create(format!(dir, "/a")))
+    opened("open_with nothing", fs.open_with(format!(dir, "/a/lines"), OpenOptions::new()))
+    opened("open_with read truncate", fs.open_with(format!(dir, "/a/lines"), OpenOptions::new().read(true).truncate(true)))
+    opened("open_with append truncate", fs.open_with(format!(dir, "/a/lines"), OpenOptions::new().append(true).truncate(true)))
+    opened("open_with create_new a/lines", fs.open_with(format!(dir, "/a/lines"), OpenOptions::new().write(true).create_new(true)))
+    match fs.open(format!(dir, "/a/lines")) {
+        Result::Ok(var file) => match file.write(format!("x").span()) {
+            Result::Ok(count) => println!("write to a file open for reading: ", count),
+            Result::Err(error) => failed("write to a file open for reading", error),
+        },
+        Result::Err(error) => failed("open a/lines", error),
+    }
     0
+}
+
+// Writes, appends to and reads `a/lines` through `File`s.
+fn files<T: Display>(_ dir: T) -> Result<Error, ()> uses (out: mut Stdout, fs: mut Fs) {
+    let path = format!(dir, "/a/lines")
+    var created = fs.create(path)?
+    created.write_all(format!("one\ntwo\n").span())?
+    let fd = created.as_raw_fd()
+    println!("create a/lines: descriptor past the standard streams: ", fd > 2, ", close-on-exec: ", unsafe { fcntl(fd, F_GETFD) } & FD_CLOEXEC != 0)
+    var appended = fs.open_with(path, OpenOptions::new().append(true))?
+    appended.write_all(format!("three").span())?
+    var reader = BufReader::new(fs.open(path)?)
+    var line = MemBuffer::empty()
+    while reader.read_line(mut line)? {
+        println!("line: ", line)
+        line.clear()
+    }
+    // A file from the descriptor of another, which then gives it up.
+    let file = fs.open(path)?
+    let raw = file.as_raw_fd()
+    core::mem::forget(file)
+    var taken = unsafe { File::from_raw_fd(raw) }
+    var head = MemBuffer::new(3)
+    taken.read_exact(head.span())?
+    println!("from_raw_fd: ", head)
+    // A write, then a read where it ended.
+    var both = fs.open_with(path, OpenOptions::new().read(true).write(true))?
+    both.write_all(format!("ONE").span())?
+    var rest = MemBuffer::empty()
+    both.read_to_end(mut rest)?
+    println!("read after write: ", rest.len(), " bytes")
+    // A new file, which `create_new` makes once.
+    var fresh = fs.open_with(format!(dir, "/a/fresh"), OpenOptions::new().write(true).create_new(true))?
+    fresh.write_all(format!("fresh").span())?
+    println!("create_new a/fresh: ", fs.read(format!(dir, "/a/fresh"))?)
+    println!("a/lines holds: ", fs.read(path)?.len(), " bytes")
+    Result::Ok(())
+}
+
+fn opened<T: Display>(_ label: T, _ result: Result<Error, File>) uses (out: mut Stdout) {
+    match result {
+        Result::Ok(_) => println!(label, ": ok"),
+        Result::Err(error) => failed(label, error),
+    }
 }
 
 fn done<T: Display>(_ label: T, _ result: Result<Error, ()>) uses (out: mut Stdout) {
@@ -103,6 +173,20 @@ fn kind_name(_ kind: ErrorKind) -> String<20> {
         ErrorKind::NotADirectory => "NotADirectory",
         ErrorKind::IsADirectory => "IsADirectory",
         ErrorKind::InvalidInput => "InvalidInput",
+        ErrorKind::WouldBlock => "WouldBlock",
+        ErrorKind::TimedOut => "TimedOut",
+        ErrorKind::ConnectionRefused => "ConnectionRefused",
+        ErrorKind::ConnectionReset => "ConnectionReset",
+        ErrorKind::ConnectionAborted => "ConnectionAborted",
+        ErrorKind::NotConnected => "NotConnected",
+        ErrorKind::AddrInUse => "AddrInUse",
+        ErrorKind::AddrNotAvailable => "AddrNotAvailable",
+        ErrorKind::NetworkUnreachable => "NetworkUnreachable",
+        ErrorKind::HostUnreachable => "HostUnreachable",
+        ErrorKind::BrokenPipe => "BrokenPipe",
+        ErrorKind::UnexpectedEof => "UnexpectedEof",
+        ErrorKind::InvalidData => "InvalidData",
+        ErrorKind::HostNotFound => "HostNotFound",
         ErrorKind::Other => "Other",
     }
 }

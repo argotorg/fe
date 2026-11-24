@@ -1,0 +1,55 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_call_infer_args_errors.fe
+---
+error[8-0000]: type mismatch
+   ┌─ generic_call_infer_args_errors.fe:23:15
+   │
+23 │     defaulted(true)
+   │               ^^^^ expected `u8`, but `bool` is given
+
+error[8-0022]: too many generic arguments
+   ┌─ generic_call_infer_args_errors.fe:25:11
+   │
+12 │ fn unused<T>() {}
+   │    ------ function defined here
+   ·
+25 │     unused<_, _>()
+   │           ^^^^^^ expected at most 1 generic argument, but 2 given
+
+error[8-0022]: too many generic arguments
+   ┌─ generic_call_infer_args_errors.fe:26:23
+   │
+17 │     fn op<const N: u64>(self) -> u64 {
+   │        -- function defined here
+   ·
+26 │     vm.op<_>() + vm.op<1, _>() + body_const<_, _>(true)
+   │                       ^^^^^^ expected at most 1 generic argument, but 2 given
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_infer_args_errors.fe:24:5
+   │
+24 │     unused<_>()
+   │     ^^^^^^^^^
+   │     │
+   │     cannot infer the type parameter `T` of `unused`
+   │     consider giving it explicitly: `unused<T>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_infer_args_errors.fe:26:8
+   │
+26 │     vm.op<_>() + vm.op<1, _>() + body_const<_, _>(true)
+   │        ^^
+   │        │
+   │        cannot infer the const parameter `N` of `op`
+   │        consider giving it explicitly: `op<N>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_infer_args_errors.fe:26:34
+   │
+26 │     vm.op<_>() + vm.op<1, _>() + body_const<_, _>(true)
+   │                                  ^^^^^^^^^^^^^^^^
+   │                                  │
+   │                                  cannot infer the const parameter `N` of `body_const`
+   │                                  consider giving it explicitly: `body_const<bool, N>`

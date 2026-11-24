@@ -11,9 +11,9 @@ use hir::analysis::{
         SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
         core_method_callee_key, eval_const_ref, generated_callee_key,
         normalized::{
-            NBlockId, NDataPath, NDataProjection, NEffectArg, NEffectArgValue, NExpr, NIndex,
-            NOperand, NPlace, NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind,
-            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
+            NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
+            NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
+            NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
         panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
     },
@@ -1292,7 +1292,8 @@ impl<'db> RmirEmitter<'db> {
                     self.lower_semantic_place_read_into(bb, dst, place, &dst_class);
                     return;
                 }
-                let (value, copy) = self.lower_place_address(
+                let (place, copy) = self.resolve_place_address(bb, place);
+                let value = self.lower_place_addr_of_for_class(
                     self.locals[dst.index()].semantic_ty,
                     bb,
                     place,
@@ -2948,15 +2949,13 @@ impl<'db> RmirEmitter<'db> {
         effect_args: &[NEffectArg<'db>],
     ) -> RLocalId {
         let semantic = SemanticInstance::new(self.db, callee.key);
-        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args, effect_args) {
+        if let Some(ret) = self.lower_extern_builtin_call(bb, semantic, args) {
             return ret;
         }
         let mut boundary_sites = BoundarySiteAllocator::default();
         let call_input_plan = compile_call_input_plan_for_semantic(
             self.db,
-            &self.semantic_body,
             semantic,
-            self.env,
             effect_args,
             &mut boundary_sites,
         );
@@ -2969,10 +2968,9 @@ impl<'db> RmirEmitter<'db> {
         let lane_copies: Vec<_> = std::mem::take(&mut self.call_lane_copies)
             .into_iter()
             .filter(|(place, _)| {
-                effect_args.iter().any(|effect| {
-                    effect.required_mut
-                        && matches!(&effect.arg, NEffectArgValue::Place(arg) if arg == place)
-                })
+                effect_args
+                    .iter()
+                    .any(|effect| effect.required_mut && effect.place == *place)
             })
             .map(|(_, copy)| (copy, self.open_lane_hold(bb, copy)))
             .collect();
@@ -3051,7 +3049,6 @@ impl<'db> RmirEmitter<'db> {
         bb: RBlockId,
         semantic: SemanticInstance<'db>,
         args: &[NOperand],
-        effect_args: &[NEffectArg<'db>],
     ) -> Option<RLocalId> {
         let BodyOwner::Func(func, _) = semantic.key(self.db).owner(self.db) else {
             return None;
@@ -3101,14 +3098,8 @@ impl<'db> RmirEmitter<'db> {
         let kind = runtime_builtin_func_kind(self.db, func)?;
 
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         if kind == RuntimeBuiltinFuncKind::PanicWithValue {
             let [value] = args.as_slice() else {
@@ -3179,7 +3170,6 @@ impl<'db> RmirEmitter<'db> {
         }
         let lowered = self.lower_extern_builtin(semantic, &args)?;
         let ret_ty = semantic_return_ty(self.db, semantic);
-        let _ = effect_args;
         Some(match lowered {
             LoweredBuiltinCall::Expr { builtin, class } => {
                 let ret = class
@@ -3284,16 +3274,16 @@ impl<'db> RmirEmitter<'db> {
         if func.body(self.db).is_some() {
             return None;
         }
+        // Only an intrinsic's arguments are lowered here: another extern
+        // function's, such as a variadic one's extra arguments, are not.
         let name = func.name(self.db).to_opt()?.data(self.db);
+        let kind = generic_numeric_intrinsic_kind(name.as_str());
+        if kind.is_none() && intrinsic_numeric_name_parts(name.as_str()).is_none() {
+            return None;
+        }
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         let ret_ty = semantic_return_ty(self.db, semantic);
         let ret_class = self.top_level_class_for_ty(ret_ty, AddressSpace::Memory)?;
@@ -3303,7 +3293,7 @@ impl<'db> RmirEmitter<'db> {
             RuntimeClass::AggregateValue { .. } | RuntimeClass::RawAddr { .. } => return None,
         };
         let ret = self.alloc_runtime_temp(ret_ty, RuntimeCarrier::Value(ret_class.clone()));
-        let expr = match generic_numeric_intrinsic_kind(name.as_str()) {
+        let expr = match kind {
             Some(GenericNumericIntrinsicKind::Saturating(op)) => {
                 let [lhs, rhs] = args.as_slice() else {
                     return None;
@@ -3534,6 +3524,8 @@ impl<'db> RmirEmitter<'db> {
         RuntimeArgLowerer::new(self, bb).lower_all(&selected)
     }
 
+    /// The runtime inputs of a call, with the classes of all but a variadic
+    /// call's extra arguments, which follow the others.
     fn lower_runtime_call_inputs(
         &mut self,
         bb: RBlockId,
@@ -3543,14 +3535,19 @@ impl<'db> RmirEmitter<'db> {
     ) -> (Vec<RLocalId>, Vec<RuntimeClass<'db>>) {
         let roots = self.runtime_roots();
         let value_classes = self.normalized_value_classes();
-        let selected = self.with_current_body_cx(|cx| {
+        let (selected, inputs) = self.with_current_body_cx(|cx| {
             let mut class_cache = InferClassCache::new(self.semantic_body.locals.len());
-            RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
+            let mut selector = RuntimeArgSelector::new(cx.env, cx.carriers, Some(&mut class_cache))
                 .with_concrete_roots(&roots)
-                .with_concrete_value_classes(&value_classes)
-                .selected_call_inputs(args, effect_args, plan)
+                .with_concrete_value_classes(&value_classes);
+            let mut selected = selector.selected_call_inputs(args, effect_args, plan);
+            let inputs = selected.len();
+            selected.extend(selector.selected_variadic_args(args, plan));
+            (selected, inputs)
         });
-        RuntimeArgLowerer::new(self, bb).lower_all(&selected)
+        let (runtime_args, mut classes) = RuntimeArgLowerer::new(self, bb).lower_all(&selected);
+        classes.truncate(inputs);
+        (runtime_args, classes)
     }
 
     fn lower_extern_builtin(
@@ -4208,14 +4205,8 @@ impl<'db> RmirEmitter<'db> {
         )
         .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, routine, error)));
         let mut boundary_sites = BoundarySiteAllocator::default();
-        let call_input_plan = compile_call_input_plan_for_semantic(
-            self.db,
-            &self.semantic_body,
-            semantic,
-            self.env,
-            &[],
-            &mut boundary_sites,
-        );
+        let call_input_plan =
+            compile_call_input_plan_for_semantic(self.db, semantic, &[], &mut boundary_sites);
         let (args, _) = self.lower_visible_call_args(bb, args, &call_input_plan);
         Some(self.call_generated(bb, SemanticInstance::new(self.db, key), &args))
     }
@@ -4743,14 +4734,14 @@ impl<'db> RmirEmitter<'db> {
             };
             let semantic = SemanticInstance::new(self.db, callee.key);
             let mut sites = BoundarySiteAllocator::default();
-            let plan = compile_call_input_plan_for_semantic(
-                self.db, &self.semantic_body, semantic, self.env, effect_args, &mut sites,
-            );
+            let plan = compile_call_input_plan_for_semantic(self.db, semantic, effect_args, &mut sites);
             self.with_current_body_cx(|cx| {
-                RuntimeArgSelector::new(cx.env, cx.carriers, None)
+                let mut selector = RuntimeArgSelector::new(cx.env, cx.carriers, None)
                     .with_concrete_roots(&roots)
-                    .with_concrete_value_classes(&value_classes)
-                    .selected_call_inputs(args, effect_args, &plan)
+                    .with_concrete_value_classes(&value_classes);
+                let mut selected = selector.selected_call_inputs(args, effect_args, &plan);
+                selected.extend(selector.selected_variadic_args(args, &plan));
+                selected
                     .iter()
                     .any(|selected| match &selected.source {
                         RuntimeArgSource::SemanticOperand(operand)
@@ -5494,28 +5485,40 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
                 Layout::Struct(data) => {
-                    let field_tys = self.aggregate_field_tys(ty, data.fields.len());
-                    let fields = data
-                        .fields
-                        .iter()
-                        .zip(field_tys)
-                        .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
-                        .collect();
+                    let fields: Box<[RLocalId]> = if data.fields.is_empty() {
+                        Box::default()
+                    } else {
+                        let field_tys = self.aggregate_field_tys(ty, data.fields.len());
+                        data.fields
+                            .iter()
+                            .zip(field_tys)
+                            .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
+                            .collect()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
                         fields,
                     }
                 }
                 Layout::Array(data) => {
-                    let elem_ty = self.aggregate_field_tys(ty, 1)[0];
-                    let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                    let fields: Box<[RLocalId]> = if data.len == 0 {
+                        Box::default()
+                    } else {
+                        let elem_ty = self.aggregate_field_tys(ty, 1)[0];
+                        let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                        vec![elem; data.len as usize].into_boxed_slice()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
-                        fields: vec![elem; data.len as usize].into_boxed_slice(),
+                        fields,
                     }
                 }
                 Layout::Enum(data) => {
-                    let classes = &data.variants[0].fields;
+                    let first = data
+                        .variants
+                        .first()
+                        .expect("zero value requires a non-empty enum layout");
+                    let classes = &first.fields;
                     let field_tys = self.enum_variant_field_tys(ty, VariantIndex(0), classes.len());
                     let fields = classes
                         .iter()
@@ -5538,17 +5541,15 @@ impl<'db> RmirEmitter<'db> {
         zero
     }
 
-    /// The address of `place` as a `target`, and the lane copy it lies in:
-    /// a lane has no address, so it is referenced as a memory copy, which
-    /// the access's users store back.
-    fn lower_place_address(
+    /// `place` resolved to be addressed, and the lane copy it lies in: a lane
+    /// has no address, so it is referenced as a memory copy, which the
+    /// access's users store back.
+    fn resolve_place_address(
         &mut self,
-        semantic_ty: TyId<'db>,
         bb: RBlockId,
         place: &NPlace<'db>,
-        target: RuntimeClass<'db>,
-    ) -> (RLocalId, Option<RLocalId>) {
-        let (place, copy) = match self.resolve_place(bb, place) {
+    ) -> (RuntimePlace<'db>, Option<RLocalId>) {
+        match self.resolve_place(bb, place) {
             ResolvedPlace::Lane(lane) => {
                 let copy = self.hold_lane(bb, lane);
                 let place = RuntimePlace {
@@ -5561,9 +5562,7 @@ impl<'db> RmirEmitter<'db> {
                 let copy = self.lane_copy_root(&place);
                 (place, copy)
             }
-        };
-        let value = self.lower_place_addr_of_for_class(semantic_ty, bb, place, target);
-        (value, copy)
+        }
     }
 
     fn alloc_word_const(&mut self, bb: RBlockId, value: u64) -> RLocalId {
@@ -6147,11 +6146,18 @@ impl<'db> RmirEmitter<'db> {
 struct RuntimeArgLowerer<'emitter, 'db> {
     emitter: &'emitter mut RmirEmitter<'db>,
     bb: RBlockId,
+    /// The places in lane copies the call's arguments hold, by the place
+    /// each provides: effects that are one place share one copy.
+    held: Vec<(NPlace<'db>, RuntimePlace<'db>)>,
 }
 
 impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
     fn new(emitter: &'emitter mut RmirEmitter<'db>, bb: RBlockId) -> Self {
-        Self { emitter, bb }
+        Self {
+            emitter,
+            bb,
+            held: Vec::new(),
+        }
     }
 
     fn lower_all(
@@ -6216,15 +6222,23 @@ impl<'emitter, 'db> RuntimeArgLowerer<'emitter, 'db> {
                 self.apply_use_plan(value, use_plan.clone(), self.semantic_local_ty(*local))
             }
             (RuntimeArgSource::PlaceAddress(source, semantic_ty), use_plan) => {
-                let (value, copy) = self.emitter.lower_place_address(
+                let place = match self.held.iter().find(|(held, _)| held == source) {
+                    Some((_, place)) => place.clone(),
+                    None => {
+                        let (place, copy) = self.emitter.resolve_place_address(self.bb, source);
+                        if let Some(copy) = copy {
+                            self.held.push((source.clone(), place.clone()));
+                            self.emitter.call_lane_copies.push((source.clone(), copy));
+                        }
+                        place
+                    }
+                };
+                let value = self.emitter.lower_place_addr_of_for_class(
                     *semantic_ty,
                     self.bb,
-                    source,
+                    place,
                     selected.class.clone(),
                 );
-                if let Some(copy) = copy {
-                    self.emitter.call_lane_copies.push((source.clone(), copy));
-                }
                 self.apply_use_plan(value, use_plan.clone(), *semantic_ty)
             }
             (RuntimeArgSource::PlaceValue(place, semantic_ty), use_plan) => {

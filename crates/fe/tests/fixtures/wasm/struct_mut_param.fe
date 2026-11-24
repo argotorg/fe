@@ -19,6 +19,7 @@ fn reset(c: mut Counter) {
     c.last = -1
 }
 
+#[unsafe(export)]
 pub fn run(a: i32, b: i32, c: i32, threshold: i32) -> i32 {
     var counter = Counter { hits: 0, misses: 0, last: 0 }
     record(c: mut counter, value: a, threshold: threshold)
@@ -27,6 +28,7 @@ pub fn run(a: i32, b: i32, c: i32, threshold: i32) -> i32 {
     counter.hits * 100 + counter.misses * 10 + counter.last
 }
 
+#[unsafe(export)]
 pub fn reset_then_count(a: i32) -> i32 {
     var counter = Counter { hits: 7, misses: 8, last: 9 }
     record(c: mut counter, value: a, threshold: 0)

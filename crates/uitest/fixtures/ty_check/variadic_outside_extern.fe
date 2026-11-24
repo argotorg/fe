@@ -1,0 +1,14 @@
+// `...` belongs to an `extern` function, which only the native target calls.
+extern {
+    fn printf(_ format: *u8, ...) -> i32
+}
+
+fn plain(_ a: i32, ...) {}
+
+pub fn closure() {
+    let f = |a: i32, ...| a
+}
+
+pub contract Init {
+    init(a: u256, ...) {}
+}

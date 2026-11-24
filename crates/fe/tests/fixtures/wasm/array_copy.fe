@@ -16,12 +16,14 @@ fn add_in_place(a: mut [i32; 4], by: i32) {
     }
 }
 
+#[unsafe(export)]
 pub fn value_semantics(x: i32) -> i32 {
     let original: [i32; 4] = [x, x + 1, x + 2, x + 3]
     let bumped = bump_all(a: original, by: 10)
     original[0] * 1000 + bumped[0] * 10 + bumped[3] - original[3]
 }
 
+#[unsafe(export)]
 pub fn in_place(x: i32) -> i32 {
     var a: [i32; 4] = [x, x + 1, x + 2, x + 3]
     let before = a
@@ -29,6 +31,7 @@ pub fn in_place(x: i32) -> i32 {
     a[0] * 1000 + before[0] * 100 + a[3] - before[3]
 }
 
+#[unsafe(export)]
 pub fn chosen(flag: bool, x: i32) -> i32 {
     let a: [i32; 4] = [x, 1, 2, 3]
     let b: [i32; 4] = [4, 5, 6, x]

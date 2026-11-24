@@ -1,0 +1,10 @@
+/// Networking. IP and socket addresses, with their text, work on every
+/// target. TCP and UDP sockets are native: `Net`, a capability of the native
+/// root effect, `std::native::Host`, makes them, and a function that does
+/// declares `uses (net: mut Net)`. A `Poller` waits for events on many of
+/// them at once.
+pub use addr::*
+#[cfg(target_family = "unix")]
+pub use poll::{Event, Events, Interest, Pollable, Poller, Token}
+#[cfg(target_family = "unix")]
+pub use socket::{Net, Shutdown, TcpListener, TcpStream, UdpSocket}

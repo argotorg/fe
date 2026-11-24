@@ -20,11 +20,13 @@ fn bubble(v: [i32; 6]) -> [i32; 6] {
     w
 }
 
+#[unsafe(export)]
 pub fn kth(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32, k: u32) -> i32 {
     let sorted = bubble(v: load(a: a, b: b, c: c, d: d, e: e, f: f))
     sorted[k as usize]
 }
 
+#[unsafe(export)]
 pub fn is_sorted_after(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> bool {
     let s = bubble(v: load(a: a, b: b, c: c, d: d, e: e, f: f))
     var i: usize = 0
@@ -37,6 +39,7 @@ pub fn is_sorted_after(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> bool {
     true
 }
 
+#[unsafe(export)]
 pub fn padded_third(a: i32, b: i32, c: i32) -> i32 {
     let s = bubble(v: load(a: a, b: b, c: c, d: c, e: c, f: c))
     s[2]

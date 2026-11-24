@@ -18,7 +18,9 @@ fn collatz(_ start: u64) -> u32 uses (log: mut Log) {
     steps
 }
 
+//host: #[unsafe(export)]
 //host: pub fn collatz_steps(start: u64) -> u32 uses (log: mut Log) {
+//mock: #[unsafe(export)]
 //mock: pub fn collatz_steps(start: u64) -> u32 {
 //mock:     var p = provider()
 //mock:     with (Log = p) {
@@ -26,7 +28,9 @@ fn collatz(_ start: u64) -> u32 uses (log: mut Log) {
 //mock:     }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn log_wide(x: u64) -> u64 uses (log: mut Log) {
+//mock: #[unsafe(export)]
 //mock: pub fn log_wide(x: u64) -> u64 {
 //mock:     var p = provider()
 //mock:     with (Log = p) {

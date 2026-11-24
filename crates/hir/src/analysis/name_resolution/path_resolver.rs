@@ -524,7 +524,9 @@ impl<'db> PathResError<'db> {
                             arg.into_assoc_type_arg().ty(),
                             TypePosition::Type,
                         ),
-                        GenericArg::Const(_) | GenericArg::Mode(_) => return None,
+                        GenericArg::Const(_) | GenericArg::Mode(_) | GenericArg::Infer => {
+                            return None;
+                        }
                     };
                 let mut visited = 0;
                 let (arg_path, span) = find_written_path(
@@ -1161,7 +1163,8 @@ fn find_written_path<'db, R>(
                             ),
                             GenericArg::Const(_)
                             | GenericArg::AssocType(_)
-                            | GenericArg::Mode(_) => None,
+                            | GenericArg::Mode(_)
+                            | GenericArg::Infer => None,
                         }),
                 }
             })
@@ -1185,7 +1188,7 @@ fn trait_arg_path_error<'db>(
     let (ty, position) = match arg {
         GenericArg::Type(ty_arg) => (ty_arg.ty, TypePosition::GenericArg),
         GenericArg::AssocType(binding) => (binding.ty, TypePosition::Type),
-        GenericArg::Const(_) | GenericArg::Mode(_) => return None,
+        GenericArg::Const(_) | GenericArg::Mode(_) | GenericArg::Infer => return None,
     };
     let mut visited = 0;
     find_written_path(

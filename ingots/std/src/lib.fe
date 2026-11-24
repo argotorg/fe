@@ -5,6 +5,7 @@ pub use env
 pub use fs
 pub use io
 pub use native
+pub use net
 pub use process
 pub use time
 pub use core::text

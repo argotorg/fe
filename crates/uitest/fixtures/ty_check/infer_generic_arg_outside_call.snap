@@ -1,0 +1,130 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/infer_generic_arg_outside_call.fe
+---
+error[3-0094]: `_` is only allowed as a call's generic argument
+  ┌─ infer_generic_arg_outside_call.fe:7:15
+  │
+7 │ trait Sub: Tr<_> {}
+  │               ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:10:16
+   │
+10 │     type A: Tr<_>
+   │                ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:14:15
+   │
+14 │     x: Option<_>,
+   │               ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:17:19
+   │
+17 │ struct Tup(Option<_>)
+   │                   ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:20:14
+   │
+20 │     A(Option<_>),
+   │              ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:21:19
+   │
+21 │     B { x: Option<_> },
+   │                   ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:24:21
+   │
+24 │ type Alias = Option<_>
+   │                     ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:26:17
+   │
+26 │ const C: Option<_> = Option<u8>::None
+   │                 ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:28:20
+   │
+28 │ fn sig(_ x: Option<_>) -> Option<_> {
+   │                    ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:28:34
+   │
+28 │ fn sig(_ x: Option<_>) -> Option<_> {
+   │                                  ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:32:16
+   │
+32 │ fn bound<T: Tr<_>>(_ t: T) {}
+   │                ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:36:11
+   │
+36 │     T: Tr<_>,
+   │           ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:39:29
+   │
+39 │ fn effect() uses (k: Option<_>) {}
+   │                             ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:41:9
+   │
+41 │ impl Tr<_> for u8 {
+   │         ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:46:21
+   │
+46 │     type A = Option<_>
+   │                     ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:49:8
+   │
+49 │ impl S<_> {}
+   │        ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:54:19
+   │
+54 │     let x: Option<_> = Option<u8>::Some(1)
+   │                   ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:55:20
+   │
+55 │     let y = Option<_>::Some(1)
+   │                    ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:56:15
+   │
+56 │     let z = S<_> { x: Option::None }
+   │               ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:57:11
+   │
+57 │     let S<_> { x } = s
+   │           ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`
+
+error[3-0094]: `_` is only allowed as a call's generic argument
+   ┌─ infer_generic_arg_outside_call.fe:58:17
+   │
+58 │     take<Option<_>>(Option::Some(1))
+   │                 ^ `_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`

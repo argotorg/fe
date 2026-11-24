@@ -40,7 +40,7 @@ use crate::analysis::{
             EffectKeyKind,
             elaborate::{build_pattern_from_requirement_decl, seed_forwarder_from_requirement},
             model::EffectRequirementDecl,
-            rows::{RowComponent, expand_rows},
+            rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
         evidence::prove,
         fold::{TyFoldable, TyFolder},
@@ -89,33 +89,52 @@ pub(crate) fn func_declared_bounds<'db>(
     let mut preds = base.list(db).to_vec();
     preds.extend(collect_func_effect_provider_constraints(db, func));
     if let Some(body) = func.body(db) {
-        // A row that stays abstract may expand in an instance and renumber
-        // the components after it, so components are only bound when every
-        // row expands.
-        let rows = expand_rows(
-            db,
-            func.effect_requirements(db, mode),
-            func.scope(),
-            base.extend_all_bounds(db),
-        );
-        if rows.abstract_rows.is_empty()
-            && rows
-                .components
+        preds.extend(
+            func_row_components(db, func, mode)
                 .iter()
-                .all(|component| component.requirement.key.key_row().is_none())
-        {
-            preds.extend(rows.components.iter().filter_map(|component| {
-                let trait_inst = component.requirement.key.key_trait()?;
-                let provider = row_effect_provider(db, body.scope(), None, &component.requirement);
-                Some(super::super::instantiate_trait_self(
-                    db,
-                    trait_inst,
-                    provider.provider_ty,
-                ))
-            }));
-        }
+                .filter_map(|component| {
+                    let trait_inst = component.requirement.key.key_trait()?;
+                    let provider =
+                        row_effect_provider(db, body.scope(), None, &component.requirement);
+                    Some(super::super::instantiate_trait_self(
+                        db,
+                        trait_inst,
+                        provider.provider_ty,
+                    ))
+                }),
+        );
     }
     PredicateListId::new(db, preds)
+}
+
+/// The components of `func`'s rows its body binds at `mode`, numbered after
+/// its declared effects. A row that stays abstract may expand in an instance
+/// and renumber the components after it, so components are only bound when
+/// every row expands.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn func_row_components<'db>(
+    db: &'db dyn HirAnalysisDb,
+    func: Func<'db>,
+    mode: Option<BorrowKind>,
+) -> Vec<RowComponentRequirement<'db>> {
+    let rows = expand_rows(
+        db,
+        func.effect_requirements(db, mode),
+        func.scope(),
+        crate::semantic::func_body_assumptions(db, func)
+            .at_mode(db, mode)
+            .extend_all_bounds(db),
+    );
+    if rows.abstract_rows.is_empty()
+        && rows
+            .components
+            .iter()
+            .all(|component| component.requirement.key.key_row().is_none())
+    {
+        rows.components
+    } else {
+        Vec::new()
+    }
 }
 
 pub(crate) struct TyCheckEnv<'db> {
@@ -204,6 +223,8 @@ pub(crate) struct TyCheckEnv<'db> {
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::StateIndex`).
     place_entries: FxHashSet<ExprId>,
+    /// The expressions of type `!` typed as their context's type.
+    never_coercions: FxHashSet<ExprId>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
     unsafe_splits: FxHashSet<ExprId>,
     /// The tuples passed to product parameters, a part each.
@@ -341,6 +362,7 @@ impl<'db> TyCheckEnv<'db> {
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
             place_entries: FxHashSet::default(),
+            never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
@@ -450,25 +472,8 @@ impl<'db> TyCheckEnv<'db> {
                 LocalBinding::effect_param(&resolved_binding),
             );
         }
-        // A row that stays abstract may expand in an instance and renumber
-        // the components after it, so components are only seeded when every
-        // row expands.
-        let rows = expand_rows(
-            self.db,
-            func.effect_requirements(self.db, mode),
-            func.scope(),
-            self.base_assumptions,
-        );
-        if !rows.abstract_rows.is_empty()
-            || rows
-                .components
-                .iter()
-                .any(|component| component.requirement.key.key_row().is_some())
-        {
-            return;
-        }
-        for component in rows.components {
-            let requirement = component.requirement;
+        for component in func_row_components(self.db, func, mode) {
+            let requirement = component.requirement.clone();
             let provider = row_effect_provider(self.db, self.body.scope(), None, &requirement);
             self.row_components.push(ResolvedEffectBindingInfo {
                 requirement,
@@ -989,6 +994,16 @@ impl<'db> TyCheckEnv<'db> {
         self.place_entries.insert(expr);
     }
 
+    /// Records whether `expr`, of type `!`, is typed as its context's type;
+    /// a new check of `expr` starts without.
+    pub(super) fn set_never_coercion(&mut self, expr: ExprId, coerced: bool) {
+        if coerced {
+            self.never_coercions.insert(expr);
+        } else {
+            self.never_coercions.remove(&expr);
+        }
+    }
+
     pub(super) fn register_builtin_op(&mut self, expr: ExprId, op: BuiltinOp) {
         self.builtin_ops.insert(expr, op);
     }
@@ -1257,14 +1272,9 @@ impl<'db> TyCheckEnv<'db> {
             ref key => key.binding_ty(db),
         }
         .map(|ty| ProvidedEffect {
-            origin: EffectOrigin::Param {
-                site: info.requirement.binding_site,
-                index: info.requirement.binding_idx as usize,
-                name: Some(name),
-            },
+            origin: EffectOrigin::Param(binding),
             ty,
             is_mut: true,
-            binding: Some(binding),
         });
         active.effects.push(info);
         if let Some(bound) = bound {
@@ -1741,6 +1751,7 @@ impl<'db> TyCheckEnv<'db> {
             expr_ty: self.expr_ty,
             yield_shapes: self.yield_shapes,
             place_entries: self.place_entries,
+            never_coercions: self.never_coercions,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
             value_calls: self.value_calls,
@@ -1828,16 +1839,11 @@ impl<'db> TyChecker<'db> {
                 .unwrap_or_else(|| panic!("missing provider binding for effect at index {idx}"));
             let local_binding = LocalBinding::effect_param(&resolved_binding);
             let provided = ProvidedEffect {
-                origin: EffectOrigin::Param {
-                    site,
-                    index: idx,
-                    name: Some(resolved_binding.requirement.binding_name),
-                },
+                origin: EffectOrigin::Param(local_binding),
                 ty: EffectEnvView::new(site)
                     .visible_effect_binding_ty(self.db, idx)
                     .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
                 is_mut: local_binding.is_mut(),
-                binding: Some(local_binding),
             };
 
             if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, binding)
@@ -1854,19 +1860,14 @@ impl<'db> TyChecker<'db> {
         }
 
         for component in self.env.row_components().to_vec() {
-            let requirement = &component.requirement;
             let local_binding = LocalBinding::effect_param(&component);
             let provided = ProvidedEffect {
-                origin: EffectOrigin::Param {
-                    site,
-                    index: requirement.binding_idx as usize,
-                    name: Some(requirement.binding_name),
-                },
+                origin: EffectOrigin::Param(local_binding),
                 ty: self.env.lookup_binding_ty(&local_binding),
                 is_mut: local_binding.is_mut(),
-                binding: Some(local_binding),
             };
-            if let Some(req) = EffectRequirementDecl::from_effect_requirement(self.db, requirement)
+            if let Some(req) =
+                EffectRequirementDecl::from_effect_requirement(self.db, &component.requirement)
                 && let Some(forwarder) =
                     seed_forwarder_from_requirement(self, &req, provided, func.scope(), assumptions)
             {
@@ -1908,23 +1909,16 @@ impl<'db> TyChecker<'db> {
         binding: &EffectRequirement<'db>,
     ) -> Option<ProvidedEffect<'db>> {
         let idx = binding.binding_idx as usize;
-        let origin = EffectOrigin::Param {
-            site: binding.binding_site,
-            index: idx,
-            name: Some(binding.binding_name),
-        };
-
         let resolved_binding = self
             .env
             .resolved_effect_binding(binding.binding_site, idx)?;
         let local_binding = LocalBinding::effect_param(&resolved_binding);
         Some(ProvidedEffect {
-            origin,
+            origin: EffectOrigin::Param(local_binding),
             ty: EffectEnvView::new(binding.binding_site)
                 .visible_effect_binding_ty(self.db, idx)
                 .unwrap_or_else(|| self.env.lookup_binding_ty(&local_binding)),
             is_mut: binding.is_mut,
-            binding: Some(local_binding),
         })
     }
 
@@ -2278,18 +2272,26 @@ pub(crate) struct ProvidedEffect<'db> {
     pub origin: EffectOrigin<'db>,
     pub ty: TyId<'db>,
     pub is_mut: bool,
-    pub binding: Option<LocalBinding<'db>>,
+}
+
+impl<'db> ProvidedEffect<'db> {
+    /// The binding the provider is, if it is one.
+    pub(super) fn binding(self) -> Option<LocalBinding<'db>> {
+        match self.origin {
+            EffectOrigin::Param(binding) => Some(binding),
+            EffectOrigin::With { binding, .. } => binding,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EffectOrigin<'db> {
-    Param {
-        site: EffectParamSite<'db>,
-        index: usize,
-        name: Option<IdentId<'db>>,
-    },
+    /// An effect binding of the body.
+    Param(LocalBinding<'db>),
+    /// A `with` value, and the binding it names, if it names one.
     With {
         value_expr: ExprId,
+        binding: Option<LocalBinding<'db>>,
     },
 }
 
@@ -2297,8 +2299,8 @@ impl<'db> EffectOrigin<'db> {
     /// Where the effect is given: a `with` value or an effect parameter.
     pub(super) fn span(self, db: &'db dyn HirAnalysisDb, body: Body<'db>) -> DynLazySpan<'db> {
         match self {
-            Self::Param { site, index, .. } => effect_param_span(db, site, index),
-            Self::With { value_expr } => value_expr.span(body).into(),
+            Self::Param(binding) => binding.def_span_in_body(db, body),
+            Self::With { value_expr, .. } => value_expr.span(body).into(),
         }
     }
 }

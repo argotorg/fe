@@ -1748,7 +1748,7 @@ pub fn walk_generic_arg<'db, V>(
             }
         }
 
-        GenericArg::Mode(_) => {}
+        GenericArg::Mode(_) | GenericArg::Infer => {}
     }
 }
 

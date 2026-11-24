@@ -63,10 +63,19 @@ fn hidden_call_with_entry() uses (records: mut StorageMap<u256, Record>, call: m
     record.owner = 2
 }
 
-// Rejected: a caller may give two effects of one type the same provider.
-fn same_type() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256, u256>) {
+// Rejected: `V` may be `u256`, so a caller may give both effects one
+// provider.
+fn same_type<V: Copy>() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256, V>) {
     let entry = mut a[1]
-    entry = b[1]
+    let other = b[1]
+    entry = 2
+}
+
+// Accepted: effects of distinct keys are disjoint, as their callers prove.
+fn distinct_types() uses (a: mut StorageMap<u256, u256>, b: StorageMap<u256, u8>) {
+    let entry = mut a[1]
+    let other = b[1]
+    entry = 2
 }
 
 msg Msg {

@@ -15,14 +15,14 @@ use crate::analysis::name_resolution;
 use crate::analysis::ty;
 use crate::analysis::ty::const_ty::ConstBodyLowering;
 use crate::analysis::ty::diagnostics::{
-    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag,
+    ExportIssue, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection, TyLowerDiag, VariadicIssue,
 };
+use crate::analysis::ty::effects::EffectKeyKind;
 use crate::analysis::ty::generic_defaults::{default_dependencies, type_default_diags};
 use crate::analysis::ty::method_cmp::{ConstraintEntailment, classify_constraint_entailment};
 use crate::analysis::ty::method_table::{MethodProbe, probe_method};
 use crate::analysis::ty::normalize::normalize_ty;
 use crate::analysis::ty::shape::Shape;
-use crate::analysis::ty::shape::check_shape_value;
 use crate::analysis::ty::trait_lower::lower_impl_trait;
 use crate::analysis::ty::trait_resolution::{
     TraitSolveCx, constraint::collect_constraints, is_goal_satisfiable,
@@ -44,10 +44,11 @@ use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::binder::Binder;
 use crate::analysis::ty::trait_def::{ImplementorId, impls_for_trait_def};
 use crate::semantic::{
-    FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility, VariantView,
-    WherePredicateBoundView, WherePredicateView, constraints_for, has_access_in_every_impl,
-    header_constraints_for, lower_hir_kind_local, param_env, returned_shapes, shape_contract_diag,
-    signature_mentions_maybe_mut, trait_returns_shape, trait_self_predicate,
+    EffectRequirementKey, FieldView, FuncParamView, ImplAssocTypeView, InherentImplAdmissibility,
+    VariantView, WherePredicateBoundView, WherePredicateView, assoc_ty_value_diags,
+    constraints_for, has_access_in_every_impl, header_constraints_for, lower_hir_kind_local,
+    param_env, returned_shapes, shape_contract_diag, signature_mentions_maybe_mut,
+    trait_returns_shape, trait_self_predicate,
 };
 
 /// Unified "pull" diagnostics surface for HIR items and views.
@@ -373,22 +374,79 @@ impl<'db> Func<'db> {
         diags
     }
 
-    /// An `#[unsafe(export)]` function is public, and a C caller supplies it no
-    /// generic arguments or effects.
+    /// An `#[unsafe(export)]` function is public, and its caller supplies it no
+    /// generic arguments. A C caller supplies no effects either; a WebAssembly
+    /// export takes the effects of the root effect, `std::wasm::Host`.
     pub fn diags_export(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         if !self.is_exported(db) {
             return Vec::new();
         }
+        let wasm = db.compilation_settings().target(db) == Target::Wasm;
         [
             (!self.vis(db).is_pub()).then(|| (self.span().name().into(), ExportIssue::NotPub)),
             (GenericParamOwner::Func(self).params(db).next().is_some())
                 .then(|| (self.span().generic_params().into(), ExportIssue::Generic)),
-            (!self.declared_effects(db).data(db).is_empty())
+            (!wasm && !self.declared_effects(db).data(db).is_empty())
                 .then(|| (self.span().effects().into(), ExportIssue::Effects)),
         ]
         .into_iter()
         .flatten()
         .map(|(span, issue)| TyLowerDiag::InvalidExport { span, issue }.into())
+        .collect()
+    }
+
+    /// A variadic `extern` function is a C function that native code calls
+    /// as it is declared: without generic arguments or effects, and not at
+    /// compile time. Each fixed parameter takes one C integer register, and
+    /// the result is a C scalar or nothing. Unlike another `extern`
+    /// function's, its signature is checked in `core` and `std` too.
+    pub fn diags_variadic(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
+        if !self.is_variadic(db) {
+            return Vec::new();
+        }
+        // A generic parameter is reported as such.
+        let no_c_form =
+            |ty: TyId<'db>| !(ty.has_invalid(db) || ty.has_param(db) || is_c_scalar(db, ty));
+        let c_abi = |span: DynLazySpan<'db>, ty, mutable| {
+            TyDiagCollection::from(TyLowerDiag::InvalidCAbi {
+                span,
+                ty,
+                mutable,
+                exported: false,
+            })
+        };
+        let ret = self.return_ty(db);
+        let types = self
+            .params(db)
+            .enumerate()
+            .filter_map(|(idx, param)| {
+                let ty = param.ty(db);
+                let mutable = param.mode_at(db, None) == FuncParamMode::Mut;
+                (mutable || no_c_form(ty))
+                    .then(|| c_abi(self.span().params().param(idx).ty().into(), ty, mutable))
+            })
+            .chain(
+                (no_c_form(ret) && ret != TyId::unit(db) && !ret.is_never(db))
+                    .then(|| c_abi(self.span().ret_ty().into(), ret, false)),
+            );
+        [
+            (db.compilation_settings().target(db) != Target::Native).then(|| {
+                (
+                    self.span().params().variadic().into(),
+                    VariadicIssue::NotNative,
+                )
+            }),
+            (GenericParamOwner::Func(self).params(db).next().is_some())
+                .then(|| (self.span().generic_params().into(), VariadicIssue::Generic)),
+            (!self.declared_effects(db).data(db).is_empty())
+                .then(|| (self.span().effects().into(), VariadicIssue::Effects)),
+            self.is_const(db)
+                .then(|| (self.span().const_kw().into(), VariadicIssue::Const)),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|(span, issue)| TyLowerDiag::InvalidVariadic { span, issue }.into())
+        .chain(types)
         .collect()
     }
 
@@ -415,7 +473,9 @@ impl<'db> Func<'db> {
             );
         }
         let exported = self.is_exported(db);
+        // `diags_variadic` checks a variadic function's signature.
         let foreign = self.is_extern(db)
+            && !self.is_variadic(db)
             && !matches!(
                 self.top_mod(db).ingot(db).kind(db),
                 IngotKind::Core | IngotKind::Std
@@ -444,9 +504,12 @@ impl<'db> Func<'db> {
     }
 
     /// A row's components carry their own modes, so a `uses` entry naming a
-    /// row takes no `mut?`.
+    /// row takes no `mut?`. An effect is identified by its key, so a `uses`
+    /// list names each key once; an implementation's row spliced into its
+    /// method's list counts as written there.
     pub fn diags_effects(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
-        self.declared_effects(db)
+        let mut diags: Vec<TyDiagCollection<'db>> = self
+            .declared_effects(db)
             .data(db)
             .iter()
             .enumerate()
@@ -458,7 +521,60 @@ impl<'db> Func<'db> {
                 }
                 .into()
             })
-            .collect()
+            .collect();
+        let requirements = self.effect_requirements(db, None);
+        // A body binds each effect of a type or trait key by its name.
+        if self.body(db).is_some() {
+            let bound: Vec<_> = requirements
+                .iter()
+                .filter(|requirement| {
+                    matches!(
+                        requirement.key.kind(),
+                        EffectKeyKind::Type | EffectKeyKind::Trait
+                    )
+                })
+                .collect();
+            for (idx, requirement) in bound.iter().enumerate() {
+                let origin = self.effect_origin(db, requirement.binding_idx as usize);
+                if let Some(first) = bound[..idx]
+                    .iter()
+                    .find(|first| first.binding_name == requirement.binding_name)
+                    && let first_origin = self.effect_origin(db, first.binding_idx as usize)
+                    // Two of one row's effects are its implementation's error.
+                    && first_origin != origin
+                {
+                    diags.push(
+                        TyLowerDiag::EffectNameBoundTwice {
+                            span: self.span().effects().param_idx(origin).into(),
+                            first: self.span().effects().param_idx(first_origin).into(),
+                            name: requirement.binding_name,
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+        for (idx, requirement) in requirements.iter().enumerate() {
+            let origin = self.effect_origin(db, requirement.binding_idx as usize);
+            if requirement.key != EffectRequirementKey::Other
+                && let Some(first) = requirements[..idx]
+                    .iter()
+                    .find(|first| first.key == requirement.key)
+                && let first_origin = self.effect_origin(db, first.binding_idx as usize)
+                // Two of one row's effects are its implementation's error.
+                && first_origin != origin
+            {
+                diags.push(
+                    TyLowerDiag::EffectKeyNamedTwice {
+                        span: self.span().effects().param_idx(origin).ty().into(),
+                        first: self.span().effects().param_idx(first_origin).ty().into(),
+                        key: requirement.binding_ty,
+                    }
+                    .into(),
+                );
+            }
+        }
+        diags
     }
 
     /// A `#[view]` type is taken only by view and `mut` parameters and
@@ -590,12 +706,10 @@ impl<'db> Diagnosable<'db> for TypeAlias<'db> {
 
 impl<'db> Trait<'db> {
     /// Diagnostics for associated type defaults, in the trait's context: the
-    /// written default's errors (see [`check_written_ty`]) and its declared
-    /// bounds.
+    /// written type, as an impl's value is checked, and its declared bounds.
     pub fn diags_assoc_defaults(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let mut diags = Vec::new();
         let assumptions = param_env(db, self.into());
-        let lowering = constraints_for(db, self.into());
         let solve_cx =
             ty::trait_resolution::TraitSolveCx::new(db, self.scope()).with_assumptions(assumptions);
         for assoc in self.assoc_types(db) {
@@ -603,21 +717,17 @@ impl<'db> Trait<'db> {
             else {
                 continue;
             };
-            let span = assoc.span().ty();
-            let errors = if assoc.is_shape(db) {
-                check_shape_value(db, hir, self.scope(), span, lowering)
-            } else {
-                check_written_ty(
-                    db,
-                    self.scope(),
-                    hir,
-                    span,
-                    lowering,
-                    ConstBodyLowering::Eager,
-                )
-            };
-            if !errors.is_empty() {
-                diags.extend(errors);
+            let value_diags = assoc_ty_value_diags(
+                db,
+                self.into(),
+                Some(assoc),
+                assoc.is_shape(db),
+                hir,
+                default_ty,
+                assoc.span().ty(),
+            );
+            if !value_diags.is_empty() {
+                diags.extend(value_diags);
                 continue;
             }
             // A default shape keeps the contract an impl's does.
@@ -1415,22 +1525,63 @@ impl<'db> ImplTrait<'db> {
                 })
             })
             .collect();
-        // A row has no mode, so none of its effects is `mut?`.
+        // A row has no mode, so none of its effects is `mut?`, and names
+        // each key once and binds each name once.
+        let assumptions = constraints_for(db, self.into());
         for (row_idx, row) in self.rows(db).iter().enumerate() {
+            let span = |idx| self.span().item_list().assoc_row(row_idx).param_idx(idx);
+            let mut keys = Vec::new();
+            let mut names = Vec::new();
             for (idx, effect) in row
                 .effects
                 .iter()
                 .flat_map(|effects| effects.data(db).iter().enumerate())
             {
                 if effect.mode == ModeMarker::MaybeMut {
-                    let span = self.span().item_list().assoc_row(row_idx).param_idx(idx);
                     diags.push(
                         TyLowerDiag::MaybeMutRowEffect {
-                            span: span.into(),
+                            span: span(idx).into(),
                             entry: false,
                         }
                         .into(),
                     );
+                }
+                let Some(key_ty) = effect.key_ty.to_opt() else {
+                    continue;
+                };
+                let key = ty::effects::resolve_effect_key(db, key_ty, self.scope(), assumptions)
+                    .into_requirement_key(db);
+                if key == EffectRequirementKey::Other {
+                    continue;
+                }
+                // A row a row names binds no name.
+                if key.key_row().is_none()
+                    && let Some(name) = effect.binding_name(db)
+                {
+                    if let Some((_, first)) = names.iter().find(|(known, _)| *known == name) {
+                        diags.push(
+                            TyLowerDiag::EffectNameBoundTwice {
+                                span: span(idx).into(),
+                                first: span(*first).into(),
+                                name,
+                            }
+                            .into(),
+                        );
+                    } else {
+                        names.push((name, idx));
+                    }
+                }
+                if let Some((_, first)) = keys.iter().find(|(known, _)| *known == key) {
+                    diags.push(
+                        TyLowerDiag::EffectKeyNamedTwice {
+                            span: span(idx).ty().into(),
+                            first: span(*first).ty().into(),
+                            key: key_ty,
+                        }
+                        .into(),
+                    );
+                } else {
+                    keys.push((key, idx));
                 }
             }
         }
@@ -2338,10 +2489,13 @@ impl<'db> Diagnosable<'db> for GenericParamOwner<'db> {
 /// Whether C can pass a `ty`. An invalid type reports elsewhere, and a generic
 /// one is checked when codegen lowers its instance.
 fn has_c_form<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
-    ty.has_invalid(db)
-        || ty.has_param(db)
-        || ty == TyId::unit(db)
-        || ty.as_ptr(db).is_some()
+    ty.has_invalid(db) || ty.has_param(db) || ty == TyId::unit(db) || is_c_scalar(db, ty)
+}
+
+/// Whether C passes `ty` as one integer register or stack slot: a 32- or
+/// 64-bit integer or a raw pointer.
+pub(crate) fn is_c_scalar<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    ty.as_ptr(db).is_some()
         || matches!(
             ty.as_prim(db),
             Some(
@@ -2367,6 +2521,7 @@ impl<'db> Diagnosable<'db> for Func<'db> {
         out.extend(self.diags_effects(db));
         out.extend(self.diags_export(db));
         out.extend(self.diags_native_signature(db));
+        out.extend(self.diags_variadic(db));
         out.extend(self.diags_view_types(db));
         out.extend(self.diags_state_only_types(db));
 

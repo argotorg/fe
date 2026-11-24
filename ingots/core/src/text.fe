@@ -6,11 +6,11 @@
 //!
 //! Text is bytes here: searches compare bytes, which is exact for UTF-8, and
 //! offsets count bytes.
-use super::abi::{ByteSource, Bytes, DynString}
+use super::abi::{ByteSource, Bytes, DynString, load_word, store_word}
 use super::fixed::{Fixed, UFixed}
 use super::iter::Driver
 use super::marker::Copy
-use super::num::{Bounded, IntDowncast}
+use super::num::{Bounded, IntDowncast, leading_zeros}
 use super::option::Option
 use super::panic_code
 use super::panics::PANIC_ASSERT
@@ -22,6 +22,22 @@ pub trait Text {
     fn text_len(self) -> usize
     /// The byte at `index`, which is below `text_len()`.
     fn text_byte(self, _ index: usize) -> u8
+
+    /// The bytes from `offset` on as a big-endian word, those from
+    /// `text_len()` on zero. `offset` is below `text_len()`.
+    fn text_word_at(self, _ offset: usize) -> u256 {
+        let len = self.text_len()
+        var word: u256 = 0
+        var i: usize = 0
+        while i < 32 {
+            word <<= 8
+            if offset + i < len {
+                word |= self.text_byte(offset + i) as u256
+            }
+            i += 1
+        }
+        word
+    }
 
     /// Whether the text is the bytes of `span` from `offset` on, of which
     /// there must be `text_len()`.
@@ -54,6 +70,13 @@ pub trait Text {
 impl<const N: usize> Text for String<N> {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+    fn text_word_at(self, _ offset: usize) -> u256 {
+        let len = self.len()
+        if offset >= len {
+            ptr::index_out_of_bounds()
+        }
+        self.text_word(len) << ((offset * 8) as u256)
+    }
 
     // `byte_at` finds the string's `len()` for each byte, so these compare words.
     fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
@@ -69,16 +92,44 @@ impl<const N: usize> Text for String<N> {
 impl Text for DynString {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+    fn text_word_at(self, _ offset: usize) -> u256 { self.span().text_word_at(offset) }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self.span(), span, offset)
+    }
 }
 
 impl Text for MemSpan {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self.byte_at(index) }
+    fn text_word_at(self, _ offset: usize) -> u256 {
+        if offset >= self.len() {
+            ptr::index_out_of_bounds()
+        }
+        // The span holds `self.len() - offset` bytes from `offset` on.
+        unsafe { ptr::read_padded_word(ptr::offset_bytes(self.ptr(), offset), self.len() - offset) }
+    }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self, span, offset)
+    }
 }
 
 impl Text for MemBuffer {
     fn text_len(self) -> usize { self.len() }
     fn text_byte(self, _ index: usize) -> u8 { self[index] }
+    fn text_word_at(self, _ offset: usize) -> u256 { self.span().text_word_at(offset) }
+    fn text_matches_at(self, _ span: MemSpan, offset: usize) -> bool {
+        span_matches_at(self.span(), span, offset)
+    }
+}
+
+fn span_matches_at(_ pattern: MemSpan, _ span: MemSpan, _ offset: usize) -> bool {
+    let len = pattern.len()
+    if len == 0 { return true }
+    // Most unsuccessful search positions differ immediately; keep that
+    // early exit before comparing whole words and the exact partial tail.
+    if pattern.byte_at(0) != span.byte_at(offset) { return false }
+    if len == 1 { return true }
+    ptr::bytes_equal(pattern, span.slice(offset, len))
 }
 
 /// Returns the concatenation of `parts` (Solidity `string.concat`).
@@ -104,11 +155,19 @@ pub fn concat<const N: usize>(_ parts: [DynString; N]) -> DynString {
 
 /// Returns the decimal representation of `value` (Solidity `Strings.toString`).
 pub fn decimal(_ value: u256) -> DynString {
-    var digits: usize = 1
-    var rest = value / 10
-    while rest != 0 {
-        digits += 1
-        rest /= 10
+    let digits: usize = if value < 10 {
+        1
+    } else if value < 100 {
+        2
+    } else {
+        // Approximate log10(value) from its bit length using 1233 / 4096.
+        // For u256 this is floor(log10(value)) or one greater; a comparison
+        // with the corresponding power of ten corrects the latter case.
+        // bits <= 256 gives estimate <= 77, so 10^estimate fits in u256.
+        let bits = 256 - leading_zeros(value)
+        let estimate = (bits * 1233) >> 12
+        let threshold = (10 as u256).wrapping_pow(estimate)
+        (estimate + ((value >= threshold) as u256)).downcast_unchecked()
     }
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
@@ -128,12 +187,16 @@ pub fn hex(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
+    // "0123456789abcdef" packed with digit zero in the low byte.
+    let alphabet: u256 = 0x66656463626139383736353433323130
     var remaining = value
     var i = digits
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'a' } }
+        unsafe {
+            *ptr::offset_bytes(data, i) = (alphabet >> (nibble as u256 * 8)).downcast_truncate()
+        }
         remaining >>= 4
     }
     out
@@ -144,12 +207,16 @@ pub fn hex_upper(_ value: u256, _ bytes: usize) -> DynString {
     let digits = bytes * 2
     let out = DynString::zeroed(digits)
     let data = out.span().ptr()
+    // "0123456789ABCDEF" packed with digit zero in the low byte.
+    let alphabet: u256 = 0x46454443424139383736353433323130
     var remaining = value
     var i = digits
     while i > 0 {
         i -= 1
         let nibble: u8 = (remaining & 15).downcast_truncate()
-        unsafe { *ptr::offset_bytes(data, i) = if nibble < 10 { nibble + b'0' } else { nibble - 10 + b'A' } }
+        unsafe {
+            *ptr::offset_bytes(data, i) = (alphabet >> (nibble as u256 * 8)).downcast_truncate()
+        }
         remaining >>= 4
     }
     out
@@ -268,7 +335,9 @@ fn parse_digits<T: Text>(_ text: T, from: usize, to: usize, radix: u256) -> Opti
         if digit >= radix || value > limit || (value == limit && digit > last) {
             return Option::None
         }
-        value = value * radix + digit
+        // The guard above proves value * radix + digit <= u256::max():
+        // below limit every digit fits; at limit, only digits <= last fit.
+        value = value.wrapping_mul(radix).wrapping_add(digit)
         i += 1
     }
     Option::Some(value)
@@ -335,40 +404,103 @@ fn base64_digit(_ digits: MemSpan, _ bits: u256, _ n: u256) -> u8 {
 /// accepted encoding (RFC 4648).
 pub fn decode_base64<T: Text>(_ input: T) -> Option<Bytes> {
     let len = input.text_len()
+    if len == 0 {
+        return Option::Some(Bytes::zeroed(0))
+    }
     if len % 4 != 0 {
         return Option::None
     }
     var padding: usize = 0
-    if len > 0 && input.text_byte(len - 1) == 61 {
+    if input.text_byte(len - 1) == 61 {
         padding = if input.text_byte(len - 2) == 61 { 2 } else { 1 }
     }
+    let digits = len - padding
     let out_len = len / 4 * 3 - padding
     let decoded = Bytes::zeroed(out_len)
     let out = decoded.span().ptr()
+    // `Bytes` pads the payload with zeros to a whole word.
+    let end = (out_len + 31) / 32 * 32
+    // 32 digits at a time, 24 bytes each. Bytes after the last digit,
+    // including `=`, read as `A`, which is zero.
     var i: usize = 0
     var j: usize = 0
-    while i < len {
-        let a = base64_value(input.text_byte(i))
-        let b = base64_value(input.text_byte(i + 1))
-        let c = if i + 2 < len - padding { base64_value(input.text_byte(i + 2)) } else { 0 }
-        let d = if i + 3 < len - padding { base64_value(input.text_byte(i + 3)) } else { 0 }
-        if a > 63 || b > 63 || c > 63 || d > 63 {
-            return Option::None
+    while i < digits {
+        var word = input.text_word_at(i)
+        let rest = digits - i
+        if rest < 32 {
+            let keep = u256::max() << ((32 - rest) * 8) as u256
+            word = (word & keep) | (BASE64_ZERO_DIGITS & ~keep)
         }
-        let group = (a << 18) | (b << 12) | (c << 6) | d
-        unsafe { *ptr::offset_bytes(out, j) = (group >> 16).downcast_truncate() }
-        if j + 1 < out_len {
-            unsafe { *ptr::offset_bytes(out, j + 1) = (group >> 8).downcast_truncate() }
+        let bits = match base64_word_bits(word) {
+            Option::Some(bits) => bits << 64
+            Option::None => return Option::None
         }
-        if j + 2 < out_len {
-            unsafe { *ptr::offset_bytes(out, j + 2) = group.downcast_truncate() }
-        } else if (group & 0xff) != 0 || (padding == 2 && (group & 0xffff) != 0) {
-            return Option::None
+        let bytes = out_len - j
+        if bytes >= 32 {
+            // The next block overwrites the last 8 bytes.
+            unsafe { store_word(ptr: ptr::offset_bytes(out, j), value: bits) }
+        } else {
+            // `=` leaves the last digit's low bits unused. They must be zero,
+            // and the zero bits after them keep the payload's padding zero.
+            if bytes < 24 && (bits << (bytes * 8) as u256) != 0 {
+                return Option::None
+            }
+            if j + 32 <= end {
+                unsafe { store_word(ptr: ptr::offset_bytes(out, j), value: bits) }
+            } else {
+                // The block ends in the last word: keep its bytes before the block.
+                let at = ptr::offset_bytes(out, end - 32)
+                let shift = ((j + 32 - end) * 8) as u256
+                unsafe { store_word(ptr: at, value: (load_word(at) & ~(u256::max() >> shift)) | (bits >> shift)) }
+            }
         }
-        i += 4
-        j += 3
+        i += 32
+        j += 24
     }
     Option::Some(decoded)
+}
+
+// `A`, the digit zero, in every byte.
+const BASE64_ZERO_DIGITS: u256 = 0x4141414141414141414141414141414141414141414141414141414141414141
+const BYTE_LANES: u256 = 0x0101010101010101010101010101010101010101010101010101010101010101
+const HIGH_BITS: u256 = 0x8080808080808080808080808080808080808080808080808080808080808080
+
+// The 32 base64 digits in `word`'s bytes as 192 bits, the first digit's
+// highest, or `None` if a byte is not a digit.
+#[arithmetic(unchecked)]
+fn base64_word_bits(_ word: u256) -> Option<u256> {
+    let upper = byte_lanes_in(word, lo: b'A', hi: b'Z')
+    let lower = byte_lanes_in(word, lo: b'a', hi: b'z')
+    let digit = byte_lanes_in(word, lo: b'0', hi: b'9')
+    let plus = byte_lanes_in(word, lo: b'+', hi: b'+')
+    let slash = byte_lanes_in(word, lo: b'/', hi: b'/')
+    if (word & HIGH_BITS) != 0 || (upper | lower | digit | plus | slash) != HIGH_BITS {
+        return Option::None
+    }
+    // Each byte becomes its digit's value. The classes are disjoint, and no
+    // byte's sum leaves its lane.
+    let raise = (digit >> 7) * 4 + (plus >> 7) * 19 + (slash >> 7) * 16
+    var bits = word + raise - (upper >> 7) * 65 - (lower >> 7) * 71
+    // Join adjacent lanes: 12 bits in each 16-bit lane, then 24 in each
+    // 32-bit lane, and so on up to 192 bits in the whole word.
+    var low = bits & 0x00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff
+    bits = ((bits ^ low) >> 2) | low
+    low = bits & 0x0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff
+    bits = ((bits ^ low) >> 4) | low
+    low = bits & 0x00000000ffffffff00000000ffffffff00000000ffffffff00000000ffffffff
+    bits = ((bits ^ low) >> 8) | low
+    low = bits & 0x0000000000000000ffffffffffffffff0000000000000000ffffffffffffffff
+    bits = ((bits ^ low) >> 16) | low
+    low = bits & 0x00000000000000000000000000000000ffffffffffffffffffffffffffffffff
+    Option::Some(((bits ^ low) >> 32) | low)
+}
+
+// The high bit of each byte of `word` from `lo` to `hi`, which are ASCII.
+// Exact when every byte of `word` is below 0x80: then no lane carries.
+#[inline(always)]
+#[arithmetic(unchecked)]
+fn byte_lanes_in(_ word: u256, lo: u8, hi: u8) -> u256 {
+    (word + BYTE_LANES * (0x80 - lo as u256)) & (BYTE_LANES * (0x80 + hi as u256) - word) & HIGH_BITS
 }
 
 /// Decodes hex digits of either case, with or without a `0x` prefix, two
@@ -398,24 +530,6 @@ pub fn decode_hex<T: Text>(_ input: T) -> Option<Bytes> {
     Option::Some(decoded)
 }
 
-// The index of `byte` in the base64 alphabet, 64 for a byte outside it.
-fn base64_value(_ byte: u8) -> u256 {
-    let c = byte as u256
-    if c >= 65 && c <= 90 {
-        c - 65
-    } else if c >= 97 && c <= 122 {
-        c - 71
-    } else if c >= 48 && c <= 57 {
-        c + 4
-    } else if c == 43 {
-        62
-    } else if c == 47 {
-        63
-    } else {
-        64
-    }
-}
-
 // Limb bases for base58 conversion: 10 base58 digits (58^10) or 24 bytes.
 const BASE58_LIMB: u256 = 430804206899405824
 const BYTES_LIMB: u256 = 1 << 192
@@ -436,13 +550,11 @@ pub fn base58(_ data: MemSpan) -> DynString {
     var i = zeros
     while i < len {
         let end = if len - i > 24 { i + 24 } else { len }
-        var chunk: u256 = 0
-        var j = i
-        while j < end {
-            chunk = (chunk << 8) | (data.byte_at(j) as u256)
-            j += 1
-        }
-        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << ((end - i) as u256 * 8), addend: chunk)
+        // The block has 1..24 bytes, all within `data`. Read it once and
+        // move its big-endian value from the high bytes of the padded word.
+        let bits = (end - i) as u256 * 8
+        let chunk = unsafe { ptr::read_padded_word(ptr::offset_bytes(data.ptr(), i), end - i) } >> (256 - bits)
+        used = mul_add(limbs, used, base: BASE58_LIMB, factor: 1 << bits, addend: chunk)
         i = end
     }
     // Every limb but the most significant one has all 10 digits.
@@ -512,28 +624,27 @@ pub fn decode_base58<T: Text>(_ input: T) -> Option<Bytes> {
     // Every limb but the most significant one has all 24 bytes.
     var bytes: usize = 0
     if used > 0 {
-        var top = limbs[used - 1]
-        while top != 0 {
-            bytes += 1
-            top >>= 8
-        }
+        // The top limb is nonzero. Count its significant bytes directly.
+        let top = limbs[used - 1]
+        bytes = (32 - super::num::leading_zeros(top) / 8).downcast_unchecked()
         bytes += (used - 1) * 24
     }
     // The leading `zeros` bytes stay zero.
     let decoded = Bytes::zeroed(zeros + bytes)
     let out = decoded.span().ptr()
-    var pos = zeros + bytes
-    var k: usize = 0
-    while pos > zeros {
-        var limb = limbs[k]
-        var n: u256 = 0
-        while n < 24 && pos > zeros {
-            pos -= 1
-            unsafe { *ptr::offset_bytes(out, pos) = limb.downcast_truncate() }
-            limb >>= 8
-            n += 1
+    if bytes != 0 {
+        // Reuse one word as a big-endian view of each limb, then copy only
+        // its significant bytes. The final limb can be shorter than 24.
+        var scratch = MemBuffer::new(32)
+        var pos = zeros + bytes
+        var k: usize = 0
+        while pos > zeros {
+            let count = if pos - zeros > 24 { 24 } else { pos - zeros }
+            pos -= count
+            scratch.write_word(offset: 0, value: limbs[k])
+            unsafe { ptr::copy(dest: ptr::offset_bytes(out, pos), source: scratch.slice(offset: 32 - count, len: count)) }
+            k += 1
         }
-        k += 1
     }
     Option::Some(decoded)
 }
@@ -553,20 +664,14 @@ fn mul_add(_ limbs: MemArray<u256>, used: usize, base: u256, factor: u256, adden
     k
 }
 
+// `value` is a remainder modulo 58 at the only call site.
 fn base58_digit(_ value: u8) -> u8 {
-    if value < 9 {
-        value + 49
-    } else if value < 17 {
-        value + 56
-    } else if value < 22 {
-        value + 57
-    } else if value < 33 {
-        value + 58
-    } else if value < 44 {
-        value + 64
-    } else {
-        value + 65
-    }
+    // Pack each half of the alphabet with its first digit in the low byte.
+    // value >> 5 is 0 or 1, selecting the second half without a branch.
+    let first: u256 = 0x595857565554535251504e4d4c4b4a4847464544434241393837363534333231
+    let difference: u256 = 0x595857565554292b292738383838383937292b29282828515f5153515751536b
+    let alphabet = first ^ difference.wrapping_mul(value as u256 >> 5)
+    (alphabet >> ((value as u256 & 31) * 8)).downcast_truncate()
 }
 
 // Inverse of `base58_digit`, 58 for a byte outside the alphabet (`0`, `I`,
@@ -834,10 +939,34 @@ fn find_word(_ text: MemSpan, word: u256, len: usize, from: usize) -> Option<usi
     Option::None
 }
 
+#[arithmetic(unchecked)]
 fn find_byte(_ text: MemSpan, _ byte: u8, from: usize) -> Option<usize> {
     let end = text.len()
     let base = text.ptr()
     var offset = from
+    if end >= 32 && from <= end - 32 {
+        // Preserve the common early match without constructing a word mask.
+        if unsafe { *ptr::offset_bytes(base, from) } == byte {
+            return Option::Some(from)
+        }
+        let ones: u256 = 0x0101010101010101010101010101010101010101010101010101010101010101
+        let low: u256 = 0x7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f
+        let repeated = (byte as u256) * ones
+        // stop - from is a multiple of 32. Every load ends at or before
+        // end, and advancing offset by 32 cannot overflow.
+        let stop = end - (end - from) % 32
+        while offset < stop {
+            let x = unsafe { text.read_be_unchecked<u256>(offset) } ^ repeated
+            // Each byte's addition stays below 256: no carry crosses a lane.
+            // The complement has a high bit exactly in lanes where x is zero;
+            // leading_zeros locates the first match in big-endian byte order.
+            let matches = ~(((x & low) + low) | x | low)
+            if matches != 0 {
+                return Option::Some(offset + (leading_zeros(matches) >> 3).downcast_unchecked())
+            }
+            offset += 32
+        }
+    }
     while offset < end {
         if unsafe { *ptr::offset_bytes(base, offset) } == byte {
             return Option::Some(offset)

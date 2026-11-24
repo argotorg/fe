@@ -1,0 +1,68 @@
+use std::evm::{Ctx, Evm}
+
+msg BlockMsg {
+    #[selector = 0x01]
+    GetTimestamp -> Timestamp,
+    #[selector = 0x02]
+    GetBlockNumber -> u256,
+}
+
+pub contract BlockBox uses (ctx: Ctx) {
+    init() {}
+
+    recv BlockMsg {
+        GetTimestamp {} -> Timestamp
+            uses (ctx)
+        {
+            ctx.timestamp()
+        }
+
+        GetBlockNumber {} -> u256
+            uses (ctx)
+        {
+            ctx.block_number()
+        }
+    }
+}
+
+// Without arguments a test runs at timestamp 1, block 0.
+#[test]
+fn default_block() uses (evm: mut Evm) {
+    assert!(evm.timestamp().as_seconds() == 1)
+    assert!(evm.block_number() == 0)
+}
+
+#[test(timestamp = 1000)]
+fn timestamp_argument() uses (evm: mut Evm) {
+    assert!(evm.timestamp().as_seconds() == 1000)
+    assert!(evm.block_number() == 0)
+}
+
+#[test(block_number = 42)]
+fn block_number_argument() uses (evm: mut Evm) {
+    assert!(evm.timestamp().as_seconds() == 1)
+    assert!(evm.block_number() == 42)
+}
+
+#[test(timestamp = 0)]
+fn timestamp_zero() uses (evm: mut Evm) {
+    assert!(evm.timestamp().as_seconds() == 0)
+}
+
+// A contract the test calls sees the same block.
+#[test(timestamp = 1_700_000_000, block_number = 19_000_000)]
+fn contract_sees_test_block() uses (evm: mut Evm) {
+    let addr = evm.create2<BlockBox>(value: Wei::zero(), args: (), salt: 0)
+    let ts: Timestamp = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: BlockMsg::GetTimestamp {})
+    let num: u256 = evm.call(addr: addr, gas: 100000, value: Wei::zero(), message: BlockMsg::GetBlockNumber {})
+    assert!(ts.as_seconds() == 1_700_000_000)
+    assert!(num == 19_000_000)
+}
+
+// The arguments combine with each other and with `balance`.
+#[test(balance = 5, timestamp = 2, block_number = 3)]
+fn block_with_balance() uses (evm: mut Evm) {
+    assert!(evm.selfbalance().as_wei() == 5)
+    assert!(evm.timestamp().as_seconds() == 2)
+    assert!(evm.block_number() == 3)
+}

@@ -1,0 +1,70 @@
+use core::{MemBuffer, ptr}
+use std::io::Stdout
+
+// C variadic functions take their extra arguments after the fixed ones,
+// which AArch64 macOS passes on the stack.
+extern {
+    fn snprintf(_ buf: *u8, _ size: usize, _ format: *u8, ...) -> i32
+    fn fcntl(_ fd: i32, _ cmd: i32, ...) -> i32
+    fn pipe(_ fds: *i32) -> i32
+}
+
+// `fcntl`'s commands are the same on Linux and macOS; its flag is not.
+const F_GETFL: i32 = 3
+const F_SETFL: i32 = 4
+#[cfg(target_os = "linux")]
+const O_NONBLOCK: i32 = 0o4000
+#[cfg(target_os = "macos")]
+const O_NONBLOCK: i32 = 4
+
+// `text` with the NUL that ends a C string.
+fn c_string(_ text: own MemBuffer) -> MemBuffer {
+    var text = text
+    text.push(0)
+    text
+}
+
+pub fn main() -> i32 uses (out: mut Stdout) {
+    // Ten extra arguments of each kind, past the registers of x86-64 and
+    // AArch64 Linux. `low` comes from a word with high bits set.
+    let format = c_string(format!("%d %u %lld %llu %s %zu %d %lld %s %d"))
+    let abc = c_string(format!("abc"))
+    let xyz = c_string(format!("xyz"))
+    let wide: i64 = 0x100000005
+    let low: i32 = wide.downcast_truncate()
+    let buf = MemBuffer::new(128)
+    let len = unsafe {
+        snprintf(
+            buf.ptr(),
+            128,
+            format.ptr(),
+            -7 as i32,
+            4000000000 as u32,
+            1099511627779 as i64,
+            18446744073709551615 as u64,
+            abc.ptr(),
+            42 as usize,
+            low,
+            -1234567890123 as i64,
+            xyz.ptr(),
+            2147483647 as i32,
+        )
+    }
+    let written: usize = len.downcast_unchecked()
+    println!(MemBuffer::from_span(buf.span().head(written)))
+    println!("length ", len)
+
+    // A pipe's read end becomes non-blocking.
+    let fds = MemBuffer::new(8)
+    if unsafe { pipe(ptr::cast(fds.ptr())) } != 0 {
+        return 1
+    }
+    let fd = fds.read_le<i32>(0)
+    let flags = unsafe { fcntl(fd, F_GETFL) }
+    let set = unsafe { fcntl(fd, F_SETFL, flags | O_NONBLOCK) }
+    let after = unsafe { fcntl(fd, F_GETFL) }
+    println!("nonblocking before: ", flags & O_NONBLOCK != 0)
+    println!("set: ", set)
+    println!("nonblocking after: ", after & O_NONBLOCK != 0)
+    0
+}

@@ -39,6 +39,27 @@ impl request::Request for DocumentTextRequest {
     const METHOD: &'static str = "experimental/fe_test_document_text";
 }
 
+// Registered only in this test harness. Keeps the actor thread busy for the given
+// number of milliseconds, as a long start-up check does.
+enum BusyActorRequest {}
+
+impl request::Request for BusyActorRequest {
+    type Params = u64;
+    type Result = ();
+    const METHOD: &'static str = "experimental/fe_test_busy_actor";
+}
+
+// Registered only in this test harness. Holds the state of the server for the
+// given number of milliseconds without blocking the actor thread, as `initialized`
+// does while it waits for the client to answer a registration.
+enum HoldStateRequest {}
+
+impl request::Request for HoldStateRequest {
+    type Params = u64;
+    type Result = ();
+    const METHOD: &'static str = "experimental/fe_test_hold_state";
+}
+
 enum DocumentDiagnosticsRequest {}
 
 impl request::Request for DocumentDiagnosticsRequest {
@@ -109,6 +130,18 @@ impl MockLspClient {
                         .get(&backend.db, &uri)
                         .map(|file| file.text(&backend.db).clone());
                     async move { Ok(text) }
+                },
+            );
+            lsp_service.primary.handle_request::<BusyActorRequest>(
+                |_backend: &Backend, milliseconds: u64| {
+                    std::thread::sleep(Duration::from_millis(milliseconds));
+                    async move { Ok(()) }
+                },
+            );
+            lsp_service.primary.handle_request::<HoldStateRequest>(
+                async |_backend: &Backend, milliseconds: u64| {
+                    async_std::task::sleep(Duration::from_millis(milliseconds)).await;
+                    Ok(())
                 },
             );
             lsp_service
@@ -232,11 +265,17 @@ impl MockLspClient {
 
     /// Notify the server that the file at `uri` changed on disk.
     pub fn file_changed(&mut self, uri: &Url) {
+        self.file_event(uri, FileChangeType::CHANGED);
+    }
+
+    /// Notify the server that the file at `uri` was created, changed or deleted
+    /// on disk.
+    pub fn file_event(&mut self, uri: &Url, typ: FileChangeType) {
         self.server
             .did_change_watched_files(DidChangeWatchedFilesParams {
                 changes: vec![FileEvent {
                     uri: uri.clone(),
-                    typ: FileChangeType::CHANGED,
+                    typ,
                 }],
             })
             .expect("didChangeWatchedFiles failed");
@@ -1786,4 +1825,307 @@ fn bar() -> () {
     );
 
     client.shutdown().await;
+}
+
+const OUTSIDE_SOURCE: &str = "fn g() -> u256 {\n    let x = 2\n    x\n}\n";
+
+/// Writes a workspace with one member, `lib`. Files elsewhere under the root,
+/// such as `scratch/*.fe`, are not loaded by the start-up scan.
+fn write_workspace_with_outside_files(root: &std::path::Path) {
+    std::fs::create_dir_all(root.join("lib/src")).unwrap();
+    std::fs::create_dir_all(root.join("scratch")).unwrap();
+    std::fs::write(root.join("fe.toml"), "[workspace]\nmembers = [\"lib\"]\n").unwrap();
+    std::fs::write(
+        root.join("lib/fe.toml"),
+        "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("lib/src/lib.fe"), LIB_SOURCE).unwrap();
+}
+
+fn text_document(uri: &Url) -> TextDocumentIdentifier {
+    TextDocumentIdentifier { uri: uri.clone() }
+}
+
+const LIB_SOURCE: &str = "pub fn f() -> u256 { 1 }\n";
+
+/// A notification that changes a file of the workspace.
+#[derive(Clone, Copy, Debug)]
+enum FileNotification {
+    Open,
+    Change,
+    WatchedCreated,
+    WatchedChanged,
+    WatchedDeleted,
+    SavedManifest,
+}
+
+impl FileNotification {
+    const ALL: [Self; 6] = [
+        Self::Open,
+        Self::Change,
+        Self::WatchedCreated,
+        Self::WatchedChanged,
+        Self::WatchedDeleted,
+        Self::SavedManifest,
+    ];
+
+    /// A symbol that a request after the notification must find, or must no
+    /// longer find.
+    fn symbol(self) -> (&'static str, bool) {
+        match self {
+            Self::Open => ("fn g", true),
+            Self::Change => ("fn h", true),
+            Self::WatchedCreated => ("fn created", true),
+            Self::WatchedChanged => ("fn changed", true),
+            Self::WatchedDeleted => ("fn f", false),
+            Self::SavedManifest => ("fn extra", true),
+        }
+    }
+}
+
+fn has_symbol(
+    response: Result<Option<DocumentSymbolResponse>, async_lsp::Error>,
+    name: &str,
+) -> bool {
+    matches!(
+        response,
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+            if symbols.iter().any(|symbol| symbol.name == name)
+    )
+}
+
+/// Occupies the server with a request of the harness and waits 100 ms for the
+/// server to start on it. The handle completes with the request.
+async fn occupy_server<R>(
+    client: &MockLspClient,
+    milliseconds: u64,
+) -> tokio::task::JoinHandle<Result<(), async_lsp::Error>>
+where
+    R: request::Request<Params = u64, Result = ()> + Send + 'static,
+{
+    let server = client.server.clone();
+    let occupied = tokio::spawn(async move { server.request::<R>(milliseconds).await });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    occupied
+}
+
+/// Sends `notification` while the server is occupied with a request of type `R`,
+/// and returns the answer to a request for the symbols of the file that the
+/// notification is about, sent right after it.
+async fn symbols_after<R>(
+    notification: FileNotification,
+) -> Result<Option<DocumentSymbolResponse>, async_lsp::Error>
+where
+    R: request::Request<Params = u64, Result = ()> + Send + 'static,
+{
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    write_workspace_with_outside_files(&root);
+    let lib = Url::from_file_path(root.join("lib/src/lib.fe")).unwrap();
+    let opened = Url::from_file_path(root.join("scratch/opened.fe")).unwrap();
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    client.wait_for_text(&lib, LIB_SOURCE).await;
+    if matches!(notification, FileNotification::Change) {
+        client.did_open(&opened, OUTSIDE_SOURCE);
+        client.wait_for_text(&opened, OUTSIDE_SOURCE).await;
+    }
+
+    let occupied = occupy_server::<R>(&client, 500).await;
+    let new_file = |name: &str, text: &str| {
+        let path = root.join("lib/src").join(name);
+        std::fs::write(&path, text).unwrap();
+        Url::from_file_path(path).unwrap()
+    };
+    let uri = match notification {
+        FileNotification::Open => {
+            client.did_open(&opened, OUTSIDE_SOURCE);
+            opened
+        }
+        FileNotification::Change => {
+            client.did_change(&opened, 2, "fn h() -> u256 { 3 }\n");
+            opened
+        }
+        FileNotification::WatchedCreated => {
+            let uri = new_file("created.fe", "fn created() -> u256 { 4 }\n");
+            client.file_event(&uri, FileChangeType::CREATED);
+            uri
+        }
+        FileNotification::WatchedChanged => {
+            std::fs::write(lib.to_file_path().unwrap(), "fn changed() -> u256 { 5 }\n").unwrap();
+            client.file_changed(&lib);
+            lib
+        }
+        FileNotification::WatchedDeleted => {
+            std::fs::remove_file(lib.to_file_path().unwrap()).unwrap();
+            client.file_event(&lib, FileChangeType::DELETED);
+            lib
+        }
+        FileNotification::SavedManifest => {
+            // Saving a manifest makes the server look for the files of its ingot.
+            let uri = new_file("extra.fe", "fn extra() -> u256 { 6 }\n");
+            client.did_save(&Url::from_file_path(root.join("lib/fe.toml")).unwrap());
+            uri
+        }
+    };
+    let symbols = client.document_symbols(&uri).await;
+    occupied.await.unwrap().unwrap();
+    client.shutdown().await;
+    symbols
+}
+
+async fn assert_file_notifications_precede_later_requests<R>()
+where
+    R: request::Request<Params = u64, Result = ()> + Send + 'static,
+{
+    let mut failures = Vec::new();
+    for notification in FileNotification::ALL {
+        let (symbol, expected) = notification.symbol();
+        if has_symbol(symbols_after::<R>(notification).await, symbol) != expected {
+            failures.push(format!(
+                "{notification:?}: the symbol `{symbol}` should be {}",
+                if expected { "present" } else { "gone" }
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// While the server is busy, for example with the first check of a large
+/// workspace, a notification and the requests behind it wait in line together.
+/// The requests must see the effect of the notification.
+#[tokio::test]
+async fn mock_lsp_applies_file_notifications_before_later_requests_while_the_server_is_busy() {
+    assert_file_notifications_precede_later_requests::<BusyActorRequest>().await;
+}
+
+/// A handler can hold the state of the server while it waits, as `initialized`
+/// does while the client answers the registration of file watchers. The
+/// notification then waits for it, and the requests behind the notification must
+/// wait for the notification.
+#[tokio::test]
+async fn mock_lsp_applies_file_notifications_before_later_requests_while_a_handler_holds_the_state()
+{
+    assert_file_notifications_precede_later_requests::<HoldStateRequest>().await;
+}
+
+/// Issue #1946 reports `documentSymbol` and `inlayHint` failing for a file that
+/// was just opened.
+#[tokio::test]
+async fn mock_lsp_answers_symbols_and_inlay_hints_right_after_did_open() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    write_workspace_with_outside_files(&root);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+
+    let uri = Url::from_file_path(root.join("scratch/opened.fe")).unwrap();
+    let occupied = occupy_server::<BusyActorRequest>(&client, 500).await;
+    client.did_open(&uri, OUTSIDE_SOURCE);
+    let (symbols, hints) = tokio::join!(
+        client.server.clone().document_symbol(DocumentSymbolParams {
+            text_document: text_document(&uri),
+            partial_result_params: PartialResultParams::default(),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+        }),
+        client.server.clone().inlay_hint(InlayHintParams {
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            text_document: text_document(&uri),
+            range: Range::new(Position::new(0, 0), Position::new(4, 0)),
+        }),
+    );
+    occupied.await.unwrap().unwrap();
+    client.shutdown().await;
+
+    assert!(
+        has_symbol(symbols, "fn g"),
+        "documentSymbol did not see the opened text"
+    );
+    assert!(
+        matches!(&hints, Ok(Some(hints)) if !hints.is_empty()),
+        "inlayHint did not see the opened text: {hints:?}"
+    );
+}
+
+const STANDALONE_MESSAGE: &str = "This file is not part of an ingot";
+
+/// A file outside every ingot is a valid way to work, so the note about it must
+/// not be listed among the problems of the workspace. A file in an ingot gets no
+/// such note.
+#[tokio::test]
+async fn mock_lsp_reports_files_outside_an_ingot_as_hints() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join("lib/src")).unwrap();
+    std::fs::create_dir_all(root.join("loose")).unwrap();
+    std::fs::write(root.join("fe.toml"), "[workspace]\nmembers = [\"lib\"]\n").unwrap();
+    std::fs::write(
+        root.join("lib/fe.toml"),
+        "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let member = Url::from_file_path(root.join("lib/src/lib.fe")).unwrap();
+    let loose = Url::from_file_path(root.join("loose/a.fe")).unwrap();
+    std::fs::write(member.to_file_path().unwrap(), "pub fn f() -> u256 { 1 }\n").unwrap();
+
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+    client.did_open(&member, "pub fn f() -> u256 { 1 }\n");
+    client.did_open(&loose, "fn g() -> u256 { 2 }\n");
+    assert!(client.wait_for_diagnostics(|d| d.uri == member).await);
+    assert!(client.wait_for_diagnostics(|d| d.uri == loose).await);
+
+    let notes = |uri: &Url| {
+        client
+            .diagnostics_for_uri(uri)
+            .into_iter()
+            .filter(|d| d.message.contains(STANDALONE_MESSAGE))
+            .collect::<Vec<_>>()
+    };
+    let notes_on_loose_file = notes(&loose);
+    assert_eq!(notes_on_loose_file.len(), 1, "{notes_on_loose_file:?}");
+    assert_eq!(
+        notes_on_loose_file[0].severity,
+        Some(DiagnosticSeverity::HINT)
+    );
+    assert!(notes(&member).is_empty());
+    client.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Documents that are not files
+// ---------------------------------------------------------------------------
+
+/// A document whose location has no file name, such as the root directory, is not
+/// a file of the project. It used to be stored, and the next request that mapped
+/// it to a module panicked, because a module takes its name from the file name.
+/// Requests about it are answered like requests about any unknown document.
+#[tokio::test]
+async fn mock_lsp_answers_requests_about_a_document_without_a_file_name() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    write_workspace_with_outside_files(&root);
+    let mut client = MockLspClient::start().await;
+    client
+        .initialize_at(Url::from_directory_path(&root).unwrap())
+        .await;
+
+    let uri = Url::parse("file:///").unwrap();
+    client.did_open(&uri, "fn f() {}\n");
+    let answer = client.document_symbols(&uri).await;
+    client.shutdown().await;
+    assert!(
+        matches!(
+            &answer,
+            Err(async_lsp::Error::Response(error)) if error.message.contains("File not found")
+        ),
+        "{answer:?}"
+    );
 }

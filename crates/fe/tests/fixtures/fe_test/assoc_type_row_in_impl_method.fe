@@ -1,0 +1,50 @@
+// A trait method and its impl both name a row through an associated type.
+// The impl knows the row: empty for `P`, one effect for `Q`.
+
+struct Store { n: u256 }
+
+trait Reader {
+    uses E
+    fn read(self) -> u256 uses E
+}
+
+struct Pure {}
+impl Reader for Pure {
+    uses E = ()
+    fn read(self) -> u256 uses E { 1 }
+}
+
+struct Stored {}
+impl Reader for Stored {
+    uses E = (store: Store)
+    fn read(self) -> u256 uses E { store.n }
+}
+
+trait Holder {
+    type A: Reader
+    fn mk(self) -> Self::A
+    fn f(self) -> u256 uses Self::A::E
+}
+
+struct P {}
+impl Holder for P {
+    type A = Pure
+    fn mk(self) -> Pure { Pure {} }
+    fn f(self) -> u256 uses Self::A::E { self.mk().read() }
+}
+
+struct Q {}
+impl Holder for Q {
+    type A = Stored
+    fn mk(self) -> Stored { Stored {} }
+    fn f(self) -> u256 uses Self::A::E { self.mk().read() }
+}
+
+#[test]
+fn t() {
+    let s = Store { n: 7 }
+    assert(P {}.f() == 1)
+    with (Store = s) {
+        assert(Q {}.f() == 7)
+    }
+}

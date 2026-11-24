@@ -78,10 +78,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
     }
 
-    pub(super) fn lower_place_data(&mut self, source_place: &Place<'db>) -> SPlace<'db> {
-        self.lower_place_source(source_place, false)
-    }
-
     fn lower_place_source(&mut self, source_place: &Place<'db>, capture: bool) -> SPlace<'db> {
         let PlaceBase::Binding(binding) = source_place.base;
         let (mut place, mut ty) = match self.capture_places.get(&binding) {

@@ -1,0 +1,73 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/generic_call_omitted_args_errors.fe
+---
+error[8-0000]: type mismatch
+   ┌─ generic_call_omitted_args_errors.fe:25:28
+   │
+25 │     dependent<u8>(1, true, x)
+   │                            ^ expected `bool`, but `u16` is given
+
+error[8-0022]: too many generic arguments
+   ┌─ generic_call_omitted_args_errors.fe:28:14
+   │
+14 │ fn defaulted<T = u8>(_ t: T) {}
+   │    --------- function defined here
+   ·
+28 │     defaulted<u8, u8>(1)
+   │              ^^^^^^^^ expected at most 1 generic argument, but 2 given
+
+error[8-0022]: too many generic arguments
+   ┌─ generic_call_omitted_args_errors.fe:29:10
+   │
+19 │     fn op<const N: u64, T>(self) -> u64 {
+   │        -- function defined here
+   ·
+29 │     vm.op<1, u8, u8>()
+   │          ^^^^^^^^^^^ expected at most 2 generic arguments, but 3 given
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_omitted_args_errors.fe:26:5
+   │
+26 │     unused<u8>()
+   │     ^^^^^^^^^^
+   │     │
+   │     cannot infer the type parameter `B` of `unused`
+   │     consider giving it explicitly: `unused<u8, B>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_omitted_args_errors.fe:27:5
+   │
+27 │     shape_only()
+   │     ^^^^^^^^^^
+   │     │
+   │     cannot infer the shape parameter `A` of `shape_only`
+   │     consider giving it explicitly: `shape_only<A>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_omitted_args_errors.fe:30:5
+   │
+30 │     body_const(true) + body_const<bool>(true) + vm.op<1>()
+   │     ^^^^^^^^^^
+   │     │
+   │     cannot infer the const parameter `N` of `body_const`
+   │     consider giving it explicitly: `body_const<bool, N>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_omitted_args_errors.fe:30:24
+   │
+30 │     body_const(true) + body_const<bool>(true) + vm.op<1>()
+   │                        ^^^^^^^^^^^^^^^^
+   │                        │
+   │                        cannot infer the const parameter `N` of `body_const`
+   │                        consider giving it explicitly: `body_const<bool, N>`
+
+error[8-0031]: type annotation is needed
+   ┌─ generic_call_omitted_args_errors.fe:30:52
+   │
+30 │     body_const(true) + body_const<bool>(true) + vm.op<1>()
+   │                                                    ^^
+   │                                                    │
+   │                                                    cannot infer the type parameter `T` of `op`
+   │                                                    consider giving it explicitly: `op<1, T>`

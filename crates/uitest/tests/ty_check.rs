@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 
 use common::{
     InputDb,
-    compilation::{Os, Target},
+    compilation::{Arch, Os, Platform, Target},
+    ingot::IngotKind,
 };
 use driver::DriverDataBase;
 use salsa::Setter;
@@ -92,30 +93,129 @@ fn native_signatures() {
     assert!(!evm.contains("native `main`"), "{evm}");
 }
 
-// `#[cfg]` keeps the items whose predicates hold for the target and OS.
+// A variadic `extern` function takes C integers and raw pointers after its
+// parameters, natively. On the EVM it is an error.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_variadic() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/native/variadic.fe");
+    let content = include_str!("../fixtures/native/variadic.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let native = diagnostics(&mut db, path, content);
+    assert!(
+        !native.contains("only supported on the native target"),
+        "{native}"
+    );
+    snap_test!(native, path);
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(evm.contains("only supported on the native target"), "{evm}");
+}
+
+// `std` declares C functions without checks, as it does compiler intrinsics,
+// but not variadic ones: each fixed parameter takes one C integer register.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn std_variadic_signatures() {
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Native);
+    let root = Url::parse("file:///variadic_std/").unwrap();
+    db.workspace().touch(
+        &mut db,
+        root.join("fe.toml").unwrap(),
+        Some("[ingot]\nname = \"std\"\nversion = \"0.1.0\"\n".to_string()),
+    );
+    let file = db.workspace().touch(
+        &mut db,
+        root.join("src/lib.fe").unwrap(),
+        Some(
+            "extern {\n    fn fixed(_ a: u8) -> bool\n    fn narrow(_ a: u8, ...) -> bool\n}\n"
+                .to_string(),
+        ),
+    );
+    let top_mod = db.top_mod(file);
+    assert_eq!(top_mod.ingot(&db).kind(&db), IngotKind::Std);
+    let diags = db.run_on_top_mod(top_mod).format_diags(&db);
+    assert_eq!(
+        diags.matches("cannot pass this type to or from C").count(),
+        2,
+        "{diags}"
+    );
+    assert_eq!(diags.matches("lib.fe:3:").count(), 2, "{diags}");
+}
+
+// A WebAssembly export takes the effects of the root effect, `std::wasm::Host`,
+// where a C caller provides none. The other rules for exports hold on both.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wasm_exports_take_effects() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/ty_check/export_attr.fe"
+    );
+    let content = include_str!("../fixtures/ty_check/export_attr.fe");
+    let mut db = DriverDataBase::default();
+    db.compilation_settings()
+        .set_target(&mut db)
+        .to(Target::Wasm);
+    let wasm = diagnostics(&mut db, path, content);
+    assert!(!wasm.contains("cannot take effects"), "{wasm}");
+    assert!(wasm.contains("cannot be generic"), "{wasm}");
+    assert!(wasm.contains("must be `pub`"), "{wasm}");
+
+    let evm = diagnostics(&mut DriverDataBase::default(), path, content);
+    assert!(evm.contains("cannot take effects"), "{evm}");
+}
+
+// `#[cfg]` keeps the items whose predicates hold for the target and platform.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn cfg_selects_items() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/cfg/select.fe");
     let content = include_str!("../fixtures/cfg/select.fe");
-    for (target, os, kept) in [
+    let platform = |os, arch| Some(Platform { os, arch });
+    for (target, platform, kept) in [
         (Target::Evm, None, &["evm"][..]),
         (Target::Native, None, &["native", "native_mod"]),
         (Target::Wasm, None, &["wasm"]),
         (
             Target::Native,
-            Some(Os::Linux),
-            &["linux", "native", "native_linux", "native_mod", "unix"],
+            platform(Os::Linux, Arch::X86_64),
+            &[
+                "linux",
+                "native",
+                "native_linux",
+                "native_mod",
+                "unix",
+                "x86_64",
+            ],
         ),
         (
             Target::Native,
-            Some(Os::Macos),
-            &["macos", "native", "native_mod", "unix"],
+            platform(Os::Linux, Arch::Aarch64),
+            &[
+                "aarch64",
+                "linux",
+                "native",
+                "native_linux",
+                "native_mod",
+                "unix",
+            ],
+        ),
+        (
+            Target::Native,
+            platform(Os::Macos, Arch::Aarch64),
+            &["aarch64", "macos", "native", "native_mod", "unix"],
         ),
     ] {
         let mut db = DriverDataBase::default();
         db.compilation_settings().set_target(&mut db).to(target);
-        db.compilation_settings().set_os(&mut db).to(os);
+        db.compilation_settings().set_platform(&mut db).to(platform);
         let diags = diagnostics(&mut db, path, content);
         let reported = diags
             .split(|c: char| !(c.is_alphanumeric() || c == '_'))
@@ -124,7 +224,7 @@ fn cfg_selects_items() {
         assert_eq!(
             reported,
             kept.iter().copied().collect(),
-            "{target:?} {os:?}:\n{diags}"
+            "{target:?} {platform:?}:\n{diags}"
         );
     }
 }

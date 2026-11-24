@@ -1,4 +1,6 @@
-use common::compilation::{Os, Target};
+use std::{fmt, sync::LazyLock};
+
+use common::compilation::{Arch, Os, Platform, Target};
 use parser::{
     TextRange,
     ast::{self, prelude::*},
@@ -10,7 +12,71 @@ use crate::{
     core::hir_def::{IdentId, LitKind, PathId, StringId, attr::*},
 };
 
-const CFG_EXPECTED: &str = "`#[cfg(target = \"evm\")]`, `#[cfg(target = \"native\")]`, `#[cfg(target = \"wasm\")]`, `#[cfg(target_os = \"linux\")]`, `#[cfg(target_os = \"macos\")]`, or `#[cfg(target_family = \"unix\")]`";
+static CFG_EXPECTED: LazyLock<String> = LazyLock::new(|| {
+    let forms: Vec<_> = CfgPredicate::all().map(|p| p.to_string()).collect();
+    let (last, rest) = forms.split_last().expect("cfg predicates exist");
+    format!("{}, or {last}", rest.join(", "))
+});
+
+/// A condition a `#[cfg(key = "value")]` attribute names.
+#[derive(Debug, Clone, Copy)]
+enum CfgPredicate {
+    Target(Target),
+    Os(Os),
+    Arch(Arch),
+    UnixFamily,
+}
+
+impl CfgPredicate {
+    fn all() -> impl Iterator<Item = Self> {
+        let targets = Target::ALL.map(Self::Target);
+        let oses = Os::ALL.map(Self::Os);
+        let arches = Arch::ALL.map(Self::Arch);
+        targets
+            .into_iter()
+            .chain(oses)
+            .chain(arches)
+            .chain([Self::UnixFamily])
+    }
+
+    fn parse(key: &str, value: &str) -> Option<Self> {
+        Self::all().find(|p| p.key() == key && p.value() == value)
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Target(_) => "target",
+            Self::Os(_) => "target_os",
+            Self::Arch(_) => "target_arch",
+            Self::UnixFamily => "target_family",
+        }
+    }
+
+    fn value(self) -> &'static str {
+        match self {
+            Self::Target(target) => target.name(),
+            Self::Os(os) => os.name(),
+            Self::Arch(arch) => arch.name(),
+            Self::UnixFamily => "unix",
+        }
+    }
+
+    /// Whether code compiled for `machine` on `platform` meets the condition.
+    fn holds(self, machine: Target, platform: Option<Platform>) -> bool {
+        match self {
+            Self::Target(target) => target == machine,
+            Self::Os(os) => platform.is_some_and(|platform| platform.os == os),
+            Self::Arch(arch) => platform.is_some_and(|platform| platform.arch == arch),
+            Self::UnixFamily => platform.is_some_and(|platform| platform.os.is_unix()),
+        }
+    }
+}
+
+impl fmt::Display for CfgPredicate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`#[cfg({} = \"{}\")]`", self.key(), self.value())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AttrMisuseError {
@@ -264,7 +330,7 @@ pub(super) fn validate_attr_rules<'db>(
 }
 
 /// Whether every `cfg` attribute in `attrs` holds for the compilation's
-/// target and operating system. A malformed one is an error and doesn't hold.
+/// target and platform. A malformed one is an error and doesn't hold.
 pub(super) fn cfg_holds<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
@@ -282,7 +348,7 @@ pub(super) fn cfg_holds<'db>(
                     "cfg".to_string(),
                     target.clone(),
                     AttrMisuseErrorKind::InvalidForm {
-                        expected_form: CFG_EXPECTED,
+                        expected_form: CFG_EXPECTED.as_str(),
                     },
                 );
             }
@@ -291,10 +357,10 @@ pub(super) fn cfg_holds<'db>(
 }
 
 /// Whether the `cfg` attribute `spec` holds for the compilation's target and
-/// operating system, or `None` if it is malformed.
+/// platform, or `None` if it is malformed.
 pub(super) fn cfg_spec_holds(db: &dyn HirDb, spec: &AstAttrSpec) -> Option<bool> {
     let settings = db.compilation_settings();
-    let (machine, os) = (settings.target(db), settings.os(db));
+    let (machine, platform) = (settings.target(db), settings.platform(db));
     let [
         AstAttrArgSpec {
             key: Some(key),
@@ -308,20 +374,7 @@ pub(super) fn cfg_spec_holds(db: &dyn HirDb, spec: &AstAttrSpec) -> Option<bool>
         return None;
     };
     let value = value.value().ok().filter(|_| spec.value.is_none())?;
-    match key.as_str() {
-        "target" => Target::ALL
-            .iter()
-            .any(|target| target.name() == value)
-            .then(|| machine.name() == value),
-        "target_os" => Os::ALL
-            .iter()
-            .any(|os| os.name() == value)
-            .then(|| os.is_some_and(|os| os.name() == value)),
-        "target_family" => {
-            (value == "unix").then(|| os.is_some_and(|os| matches!(os, Os::Linux | Os::Macos)))
-        }
-        _ => None,
-    }
+    CfgPredicate::parse(key, &value).map(|p| p.holds(machine, platform))
 }
 
 pub(super) fn validate_unknown_attrs_in_restricted_context<'db>(

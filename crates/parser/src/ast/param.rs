@@ -70,6 +70,12 @@ impl FuncParam {
         support::token(self.syntax(), SK::Dot2)
     }
 
+    /// Returns the `...` that stands for a C variadic function's extra
+    /// arguments, a parameter of its own.
+    pub fn variadic_token(&self) -> Option<SyntaxToken> {
+        support::token(self.syntax(), SK::Dot3)
+    }
+
     /// Returns the pattern a parameter destructures with instead of a name.
     /// `(a, b)` in `_ (a, b): (u256, u256)`.
     pub fn pat(&self) -> Option<super::Pat> {
@@ -269,8 +275,13 @@ ast_node! {
     /// `{expr}`
     /// `lit`
     /// `Output = u64`
+    /// `_`
     pub struct GenericArg,
-    SK::TypeGenericArg | SK::ConstGenericArg | SK::AssocTypeGenericArg | SK::ModeGenericArg,
+    SK::TypeGenericArg
+    | SK::ConstGenericArg
+    | SK::AssocTypeGenericArg
+    | SK::ModeGenericArg
+    | SK::InferGenericArg,
 }
 impl GenericArg {
     pub fn kind(&self) -> GenericArgKind {
@@ -286,6 +297,9 @@ impl GenericArg {
             }
             SK::ModeGenericArg => {
                 GenericArgKind::Mode(AstNode::cast(self.syntax().clone()).unwrap())
+            }
+            SK::InferGenericArg => {
+                GenericArgKind::Infer(AstNode::cast(self.syntax().clone()).unwrap())
             }
             _ => unreachable!(),
         }
@@ -508,12 +522,14 @@ impl UsesParamName {
 /// `Type` is either `Type` or `T: Trait`.
 /// `Const` is either `{expr}` or `lit`.
 /// `AssocType` is `Output = u64`.
+/// `Infer` is `_`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, derive_more::TryInto)]
 pub enum GenericArgKind {
     Type(TypeGenericArg),
     Const(ConstGenericArg),
     AssocType(AssocTypeGenericArg),
     Mode(ModeGenericArg),
+    Infer(InferGenericArg),
 }
 
 ast_node! {
@@ -527,6 +543,12 @@ impl ModeGenericArg {
     pub fn is_mut(&self) -> bool {
         support::token(self.syntax(), SK::MutKw).is_some()
     }
+}
+
+ast_node! {
+    /// `_`: a generic argument a call infers, `f<_, u8>(x)`.
+    pub struct InferGenericArg,
+    SK::InferGenericArg,
 }
 
 ast_node! {

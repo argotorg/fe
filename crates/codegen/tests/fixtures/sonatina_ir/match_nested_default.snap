@@ -1,6 +1,6 @@
 ---
 source: crates/codegen/tests/sonatina_ir.rs
-assertion_line: 388
+assertion_line: 588
 expression: output
 input_file: crates/codegen/tests/fixtures/match_nested_default.fe
 ---
@@ -109,11 +109,8 @@ func private %main() -> @layout_3 {
         v16.@layout_0 = enum.make @layout_0 #variant_2;
         v17.@layout_1 = enum.make @layout_1 #variant_0 v16;
         v18.i8 = call %exhaustive_inner_outer_wildcard v17;
-        v21.@layout_3 = insert_value undef.@layout_3 0.i256 v3;
-        v23.@layout_3 = insert_value v21 1.i256 v7;
-        v25.@layout_3 = insert_value v23 2.i256 v14;
-        v27.@layout_3 = insert_value v25 3.i256 v18;
-        return v27;
+        v19.@layout_3 = agg.make @layout_3 v3 v7 v14 v18;
+        return v19;
 }
 
 func private %main_root() {

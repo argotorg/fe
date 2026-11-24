@@ -414,6 +414,8 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
         doc: Doc<'a>,
         blank_line_before: bool,
         is_element: bool,
+        /// A `//` comment that follows the element on its own line, kept there.
+        trailing_comment: Option<&'a str>,
     }
 
     let mut entries: Vec<Entry<'a>> = Vec::new();
@@ -429,6 +431,7 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
                     doc: elem.to_doc(ctx),
                     blank_line_before: pending_newlines >= 2,
                     is_element: true,
+                    trailing_comment: None,
                 });
                 pending_newlines = 0;
             }
@@ -438,10 +441,21 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
                 }
                 SyntaxKind::WhiteSpace => {}
                 SyntaxKind::Comment | SyntaxKind::DocComment => {
+                    let text = ctx.snippet(token.text_range()).trim_end();
+                    if pending_newlines == 0
+                        && token.kind() == SyntaxKind::Comment
+                        && let Some(prev) = entries.last_mut()
+                        && prev.is_element
+                        && prev.trailing_comment.is_none()
+                    {
+                        prev.trailing_comment = Some(text);
+                        continue;
+                    }
                     entries.push(Entry {
-                        doc: alloc.text(ctx.snippet(token.text_range()).trim_end()),
+                        doc: alloc.text(text),
                         blank_line_before: pending_newlines >= 2,
                         is_element: false,
+                        trailing_comment: None,
                     });
                     pending_newlines = 0;
                 }
@@ -466,6 +480,10 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
             entry.doc.append(alloc.text(","))
         } else {
             entry.doc
+        };
+        let doc = match entry.trailing_comment {
+            Some(comment) => doc.append(alloc.text(" ")).append(alloc.text(comment)),
+            None => doc,
         };
         inner = inner.append(doc);
     }
@@ -1146,6 +1164,7 @@ impl ToDoc for ast::GenericArg {
             GenericArgKind::Const(const_arg) => const_arg.to_doc(ctx),
             GenericArgKind::AssocType(assoc_arg) => assoc_arg.to_doc(ctx),
             GenericArgKind::Mode(mode) => ctx.alloc.text(if mode.is_mut() { "mut" } else { "ref" }),
+            GenericArgKind::Infer(_) => ctx.alloc.text("_"),
         }
     }
 }

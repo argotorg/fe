@@ -929,35 +929,7 @@ pub fn isqrt(_ x: u256) -> u256 {
 
     // Seed with `1 << (log2(x) / 2)`, a power of two within a factor of two
     // of the true root, so a fixed number of Newton iterations suffices.
-    var y = x
-    var z: u256 = 1
-    if y >= 1 << 128 {
-        y >>= 128
-        z <<= 64
-    }
-    if y >= 1 << 64 {
-        y >>= 64
-        z <<= 32
-    }
-    if y >= 1 << 32 {
-        y >>= 32
-        z <<= 16
-    }
-    if y >= 1 << 16 {
-        y >>= 16
-        z <<= 8
-    }
-    if y >= 1 << 8 {
-        y >>= 8
-        z <<= 4
-    }
-    if y >= 1 << 4 {
-        y >>= 4
-        z <<= 2
-    }
-    if y >= 1 << 2 {
-        z <<= 1
-    }
+    var z: u256 = 1 << ((255 - leading_zeros(x)) >> 1)
 
     // Newton's method doubles the number of correct bits per step, so seven
     // iterations refine the seed past the 128 bits a root can occupy.
@@ -1072,11 +1044,11 @@ pub const fn checked_mul_div(_ a: u256, _ b: u256, _ d: u256) -> Option<u256> {
     low = low - remainder
 
     // Factor powers of two out of `d` and shift them out of [high low].
-    let twos = (0 - d) & d
-    let odd = d / twos
-    low = low / twos
-    let shift = (0 - twos) / twos + 1
-    low = low | (high * shift)
+    // d > high proves d != 0, so bits is in 0..=255. With an odd d,
+    // shifting high by 256 yields zero, leaving the low word unchanged.
+    let bits = trailing_zeros(d)
+    let odd = d >> bits
+    low = (low >> bits) | (high << (256 - bits))
 
     // `odd` is invertible modulo 2^256; Newton-Raphson doubles the correct
     // bits per step, starting from 4 correct bits.

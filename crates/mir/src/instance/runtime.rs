@@ -57,6 +57,13 @@ impl<'db> RuntimeInstanceKey<'db> {
             RuntimeInstanceSource::Synthetic(_) => None,
         }
     }
+
+    /// Whether the instance is a variadic function's, whose calls pass
+    /// extra arguments after its parameters.
+    pub fn is_variadic(self, db: &'db dyn MirDb) -> bool {
+        self.semantic(db)
+            .is_some_and(|semantic| semantic.key(db).owner(db).is_variadic(db))
+    }
 }
 
 #[salsa::tracked]

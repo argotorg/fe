@@ -61,7 +61,9 @@ pub(crate) fn runtime_param_locals<'db>(
 /// of a product and a read-only effect read it, and a `mut` parameter or
 /// part and a mutable effect may write it. Fe's access rules make such a
 /// place exclusive to the call or unwritten during it, and nothing writes
-/// it through a read-only access.
+/// it through a read-only access. An effect that may be one place with
+/// another of the instance's, one of them `mut`, is neither, so it has no
+/// access here.
 pub fn runtime_param_accesses<'db>(
     db: &'db dyn MirDb,
     key: RuntimeInstanceKey<'db>,
@@ -69,9 +71,11 @@ pub fn runtime_param_accesses<'db>(
     let Some(semantic) = key.semantic(db) else {
         return Vec::new();
     };
+    let shared = semantic.shared_effects(db);
     runtime_visible_binding_plans(db, semantic)
         .iter()
         .map(|entry| match entry.binding {
+            LocalBinding::EffectParam { idx, .. } if shared.contains(&(idx as u32)) => None,
             LocalBinding::Param {
                 mode: FuncParamMode::View,
                 ..

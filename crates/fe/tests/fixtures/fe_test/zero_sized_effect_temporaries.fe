@@ -1,0 +1,17 @@
+struct Unit {}
+fn mk() -> Unit { Unit {} }
+fn h() -> u256 uses (e: ()) { 1 }
+fn g() -> u256 uses (e: mut Unit) { 2 }
+fn k() -> u256 uses (e: Unit) { 3 }
+
+#[test]
+fn t_unit() { assert(with (()) { h() } == 1) }
+
+#[test]
+fn t_mut_struct() { assert(with (Unit {}) { g() } == 2) }
+
+#[test]
+fn t_call() { assert(with (mk()) { k() } == 3) }
+
+#[test]
+fn t_keyed() { assert(with (Unit = Unit {}) { g() } == 2) }

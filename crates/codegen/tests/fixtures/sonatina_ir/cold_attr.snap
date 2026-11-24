@@ -73,11 +73,11 @@ func private %main() -> i256 {
 
     block1:
         v1.i256 = call %fail 1.i256;
-        v4.@layout_0 = insert_value undef.@layout_0 0.i256 v1;
-        v5.i256 = call %get v4;
-        v6.i256 = call %kept v5;
-        v7.i256 = call %forced v6;
-        return v7;
+        v2.@layout_0 = agg.make @layout_0 v1;
+        v3.i256 = call %get v2;
+        v4.i256 = call %kept v3;
+        v5.i256 = call %forced v4;
+        return v5;
 }
 
 func private %main_root() {

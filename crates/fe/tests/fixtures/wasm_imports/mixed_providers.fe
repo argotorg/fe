@@ -8,7 +8,9 @@ fn stamp_and_log(_ x: i32) -> u64 uses (log: mut Log, clock: mut Clock) {
     t
 }
 
+//host: #[unsafe(export)]
 //host: pub fn stamp(x: i32) -> u64 uses (clock: mut Clock) {
+//mock: #[unsafe(export)]
 //mock: pub fn stamp(x: i32) -> u64 {
 //mock:     var clock = mock(1000, 10)
     var log = mock(0, 0)
@@ -18,7 +20,9 @@ fn stamp_and_log(_ x: i32) -> u64 uses (log: mut Log, clock: mut Clock) {
     }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn stamp_count(x: i32) -> u32 uses (clock: mut Clock) {
+//mock: #[unsafe(export)]
 //mock: pub fn stamp_count(x: i32) -> u32 {
 //mock:     var clock = mock(1000, 10)
     var log = mock(0, 0)

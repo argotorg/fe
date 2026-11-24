@@ -1,9 +1,12 @@
 //! A small host contract for text, handles and errors: read-only files.
 //!
-//! Four operations, each synchronous:
+//! Five operations, each synchronous:
 //!
 //! - `open(name)` finds the file called `name` and returns a handle to it.
 //! - `size(handle)` is the length of the file in bytes, at most `0xffffffff`.
+//! - `read(handle, offset, buf)` places the bytes of the file from `offset` at
+//!   the start of `buf`, at most `buf.len()` of them, and is how many it
+//!   placed: 0 at or past the end of the file.
 //! - `read_byte(handle, index)` is the byte at `index`.
 //! - `close(handle)` ends the use of the handle. It takes the handle by value,
 //!   so a closed handle cannot be used again.
@@ -20,21 +23,24 @@
 //! | --- | --- | --- |
 //! | `sys_wasm_files_open` | name address `i32`, name length `i32` | reply word `i64` |
 //! | `sys_wasm_files_size` | handle `i32` | reply word `i64` |
+//! | `sys_wasm_files_read` | handle `i32`, offset `i32`, address `i32`, length `i32` | reply word `i64` |
 //! | `sys_wasm_files_read_byte` | handle `i32`, index `i32` | reply word `i64` |
 //! | `sys_wasm_files_close` | handle `i32` | none |
 //!
 //! The reply word is described in `std::wasm::Reply`. A handle is one word that
-//! the host chose; its value means nothing to the program. The name is valid
-//! for the call only, and a host that keeps it copies it. The error numbers
-//! are in `FileError`.
+//! the host chose; its value means nothing to the program. The name and the
+//! range of a read are valid for the call only, and a host that keeps the name
+//! copies it. The error numbers are in `FileError`.
 use core::abi::DynString
-use core::ptr::MemVec
+use core::ptr::{MemSpan, MemVec}
 use super::Host
 use super::boundary::Reply
+use super::streams::{address, length}
 
 extern {
     fn sys_wasm_files_open(_ addr: u32, _ len: u32) -> u64
     fn sys_wasm_files_size(_ handle: u32) -> u64
+    fn sys_wasm_files_read(_ handle: u32, _ offset: u32, _ addr: u32, _ len: u32) -> u64
     fn sys_wasm_files_read_byte(_ handle: u32, _ index: u32) -> u64
     fn sys_wasm_files_close(_ handle: u32)
 }
@@ -90,10 +96,13 @@ pub struct Handle {
     unsafe id: u32,
 }
 
-/// The four operations.
+/// The five operations.
 pub trait Files {
     fn open(mut self, _ name: DynString) -> Result<FileError, Handle>
     fn size(mut self, _ handle: Handle) -> Result<FileError, u32>
+    /// Places the bytes of the file from `offset` at the start of `buf`, at
+    /// most `buf.len()` of them: how many it placed, 0 at or past the end.
+    fn read(mut self, _ handle: Handle, _ offset: u32, _ buf: mut MemSpan) -> Result<FileError, u32>
     fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8>
     fn close(mut self, _ handle: own Handle)
 }
@@ -109,9 +118,7 @@ fn checked(_ reply: Reply) -> Result<FileError, u32> {
 impl Files for Host {
     fn open(mut self, _ name: DynString) -> Result<FileError, Handle> {
         let bytes = name.span()
-        let addr: u32 = (bytes.ptr() as usize).downcast().unwrap()
-        let len: u32 = bytes.len().downcast().unwrap()
-        match checked(Reply::from_word(sys_wasm_files_open(addr, len))) {
+        match checked(Reply::from_word(sys_wasm_files_open(address(bytes), length(bytes)))) {
             Result::Ok(id) => Result::Ok(unsafe { Handle { id } })
             Result::Err(error) => Result::Err(error)
         }
@@ -119,6 +126,19 @@ impl Files for Host {
 
     fn size(mut self, _ handle: Handle) -> Result<FileError, u32> {
         checked(Reply::from_word(sys_wasm_files_size(handle.id)))
+    }
+
+    fn read(mut self, _ handle: Handle, _ offset: u32, _ buf: mut MemSpan) -> Result<FileError, u32> {
+        let word = sys_wasm_files_read(handle.id, offset, address(buf), length(buf))
+        match checked(Reply::from_word(word)) {
+            Result::Ok(count) => {
+                // A host that counts more bytes than it was given room for is
+                // at fault.
+                assert!((count as usize) <= buf.len())
+                Result::Ok(count)
+            }
+            Result::Err(error) => Result::Err(error)
+        }
     }
 
     fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8> {
@@ -139,6 +159,10 @@ pub fn open(_ name: DynString) -> Result<FileError, Handle> uses (files: mut Fil
 
 pub fn size(_ handle: Handle) -> Result<FileError, u32> uses (files: mut Files) {
     files.size(handle)
+}
+
+pub fn read(_ handle: Handle, _ offset: u32, _ buf: mut MemSpan) -> Result<FileError, u32> uses (files: mut Files) {
+    files.read(handle, offset, mut buf)
 }
 
 pub fn read_byte(_ handle: Handle, _ index: u32) -> Result<FileError, u8> uses (files: mut Files) {
@@ -211,6 +235,16 @@ impl Files for MemFiles {
 
     fn size(mut self, _ handle: Handle) -> Result<FileError, u32> {
         Result::Ok(self.contents[self.file_of(handle)].len().downcast().unwrap())
+    }
+
+    fn read(mut self, _ handle: Handle, _ offset: u32, _ buf: mut MemSpan) -> Result<FileError, u32> {
+        let contents = self.contents[self.file_of(handle)].span()
+        let offset = offset as usize
+        let start = if offset < contents.len() { offset } else { contents.len() }
+        let rest = contents.len() - start
+        let count = if buf.len() < rest { buf.len() } else { rest }
+        buf.head(count).copy_from(contents.slice(offset: start, len: count))
+        Result::Ok(count.downcast().unwrap())
     }
 
     fn read_byte(mut self, _ handle: Handle, _ index: u32) -> Result<FileError, u8> {

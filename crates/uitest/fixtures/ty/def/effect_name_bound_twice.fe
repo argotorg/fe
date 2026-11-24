@@ -1,0 +1,74 @@
+// A body binds each of its effects by name, so a `uses` list binds each name
+// once: a function's, with its implementation's row spliced in, a row's, a
+// contract's, an `init`'s and a recv arm's. An effect that binds a
+// parameter's name hides it, which is reported too.
+use std::evm::{Ctx, Log}
+
+struct Store { n: u256 }
+struct Other { n: u256 }
+
+mod a {
+    pub struct Store { pub n: u256 }
+}
+
+fn labelled() -> u256 uses (s: Store, s: Other) { s.n }
+
+fn unlabelled() -> u256 uses (Store, a::Store) { Store.n }
+
+fn param_and_effect(_ s: u256) uses (s: Store) {}
+
+// Accepted: a declaration has no body to bind them.
+trait Decl {
+    fn decl(self) uses (s: Store, s: Other)
+}
+
+trait Count {
+    uses E
+    fn count(mut self) -> u256 uses E
+}
+
+struct S {}
+
+impl Count for S {
+    uses E = (a: Store, a: Other)
+    fn count(mut self) -> u256 uses E { a.n }
+}
+
+trait Logger {
+    uses E
+    fn log(mut self) uses (E, also: Other)
+}
+
+struct L {}
+
+impl Logger for L {
+    uses E = (also: Store)
+    fn log(mut self) uses (E, also: Other) {}
+}
+
+struct Both<A, B> { a: A, b: B }
+
+// Accepted: rows bind no names.
+impl<A: Count, B: Count> Count for Both<A, B> {
+    uses E = (A::E, B::E)
+    fn count(mut self) -> u256 uses E { self.a.count() + self.b.count() }
+}
+
+msg Msg {
+    #[selector = 1]
+    A -> u256,
+}
+
+pub contract Arm uses (ctx: Ctx, log: mut Log) {
+    mut x: u256,
+    recv Msg {
+        A -> u256 uses (x, x) { x }
+    }
+}
+
+pub contract Root uses (ctx: Ctx, ctx: Log) {
+    mut x: u256,
+    recv Msg {
+        A -> u256 uses (x) { x }
+    }
+}

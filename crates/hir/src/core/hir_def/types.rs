@@ -44,7 +44,9 @@ impl<'db> TypeId<'db> {
                             .any(|arg| match arg {
                                 GenericArg::Type(arg) => mentions(&arg.ty),
                                 GenericArg::AssocType(arg) => mentions(&arg.ty),
-                                GenericArg::Const(_) | GenericArg::Mode(_) => false,
+                                GenericArg::Const(_) | GenericArg::Mode(_) | GenericArg::Infer => {
+                                    false
+                                }
                             })
                     })
                 })

@@ -1,6 +1,6 @@
 use super::{
-    EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance, SemanticInstanceKey,
-    provisional_provider_binding_for_instance_effect, provisional_provider_idx_for_requirement,
+    CallEffectArg, EffectProviderSubst, GenericSubst, ImplEnv, SemanticInstance,
+    SemanticInstanceKey, provisional_provider_binding_for_instance_effect,
     resolved_provider_binding_for_instance_effect, row_expansion_for_key,
 };
 use crate::{
@@ -32,14 +32,16 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
-                ResolvedEffectArg,
             },
             ty_def::{BorrowKind, TyFlags, TyId},
             ty_lower::{ParamKey, ParamSchemaId},
             visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    core::semantic::{EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding},
+    core::semantic::{
+        EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding,
+        effect_resolutions_for_site,
+    },
     hir_def::{
         CallableDef, Const, Func, GenericParamOwner, HirIngot, IdentId, scope_graph::ScopeId,
     },
@@ -331,11 +333,23 @@ pub(crate) struct SemanticCallCallee<'db> {
     pub drops_receiver: bool,
 }
 
+/// The callee body's effect that the callee's nominal effect `nominal` is. A
+/// callee with no pairs numbers its effects as its nominal function does.
+pub(super) fn body_effect(effect_pairs: &[(usize, usize)], nominal: usize) -> Option<usize> {
+    if effect_pairs.is_empty() {
+        return Some(nominal);
+    }
+    effect_pairs
+        .iter()
+        .find(|(index, _)| *index == nominal)
+        .map(|&(_, body)| body)
+}
+
 pub(crate) fn semantic_callee_key_with_effect_providers<'db>(
     db: &'db dyn HirAnalysisDb,
     caller_key: SemanticInstanceKey<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
     effect_providers: &[EffectProviderSpecialization<'db>],
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
     let caller = SemanticInstance::new(db, caller_key);
@@ -355,7 +369,8 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     caller_key: SemanticInstanceKey<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
+    effect_providers: &[EffectProviderSpecialization<'db>],
     assumptions: PredicateListId<'db>,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
     semantic_callee_key_with_assumptions(
@@ -364,7 +379,7 @@ pub(crate) fn provisional_semantic_callee_key<'db>(
         caller_key.impl_env(db),
         callable,
         effect_args,
-        callable.effect_providers(),
+        effect_providers,
         assumptions,
         ProviderResolutionMode::Provisional,
     )
@@ -495,7 +510,7 @@ fn semantic_callee_key_with_assumptions<'db>(
     caller: Option<SemanticInstance<'db>>,
     impl_env: ImplEnv<'db>,
     callable: &Callable<'db>,
-    effect_args: &[ResolvedEffectArg<'db>],
+    effect_args: &[CallEffectArg<'db>],
     effect_providers: &[EffectProviderSpecialization<'db>],
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
@@ -667,18 +682,14 @@ fn semantic_callee_key_with_assumptions<'db>(
                         .then_some(effect as u32)
                 })
         };
-        let target_effect_args = effect_args
+        if let Some(arg) = effect_args
             .iter()
-            .map(|arg| {
-                let effect = effect_of(arg.binding_idx as usize).ok_or(
-                    MethodArgMapError::MissingEffectRole(arg.binding_idx as usize),
-                )?;
-                let mut arg = arg.clone();
-                arg.binding_idx = effect as u32;
-                arg.param_idx = effect;
-                Ok(arg)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            .find(|arg| effect_of(arg.binding_idx as usize).is_none())
+        {
+            return Err(MethodArgMapError::MissingEffectRole(
+                arg.binding_idx as usize,
+            ));
+        }
         let target_providers: Vec<_> = effect_providers
             .iter()
             .filter_map(|specialization| {
@@ -694,7 +705,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             caller,
             impl_env,
             &target,
-            &target_effect_args,
+            effect_args,
             &target_providers,
             assumptions,
             provider_resolution_mode,
@@ -704,17 +715,6 @@ fn semantic_callee_key_with_assumptions<'db>(
         };
         // The function's effects and providers lie where its own call puts
         // them.
-        let body_effect = |effect: usize| {
-            if callee.effect_pairs.is_empty() {
-                Some(effect)
-            } else {
-                callee
-                    .effect_pairs
-                    .iter()
-                    .find(|(index, _)| *index == effect)
-                    .map(|&(_, body)| body)
-            }
-        };
         let body_provider = |provider: u32| {
             callee
                 .provider_pairs
@@ -724,7 +724,9 @@ fn semantic_callee_key_with_assumptions<'db>(
         };
         let effect_pairs = pairs
             .iter()
-            .filter_map(|&(nominal, effect)| Some((nominal, body_effect(effect)?)))
+            .filter_map(|&(nominal, effect)| {
+                Some((nominal, body_effect(&callee.effect_pairs, effect)?))
+            })
             .collect();
         let provider_pairs = pairs
             .iter()
@@ -742,14 +744,6 @@ fn semantic_callee_key_with_assumptions<'db>(
     let mut selected_trait_method: Option<(ResolvedImplInstance<'db>, TraitInstId<'db>)> = None;
     let mut effect_pairs = Vec::new();
     let mut provider_pairs = Vec::new();
-    let checked_effect_inputs = effect_args
-        .iter()
-        .filter_map(|arg| {
-            arg.instantiated_key_ty
-                .or(arg.provider_target_ty)
-                .map(|ty| (arg.binding_idx as usize, ty))
-        })
-        .collect::<Vec<_>>();
     let mut subst_args = callable.generic_args().to_vec();
     let body_func = if let Some(inst) = callable.trait_inst()
         && let Some(method) = callable.selected_method(
@@ -1002,7 +996,8 @@ fn semantic_callee_key_with_assumptions<'db>(
         // caller's assumptions, and its ground bounds hold without them. A
         // bound on a caller's parameter is one of the callee instance's own
         // assumptions, so equal calls written in different bodies share one
-        // instance.
+        // instance. A row of a caller's parameter expands as far as the
+        // caller's assumptions select implementations, so it keeps them.
         let empty = PredicateListId::empty_list(db);
         let scope = nominal_func.scope();
         let caller_scope = impl_env.normalization_scope(db);
@@ -1024,9 +1019,18 @@ fn semantic_callee_key_with_assumptions<'db>(
                 .iter()
                 .all(|param| same_without_caller(param.shape.erased_ty(db)))
             && same_without_caller(callable.ret_ty(db))
-            && checked_effect_inputs
+            && effect_args
                 .iter()
-                .all(|&(_, ty)| same_without_caller(ty));
+                .filter_map(|arg| arg.instantiated_key_ty.or(arg.provider_target_ty))
+                .all(same_without_caller)
+            && !nominal_func
+                .effect_requirements(db, callable.mode())
+                .iter()
+                .filter_map(|requirement| requirement.key.key_row())
+                .any(|row| {
+                    let row = Binder::bind(nominal_func.into(), row).instantiate(db, &subst_args);
+                    collect_flags(db, row).contains(TyFlags::HAS_PARAM)
+                });
         (independent, true)
     } else {
         (false, true)
@@ -1177,23 +1181,10 @@ fn resolve_callable_effect_providers<'db>(
 ) -> Vec<EffectProviderSpecialization<'db>> {
     let providers =
         resolve_provider_specializations(db, caller, effect_providers, provider_resolution_mode);
-    let site = EffectParamSite::Func(func, mode);
-    let effect_env = EffectEnvView::new(site);
-    let resolution_by_req = match provider_resolution_mode {
-        ProviderResolutionMode::Final => effect_env
-            .resolutions(db)
-            .into_iter()
-            .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
-            .collect::<FxHashMap<_, _>>(),
-        ProviderResolutionMode::Provisional => effect_env
-            .requirements(db)
-            .into_iter()
-            .filter_map(|requirement| {
-                provisional_provider_idx_for_requirement(db, site, requirement.binding_idx)
-                    .map(|provider_idx| (requirement.binding_idx as usize, provider_idx))
-            })
-            .collect::<FxHashMap<_, _>>(),
-    };
+    let resolution_by_req = effect_resolutions_for_site(db, EffectParamSite::Func(func, mode))
+        .iter()
+        .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
+        .collect::<FxHashMap<_, _>>();
     let provider_by_idx = providers
         .iter()
         .map(|provider| (provider.provider.provider_idx, provider))

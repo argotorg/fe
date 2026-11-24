@@ -5,6 +5,7 @@
 use core::MemBuffer
 use std::io::{Stderr, Stdio, Stdout, StdinReader}
 
+#[unsafe(export)]
 pub fn greet(count: u32, big: u64, small: i8) -> u32 uses (out: mut Stdout) {
     println!("hello ", count, " times")
     print!("big ", big, ", small ", small, ", ", count > 2)
@@ -12,6 +13,7 @@ pub fn greet(count: u32, big: u64, small: i8) -> u32 uses (out: mut Stdout) {
     count
 }
 
+#[unsafe(export)]
 pub fn warn(code: i32) -> i32 uses (err: mut Stderr) {
     eprintln!("warning ", code)
     eprint!("no newline")
@@ -19,6 +21,7 @@ pub fn warn(code: i32) -> i32 uses (err: mut Stderr) {
 }
 
 // The digits 0 to 9 over and over, `len` bytes in one print.
+#[unsafe(export)]
 pub fn digits(len: u32) -> u32 uses (out: mut Stdout) {
     var text = MemBuffer::with_capacity(len as usize)
     var i: u32 = 0
@@ -32,6 +35,7 @@ pub fn digits(len: u32) -> u32 uses (out: mut Stdout) {
 
 // Prints each line of the input after its number, and the count of lines to
 // standard error.
+#[unsafe(export)]
 pub fn number_lines() -> u32 uses (io: mut Stdio) {
     var reader = StdinReader::new()
     var line = MemBuffer::empty()

@@ -5,7 +5,8 @@
 //! `if`, `match` and `with` yield through their tails. Each yield site's shape
 //! is recorded for lowering.
 use super::{
-    Callable, ExprProp, SumShapeOp, TraitObligationOutcome, TyChecker, ValuePathRef,
+    Callable, EffectArgTarget, ExprProp, SumShapeOp, TraitObligationOutcome, TyChecker,
+    ValuePathRef,
     callable::place_borrow_suggestion,
     env::{TraitObligation, TraitObligationOrigin},
 };
@@ -376,11 +377,13 @@ impl<'db> TyChecker<'db> {
         }
         let mut raised = Vec::new();
         if let Some(args) = self.env.call_effect_args_mut(expr) {
-            for arg in args.iter_mut().filter(|arg| {
-                !arg.required_mut && arg.row_arg.is_none() && mut_at_mut(arg.binding_idx)
-            }) {
-                arg.required_mut = true;
-                raised.push((arg.binding_idx, arg.key));
+            for arg in args.iter_mut().filter(|arg| !arg.required_mut) {
+                if let EffectArgTarget::Declared(binding_idx) = arg.target
+                    && mut_at_mut(binding_idx)
+                {
+                    arg.required_mut = true;
+                    raised.push((binding_idx, arg.key));
+                }
             }
         }
         for (binding_idx, key) in raised {

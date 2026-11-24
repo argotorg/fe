@@ -212,6 +212,16 @@ pub trait AbiSpan<A: Abi>: AbiSize {
 }
 
 pub trait Decode<A: Abi>: AbiSize {
+    /// Whether `decode_from_bounded` accepts every validated 32-byte head
+    /// and re-encoding the result preserves all bytes without observable
+    /// side effects.
+    ///
+    /// This opts into copying canonical word arrays without invoking this
+    /// decoder or the matching `Encode<A>` implementation. Only set this
+    /// for a static, single-word encoding whose round trip is an identity.
+    /// Custom codecs keep the element-by-element path by default.
+    const IS_CANONICAL_WORD: bool = false
+
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self
 
     /// Decode from a raw ABI payload position. Callers that use this path are
@@ -1016,7 +1026,9 @@ impl DynString {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
-            ptr::zero_bytes(data, word_to_usize(size))
+            // The length and payload overwrite everything except final padding.
+            // size >= 32, including the empty tail whose length word follows.
+            store_word(ptr: ptr_offset(data, size - 32), value: 0)
             store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
@@ -1131,7 +1143,9 @@ impl Bytes {
         let size = 32 + round_up_words(len as u256)
         let data = ptr::alloc_bytes(ptr::allocation_len(size))
         unsafe {
-            ptr::zero_bytes(data, word_to_usize(size))
+            // The length and payload overwrite everything except final padding.
+            // size >= 32, including the empty tail whose length word follows.
+            store_word(ptr: ptr_offset(data, size - 32), value: 0)
             store_word(ptr: data, value: len as u256)
             ptr::copy(dest: ptr::offset_bytes(data, 32), source)
         }
@@ -1254,19 +1268,19 @@ impl Eq for DynString {
 /// Strings order by their bytes, as spans do.
 impl Ord for DynString {
     fn lt(self, _ other: DynString) -> bool {
-        self.span() < other.span()
+        ptr::bytes_order_before(self.span(), other.span())
     }
 
     fn le(self, _ other: DynString) -> bool {
-        self.span() <= other.span()
+        !ptr::bytes_order_before(other.span(), self.span())
     }
 
     fn gt(self, _ other: DynString) -> bool {
-        self.span() > other.span()
+        ptr::bytes_order_before(other.span(), self.span())
     }
 
     fn ge(self, _ other: DynString) -> bool {
-        self.span() >= other.span()
+        !ptr::bytes_order_before(self.span(), other.span())
     }
 }
 
@@ -2125,6 +2139,8 @@ impl<A: Abi> AbiSpan<A> for () {
 }
 
 impl<A: Abi> Decode<A> for u256 {
+    const IS_CANONICAL_WORD: bool = true
+
     #[inline(always)]
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
         d.read_word(input)
@@ -2455,6 +2471,8 @@ impl<A: Abi> Encode<A> for i128 {
 }
 
 impl<A: Abi> Decode<A> for i256 {
+    const IS_CANONICAL_WORD: bool = true
+
     fn decode_payload<D: AbiDecoder<A>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
         d.read_word(input).downcast_unchecked()
     }

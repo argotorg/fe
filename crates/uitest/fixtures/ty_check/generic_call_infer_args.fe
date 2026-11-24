@@ -1,0 +1,77 @@
+// `_` as a call's generic argument is inferred, even for a parameter with a
+// default, and lets a later argument be given while an earlier one is
+// inferred.
+use core::functional::Fn
+
+trait Rules {
+    const BONUS: u64
+}
+
+struct Osaka {}
+
+impl Rules for Osaka {
+    const BONUS: u64 = 1
+}
+
+struct Cursor<F: Rules> { gas: u64 }
+
+impl<F: Rules> Copy for Cursor<F> {}
+
+fn op<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+    c.gas + N + F::BONUS
+}
+
+fn pick<T, const N: usize>(_ x: [T; N]) -> usize {
+    N
+}
+
+fn defaulted<T = u8>(_ t: own T) -> T {
+    t
+}
+
+fn defaulted_len<const N: usize = 3>(_ x: [u8; N]) -> usize {
+    N
+}
+
+fn apply<shape A, F: Fn<A, Out = u64>>(_ f: F) -> u64 {
+    0
+}
+
+struct Vm {}
+
+impl Vm {
+    fn op<const N: u64, F: Rules>(self, _ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+
+    fn assoc<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+}
+
+trait Maker {
+    fn make<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64
+}
+
+impl Maker for Vm {
+    fn make<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+}
+
+fn through_bound<M: Maker, F: Rules>(_ c: Cursor<F>) -> u64 {
+    M::make<1, _>(c)
+}
+
+fn calls(c: Cursor<Osaka>, vm: Vm) -> u64 {
+    let flag: bool = defaulted<_>(true)
+    let len: usize = defaulted_len<_>([1, 2]) + pick<_, 2>([true, false]) + pick<bool, _>([true])
+    let item = op<1, _>
+    op<1, _>(c)
+        + vm.op<1, _>(c)
+        + Vm::assoc<1, _>(c)
+        + <Vm as Maker>::make<2, _>(c)
+        + through_bound<Vm, _>(c)
+        + apply<_>(|x: u8| x as u64)
+        + item(c)
+}

@@ -408,6 +408,21 @@ fn storage_map_root_effect_reports_runtime_root_error(fixture: Fixture<&str>) {
     );
 }
 
+#[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "manual_root_trait_effect_reports_missing_provider.fe")]
+fn manual_root_trait_effect_reports_missing_provider(fixture: Fixture<&str>) {
+    let err = with_top_mod_for_source(&fixture, |db, top_mod| {
+        emit_module_sonatina_ir(db, top_mod)
+            .expect_err("a manual contract root cannot take a trait effect")
+    });
+    let message = err.to_string();
+    assert!(
+        message.contains("function `runtime`")
+            && message.contains("nothing provides its effect `k`")
+            && message.contains("with (...)"),
+        "unexpected error message:\n{message}"
+    );
+}
+
 #[dir_test(dir: "$CARGO_MANIFEST_DIR/tests/fixtures/sonatina_ir_semantic", glob: "storage_map_free_function_compiles_with_concrete_provider.fe")]
 fn storage_map_free_function_compiles_with_concrete_provider(fixture: Fixture<&str>) {
     let output = with_top_mod_for_source(&fixture, |db, top_mod| {

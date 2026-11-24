@@ -17,6 +17,7 @@ use crate::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
         ImplTrait, IntegerId, ModeMarker, TypeId as HirTypeId, TypeMode,
     },
+    core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
 use either::Either;
@@ -71,6 +72,8 @@ pub enum TyLowerDiag<'db> {
     /// `ref` or `mut` as a generic argument of anything but an associated
     /// shape.
     ModeArgNotShape(DynLazySpan<'db>),
+    /// `_` as a generic argument of anything but a call.
+    InferArgOutsideCall(DynLazySpan<'db>),
     /// An associated type binding as a generic argument of anything but a
     /// trait.
     AssocBindingNotOnTrait(DynLazySpan<'db>),
@@ -90,6 +93,11 @@ pub enum TyLowerDiag<'db> {
         ty: TyId<'db>,
         mutable: bool,
         exported: bool,
+    },
+    /// A variadic `extern` function that C cannot call as declared.
+    InvalidVariadic {
+        span: DynLazySpan<'db>,
+        issue: VariadicIssue,
     },
     /// A native `main` that doesn't return `i32` or nothing.
     InvalidMainReturn {
@@ -132,6 +140,18 @@ pub enum TyLowerDiag<'db> {
     MaybeMutRowEffect {
         span: DynLazySpan<'db>,
         entry: bool,
+    },
+    /// A `uses` list names `key` twice.
+    EffectKeyNamedTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: HirTypeId<'db>,
+    },
+    /// Two effects of a `uses` list bind `name`.
+    EffectNameBoundTwice {
+        span: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        name: IdentId<'db>,
     },
     /// A spread parameter, `..A`, that is not the last of a trait method's
     /// declaration.
@@ -315,6 +335,7 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
 
     /// A collection entry type in contract state with no storage layout.
@@ -364,12 +385,22 @@ pub enum RevealedBy {
     Evaluation,
 }
 
-/// Why a C caller cannot call an `#[unsafe(export)]` function.
+/// Why the caller outside Fe cannot call an `#[unsafe(export)]` function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ExportIssue {
     NotPub,
     Generic,
     Effects,
+}
+
+/// Why a variadic `extern` function cannot be called as declared.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub enum VariadicIssue {
+    /// Only native code calls C.
+    NotNative,
+    Generic,
+    Effects,
+    Const,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -386,6 +417,7 @@ impl TyLowerDiag<'_> {
             Self::ModeNotType(_) => 58,
             Self::ModeOnProduct { .. } => 82,
             Self::ModeArgNotShape(_) => 83,
+            Self::InferArgOutsideCall(_) => 94,
             Self::AssocBindingNotOnTrait(_) => 89,
             Self::ShapeWithoutMode(_) => 84,
             Self::ProductReceiver(_) => 74,
@@ -393,9 +425,12 @@ impl TyLowerDiag<'_> {
             Self::DestructuredParamWithoutBody(_) => 76,
             Self::InvalidExport { .. } => 88,
             Self::InvalidCAbi { .. } => 90,
+            Self::InvalidVariadic { .. } => 95,
             Self::InvalidMainReturn { .. } => 91,
             Self::MaybeMutWithoutResult(_) => 77,
             Self::MaybeMutRowEffect { .. } => 78,
+            Self::EffectKeyNamedTwice { .. } => 92,
+            Self::EffectNameBoundTwice { .. } => 93,
             Self::MisplacedSpread(_) => 80,
             Self::SpreadOfNonShape { .. } => 81,
             Self::MaybeMutBound(_) => 71,
@@ -732,6 +767,13 @@ pub enum BodyDiag<'db> {
         key: PathId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
+    },
+
+    /// Two keyed bindings of one `with` provide one key.
+    DuplicateWithKey {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        key: PathId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -1117,6 +1159,13 @@ pub enum BodyDiag<'db> {
         field: IdentId<'db>,
         field_span: DynLazySpan<'db>,
     },
+    /// A recv arm or `init` lists `mut` a contract effect the contract
+    /// declares without `mut`.
+    ImmutableContractEffectMutBinding {
+        primary: DynLazySpan<'db>,
+        effect: IdentId<'db>,
+        effect_span: DynLazySpan<'db>,
+    },
 
     LoopControlOutsideOfLoop {
         primary: DynLazySpan<'db>,
@@ -1147,7 +1196,8 @@ pub enum BodyDiag<'db> {
         func_ty: TyId<'db>,
     },
 
-    CallGenericArgNumMismatch {
+    /// More generic arguments at a call than the callee has parameters.
+    TooManyCallGenericArgs {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
         given: usize,
@@ -1215,6 +1265,17 @@ pub enum BodyDiag<'db> {
 
     TypeAnnotationNeeded {
         span: DynLazySpan<'db>,
+        ty: TyId<'db>,
+        /// Whether the expression is an extra argument of a variadic call,
+        /// which has no parameter to take a type from.
+        variadic: bool,
+    },
+    /// A label on an extra argument of a variadic call, which no parameter
+    /// names.
+    VariadicArgLabel(DynLazySpan<'db>),
+    /// An extra argument of a variadic call that C cannot take.
+    InvalidVariadicArg {
+        primary: DynLazySpan<'db>,
         ty: TyId<'db>,
     },
     UnusedMustUse {
@@ -1511,6 +1572,7 @@ impl<'db> BodyDiag<'db> {
             Self::EffectTraitUnsatisfied { .. } => 39,
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
+            Self::DuplicateWithKey { .. } => 159,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
@@ -1592,7 +1654,7 @@ impl<'db> BodyDiag<'db> {
             Self::LoopControlOutsideOfLoop { .. } => 19,
             Self::TraitNotImplemented { .. } => 20,
             Self::NotCallable(..) => 21,
-            Self::CallGenericArgNumMismatch { .. } => 22,
+            Self::TooManyCallGenericArgs { .. } => 22,
             Self::CallArgNumMismatch { .. } => 23,
             Self::AssertArgNumMismatch { .. } => 82,
             Self::AssertMessageMustBeStringLiteral { .. } => 83,
@@ -1603,6 +1665,9 @@ impl<'db> BodyDiag<'db> {
             Self::InvisibleAmbiguousTrait { .. } => 28,
             Self::NotValue { .. } => 30,
             Self::TypeAnnotationNeeded { .. } => 31,
+            Self::VariadicArgLabel(_) => 160,
+            Self::InvalidVariadicArg { .. } => 161,
+            Self::ImmutableContractEffectMutBinding { .. } => 162,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,

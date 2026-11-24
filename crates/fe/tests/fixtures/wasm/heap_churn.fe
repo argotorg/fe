@@ -20,6 +20,7 @@ fn pass(_ text: own DynString) -> DynString {
 
 // Allocates a zeroed block of `n` words each round, writes the round number to its
 // first word and drops it. Returns how many rounds wrote an odd number.
+#[unsafe(export)]
 pub fn churn(rounds: u32, n: u32) -> u32 {
     var odd: u32 = 0
     var r: u32 = 0
@@ -33,6 +34,7 @@ pub fn churn(rounds: u32, n: u32) -> u32 {
 }
 
 // Builds a vector of 20 words each round, which grows by reallocation, and drops it.
+#[unsafe(export)]
 pub fn vec_churn(rounds: u32) -> u32 {
     var total: u32 = 0
     var r: u32 = 0
@@ -52,6 +54,7 @@ pub fn vec_churn(rounds: u32) -> u32 {
 // Makes strings every way that allocates one and drops them each round. `free`
 // traps on anything but the start of a live block, so this also checks that each
 // string owns its allocation and frees it once.
+#[unsafe(export)]
 pub fn string_churn(rounds: u32) -> u32 {
     var total: u32 = 0
     var r: u32 = 0
@@ -82,6 +85,7 @@ pub fn string_churn(rounds: u32) -> u32 {
 
 // Encodes an array of strings to the Solidity ABI and decodes it each round, which
 // moves each string through a raw place.
+#[unsafe(export)]
 pub fn string_abi_churn(rounds: u32) -> u32 {
     var total: u32 = 0
     var r: u32 = 0
@@ -97,6 +101,7 @@ pub fn string_abi_churn(rounds: u32) -> u32 {
 }
 
 // A fallible allocation that no module can meet returns nothing instead of trapping.
+#[unsafe(export)]
 pub fn try_huge() -> u32 {
     match unsafe { MemArray<u8>::try_new_uninit(3000000000) } {
         Option::Some(_) => 1,

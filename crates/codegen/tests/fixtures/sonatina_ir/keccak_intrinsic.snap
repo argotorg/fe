@@ -61,9 +61,8 @@ func private %hash(v0.i256, v1.i256) -> i256 {
         jump block5;
 
     block3:
-        v11.@layout_0 = insert_value undef.@layout_0 0.i256 v0;
-        v14.@layout_0 = insert_value v11 1.i256 v4;
-        obj.store v2 v14;
+        v10.@layout_0 = agg.make @layout_0 v0 v4;
+        obj.store v2 v10;
         jump block2;
 
     block4:

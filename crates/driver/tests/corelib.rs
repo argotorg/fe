@@ -1,7 +1,7 @@
 //! Analysis of the builtin core and std ingots through the driver.
 
 use common::InputDb;
-use common::compilation::{Os, Target};
+use common::compilation::{Platform, Target};
 use common::indexmap::IndexMap;
 use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use fe_driver::{DriverDataBase, db::DiagnosticsCollection};
@@ -38,18 +38,18 @@ fn analyze_corelib() {
     }
 }
 
-// Std is checked for each target and operating system, since `#[cfg]`
+// Std is checked for each target and supported platform, since `#[cfg]`
 // selects its items by them.
 #[test]
 fn analyze_stdlib() {
     let configs = Target::ALL
         .into_iter()
         .map(|target| (target, None))
-        .chain(Os::ALL.map(|os| (Target::Native, Some(os))));
-    for (target, os) in configs {
+        .chain(Platform::SUPPORTED.map(|platform| (Target::Native, Some(platform))));
+    for (target, platform) in configs {
         let mut db = DriverDataBase::default();
         db.compilation_settings().set_target(&mut db).to(target);
-        db.compilation_settings().set_os(&mut db).to(os);
+        db.compilation_settings().set_platform(&mut db).to(platform);
         let std_ingot = db.builtin_std();
         assert!(
             std_ingot.files(&db).iter().next().is_some(),
@@ -61,7 +61,7 @@ fn analyze_stdlib() {
             &db,
             std_ingot,
             std_diags,
-            &format!("std ({target:?}, {os:?})"),
+            &format!("std ({target:?}, {platform:?})"),
         );
     }
 }

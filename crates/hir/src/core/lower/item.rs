@@ -1,5 +1,5 @@
 use common::ingot::IngotKind;
-use parser::ast::{self, WhereClauseOwner as _, prelude::*};
+use parser::ast::{self, WhereClauseOwner, prelude::*};
 
 use super::{
     FileLowerCtxt,
@@ -598,16 +598,24 @@ impl<'db> Func<'db> {
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let generic_params = GenericParamListId::lower_ast_opt(ctxt, sig.generic_params());
         let where_clause = WhereClauseId::lower_ast_opt(ctxt, sig.where_clause());
+        let is_variadic = is_extern
+            && sig
+                .params()
+                .and_then(|params| params.into_iter().last())
+                .is_some_and(|param| param.variadic_token().is_some());
         let params = sig
             .params()
-            .map(|params| FuncParamListId::lower_ast(ctxt, params))
+            .map(|params| FuncParamListId::lower_ast(ctxt, params, is_extern))
             .into();
         let ret_ty = sig.ret_ty().map(|ty| TypeId::lower_ast(ctxt, ty));
         let effects = lower_uses_clause_opt(ctxt, ast.sig().uses_clause());
         let vis = super::lower_visibility(&ast);
         let is_unsafe = super::lower_is_unsafe(&ast);
         let is_const = ast.const_kw().is_some();
-        let modifiers = FuncModifiers::new(vis, is_unsafe, is_const, is_extern);
+        let modifiers = FuncModifiers {
+            is_variadic,
+            ..FuncModifiers::new(vis, is_unsafe, is_const, is_extern)
+        };
         // A body that declares items is lowered with the module, which resolves
         // their imports and collects their impls. Other bodies are lowered when
         // first needed (`Func::body`).

@@ -41,11 +41,56 @@ impl<'db> GenericParamListId<'db> {
     }
 }
 
+/// A `...` where a function takes no variadic arguments, reported while
+/// lowering its parameters.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariadicParamError {
+    pub kind: VariadicParamErrorKind,
+    pub file: common::file::File,
+    pub primary_range: parser::TextRange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VariadicParamErrorKind {
+    /// In a function that is not `extern`, a closure or a contract's `init`.
+    OutsideExtern,
+    /// In an `extern` function, before another parameter.
+    NotLast,
+}
+
 impl<'db> FuncParamListId<'db> {
-    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::FuncParamList) -> Self {
-        let params = ast
+    /// Lowers the parameters of `ast`, of an `extern` function with
+    /// `is_extern`. A `...` stands for no parameter, so the others keep
+    /// their positions in `ast`, which name destructured parameters, and a
+    /// `...` anywhere but at the end of an `extern` function's is reported.
+    pub(super) fn lower_ast(
+        ctxt: &mut FileLowerCtxt<'db>,
+        ast: ast::FuncParamList,
+        is_extern: bool,
+    ) -> Self {
+        let params: Vec<_> = ast.into_iter().collect();
+        let file = ctxt.top_mod().file(ctxt.db());
+        for (idx, param) in params.iter().enumerate() {
+            let Some(token) = param.variadic_token() else {
+                continue;
+            };
+            let kind = if !is_extern {
+                VariadicParamErrorKind::OutsideExtern
+            } else if idx + 1 < params.len() {
+                VariadicParamErrorKind::NotLast
+            } else {
+                continue;
+            };
+            ctxt.report(VariadicParamError {
+                kind,
+                file,
+                primary_range: token.text_range(),
+            });
+        }
+        let params = params
             .into_iter()
             .enumerate()
+            .filter(|(_, param)| param.variadic_token().is_none())
             .map(|(idx, param)| FuncParam::lower_ast(ctxt, param, idx))
             .collect::<Vec<_>>();
         Self::new(ctxt.db(), params)
@@ -136,6 +181,7 @@ impl<'db> GenericArg<'db> {
             } else {
                 TypeMode::Ref
             }),
+            ast::GenericArgKind::Infer(_) => Self::Infer,
         }
     }
 }

@@ -53,20 +53,12 @@ pub enum ProviderKind {
     Place,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
-pub enum ProviderTransport {
-    ByValue,
-    ByPlace,
-    ByTempPlace,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub struct ProviderSemantics<'db> {
     pub provider_ty: TyId<'db>,
     pub kind: ProviderKind,
-    pub address_space: Option<AddressSpace>,
+    pub address_space: AddressSpace,
     pub target_ty: Option<TyId<'db>>,
-    pub transport: ProviderTransport,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
@@ -194,9 +186,8 @@ pub fn provider_semantics<'db>(
     ProviderSemantics {
         provider_ty,
         kind,
-        address_space: Some(AddressSpace::Memory),
+        address_space: AddressSpace::Memory,
         target_ty,
-        transport: ProviderTransport::ByValue,
     }
 }
 
@@ -205,21 +196,20 @@ pub fn provider_semantics_for_specialized_call<'db>(
     provider_ty: TyId<'db>,
     target_ty: Option<TyId<'db>>,
     address_space: Option<AddressSpace>,
-    transport: ProviderTransport,
 ) -> ProviderSemantics<'db> {
     let mut semantics = provider_semantics(db, provider_ty);
     // A capability names its target's place, and so does a root object
     // specialized to its own type.
-    if provider_ty.as_capability(db).is_some() || target_ty == Some(provider_ty) {
-        if let Some(target_ty) = target_ty {
-            semantics.kind = ProviderKind::Place;
-            semantics.target_ty = Some(target_ty);
-        }
-        if let Some(address_space) = address_space {
-            semantics.address_space = Some(address_space);
-        }
+    if let Some(target_ty) = target_ty
+        && (provider_ty.as_capability(db).is_some() || target_ty == provider_ty)
+    {
+        semantics.kind = ProviderKind::Place;
+        semantics.target_ty = Some(target_ty);
     }
-    semantics.transport = transport;
+    // Any provider a call passes is a place, which lies in a space.
+    if let Some(address_space) = address_space {
+        semantics.address_space = address_space;
+    }
     semantics
 }
 

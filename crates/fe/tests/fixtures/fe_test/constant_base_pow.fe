@@ -1,0 +1,188 @@
+use core::hint::black_box
+
+#[test]
+fn decimal_powers_match_multiplication() {
+    var expected: u256 = 1
+    for i in 0 .. 78 {
+        let exponent = black_box(i as u256)
+        assert!((10 as u256) ** exponent == expected)
+        if i < 77 { expected *= 10 }
+    }
+}
+
+#[test]
+fn binary_powers_match_shifts() {
+    for i in 0 .. 256 {
+        let exponent = black_box(i as u256)
+        assert!((2 as u256) ** exponent == (1 << (i as u256)))
+    }
+}
+
+#[test]
+fn zero_and_one_bases() {
+    assert!((0 as u256) ** black_box(0) == 1)
+    assert!((0 as u256) ** black_box(u256::max()) == 0)
+    assert!((1 as u256) ** black_box(u256::max()) == 1)
+    assert!((1 as i256) ** black_box(i256::max()) == 1)
+}
+
+#[test]
+fn negative_base_keeps_signed_boundaries() {
+    assert!((-2 as i8) ** black_box(7) == i8::min())
+    assert!((-2 as i256) ** black_box(255) == i256::min())
+    assert!((-1 as i8) ** black_box(126) == 1)
+    assert!((-1 as i8) ** black_box(127) == -1)
+}
+
+#[test]
+fn other_constant_bases() {
+    assert!((3 as u8) ** black_box(5) == 243)
+    assert!((3 as i8) ** black_box(4) == 81)
+    assert!(u256::max() ** black_box(1) == u256::max())
+    assert!((128 as u8) ** black_box(1) == 128)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn decimal_overflow() {
+    let _ = (10 as u256) ** black_box(78)
+}
+#[test(should_revert)]
+fn positive_base_negative_exponent() {
+    let _ = (2 as i8) ** black_box(-1)
+}
+#[test(should_revert)]
+fn zero_base_negative_exponent() {
+    let _ = (0 as i8) ** black_box(-1)
+}
+#[test(should_revert)]
+fn one_base_negative_exponent() {
+    let _ = (1 as i8) ** black_box(-1)
+}
+#[test(should_revert, panic = 0x11)]
+fn negative_base_overflow() {
+    let _ = (-2 as i8) ** black_box(8)
+}
+#[test(should_revert, panic = 0x11)]
+fn nonbinary_signed_overflow() {
+    let _ = (3 as i8) ** black_box(5)
+}
+#[test(should_revert, panic = 0x11)]
+fn high_unsigned_base_overflow() {
+    let _ = (128 as u8) ** black_box(2)
+}
+
+#[test]
+fn boundary_u8() {
+    assert!((2 as u8) ** black_box(7) == (1 as u8) << (7 as u8))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u8() {
+    let _ = (2 as u8) ** black_box(8)
+}
+
+#[test]
+fn boundary_i8() {
+    assert!((2 as i8) ** black_box(6) == (1 as i8) << (6 as i8))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i8() {
+    let _ = (2 as i8) ** black_box(7)
+}
+
+#[test]
+fn boundary_u16() {
+    assert!((2 as u16) ** black_box(15) == (1 as u16) << (15 as u16))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u16() {
+    let _ = (2 as u16) ** black_box(16)
+}
+
+#[test]
+fn boundary_i16() {
+    assert!((2 as i16) ** black_box(14) == (1 as i16) << (14 as i16))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i16() {
+    let _ = (2 as i16) ** black_box(15)
+}
+
+#[test]
+fn boundary_u32() {
+    assert!((2 as u32) ** black_box(31) == (1 as u32) << (31 as u32))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u32() {
+    let _ = (2 as u32) ** black_box(32)
+}
+
+#[test]
+fn boundary_i32() {
+    assert!((2 as i32) ** black_box(30) == (1 as i32) << (30 as i32))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i32() {
+    let _ = (2 as i32) ** black_box(31)
+}
+
+#[test]
+fn boundary_u64() {
+    assert!((2 as u64) ** black_box(63) == (1 as u64) << (63 as u64))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u64() {
+    let _ = (2 as u64) ** black_box(64)
+}
+
+#[test]
+fn boundary_i64() {
+    assert!((2 as i64) ** black_box(62) == (1 as i64) << (62 as i64))
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i64() {
+    let _ = (2 as i64) ** black_box(63)
+}
+
+#[test]
+fn boundary_u128() {
+    assert!(
+        (2 as u128) ** black_box(127) == (1 as u128) << (127 as u128),
+    )
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u128() {
+    let _ = (2 as u128) ** black_box(128)
+}
+
+#[test]
+fn boundary_i128() {
+    assert!(
+        (2 as i128) ** black_box(126) == (1 as i128) << (126 as i128),
+    )
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i128() {
+    let _ = (2 as i128) ** black_box(127)
+}
+
+#[test]
+fn boundary_u256() {
+    assert!(
+        (2 as u256) ** black_box(255) == (1 as u256) << (255 as u256),
+    )
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_u256() {
+    let _ = (2 as u256) ** black_box(256)
+}
+
+#[test]
+fn boundary_i256() {
+    assert!(
+        (2 as i256) ** black_box(254) == (1 as i256) << (254 as i256),
+    )
+}
+#[test(should_revert, panic = 0x11)]
+fn overflow_i256() {
+    let _ = (2 as i256) ** black_box(255)
+}

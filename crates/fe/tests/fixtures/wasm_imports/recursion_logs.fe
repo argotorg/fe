@@ -12,7 +12,9 @@ fn walk(_ depth: i32) -> i32 uses (log: mut Log) {
     below + depth
 }
 
+//host: #[unsafe(export)]
 //host: pub fn walk_down(depth: i32) -> i32 uses (log: mut Log) {
+//mock: #[unsafe(export)]
 //mock: pub fn walk_down(depth: i32) -> i32 {
 //mock:     var p = provider()
 //mock:     with (Log = p) {

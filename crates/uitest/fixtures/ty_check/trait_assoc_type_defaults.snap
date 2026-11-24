@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_assoc_type_defaults.fe
+---
+error[2-0002]: `Nope` is not found
+   ┌─ trait_assoc_type_defaults.fe:15:27
+   │
+15 │     type Missing = Option<Nope>
+   │                           ^^^^ `Nope` is not found
+
+error[2-0002]: `Nope` is not found
+   ┌─ trait_assoc_type_defaults.fe:20:23
+   │
+20 │     shape Step = (own Nope,)
+   │                       ^^^^ `Nope` is not found
+
+error[3-0001]: invalid type argument kind
+   ┌─ trait_assoc_type_defaults.fe:17:17
+   │
+17 │     type Kind = Option
+   │                 ^^^^^^ expected `*` kind, but `Option` has `(* -> *)` kind
+
+error[3-0083]: a mode argument names an associated shape's mode
+   ┌─ trait_assoc_type_defaults.fe:16:17
+   │
+16 │     type Mode = Option<ref>
+   │                 ^^^^^^^^^^^ only an associated shape takes `ref` or `mut`, as in `D::Step<ref>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ trait_assoc_type_defaults.fe:18:16
+   │
+18 │     type Ill = Foo<NotMarked>
+   │                ^^^^^^^^^^^^^^ `NotMarked` doesn't implement `Marker`

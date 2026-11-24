@@ -538,6 +538,38 @@ fn copy_call_outcome(_ raw: RawCallOutcome) -> CallOutcome {
     }
 }
 
+// Static ABI outputs fit in their head. Let the call write them directly;
+// dynamic outputs still need the complete returndata after the call.
+fn typed_return_buffer<R: AbiSize>() -> MemBuffer {
+    if R::IS_DYNAMIC {
+        MemBuffer::empty()
+    } else {
+        // The call writes this region. decode_call_output checks that every
+        // byte was received before exposing the span to the decoder.
+        unsafe { MemBuffer::new_uninit(R::HEAD_SIZE.downcast().unwrap()) }
+    }
+}
+
+fn decode_call_output<R>(_ success: bool, _ ret: MemBuffer) -> R
+where R: Decode<Sol> + AbiSize
+{
+    // A failed call can return more than the static output buffer holds.
+    // Bubble from the EVM buffer, not the bounded copy.
+    if !success {
+        bubble_last_revert()
+    }
+    // Decode is an open trait: a custom static decoder can inspect trailing
+    // bytes or the full input length. Only the exact-size case may substitute
+    // the bounded call output for the complete input it previously received.
+    if R::IS_DYNAMIC || ops::returndatasize() != R::HEAD_SIZE {
+        decode_returndata(copy_returndata().span())
+    } else {
+        // Only now is the complete static output initialized. Keep the
+        // regular ABI decoder's validation of each word.
+        decode_returndata(ret.span())
+    }
+}
+
 fn prepare_copy_destination(
     dest: mut MemBuffer,
     dest_offset: u256,
@@ -668,6 +700,37 @@ pub trait Call: EvmCapabilitySeal {
         finish_raw_call(success, mut ret)
     }
 
+    /// Forward the current call to `addr` with `DELEGATECALL` and end it with
+    /// the callee's outcome: return its returndata on success, revert with it
+    /// on failure. This is the fallback of a delegating proxy (OpenZeppelin's
+    /// `Proxy._delegate`).
+    ///
+    /// Unlike copying through `MemBuffer`, `raw_delegatecall` and
+    /// `copy_returndata`, this needs no buffer bookkeeping, and the backend
+    /// can place both copies at the same address.
+    fn forward_delegatecall(mut self, addr: Address, gas: u256) -> ! {
+        let args_len = ops::calldatasize()
+        let args = ptr::alloc_bytes(args_len.downcast_unchecked())
+        unsafe {
+            ops::calldatacopy(dest: args, offset: 0, len: args_len)
+            let success = ops::delegatecall(
+                gas: gas,
+                addr: addr.inner,
+                args_offset: args,
+                args_len: args_len,
+                ret_offset: args,
+                ret_len: 0,
+            )
+            let ret_len = ops::returndatasize()
+            let ret = ptr::alloc_bytes(ret_len.downcast_unchecked())
+            ops::returndatacopy(dest: ret, offset: 0, len: ret_len)
+            if success == 0 {
+                ops::revert(offset: ret, len: ret_len)
+            }
+            ops::return_data(offset: ret, len: ret_len)
+        }
+    }
+
     /// `CALL` with pre-encoded calldata without bubbling failure.
     ///
     /// The returned owner contains the complete success or revert payload.
@@ -760,7 +823,20 @@ pub trait Call: EvmCapabilitySeal {
     fn call<M>(mut self, addr: own Address, gas: u256, value: Wei, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
-        self.try_call(addr, gas, value, message).decode()
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let ret = typed_return_buffer<M::Return>()
+        let success = unsafe {
+            ops::call(
+                gas: gas,
+                addr: addr.inner,
+                value: value.as_wei(),
+                args_offset: args.ptr(),
+                args_len: args.len() as u256,
+                ret_offset: ret.ptr(),
+                ret_len: ret.len() as u256,
+            ) != 0
+        }
+        decode_call_output(success, ret)
     }
 
     /// Like `call<M>`, but if the call succeeds with EMPTY returndata, returns
@@ -791,13 +867,37 @@ pub trait Call: EvmCapabilitySeal {
     fn static<M>(self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
-        self.try_static(addr, gas, message).decode()
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let ret = typed_return_buffer<M::Return>()
+        let success = unsafe {
+            ops::staticcall(
+                gas: gas,
+                addr: addr.inner,
+                args_offset: args.ptr(),
+                args_len: args.len() as u256,
+                ret_offset: ret.ptr(),
+                ret_len: ret.len() as u256,
+            ) != 0
+        }
+        decode_call_output(success, ret)
     }
 
     fn delegate<M>(mut self, addr: own Address, gas: u256, message: own M) -> M::Return
     where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
     {
-        self.try_delegate(addr, gas, message).decode()
+        let args = encode_calldata(<M as MsgVariant<Sol>>::SELECTOR, message)
+        let ret = typed_return_buffer<M::Return>()
+        let success = unsafe {
+            ops::delegatecall(
+                gas: gas,
+                addr: addr.inner,
+                args_offset: args.ptr(),
+                args_len: args.len() as u256,
+                ret_offset: ret.ptr(),
+                ret_len: ret.len() as u256,
+            ) != 0
+        }
+        decode_call_output(success, ret)
     }
 }
 
@@ -1227,13 +1327,18 @@ pub fn staticcall_decode<R>(addr: Address, gas: u256, args: MemSpan) -> R
     uses (call: Call)
     where R: Decode<Sol> + AbiSize
 {
-    var ret = MemBuffer::empty()
-    let outcome = call.raw_staticcall(addr, gas, args, ret: mut ret)
-    if !outcome.success() {
-        bubble_last_revert()
+    let ret = typed_return_buffer<R>()
+    let success = unsafe {
+        ops::staticcall(
+            gas: gas,
+            addr: addr.inner,
+            args_offset: args.ptr(),
+            args_len: args.len() as u256,
+            ret_offset: ret.ptr(),
+            ret_len: ret.len() as u256,
+        ) != 0
     }
-
-    decode_returndata(copy_returndata().span())
+    decode_call_output(success, ret)
 }
 
 impl Call for Evm {}

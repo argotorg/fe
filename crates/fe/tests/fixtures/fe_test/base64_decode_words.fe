@@ -1,0 +1,154 @@
+// Exercise word-at-a-time base64 decoding: every byte in every lane of whole
+// and final blocks, every final store, and each kind of text input.
+use core::abi::{Bytes, DynString}
+use core::ptr::{MemBuffer, MemSpan}
+use core::text::{self, Text}
+
+// The digit's value, or 64 for a byte outside the alphabet.
+fn digit_value(_ byte: u8) -> usize {
+    let digits: DynString = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    for digit in 0 .. 64 {
+        if digits.byte_at(digit) == byte {
+            return digit
+        }
+    }
+    64
+}
+
+// Whether `decoded` holds `expected`, with zero padding to a whole word.
+fn decodes_exactly(_ decoded: Bytes, _ expected: MemSpan) -> bool {
+    let encoded = decoded.encoded_span()
+    if decoded.span() != expected || encoded.len() % 32 != 0 {
+        return false
+    }
+    for k in 32 + expected.len() .. encoded.len() {
+        if encoded.byte_at(k) != 0 {
+            return false
+        }
+    }
+    true
+}
+
+fn all_a(_ len: usize) -> MemBuffer {
+    var input = MemBuffer::new(len)
+    for k in 0 .. len {
+        input[k] = b'A'
+    }
+    input
+}
+
+#[test]
+fn base64_roundtrips_every_length_with_zero_padding() {
+    // Output lengths 0..200 cover every final block and last-word store.
+    var data = MemBuffer::new(204)
+    for i in 0 .. 204 {
+        data[i] = ((i * 151 + 7) % 256).downcast_truncate()
+    }
+    for offset in 0 .. 4 {
+        for len in 0 .. 201 {
+            let input = data.slice(offset, len)
+            let encoded = text::base64(input)
+            assert!(decodes_exactly(text::decode_base64(encoded).unwrap(), input))
+        }
+    }
+}
+
+#[test]
+fn base64_checks_every_byte_in_every_lane() {
+    // Two whole words and a final block of 12 digits.
+    var input = all_a(76)
+    for position in 0 .. 76 {
+        for value in 0 .. 256 {
+            let byte: u8 = value.downcast_truncate()
+            input[position] = byte
+            let decoded = text::decode_base64(input.span())
+            if position == 75 && byte == b'=' {
+                // The last digit becomes padding.
+                assert!(decoded.unwrap().len() == 56)
+            } else if digit_value(byte) < 64 {
+                let bytes = decoded.unwrap().span()
+                assert!(bytes.len() == 57)
+                // The digit's six bits, from bit 6 * position on.
+                let bit = position * 6
+                let next = if bit / 8 + 1 < 57 { bytes.byte_at(bit / 8 + 1) as usize } else { 0 }
+                let pair = (bytes.byte_at(bit / 8) as usize) * 256 + next
+                assert!((pair >> (10 - bit % 8)) % 64 == digit_value(byte))
+            } else {
+                assert!(decoded.is_none())
+            }
+        }
+        input[position] = b'A'
+    }
+}
+
+#[test]
+fn base64_checks_every_byte_before_padding() {
+    // The padded quartet ends the final block after two whole words.
+    var one = all_a(80)
+    var two = all_a(80)
+    one[79] = b'='
+    two[78] = b'='
+    two[79] = b'='
+    for position in 0 .. 79 {
+        for value in 0 .. 256 {
+            let byte: u8 = value.downcast_truncate()
+            let digit = digit_value(byte)
+            one[position] = byte
+            // The last digit before one `=` leaves two bits unused.
+            // An `=` there is a second `=`.
+            let one_valid = (digit < 64 && (position != 78 || digit % 4 == 0))
+                || (position == 78 && byte == b'=')
+            assert!(text::decode_base64(one.span()).is_some() == one_valid)
+            one[position] = b'A'
+            if position < 78 {
+                two[position] = byte
+                // Before two, it leaves four bits unused.
+                let two_valid = digit < 64 && (position != 77 || digit % 16 == 0)
+                assert!(text::decode_base64(two.span()).is_some() == two_valid)
+                two[position] = b'A'
+            }
+        }
+    }
+    assert!(text::decode_base64(one.span()).unwrap().len() == 59)
+    assert!(text::decode_base64(two.span()).unwrap().len() == 58)
+}
+
+// Text with only the required methods, read through the default
+// `text_word_at`.
+struct Bytewise {
+    buffer: MemBuffer,
+}
+
+impl Text for Bytewise {
+    fn text_len(self) -> usize { self.buffer.len() }
+    fn text_byte(self, _ index: usize) -> u8 { self.buffer[index] }
+}
+
+#[test]
+fn base64_reads_each_kind_of_text() {
+    let expected: DynString = "foobarfoobarfoobarfoobarfoobarfoob"
+    let encoded: DynString = "Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFyZm9vYg=="
+    // Digits follow the span and the buffer's length: they are not read.
+    var buffer = MemBuffer::from_span(encoded.span())
+    buffer.extend_from(("QUJD").span())
+    let span = buffer.slice(offset: 0, len: encoded.len())
+    assert!(decodes_exactly(text::decode_base64(span).unwrap(), expected.span()))
+    var shifted = MemBuffer::from_span(("Q").span())
+    shifted.extend_from(encoded.span())
+    shifted.extend_from(("QUJD").span())
+    let unaligned = shifted.slice(offset: 1, len: encoded.len())
+    assert!(decodes_exactly(text::decode_base64(unaligned).unwrap(), expected.span()))
+    buffer.truncate(encoded.len())
+    assert!(decodes_exactly(text::decode_base64(buffer).unwrap(), expected.span()))
+    assert!(decodes_exactly(text::decode_base64(encoded).unwrap(), expected.span()))
+    let bytewise = Bytewise { buffer: MemBuffer::from_span(encoded.span()) }
+    assert!(decodes_exactly(text::decode_base64(bytewise).unwrap(), expected.span()))
+    // Literals hold up to 32 digits.
+    assert!(
+        text::decode_base64("Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYmFy").unwrap().span()
+            == ("foobarfoobarfoobarfoobar").span(),
+    )
+    assert!(text::decode_base64("Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYg==").unwrap().span() == ("foobarfoobarfoobarfoob").span())
+    assert!(text::decode_base64("Zm8=").unwrap().span() == ("fo").span())
+    assert!(text::decode_base64("Zm9vYmFyZm9vYmFyZm9vYmFyZm9vYg=A").is_none())
+}

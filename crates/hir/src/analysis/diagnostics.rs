@@ -16,15 +16,17 @@ use crate::analysis::{
             BodyDiag, CallConstraintDiagInfo, ContractFieldLayoutIssue, DefConflictError,
             ExportIssue, FuncBodyDiag, ImplDiag, MarkerPosition, MustUseSubject, MutabilityFix,
             ReadOnlyProvider, RevealedBy, TraitConstraintDiag, TraitLowerDiag, TyDiagCollection,
-            TyLowerDiag,
+            TyLowerDiag, VariadicIssue,
         },
         trait_def::TraitInstId,
         ty_check::{EffectParamOwner, RecordLike},
-        ty_def::{BorrowKind, TyData, TyId, TyVarSort},
+        ty_def::{BorrowKind, Kind, PrimTy, TyBase, TyData, TyId, TyVarSort},
+        ty_lower::collect_generic_params,
     },
 };
 use crate::{
     ParserError, SpannedHirDb,
+    core::semantic::ZeroInvalidReason,
     hir_def::{
         AssocTyDecl, CallableDef, FieldIndex, GenericParamOwner, ModeMarker, PathKind, Trait,
         TypeMode, params::FuncParamMode,
@@ -59,23 +61,19 @@ fn pretty_print_ty_for_mismatch<'db>(db: &'db dyn SpannedHirAnalysisDb, ty: TyId
             format!("<{} as {}>", self_ty, trait_inst.pretty_print(db, false))
         }
         TyData::TyApp(_, _) => pretty_print_ty_app_for_mismatch(db, ty),
-        TyData::TyBase(base) => {
-            use crate::analysis::ty::ty_def::TyBase;
-
-            match base {
-                TyBase::Adt(adt) => adt
-                    .scope(db)
-                    .pretty_path(db)
-                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Contract(contract) => contract
-                    .scope()
-                    .pretty_path(db)
-                    .unwrap_or_else(|| ty.pretty_print(db).to_string()),
-                TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
-                    ty.pretty_print(db).to_string()
-                }
+        TyData::TyBase(base) => match base {
+            TyBase::Adt(adt) => adt
+                .scope(db)
+                .pretty_path(db)
+                .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+            TyBase::Contract(contract) => contract
+                .scope()
+                .pretty_path(db)
+                .unwrap_or_else(|| ty.pretty_print(db).to_string()),
+            TyBase::Prim(_) | TyBase::Func(_) | TyBase::Closure(_) | TyBase::Shape(_) => {
+                ty.pretty_print(db).to_string()
             }
-        }
+        },
         TyData::ConstTy(_) => ty.pretty_print(db).to_string(),
         TyData::Never => "!".to_string(),
         TyData::Invalid(cause) => format!("invalid({})", cause.pretty_print(db)),
@@ -86,8 +84,6 @@ fn pretty_print_ty_app_for_mismatch<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ty: TyId<'db>,
 ) -> String {
-    use crate::analysis::ty::ty_def::{PrimTy, TyBase};
-
     let (base, args) = ty.decompose_ty_app(db);
     match base.data(db) {
         TyData::TyBase(TyBase::Prim(PrimTy::BorrowMut)) => {
@@ -596,6 +592,35 @@ impl DiagnosticVoucher for crate::FieldModifierError {
             message,
             vec![SubDiagnostic::new(LabelStyle::Primary, label, Some(span))],
             notes,
+            GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
+        )
+    }
+}
+
+impl DiagnosticVoucher for crate::VariadicParamError {
+    fn to_complete(&self, _db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let span = Span::new(self.file, self.primary_range, SpanKind::Original);
+        let (local_code, message, label) = match self.kind {
+            crate::VariadicParamErrorKind::OutsideExtern => (
+                6,
+                "`...` outside an `extern` function",
+                "only an `extern` function takes variadic arguments",
+            ),
+            crate::VariadicParamErrorKind::NotLast => (
+                7,
+                "`...` must be the last parameter",
+                "a parameter follows `...`",
+            ),
+        };
+        CompleteDiagnostic::new(
+            Severity::Error,
+            message.to_string(),
+            vec![SubDiagnostic::new(
+                LabelStyle::Primary,
+                label.to_string(),
+                Some(span),
+            )],
+            vec![],
             GlobalErrorCode::new(DiagnosticPass::AttrMisuse, local_code),
         )
     }
@@ -1724,6 +1749,14 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             ),
 
+            Self::InferArgOutsideCall(span) => primary_diag(
+                Severity::Error,
+                "`_` is only allowed as a call's generic argument",
+                "`_` stands for a whole generic argument of a call, as in `f<_, u8>(x)`",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::AssocBindingNotOnTrait(span) => primary_diag(
                 Severity::Error,
                 "an associated type binding names a trait's associated type",
@@ -1811,6 +1844,33 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     error_code,
                 }
             }
+            Self::InvalidVariadic { span, issue } => {
+                let (message, label) = match issue {
+                    VariadicIssue::NotNative => (
+                        "a variadic `extern` function is only supported on the native target",
+                        "variadic arguments",
+                    ),
+                    VariadicIssue::Generic => (
+                        "a variadic `extern` function cannot be generic",
+                        "generic parameters",
+                    ),
+                    VariadicIssue::Effects => (
+                        "a variadic `extern` function cannot take effects",
+                        "effects",
+                    ),
+                    VariadicIssue::Const => (
+                        "a variadic `extern` function cannot be `const`",
+                        "`const`",
+                    ),
+                };
+                primary_diag(
+                    Severity::Error,
+                    message,
+                    label,
+                    span.resolve(db),
+                    error_code,
+                )
+            }
             Self::InvalidMainReturn { span, ty } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "a native `main` must return `i32` or nothing".to_string(),
@@ -1836,12 +1896,12 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     ExportIssue::Generic => (
                         "an `#[unsafe(export)]` function cannot be generic",
                         "generic parameters",
-                        Some("a C caller supplies no generic arguments: export a function for each one"),
+                        Some("a C caller or WebAssembly host supplies no generic arguments: export a function for each one"),
                     ),
                     ExportIssue::Effects => (
                         "an `#[unsafe(export)]` function cannot take effects",
                         "effects",
-                        Some("a C caller provides no effects: provide them in the body with `with`"),
+                        Some("a C caller provides no effects: provide them in the body with `with`; a WebAssembly export takes those of `std::wasm::Host`"),
                     ),
                 };
                 CompleteDiagnostic {
@@ -1931,6 +1991,53 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                     )
                 };
                 primary_diag(Severity::Error, message, label, span.resolve(db), error_code)
+            }
+
+            Self::EffectKeyNamedTwice { span, first, key } => {
+                let key = key.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("effect `{key}` is required twice"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{key}` is required again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{key}` is first required here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![
+                        "an effect is identified by its key, and a caller provides one value per key"
+                            .to_string(),
+                    ],
+                    error_code,
+                }
+            }
+
+            Self::EffectNameBoundTwice { span, first, name } => {
+                let name = name.data(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("`{name}` is bound by more than one effect"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{name}` is bound again here"),
+                            span: span.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{name}` is first bound here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
             }
 
             Self::MaybeMutWithoutResult(span) => CompleteDiagnostic {
@@ -2418,12 +2525,31 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ContractFieldZeroInvalid { span, ty, invalid } => {
+            Self::ContractFieldZeroInvalid {
+                span,
+                ty,
+                invalid,
+                reason,
+            } => {
+                let (reason, note) = match reason {
+                    ZeroInvalidReason::UnsafeFields => (
+                        "has `unsafe` fields",
+                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant",
+                    ),
+                    ZeroInvalidReason::Uninhabited => (
+                        "is uninhabited",
+                        "state starts zeroed, and an uninhabited type has no valid values",
+                    ),
+                    ZeroInvalidReason::UninhabitedFirstVariant => (
+                        "has an uninhabited first variant",
+                        "state starts zeroed, and tag 0 selects an uninhabited variant",
+                    ),
+                };
                 let label = if ty == invalid {
-                    format!("`{}` has `unsafe` fields", ty.pretty_print(db))
+                    format!("`{}` {reason}", ty.pretty_print(db))
                 } else {
                     format!(
-                        "`{}` holds `{}`, which has `unsafe` fields",
+                        "`{}` holds `{}`, which {reason}",
                         ty.pretty_print(db),
                         invalid.pretty_print(db)
                     )
@@ -2439,9 +2565,7 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                         message: label,
                         span: span.resolve(db),
                     }],
-                    notes: vec![
-                        "state starts zeroed, and the all-zero representation is no value of a type whose `unsafe` fields carry an invariant".to_string(),
-                    ],
+                    notes: vec![note.to_string()],
                     error_code,
                 }
             }
@@ -3392,9 +3516,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     .to_opt().map_or_else(|| "<unknown>".to_string(), |n| n.data(db).to_string());
                 let key_str = key.pretty_print(db);
 
-                primary_diag(Severity::Error, "multiple effect candidates found", format!(
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "multiple effect candidates found".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!(
                             "effect `{key_str}` is ambiguous when calling `{func_name}`"
-                        ), primary.resolve(db), error_code)
+                        ),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![format!(
+                        "choose its provider with `with ({key_str} = value) {{ .. }}`"
+                    )],
+                    error_code,
+                }
             }
 
             Self::EffectMutabilityMismatch {
@@ -3634,6 +3770,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ), format!(
                             "`{given_ty}` does not implement `{trait_str}` for effect `{key_str}`"
                         ), primary.resolve(db), error_code)
+            }
+
+            Self::DuplicateWithKey {
+                primary,
+                first,
+                key,
+            } => {
+                let key_str = key.pretty_print(db);
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: format!("effect `{key_str}` is provided twice in one `with`"),
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: format!("`{key_str}` is provided again here"),
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: format!("`{key_str}` is first provided here"),
+                            span: first.resolve(db),
+                        },
+                    ],
+                    notes: vec![],
+                    error_code,
+                }
             }
 
             Self::WithEffectTypeUnsatisfied {
@@ -4829,6 +4991,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             },
 
+            Self::ImmutableContractEffectMutBinding {
+                primary,
+                effect,
+                effect_span,
+            } => CompleteDiagnostic {
+                severity: Severity::Error,
+                message: "cannot bind immutable contract effect as `mut`".to_string(),
+                sub_diagnostics: vec![
+                    SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` is not declared `mut`", effect.data(db)),
+                        span: primary.resolve(db),
+                    },
+                    SubDiagnostic {
+                        style: LabelStyle::Secondary,
+                        message: format!("`{}` declared here", effect.data(db)),
+                        span: effect_span.resolve(db),
+                    },
+                ],
+                notes: vec![
+                    "mark the contract's effect `mut` to use it mutably in `init` or a recv arm"
+                        .to_string(),
+                ],
+                error_code,
+            },
+
             Self::LoopControlOutsideOfLoop { primary, is_break } => {
                 let stmt = if *is_break { "break" } else { "continue" };
 
@@ -4901,20 +5089,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::CallGenericArgNumMismatch {
+            Self::TooManyCallGenericArgs {
                 primary,
                 def_span,
                 given,
                 expected,
             } => CompleteDiagnostic {
                 severity: Severity::Error,
-                message: "given generic argument number mismatch".to_string(),
+                message: "too many generic arguments".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
                         style: LabelStyle::Primary,
-                        message: format!(
-                            "expected {expected} generic arguments, but {given} given"
-                        ),
+                        message: match expected {
+                            0 => format!("expected no generic arguments, but {given} given"),
+                            1 => format!("expected at most 1 generic argument, but {given} given"),
+                            _ => format!(
+                                "expected at most {expected} generic arguments, but {given} given"
+                            ),
+                        },
                         span: primary.resolve(db),
                     },
                     SubDiagnostic {
@@ -5274,31 +5466,108 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            Self::TypeAnnotationNeeded { span: primary, ty } => {
-                let mut sub_diagnostics = vec![SubDiagnostic {
-                    style: LabelStyle::Primary,
-                    message: "type annotation is needed".to_string(),
-                    span: primary.resolve(db),
-                }];
-
-                let sub_diag_msg = match ty.base_ty(db).data(db) {
-                    TyData::TyVar(var) if var.sort == TyVarSort::Integral => {
-                        "no default type is provided for an integer type. consider giving integer type".to_string()
-                    }
-                    TyData::TyVar(_) => "consider giving `: Type` here".to_string(),
-                    _ => format!("consider giving `: {}` here", ty.pretty_print(db)),
+            Self::VariadicArgLabel(primary) => primary_diag(
+                Severity::Error,
+                "a variadic argument takes no label",
+                "no parameter has this label",
+                primary.resolve(db),
+                error_code,
+            ),
+            Self::InvalidVariadicArg { primary, ty } => {
+                let narrow = matches!(
+                    ty.as_prim(db),
+                    Some(PrimTy::Bool | PrimTy::I8 | PrimTy::U8 | PrimTy::I16 | PrimTy::U16)
+                );
+                let note = if narrow {
+                    "cast it to `i32`, which C passes in its place"
+                } else {
+                    "a variadic argument is an `i32`, `u32`, `i64`, `u64`, `isize`, `usize` or a raw pointer"
                 };
-
-                sub_diagnostics.push(SubDiagnostic {
-                    style: LabelStyle::Secondary,
-                    message: sub_diag_msg,
-                    span: primary.resolve(db),
+                CompleteDiagnostic {
+                    severity: Severity::Error,
+                    message: "a variadic argument must be a C integer or a raw pointer".to_string(),
+                    sub_diagnostics: vec![SubDiagnostic {
+                        style: LabelStyle::Primary,
+                        message: format!("`{}` cannot pass to C here", ty.pretty_print(db)),
+                        span: primary.resolve(db),
+                    }],
+                    notes: vec![note.to_string()],
+                    error_code,
+                }
+            }
+            Self::TypeAnnotationNeeded {
+                span: primary,
+                ty,
+                variadic,
+            } => {
+                // A function's own generic parameter that its call leaves
+                // open is named, with the arguments that would close it.
+                let uninferred_param = || {
+                    let (base, args) = ty.decompose_ty_app(db);
+                    let TyData::TyBase(TyBase::Func(CallableDef::Func(func))) = base.data(db)
+                    else {
+                        return None;
+                    };
+                    let params = collect_generic_params(db, (*func).into());
+                    let explicit = args.get(params.offset_to_explicit_params_position(db)..)?;
+                    let idx = explicit.iter().position(|arg| arg.has_var(db))?;
+                    let kind = match params.explicit_params(db).get(idx)? {
+                        param if param.is_const_ty(db) => "const",
+                        param if *param.kind(db) == Kind::Shape => "shape",
+                        _ => "type",
+                    };
+                    let param = GenericParamOwner::Func(*func)
+                        .params(db)
+                        .nth(idx)?
+                        .name()
+                        .to_opt()?
+                        .data(db);
+                    let name = func.name(db).to_opt()?.data(db);
+                    let args = explicit[..idx]
+                        .iter()
+                        .map(|arg| {
+                            if arg.has_var(db) {
+                                "_".to_string()
+                            } else {
+                                arg.pretty_print(db).to_string()
+                            }
+                        })
+                        .chain([param.to_string()])
+                        .join(", ");
+                    Some((
+                        format!("cannot infer the {kind} parameter `{param}` of `{name}`"),
+                        format!("consider giving it explicitly: `{name}<{args}>`"),
+                    ))
+                };
+                let (label, hint) = uninferred_param().unwrap_or_else(|| {
+                    let hint = match ty.base_ty(db).data(db) {
+                        _ if *variadic => "a variadic argument has no parameter to take a type \
+                                           from: give it one, as in `0 as i32`"
+                            .to_string(),
+                        TyData::TyVar(var) if var.sort == TyVarSort::Integral => {
+                            "no default type is provided for an integer type. consider giving integer type".to_string()
+                        }
+                        TyData::TyVar(_) => "consider giving `: Type` here".to_string(),
+                        _ => format!("consider giving `: {}` here", ty.pretty_print(db)),
+                    };
+                    ("type annotation is needed".to_string(), hint)
                 });
 
                 CompleteDiagnostic {
                     severity: Severity::Error,
                     message: "type annotation is needed".to_string(),
-                    sub_diagnostics,
+                    sub_diagnostics: vec![
+                        SubDiagnostic {
+                            style: LabelStyle::Primary,
+                            message: label,
+                            span: primary.resolve(db),
+                        },
+                        SubDiagnostic {
+                            style: LabelStyle::Secondary,
+                            message: hint,
+                            span: primary.resolve(db),
+                        },
+                    ],
                     notes: vec![],
                     error_code,
                 }

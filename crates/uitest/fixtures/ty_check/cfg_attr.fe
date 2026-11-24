@@ -1,6 +1,9 @@
 #[cfg(target = "jvm")]
 fn unknown_target() {}
 
+#[cfg(target_arch = "riscv64")]
+fn unknown_arch() {}
+
 #[cfg(os = "linux")]
 fn unknown_key() {}
 

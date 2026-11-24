@@ -31,7 +31,7 @@ impl<'db> Expr<'db> {
             ast::ExprKind::Closure(closure) => {
                 let params = closure
                     .params()
-                    .map(|params| FuncParamListId::lower_ast(ctxt.f_ctxt, params))
+                    .map(|params| FuncParamListId::lower_ast(ctxt.f_ctxt, params, false))
                     .unwrap_or_else(|| FuncParamListId::new(ctxt.f_ctxt.db(), Vec::new()));
                 let ret_ty = closure
                     .ret_ty()

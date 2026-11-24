@@ -1670,6 +1670,10 @@ pub enum RTerminator<'db> {
         offset: RValueId,
         len: RValueId,
     },
+    ReturnCode {
+        offset: RValueId,
+        len: RValueId,
+    },
     Revert {
         offset: RValueId,
         len: RValueId,
@@ -2094,7 +2098,9 @@ impl<'db> RTerminator<'db> {
                 value: Some(value), ..
             } => vec![value],
             Self::TerminalCall { args, .. } => args.iter_mut().collect(),
-            Self::ReturnData { offset, len } | Self::Revert { offset, len } => vec![offset, len],
+            Self::ReturnData { offset, len }
+            | Self::ReturnCode { offset, len }
+            | Self::Revert { offset, len } => vec![offset, len],
             Self::Goto(_)
             | Self::RevertEmpty
             | Self::Trap
@@ -2130,6 +2136,7 @@ impl<'db> RTerminator<'db> {
                 .collect(),
             Self::TerminalCall { .. }
             | Self::ReturnData { .. }
+            | Self::ReturnCode { .. }
             | Self::Revert { .. }
             | Self::RevertEmpty
             | Self::Panic { .. }

@@ -20,7 +20,7 @@ use std::{
 
 use tempfile::tempdir;
 use wasm_support::*;
-use wasmtime::{Module, Trap, Val};
+use wasmtime::{Module, Val};
 
 macro_rules! program_test {
     ($test:ident, $file:literal, $exports:expr) => {
@@ -794,15 +794,23 @@ fn write_source(dir: &Path, name: &str, source: &str) -> PathBuf {
 }
 
 #[test]
-fn the_module_exports_the_public_functions_and_a_memory() {
+fn the_module_exports_the_marked_functions_and_a_memory() {
+    // As natively, the `#[unsafe(export)]` functions of any module are
+    // exports, and a `pub fn` is not one by itself.
     let temp = tempdir().unwrap();
     let source = write_source(
         temp.path(),
         "exports",
         "fn hidden() -> u32 { 1 }\n\
+         #[unsafe(export)]\n\
          pub fn visible(x: u32) -> u32 { x + hidden() }\n\
+         #[unsafe(export)]\n\
          pub fn another() -> bool { true }\n\
-         pub fn generic<T>(x: own T) -> T { x }\n",
+         pub fn unmarked() -> u32 { 2 }\n\
+         mod inner {\n\
+         \x20   #[unsafe(export)]\n\
+         \x20   pub fn nested() -> i32 { 1 }\n\
+         }\n",
     );
     let bytes = build_wasm(&source, "1", &temp.path().join("out"));
     let module = Module::new(engine(), &bytes).unwrap();
@@ -811,7 +819,9 @@ fn the_module_exports_the_public_functions_and_a_memory() {
         .map(|export| export.name().to_string())
         .collect();
     names.sort();
-    assert_eq!(names, ["another", "memory", "visible"]);
+    // `visible` can overflow, so the module imports the revert of `core::rt`
+    // and exports its stack.
+    assert_eq!(names, ["another", "memory", "nested", "visible"]);
 }
 
 #[test]
@@ -831,7 +841,8 @@ fn narrow_parameters_ignore_bits_above_their_width() {
     let source = write_source(
         temp.path(),
         "narrow",
-        "pub fn add(a: u8, b: u8) -> u8 { a + b }\n\
+        "#[unsafe(export)]\npub fn add(a: u8, b: u8) -> u8 { a + b }\n\
+         #[unsafe(export)]\n\
          pub fn lt(a: i8, b: i8) -> bool { a < b }\n",
     );
     let bytes = build_wasm(&source, "1", &temp.path().join("out"));
@@ -866,7 +877,7 @@ fn a_trap_leaves_the_instance_usable() {
     let source = write_source(
         temp.path(),
         "after_trap",
-        "pub fn half(x: u32, d: u32) -> u32 { x / d }\n",
+        "#[unsafe(export)]\npub fn half(x: u32, d: u32) -> u32 { x / d }\n",
     );
     let bytes = build_wasm(&source, "2", &temp.path().join("out"));
     let mut running = Running::new(&bytes);
@@ -876,16 +887,29 @@ fn a_trap_leaves_the_instance_usable() {
 }
 
 #[test]
-fn traps_are_the_unreachable_instruction_where_the_program_checks() {
+fn a_failed_check_passes_its_revert_data_to_the_host() {
+    // As natively, a failed assertion is `Panic(0x01)` and one with a message
+    // `Error(string)`, which the module passes to `__fe_revert`.
     let temp = tempdir().unwrap();
     let source = fixture_path("trap_assert");
     let bytes = build_wasm(&source, "1", &temp.path().join("out"));
     let mut running = Running::new(&bytes);
-    let export = Export::new("positive", &[("x", I32)], I32);
+    let positive = Export::new("positive", &[("x", I32)], I32);
     assert_eq!(
-        running.call(&export, &[-3]),
-        Err(Trap::UnreachableCodeReached)
+        running.call(&positive, &[-3]).unwrap_err().panic_code(),
+        Some(0x01)
     );
+    let small = Export::new("small", &[("x", U8)], U8);
+    let Err(Fault::Revert(Revert(data))) = running.call(&small, &[200]) else {
+        panic!("`small(200)` must revert");
+    };
+    assert_eq!(&data[..4], [0x08, 0xc3, 0x79, 0xa0]);
+    assert!(
+        data.windows(19)
+            .any(|bytes| bytes == b"x must be below 100"),
+        "{data:?}"
+    );
+    assert_eq!(running.call(&positive, &[3]), Ok(3));
 }
 
 // ---------------------------------------------------------------------------
@@ -895,7 +919,11 @@ fn traps_are_the_unreachable_instruction_where_the_program_checks() {
 #[test]
 fn the_default_output_is_the_module() {
     let temp = tempdir().unwrap();
-    let source = write_source(temp.path(), "plain", "pub fn one() -> u32 { 1 }\n");
+    let source = write_source(
+        temp.path(),
+        "plain",
+        "#[unsafe(export)]\npub fn one() -> u32 { 1 }\n",
+    );
     let out = temp.path().join("out");
     let output = fe(&[
         "build",
@@ -914,7 +942,11 @@ fn the_default_output_is_the_module() {
 #[test]
 fn ir_can_be_emitted_with_or_without_the_module() {
     let temp = tempdir().unwrap();
-    let source = write_source(temp.path(), "ir", "pub fn one() -> u32 { 1 }\n");
+    let source = write_source(
+        temp.path(),
+        "ir",
+        "#[unsafe(export)]\npub fn one() -> u32 { 1 }\n",
+    );
     for (emit, module) in [("ir", false), ("wasm,ir", true)] {
         let out = temp.path().join(format!("out-{module}"));
         let output = fe(&[
@@ -938,7 +970,11 @@ fn ir_can_be_emitted_with_or_without_the_module() {
 #[test]
 fn other_backends_and_outputs_are_refused_with_a_reason() {
     let temp = tempdir().unwrap();
-    let source = write_source(temp.path(), "refused", "pub fn one() -> u32 { 1 }\n");
+    let source = write_source(
+        temp.path(),
+        "refused",
+        "#[unsafe(export)]\npub fn one() -> u32 { 1 }\n",
+    );
     let path = source.to_str().unwrap();
     expect_failure(
         &["build", "--emit", "wasm", path],
@@ -992,7 +1028,7 @@ fn rejected(name: &str, source: &str, needles: &[&str]) -> String {
 fn a_u256_parameter_is_a_named_error() {
     rejected(
         "wide_param",
-        "pub fn total(x: u256, y: u32) -> u32 { y }\n",
+        "#[unsafe(export)]\npub fn total(x: u256, y: u32) -> u32 { y }\n",
         &[
             "cannot export `total` to WebAssembly",
             "parameter `x: u256`",
@@ -1005,7 +1041,7 @@ fn a_u256_parameter_is_a_named_error() {
 fn an_i256_parameter_is_a_named_error() {
     rejected(
         "signed_wide",
-        "pub fn f(a: u32, b: i256) -> u32 { a }\n",
+        "#[unsafe(export)]\npub fn f(a: u32, b: i256) -> u32 { a }\n",
         &[
             "cannot export `f`",
             "parameter `b: i256`",
@@ -1020,12 +1056,12 @@ fn a_type_larger_than_the_address_space_is_an_error() {
     // zero and the array would overlap the module's data.
     rejected(
         "huge_array",
-        "use core::ptr::MemArray\n\npub fn poke(i: u32, v: u8) -> u32 {\n    var a: MemArray<[[u8; 0x10000]; 0x10000]> = MemArray::new_zeroed(1)\n    a[0][0][i as usize] = v\n    1\n}\n",
+        "use core::ptr::MemArray\n\n#[unsafe(export)]\npub fn poke(i: u32, v: u8) -> u32 {\n    var a: MemArray<[[u8; 0x10000]; 0x10000]> = MemArray::new_zeroed(1)\n    a[0][0][i as usize] = v\n    1\n}\n",
         &["exceeds the supported 32-bit raw-memory layout size"],
     );
     rejected(
         "huge_size_of",
-        "use core::intrinsic::size_of\n\npub fn size() -> usize {\n    size_of<[u64; 0x20000001]>()\n}\n",
+        "use core::intrinsic::size_of\n\n#[unsafe(export)]\npub fn size() -> usize {\n    size_of<[u64; 0x20000001]>()\n}\n",
         &["exceeds the supported 32-bit raw-memory layout size"],
     );
 }
@@ -1034,7 +1070,7 @@ fn a_type_larger_than_the_address_space_is_an_error() {
 fn an_export_named_like_an_import_or_a_runtime_routine_is_an_error() {
     rejected(
         "export_import",
-        "use std::wasm::{Clock, now_ms}\n\npub fn sys_wasm_now_ms() -> u64 {\n    5\n}\n\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
+        "use std::wasm::{Clock, now_ms}\n\n#[unsafe(export)]\npub fn sys_wasm_now_ms() -> u64 {\n    5\n}\n\n#[unsafe(export)]\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
         &[
             "cannot export `sys_wasm_now_ms`",
             "imports an `extern` function of that name",
@@ -1042,13 +1078,13 @@ fn an_export_named_like_an_import_or_a_runtime_routine_is_an_error() {
     );
     rejected(
         "export_free",
-        "pub fn free(x: u32) -> u32 {\n    x\n}\n",
+        "#[unsafe(export)]\npub fn free(x: u32) -> u32 {\n    x\n}\n",
         &["cannot export `free`", "reserved for a runtime routine"],
     );
     // An export whose result is a `Reply` is a wrapper of that name.
     rejected(
         "adapted_export_import",
-        "use std::wasm::{Clock, Reply, now_ms}\n\npub fn sys_wasm_now_ms() -> Reply {\n    Reply::ok(5)\n}\n\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
+        "use std::wasm::{Clock, Reply, now_ms}\n\n#[unsafe(export)]\npub fn sys_wasm_now_ms() -> Reply {\n    Reply::ok(5)\n}\n\n#[unsafe(export)]\npub fn elapsed() -> u64 uses (clock: mut Clock) {\n    now_ms()\n}\n",
         &[
             "cannot export `sys_wasm_now_ms`",
             "imports an `extern` function of that name",
@@ -1056,7 +1092,7 @@ fn an_export_named_like_an_import_or_a_runtime_routine_is_an_error() {
     );
     rejected(
         "adapted_export_free",
-        "use std::wasm::Reply\n\npub fn free() -> Reply {\n    Reply::ok(1)\n}\n",
+        "use std::wasm::Reply\n\n#[unsafe(export)]\npub fn free() -> Reply {\n    Reply::ok(1)\n}\n",
         &["cannot export `free`", "reserved for a runtime routine"],
     );
 }
@@ -1067,7 +1103,7 @@ fn usize_is_a_32_bit_integer_of_the_module() {
     let source = write_source(
         temp.path(),
         "usize_param",
-        "pub fn double(n: usize) -> usize { n + n }\n",
+        "#[unsafe(export)]\npub fn double(n: usize) -> usize { n + n }\n",
     );
     let bytes = build_wasm(&source, "1", &temp.path().join("out"));
     let module = Module::new(engine(), &bytes).unwrap();
@@ -1101,12 +1137,12 @@ fn usize_is_a_32_bit_integer_of_the_module() {
         .unwrap();
     assert_eq!(result[0].unwrap_i32(), 42);
     // The sum of 2^31 and itself does not fit 32 bits.
-    let trap = double
+    let error = double
         .call(&mut running.store, &[Val::I32(i32::MIN)], &mut result)
         .unwrap_err();
     assert_eq!(
-        trap.downcast_ref::<Trap>(),
-        Some(&Trap::UnreachableCodeReached)
+        error.downcast_ref::<Revert>().and_then(Revert::panic_code),
+        Some(0x11)
     );
 }
 
@@ -1114,7 +1150,7 @@ fn usize_is_a_32_bit_integer_of_the_module() {
 fn a_wide_result_is_a_named_error() {
     rejected(
         "wide_result",
-        "pub fn big(x: u32) -> u128 { x as u128 }\n",
+        "#[unsafe(export)]\npub fn big(x: u32) -> u128 { x as u128 }\n",
         &[
             "cannot export `big`",
             "result type `u128`",
@@ -1127,7 +1163,7 @@ fn a_wide_result_is_a_named_error() {
 fn non_scalar_exports_are_named_errors() {
     rejected(
         "struct_param",
-        "struct Point { x: i32, y: i32 }\npub fn norm(p: Point) -> i32 { p.x + p.y }\n",
+        "struct Point { x: i32, y: i32 }\n#[unsafe(export)]\npub fn norm(p: Point) -> i32 { p.x + p.y }\n",
         &[
             "cannot export `norm`",
             "parameter `p: Point`",
@@ -1136,7 +1172,7 @@ fn non_scalar_exports_are_named_errors() {
     );
     rejected(
         "tuple_result",
-        "pub fn pair(x: i32) -> (i32, i32) { (x, x) }\n",
+        "#[unsafe(export)]\npub fn pair(x: i32) -> (i32, i32) { (x, x) }\n",
         &[
             "cannot export `pair`",
             "result type `(i32, i32)`",
@@ -1145,7 +1181,7 @@ fn non_scalar_exports_are_named_errors() {
     );
     rejected(
         "array_param",
-        "pub fn first(items: [u8; 4]) -> u8 { items[0] }\n",
+        "#[unsafe(export)]\npub fn first(items: [u8; 4]) -> u8 { items[0] }\n",
         &[
             "cannot export `first`",
             "parameter `items: [u8; 4]`",
@@ -1154,12 +1190,12 @@ fn non_scalar_exports_are_named_errors() {
     );
     rejected(
         "mut_param",
-        "pub fn bump(x: mut i32) { x = x + 1 }\n",
+        "#[unsafe(export)]\npub fn bump(x: mut i32) { x = x + 1 }\n",
         &["cannot export `bump`", "parameter `x: i32`", "not a scalar"],
     );
     rejected(
         "product_param",
-        "pub fn sum(_ (a, b): (own u32, own u32)) -> u32 { a + b }\n",
+        "#[unsafe(export)]\npub fn sum(_ (a, b): (own u32, own u32)) -> u32 { a + b }\n",
         &[
             "cannot export `sum`",
             "parameter `0: (u32, u32)`",
@@ -1168,7 +1204,7 @@ fn non_scalar_exports_are_named_errors() {
     );
     rejected(
         "unit_param",
-        "pub fn second(unit: (), n: u64) -> u64 { n }\n",
+        "#[unsafe(export)]\npub fn second(unit: (), n: u64) -> u64 { n }\n",
         &[
             "cannot export `second`",
             "parameter `unit: ()` is zero-sized",
@@ -1181,6 +1217,7 @@ fn an_evm_only_instruction_is_a_named_error() {
     let stderr = rejected(
         "evm_caller",
         "use std::evm::{Ctx, Evm}\n\
+         #[unsafe(export)]\n\
          pub fn who() -> u32 uses (evm: Evm) {\n\
          \x20   let _ = evm.caller()\n\
          \x20   1\n\
@@ -1191,24 +1228,17 @@ fn an_evm_only_instruction_is_a_named_error() {
 }
 
 #[test]
-fn unsafe_export_is_a_named_error() {
-    // A module exports the `pub fn` items of its root module, so the
-    // attribute would do nothing.
+fn two_exports_of_one_name_are_a_named_error() {
     rejected(
-        "root_export",
-        "#[unsafe(export)]\npub fn answer() -> i32 { 42 }\n",
-        &["`#[unsafe(export)]` requires `--backend native`", "answer"],
-    );
-    rejected(
-        "nested_export",
+        "same_name",
         "mod inner {\n\
          \x20   #[unsafe(export)]\n\
-         \x20   pub fn nested() -> i32 { 1 }\n\
+         \x20   pub fn same() -> i32 { 1 }\n\
          }\n\
-         pub fn top() -> i32 { inner::nested() }\n",
+         #[unsafe(export)]\n\
+         pub fn same() -> i32 { inner::same() }\n",
         &[
-            "`#[unsafe(export)]` requires `--backend native`",
-            "inner::nested",
+            "`same_name::inner::same` and `same_name::same` both define the WebAssembly export `same`",
         ],
     );
 }
@@ -1217,20 +1247,8 @@ fn unsafe_export_is_a_named_error() {
 fn a_function_named_memory_is_refused() {
     rejected(
         "reserved_name",
-        "pub fn memory() -> u32 { 1 }\n",
+        "#[unsafe(export)]\npub fn memory() -> u32 { 1 }\n",
         &["cannot export `memory`", "reserved for the linear memory"],
-    );
-}
-
-#[test]
-fn a_function_named_stack_top_is_refused() {
-    rejected(
-        "reserved_stack",
-        "pub fn stack_top() -> u32 { 1 }\n",
-        &[
-            "cannot export `stack_top`",
-            "reserved for the stack of the module",
-        ],
     );
 }
 
@@ -1239,6 +1257,7 @@ fn a_function_that_needs_effects_is_refused() {
     rejected(
         "effects",
         "trait Counter { fn next(mut self) -> u32 }\n\
+         #[unsafe(export)]\n\
          pub fn tick() -> u32 uses (c: mut Counter) { c.next() }\n",
         &["cannot export `tick`", "effect"],
     );
@@ -1248,7 +1267,7 @@ fn a_function_that_needs_effects_is_refused() {
 fn a_file_without_exports_is_refused() {
     rejected(
         "no_exports",
-        "fn private_only() -> u32 { 1 }\npub fn generic<T>(x: own T) -> T { x }\n",
-        &["needs at least one exported function"],
+        "fn private_only() -> u32 { 1 }\npub fn public_only() -> u32 { 2 }\n",
+        &["requires an `#[unsafe(export)]` function"],
     );
 }

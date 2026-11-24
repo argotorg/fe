@@ -1,0 +1,46 @@
+// A `mut` parameter that names storage provides a trait-key effect, and
+// the callee returns a borrow of it: the borrow lies in storage.
+use std::evm::{Evm, StorPtr}
+
+trait Cell {
+    fn slot(mut self) -> mut u256
+    fn peek(self) -> ref u256
+}
+
+struct Z { x: u256, y: u256 }
+
+impl Cell for Z {
+    fn slot(mut self) -> mut u256 { mut self.y }
+    fn peek(self) -> ref u256 { ref self.y }
+}
+
+fn slot() -> mut u256 uses (c: mut Cell) { mut c.slot() }
+fn peek() -> ref u256 uses (c: Cell) { ref c.peek() }
+
+fn slot_of(z: mut Z) -> mut u256 { with (Cell = z) { mut slot() } }
+fn peek_of(z: ref Z) -> ref u256 { with (Cell = z) { ref peek() } }
+
+#[test]
+fn storage_param() uses (evm: mut Evm) {
+    let at: u256 = 7
+    let ptr = at as StorPtr<Z>
+    unsafe {
+        let r = mut slot_of(z: mut *ptr)
+        r = 10
+        assert((*ptr).y == 10)
+        assert((*ptr).x == 0)
+        let v = ref peek_of(z: ref *ptr)
+        assert(v == 10)
+    }
+}
+
+#[test]
+fn memory_param() {
+    var z = Z { x: 1, y: 2 }
+    let r = mut slot_of(z: mut z)
+    r = 10
+    assert(z.y == 10)
+    assert(z.x == 1)
+    let v = ref peek_of(z: ref z)
+    assert(v == 10)
+}

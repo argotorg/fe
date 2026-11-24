@@ -1,0 +1,156 @@
+// Call::forward_delegatecall: a proxy fallback that forwards calldata and
+// returns or reverts with the implementation's returndata.
+use core::ptr::{MemBuffer, MemSpan}
+use std::abi::Bytes
+use std::evm::{Address, Call, Ctx, Evm, RawCallOutcome, encode_error}
+
+#[error]
+pub struct Rejected { pub code: u256 }
+
+msg ImplMsg {
+    #[selector = sol("set(uint256)")]
+    Set { value: u256 },
+    #[selector = sol("value()")]
+    Value -> u256,
+    #[selector = sol("self()")]
+    SelfAddress -> Address,
+    // Calldata longer than the returndata, and returndata longer than the
+    // calldata, which share one region of memory.
+    #[selector = sol("sum(uint256[8])")]
+    Sum { values: [u256; 8] } -> u256,
+    #[selector = sol("wide(uint256)")]
+    Wide { seed: u256 } -> [u256; 8],
+    #[selector = sol("reject(uint256)")]
+    Reject { code: u256 },
+    #[selector = sol("stop()")]
+    Stop,
+}
+
+pub contract Implementation uses (ctx: Ctx) {
+    mut value: u256,
+
+    recv ImplMsg {
+        Set { value: new_value } uses (mut value) {
+            value = new_value
+        }
+        Value -> u256 uses (value) {
+            value
+        }
+        SelfAddress -> Address uses (ctx) {
+            ctx.address()
+        }
+        Sum { values } -> u256 {
+            var total: u256 = 0
+            for i in 0 .. 8 {
+                total += values[i] * (i as u256 + 1)
+            }
+            total
+        }
+        Wide { seed } -> [u256; 8] {
+            [seed, seed + 1, seed + 2, seed + 3, seed + 4, seed + 5, seed + 6, seed + 7]
+        }
+        Reject { code } {
+            revert_error(Rejected { code })
+        }
+        Stop {} {
+            std::evm::revert_empty()
+        }
+    }
+}
+
+pub contract Proxy uses (ctx: Ctx, call: mut Call) {
+    implementation: Address,
+
+    init(target: Address) uses (mut implementation) { implementation = target }
+
+    recv {
+        #[payable]
+        _ uses (ctx, implementation, mut call) {
+            call.forward_delegatecall(addr: implementation, gas: ctx.gas())
+        }
+    }
+}
+
+fn deploy() -> (Address, Address) uses (evm: mut Evm) {
+    let implementation = evm.create2<Implementation>(value: Wei::zero(), args: (), salt: 0)
+    let proxy = evm.create2<Proxy>(value: Wei::zero(), args: (implementation,), salt: 0)
+    (implementation, proxy)
+}
+
+#[test]
+fn forwards_state_writes_into_proxy_storage() uses (evm: mut Evm) {
+    let (implementation, proxy) = deploy()
+    with (Call = evm) {
+        proxy.call(ImplMsg::Set { value: 42 })
+        let through_proxy: u256 = proxy.call(ImplMsg::Value {})
+        let direct: u256 = implementation.call(ImplMsg::Value {})
+        assert!(through_proxy == 42)
+        assert!(direct == 0)
+        // DELEGATECALL runs the implementation in the proxy's context.
+        let this: Address = proxy.call(ImplMsg::SelfAddress {})
+        assert!(this == proxy)
+    }
+}
+
+#[test]
+fn forwards_wide_calldata_and_returndata() uses (evm: mut Evm) {
+    let (_, proxy) = deploy()
+    with (Call = evm) {
+        let total: u256 = proxy.call(ImplMsg::Sum { values: [1, 2, 3, 4, 5, 6, 7, 8] })
+        // 1*1 + 2*2 + ... + 8*8
+        assert!(total == 204)
+        let wide: [u256; 8] = proxy.call(ImplMsg::Wide { seed: 100 })
+        for i in 0 .. 8 {
+            assert!(wide[i] == 100 + i as u256)
+        }
+    }
+}
+
+#[test]
+fn bubbles_revert_data_unchanged() uses (evm: mut Evm) {
+    let (_, proxy) = deploy()
+    with (Call = evm) {
+        let outcome = proxy.try_call(ImplMsg::Reject { code: 7 })
+        assert!(!outcome.success())
+        let expected = encode_error(Rejected { code: 7 })
+        assert!(
+            Bytes::from_payload(source: outcome.returndata())
+                == Bytes::from_payload(source: expected.span()),
+        )
+
+        let empty = proxy.try_call(ImplMsg::Stop {})
+        assert!(!empty.success())
+        assert!(empty.returndata_len() == 0)
+    }
+}
+
+fn raw_call(_ proxy: Address, _ args: MemSpan) -> RawCallOutcome
+uses (call: mut Call)
+{
+    var ret = MemBuffer::empty()
+    call.raw_call(
+        addr: proxy,
+        gas: 100000,
+        value: Wei::zero(),
+        args,
+        ret: mut ret,
+    )
+}
+
+#[test]
+fn forwards_unknown_selector_and_empty_calldata() uses (evm: mut Evm) {
+    let (_, proxy) = deploy()
+    with (Call = evm) {
+        // The implementation has no fallback, so both revert without data.
+        var unknown = MemBuffer::with_capacity(32)
+        unknown.write_word(offset: 0, value: 0x12345678 << 224)
+        unknown.truncate(4)
+        let outcome = raw_call(proxy, unknown.span())
+        assert!(!outcome.success())
+        assert!(outcome.returndata_len() == 0)
+
+        let outcome = raw_call(proxy, MemSpan::empty())
+        assert!(!outcome.success())
+        assert!(outcome.returndata_len() == 0)
+    }
+}

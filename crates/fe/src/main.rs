@@ -28,9 +28,12 @@ use camino::Utf8PathBuf;
 use check::check;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum, value_parser};
 use colored::Colorize;
-use common::compilation::{Os, Target};
+use common::InputDb;
+use common::compilation::{Platform, Target};
+use driver::DriverDataBase;
 use driver::project_target::{TargetConflict, project_target};
 use fmt as fe_fmt;
+use salsa::Setter;
 use similar::{ChangeTag, TextDiff};
 use walkdir::WalkDir;
 
@@ -71,8 +74,8 @@ pub enum BuildEmit {
 pub enum BuildBackend {
     Sonatina,
     #[cfg(feature = "cranelift")]
-    /// Host-native IR, or executables and libraries on x86-64 Linux and
-    /// AArch64 macOS.
+    /// Host-native IR, or executables and libraries on x86-64 Linux,
+    /// AArch64 Linux or AArch64 macOS.
     Native,
     #[cfg(feature = "sp1")]
     /// RV64IM SP1 guest IR or ELF executables.
@@ -149,26 +152,51 @@ impl BuildBackend {
         }
     }
 
-    /// The operating system this backend's code runs on: the host's for
-    /// native executables, none for EVM code and SP1 guests.
-    pub fn os(self) -> Option<Os> {
-        if self.is_native() { Os::host() } else { None }
+    /// The platform this backend's code runs on: the host's for native
+    /// executables, none for EVM code, WebAssembly and SP1 guests.
+    pub fn platform(self) -> Option<Platform> {
+        if self.is_native() {
+            Platform::host()
+        } else {
+            None
+        }
+    }
+
+    /// Creates an empty compiler database that compiles for this backend's
+    /// target and platform.
+    pub fn database(self, profile: &str, recovery_mode: bool) -> DriverDataBase {
+        let mut db = DriverDataBase::default();
+        self.configure(&mut db, profile, recovery_mode);
+        db
+    }
+
+    /// Sets up a new compiler database to compile for this backend's target
+    /// and platform, as [`BuildBackend::database`] does.
+    pub fn configure(self, db: &mut DriverDataBase, profile: &str, recovery_mode: bool) {
+        db.compiler_options()
+            .set_recovery_mode(db)
+            .to(recovery_mode);
+        db.compilation_settings().set_profile(db).to(profile.into());
+        db.compilation_settings().set_target(db).to(self.target());
+        db.compilation_settings()
+            .set_platform(db)
+            .to(self.platform());
     }
 
     pub fn is_native(self) -> bool {
-        #[cfg(feature = "cranelift")]
-        if matches!(self, Self::Native) {
-            return true;
+        match self {
+            #[cfg(feature = "cranelift")]
+            Self::Native => true,
+            _ => false,
         }
-        false
     }
 
     pub fn is_wasm(self) -> bool {
-        #[cfg(feature = "wasm")]
-        if matches!(self, Self::Wasm) {
-            return true;
+        match self {
+            #[cfg(feature = "wasm")]
+            Self::Wasm => true,
+            _ => false,
         }
-        false
     }
 
     fn default_emit(self) -> Vec<BuildEmit> {
@@ -308,9 +336,10 @@ pub enum Command {
         #[arg(long, value_name = "NAME")]
         link_lib: Vec<String>,
         /// Size in bytes of the stack of a WebAssembly module, which holds the
-        /// frames of its calls (default: 1048576, 1 MiB). It is rounded up so
-        /// that the stack ends on a 64 KiB page boundary. Requires `--backend
-        /// wasm`.
+        /// frames of the calls in progress (default: 1048576, 1 MiB). A call
+        /// whose frame does not fit traps, so deep recursion that does not end
+        /// in tail calls may need more. It is rounded up so that the stack ends
+        /// on a 64 KiB page boundary. Requires `--backend wasm`.
         #[arg(long, value_name = "BYTES", value_parser = value_parser!(u32).range(1..))]
         wasm_stack_size: Option<u32>,
         /// Write a debugging report as a `.tar.gz` file (includes sources, IR, backend output, and bytecode artifacts).
@@ -624,14 +653,7 @@ pub enum DocAction {
 #[derive(Debug, Clone, Subcommand)]
 pub enum LspMode {
     /// Start with TCP transport instead of stdio.
-    Tcp {
-        /// Port to listen on.
-        #[arg(short, long, default_value_t = 4242)]
-        port: u16,
-        /// Timeout in seconds to shut down if no clients are connected.
-        #[arg(short, long, default_value_t = 10)]
-        timeout: u64,
-    },
+    Tcp(language_server::cli::TcpArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -1110,10 +1132,11 @@ pub fn run(opts: &Options) {
                 }
                 language_server::setup_panic_hook();
                 match mode {
-                    Some(LspMode::Tcp { port, timeout }) => {
+                    Some(LspMode::Tcp(tcp)) => {
                         language_server::run_tcp_server(
-                            *port,
-                            std::time::Duration::from_secs(*timeout),
+                            tcp.host,
+                            tcp.port,
+                            std::time::Duration::from_secs(tcp.timeout),
                         )
                         .await;
                     }
@@ -1562,5 +1585,16 @@ fn format_single_file(path: &Utf8PathBuf, config: &fe_fmt::Config, check: bool) 
     FormatResult::Formatted {
         original,
         formatted,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::compilation::Platform;
+
+    /// build.rs sets `native_host` from its own copy of `Platform::SUPPORTED`.
+    #[test]
+    fn native_host_cfg_matches_platform_host() {
+        assert_eq!(cfg!(native_host), Platform::host().is_some());
     }
 }

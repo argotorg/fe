@@ -23,9 +23,8 @@ func private %main() -> @layout_0 {
         v7.constref<@layout_1> = const.ref $const_region_1;
         v8.@layout_1 = const.load v7;
         v9.i8 = call %match_nested_extract v8;
-        v12.@layout_0 = insert_value undef.@layout_0 0.i256 v4;
-        v14.@layout_0 = insert_value v12 1.i256 v9;
-        return v14;
+        v10.@layout_0 = agg.make @layout_0 v4 v9;
+        return v10;
 }
 
 func private %main_root() {

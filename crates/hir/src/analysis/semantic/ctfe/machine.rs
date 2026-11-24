@@ -20,14 +20,14 @@ use crate::{
         },
         semantic::{
             BinaryOp, BlockedInfo, ConstDemandKind, ConstDependency, EvalFailure, EvalOutcome,
-            FailReason, FieldIndex, Overflow, PrimitiveFault, RuntimeSizeError, SConst,
-            SEffectArgValue, SExpr, SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind,
-            STerminatorKind, SemConstId, SemConstScalar, SemConstValue, SemOrigin, SemanticBody,
-            SemanticConstRef, UnaryOp, VariantIndex, array_const, bool_const, bytes_const,
-            consts::instantiate_const_template, enum_const, execute_scalar_cast,
-            execute_source_int_binary, execute_source_int_unary, int_const, int_in_range,
-            int_ty_shape, normalize_int_to_shape, runtime_size_bytes, sem_const_eq,
-            sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const, wrapping_pow,
+            FailReason, FieldIndex, Overflow, PrimitiveFault, RuntimeSizeError, SConst, SExpr,
+            SLocalId, SOperand, SPlace, SStmt, SStmtId, SStmtKind, STerminatorKind, SemConstId,
+            SemConstScalar, SemConstValue, SemOrigin, SemanticBody, SemanticConstRef, UnaryOp,
+            VariantIndex, array_const, bool_const, bytes_const, consts::instantiate_const_template,
+            enum_const, execute_scalar_cast, execute_source_int_binary, execute_source_int_unary,
+            int_const, int_in_range, int_ty_shape, normalize_int_to_shape, runtime_size_bytes,
+            sem_const_eq, sem_const_from_ty, sem_const_ty, struct_const, tuple_const, unit_const,
+            wrapping_pow,
         },
         ty::{
             const_check::const_effects_supported,
@@ -40,7 +40,7 @@ use crate::{
             normalize::normalize_ty,
             provider::AddressSpace,
             ty_check::{
-                BodyOwner, EffectParamSite, EffectPassMode, LocalBinding, ParamSite, infer_body,
+                BodyOwner, EffectParamSite, LocalBinding, ParamSite, infer_body,
                 inference_met_lowering_cycle,
             },
             ty_def::{InvalidCause, TyData, TyId},
@@ -1500,10 +1500,6 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 let mut effects = Vec::with_capacity(effect_args.len());
                 for arg in &effect_args {
                     if arg.required_mut
-                        || !matches!(
-                            arg.pass_mode,
-                            EffectPassMode::ByValue | EffectPassMode::ByPlace
-                        )
                         || arg
                             .provider
                             .is_some_and(|space| space != AddressSpace::Memory)
@@ -1511,27 +1507,15 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                     {
                         return Err(CtfeError::NotConstEvaluable { origin }.into());
                     }
-                    let value = match &arg.arg {
-                        SEffectArgValue::Value(operand) => {
-                            let value = self.read_operand(frame_idx, *operand, origin)?;
-                            if !matches!(value, CtfeValue::Value(_)) {
-                                return Err(CtfeError::NotConstEvaluable { origin }.into());
-                            }
-                            value
-                        }
-                        // A `with` provider is captured once as a place and
-                        // passed by place. An immutable provider reads the
-                        // same as a copy of its value.
-                        SEffectArgValue::Place(place) => {
-                            let place = self.resolve_place(frame_idx, place, origin)?;
-                            let r#ref = CtfeRef {
-                                frame: place.frame,
-                                root: place.root,
-                                path: place.path.into_boxed_slice(),
-                            };
-                            CtfeValue::Value(self.load_ref_value(&r#ref, origin)?)
-                        }
+                    // An immutable provider reads the same as a copy of the
+                    // value in its place.
+                    let place = self.resolve_place(frame_idx, &arg.place, origin)?;
+                    let r#ref = CtfeRef {
+                        frame: place.frame,
+                        root: place.root,
+                        path: place.path.into_boxed_slice(),
                     };
+                    let value = CtfeValue::Value(self.load_ref_value(&r#ref, origin)?);
                     effects.push((arg.binding_idx, value));
                 }
                 let args = self

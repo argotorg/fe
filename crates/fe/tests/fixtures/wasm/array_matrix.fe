@@ -26,12 +26,14 @@ fn mul(a: [[i32; 3]; 3], b: [[i32; 3]; 3]) -> [[i32; 3]; 3] {
     r
 }
 
+#[unsafe(export)]
 pub fn trace_of_square(s: i32) -> i32 {
     let m = from_seed(s: s)
     let sq = mul(a: m, b: m)
     sq[0][0] + sq[1][1] + sq[2][2]
 }
 
+#[unsafe(export)]
 pub fn identity_is_neutral(s: i32) -> bool {
     let m = from_seed(s: s)
     let left = mul(a: identity(), b: m)
@@ -50,11 +52,13 @@ pub fn identity_is_neutral(s: i32) -> bool {
     true
 }
 
+#[unsafe(export)]
 pub fn cell(s: i32, row: u32, col: u32) -> i32 {
     let m = mul(a: from_seed(s: s), b: from_seed(s: 1))
     m[row as usize][col as usize]
 }
 
+#[unsafe(export)]
 pub fn transpose_sum(s: i32) -> i32 {
     let m = from_seed(s: s)
     var t: [[i32; 3]; 3] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]

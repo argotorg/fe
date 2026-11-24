@@ -74,6 +74,7 @@ fn byte_at(seed: u32, index: usize) -> u8 {
     (mixed >> 24).downcast_truncate()
 }
 
+#[unsafe(export)]
 pub fn crc_of_stream(seed: u32, n: u32) -> u32 {
     var crc: u32 = 0xffffffff
     var i: usize = 0
@@ -86,6 +87,7 @@ pub fn crc_of_stream(seed: u32, n: u32) -> u32 {
     crc ^ 0xffffffff
 }
 
+#[unsafe(export)]
 pub fn table_entry(i: u32) -> u32 {
     CRC_TABLE[i as usize]
 }

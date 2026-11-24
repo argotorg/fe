@@ -14,6 +14,7 @@ fn items(n: u32) -> [Item; 4] {
     ]
 }
 
+#[unsafe(export)]
 pub fn total_value(n: u32) -> u32 {
     let list = items(n: n)
     var s: u32 = 0
@@ -25,6 +26,7 @@ pub fn total_value(n: u32) -> u32 {
     s
 }
 
+#[unsafe(export)]
 pub fn best_ratio_index(n: u32) -> u32 {
     let list = items(n: n)
     var best: usize = 0
@@ -38,12 +40,14 @@ pub fn best_ratio_index(n: u32) -> u32 {
     best.downcast_unchecked()
 }
 
+#[unsafe(export)]
 pub fn update_one(n: u32, which: u32, delta: u32) -> u32 {
     var list = items(n: n)
     list[which as usize].value += delta
     list[0].value * 1000000 + list[1].value * 10000 + list[2].value * 100 + list[3].value
 }
 
+#[unsafe(export)]
 pub fn knapsack(cap: u32) -> u32 {
     let list = items(n: 10)
     var best: u32 = 0

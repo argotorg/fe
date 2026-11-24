@@ -1,9 +1,24 @@
 ---
 source: crates/uitest/tests/ty_check.rs
-assertion_line: 27
 expression: diags
 input_file: fixtures/ty_check/effect_resolution.fe
 ---
+error[3-0093]: `foo` is bound by more than one effect
+  ┌─ effect_resolution.fe:4:34
+  │
+4 │     init() uses (foo, mut owner, foo) {
+  │                  ---             ^^^ `foo` is bound again here
+  │                  │
+  │                  `foo` is first bound here
+
+error[3-0093]: `foo` is bound by more than one effect
+  ┌─ effect_resolution.fe:9:38
+  │
+9 │         Hi -> bool uses (foo, owner, foo) {
+  │                          ---         ^^^ `foo` is bound again here
+  │                          │
+  │                          `foo` is first bound here
+
 error[8-0012]: undefined variable
    ┌─ effect_resolution.fe:27:5
    │

@@ -9,6 +9,7 @@ import {
   ContractError,
   FILE_ERRORS,
   GuestAbort,
+  GuestRevert,
   MAX_FILE_BYTES,
   MAX_TEXT_BYTES,
   MANIFEST_VERSION,
@@ -18,10 +19,57 @@ import {
   encodeReply,
   instantiate,
   parseManifest,
+  revertReason,
   sha256Hex,
 } from "./host.mjs";
 
 const PAGE = 65536;
+
+/** Solidity revert data: the selector, then 32-byte words. */
+function revertData(selector, ...words) {
+  const data = new Uint8Array(4 + 32 * words.length);
+  new DataView(data.buffer).setUint32(0, selector);
+  words.forEach((word, index) => data.set(word, 4 + 32 * index + 32 - word.length));
+  return data;
+}
+
+test("a revert ends the call with its data and what the data says", () => {
+  const host = createHost({});
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  host.bind({ exports: { memory } });
+  const bytes = new Uint8Array(memory.buffer);
+  const panic = revertData(0x4e487b71, [0x11]);
+  bytes.set(panic, 100);
+  assert.throws(
+    () => host.imports.env.__fe_revert(100, panic.length),
+    (error) =>
+      error instanceof GuestRevert &&
+      error.reason === "arithmetic overflow" &&
+      error.message === "the module reverted: arithmetic overflow" &&
+      assert.deepEqual(error.data, panic) === undefined,
+  );
+  assert.throws(() => host.imports.env.__fe_revert(PAGE - 2, 4), ContractError);
+  assert.throws(
+    () => host.imports.env.abort(),
+    (error) => error instanceof GuestRevert && error.data === null && error.reason === "out of memory",
+  );
+});
+
+test("revert reasons are those of Panic codes and Error strings", () => {
+  const text = new TextEncoder().encode("x must be below 100");
+  const padded = new Uint8Array(32);
+  padded.set(text);
+  const error = new Uint8Array([...revertData(0x08c379a0, [32], [text.length]), ...padded]);
+  assert.equal(revertReason(revertData(0x4e487b71, [0x01])), "assertion failed");
+  assert.equal(revertReason(revertData(0x4e487b71, [0x99])), null);
+  assert.equal(revertReason(error), "x must be below 100");
+  // A length beyond the data, an offset other than 32, short data, other selectors.
+  assert.equal(revertReason(revertData(0x08c379a0, [32], [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])), null);
+  assert.equal(revertReason(revertData(0x08c379a0, [64], [0])), null);
+  assert.equal(revertReason(new Uint8Array([0x4e, 0x48])), null);
+  assert.equal(revertReason(revertData(0x12345678, [1])), null);
+  assert.equal(new GuestRevert(revertData(0x12345678)).message, "the module reverted with data 0x12345678");
+});
 
 /** A host over two files, bound to a memory that holds the names `hello.txt` and `nope` at 100. */
 function fixture() {
@@ -54,6 +102,22 @@ test("size and read_byte, and a read past the end is OutOfRange", () => {
   assert.deepEqual(decodeReply(env.sys_wasm_files_read_byte(handle, -1)), { ok: false, code: 2, error: "OutOfRange" });
 });
 
+test("read places bytes from an offset and counts them, 0 at the end", () => {
+  const { env, memory } = fixture();
+  const handle = open(env, 100, 9).value;
+  const bytes = new Uint8Array(memory.buffer);
+  const read = (offset, address, length) => decodeReply(env.sys_wasm_files_read(handle, offset, address, length));
+  assert.deepEqual(read(0, 300, 5), { ok: true, value: 5 });
+  assert.equal(new TextDecoder().decode(bytes.subarray(300, 305)), "Hello");
+  // A read near the end places what is left; at and past the end, nothing.
+  assert.deepEqual(read(7, 400, 100), { ok: true, value: 5 });
+  assert.equal(new TextDecoder().decode(bytes.subarray(400, 405)), "world");
+  assert.deepEqual(read(12, 400, 4), { ok: true, value: 0 });
+  assert.deepEqual(read(-1, 400, 4), { ok: true, value: 0 });
+  assert.deepEqual(read(0, 400, 0), { ok: true, value: 0 });
+  assert.throws(() => read(0, PAGE - 2, 4), (error) => error instanceof ContractError && /outside the memory/.test(error.message));
+});
+
 test("handles count up from 1 and are not reused", () => {
   const { env } = fixture();
   const first = open(env, 100, 9).value;
@@ -68,6 +132,7 @@ test("a forged handle is refused by every operation", () => {
   for (const forged of [0, 2, 77, -1, 0x7fffffff]) {
     for (const call of [
       () => env.sys_wasm_files_size(forged),
+      () => env.sys_wasm_files_read(forged, 0, 0, 0),
       () => env.sys_wasm_files_read_byte(forged, 0),
       () => env.sys_wasm_files_close(forged),
     ]) {
@@ -85,6 +150,7 @@ test("a closed handle is refused: double close and use after close", () => {
   for (const call of [
     () => env.sys_wasm_files_close(handle),
     () => env.sys_wasm_files_size(handle),
+    () => env.sys_wasm_files_read(handle, 0, 0, 0),
     () => env.sys_wasm_files_read_byte(handle, 0),
   ]) {
     assert.throws(call, (error) => error instanceof ContractError && /handle 1 is closed/.test(error.message));
@@ -376,6 +442,84 @@ test("text in the guest's memory is copied before an allocation grows the memory
   assert.equal(guest.call("pair", memory.subarray(0, 2), memory.subarray(2, 5)), (7 << 8) | 9 | (5 << 16));
 });
 
+test("after a failed call the guest runs a new instance of the module", async () => {
+  // The first text is placed, which grows the memory by a page; the second
+  // is too long, so the call fails before it runs. The new instance has the
+  // module's single page again, and the next call runs in it.
+  const guest = await instantiate(assembleAllocator());
+  const first = guest.instance;
+  assert.throws(() => guest.call("pair", "a", "x".repeat(MAX_TEXT_BYTES + 1)), ContractError);
+  assert.notEqual(guest.instance, first);
+  assert.equal(guest.exports, guest.instance.exports);
+  assert.equal(guest.exports.memory.buffer.byteLength, PAGE);
+  assert.equal(guest.call("pair", "a", "bc"), (97 << 8) | 98 | (3 << 16));
+});
+
+/**
+ * A module that imports `env.callback` and the stream write, with an export
+ * `outer` that stores "A" at address 0, calls `callback`, writes that byte to
+ * standard output and returns it, and an export `fail` that traps.
+ */
+function assembleReentrant() {
+  const body = (code) => [...leb(code.length + 1), 0, ...code];
+  const bytes = [
+    0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0,
+    ...section(
+      1,
+      vec([
+        [0x60, 0, 0], // () -> ()
+        [0x60, 3, 0x7f, 0x7f, 0x7f, 1, 0x7f], // (i32, i32, i32) -> i32
+        [0x60, 0, 1, 0x7f], // () -> i32
+      ]),
+    ),
+    ...section(2, vec([[...text("env"), ...text("callback"), 0, 0], [...text("env"), ...text("sys_wasm_stream_write"), 0, 1]])),
+    ...section(3, vec([[2], [0]])),
+    ...section(5, vec([[0, 1]])),
+    ...section(7, vec([[...text("memory"), 2, 0], [...text("outer"), 0, 2], [...text("fail"), 0, 3]])),
+    ...section(
+      10,
+      vec([
+        body([
+          0x41, 0, 0x41, 0xc1, 0x00, 0x3a, 0, 0, // store8 [0] = 'A'
+          0x10, 0, // call callback
+          0x41, 1, 0x41, 0, 0x41, 1, 0x10, 1, 0x1a, // write [0..1] to stream 1, drop the count
+          0x41, 0, 0x2d, 0, 0, // load8_u [0]
+          0x0b,
+        ]),
+        body([0x00, 0x0b]), // unreachable
+      ]),
+    ),
+  ];
+  return new Uint8Array(bytes);
+}
+
+test("a call that fails inside an import's call replaces the instance after the outer call", async () => {
+  // The import catches the failure, so `outer` goes on in its instance, and
+  // the host still reads that instance's memory for the write.
+  let guest;
+  let nested = null;
+  guest = await instantiate(assembleReentrant(), {
+    imports: {
+      env: {
+        callback() {
+          try {
+            guest.call("fail");
+          } catch (error) {
+            nested = error;
+          }
+        },
+      },
+    },
+  });
+  const first = guest.instance;
+  assert.equal(guest.call("outer"), 65);
+  assert.ok(nested instanceof WebAssembly.RuntimeError);
+  assert.equal(guest.host.stdout, "A");
+  assert.notEqual(guest.instance, first, "the failed call's instance is replaced after the outer call");
+  assert.equal(guest.call("outer"), 65);
+  assert.equal(guest.host.stdout, "AA");
+});
+
 test("the bytes that match the manifest are the bytes that run", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);
@@ -423,8 +567,8 @@ test("a manifest of another version is refused", async () => {
   const bytes = assemble();
   const manifest = await manifestFor(bytes);
   await refuses(instantiate(bytes, { manifest: { ...manifest, manifest_version: 2 } }), /format version 2; this host reads version 1/);
-  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 3 } }), /host contract version 3; this host implements version 2/);
-  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 2 } }), /lacks the module hash/);
+  await refuses(instantiate(bytes, { manifest: { ...manifest, contract_version: 4 } }), /host contract version 4; this host implements version 3/);
+  await refuses(instantiate(bytes, { manifest: { manifest_version: 1, contract_version: 3 } }), /lacks the module hash/);
   assert.throws(() => parseManifest("{"), (error) => error instanceof ContractError && /not valid JSON/.test(error.message));
   assert.throws(() => parseManifest("[]"), /format version undefined/);
   assert.deepEqual(parseManifest(JSON.stringify(manifest)), manifest);

@@ -398,12 +398,14 @@ impl<'db> WherePredicate<'db> {
 // ============================================================================
 
 impl<'db> FuncParamListId<'db> {
-    /// Pretty-prints function parameters like `(x: u32, y: i64)`.
-    pub fn pretty_print(self, db: &'db dyn HirDb) -> String {
-        let params = self.data(db);
-        let params_str = params
+    /// Pretty-prints function parameters like `(x: u32, y: i64)`, ending in
+    /// `...` with `variadic`.
+    pub fn pretty_print(self, db: &'db dyn HirDb, variadic: bool) -> String {
+        let params_str = self
+            .data(db)
             .iter()
             .map(|p| p.pretty_print(db))
+            .chain(variadic.then(|| "...".to_string()))
             .collect::<Vec<_>>()
             .join(", ");
         format!("({params_str})")
@@ -1259,7 +1261,9 @@ impl<'db> Func<'db> {
 
         // Parameters
         match self.params_list(db) {
-            Partial::Present(params) => result.push_str(&params.pretty_print(db)),
+            Partial::Present(params) => {
+                result.push_str(&params.pretty_print(db, self.is_variadic(db)))
+            }
             Partial::Absent => result.push_str("(..)"),
         }
 

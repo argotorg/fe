@@ -1,0 +1,37 @@
+use core::hint::black_box
+use core::ptr::MemBuffer
+use std::evm::{crypto, merkle}
+
+fn memory_pair(_ a: u256, _ b: u256) -> u256 {
+    var memory = MemBuffer::new(64)
+    memory.write_word(offset: 0, value: if a < b { a } else { b })
+    memory.write_word(offset: 32, value: if a < b { b } else { a })
+    crypto::keccak256(memory.span())
+}
+
+#[test]
+fn sorted_pair_matches_known_vectors() {
+    assert!(
+        merkle::hash_pair_sorted(0, 0)
+            == 0xad3228b676f7d3cd4284a5443f17f1962b36e491b30a40b2405849e597ba5fb5,
+    )
+    let a = black_box(0 as u256)
+    let b = black_box(u256::max())
+    assert!(merkle::hash_pair_sorted(a, b) == memory_pair(a, b))
+    assert!(merkle::hash_pair_sorted(b, a) == memory_pair(a, b))
+    assert!(merkle::hash_pair_sorted(b, b) == memory_pair(b, b))
+}
+
+#[test]
+fn sorted_pair_preserves_order_independence_and_full_words() {
+    let before = MemBuffer::new(32)
+    for bit in 0 .. 256 {
+        let a = black_box((1 as u256) << (bit as u256))
+        let b = black_box(~a)
+        let expected = memory_pair(a, b)
+        assert!(merkle::hash_pair_sorted(a, b) == expected)
+        assert!(merkle::hash_pair_sorted(b, a) == expected)
+        assert!(merkle::hash_pair_sorted(a, a) == memory_pair(a, a))
+        assert!(before.span().read_word(0) == 0)
+    }
+}

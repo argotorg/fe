@@ -1,0 +1,30 @@
+// A trait argument of a qualified path is checked where it is written, in
+// a signature and in a body, and reported once.
+trait Tr<T> {
+    type A
+
+    fn m(self) -> u8
+}
+
+impl Tr<u8> for u8 {
+    type A = u16
+
+    fn m(self) -> u8 {
+        7
+    }
+}
+
+fn mode(_ x: <u8 as Tr<ref>>::A) {}
+
+fn nested_mode(_ x: <u8 as Tr<Option<mut>>>::A) {}
+
+fn missing(_ x: <u8 as Tr<Missing>>::A) {}
+
+fn kind(_ x: <u8 as Tr<Option>>::A) {}
+
+fn body() {
+    let a = <u8 as Tr<ref>>::m(1)
+    let b = <u8 as Tr<Option<ref>>>::m(1)
+    let c = <u8 as Tr<Missing>>::m(1)
+    let d = <u8 as Tr<u8, u8>>::m(1)
+}

@@ -1,0 +1,57 @@
+use core::abi::DynString
+use core::hint::black_box
+use core::num::IntDowncast
+use core::ptr
+use core::text
+
+fn reference_hex(_ value: u256, _ width: usize, _ upper: bool) -> DynString {
+    let out = DynString::zeroed(width * 2)
+    var remaining = value
+    var i = width * 2
+    while i > 0 {
+        i -= 1
+        let nibble: u8 = (remaining & 15).downcast_truncate()
+        let base: u8 = if upper { b'A' } else { b'a' }
+        unsafe {
+            *ptr::offset_bytes(out.span().ptr(), i) = if nibble < 10 {
+                nibble + b'0'
+            } else {
+                nibble - 10 + base
+            }
+        }
+        remaining >>= 4
+    }
+    out
+}
+#[test]
+fn hex_every_byte_and_width() {
+    for n in 0 .. 256 {
+        let value = black_box(n as u256)
+        assert!(text::hex(value, 1) == reference_hex(value, 1, false))
+        assert!(text::hex_upper(value, 1) == reference_hex(value, 1, true))
+    }
+    for width in 0 .. 41 {
+        let value = black_box(u256::max())
+        assert!(
+            text::hex(value, width) == reference_hex(value, width, false),
+        )
+        assert!(
+            text::hex_upper(value, width) == reference_hex(value, width, true),
+        )
+    }
+}
+
+#[test]
+fn mixed_values_and_truncation() {
+    var value: u256 = 123456789
+    for i in 0 .. 100 {
+        value = value.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407)
+        let width = i % 41
+        assert!(
+            text::hex(value, width) == reference_hex(value, width, false),
+        )
+        assert!(
+            text::hex_upper(value, width) == reference_hex(value, width, true),
+        )
+    }
+}

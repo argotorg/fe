@@ -1,0 +1,114 @@
+use core::hint::black_box
+use core::num::IntDowncast
+
+#[test]
+fn zero_and_one_keep_edge_values() {
+    let zero = black_box(0 as u256)
+    let max = black_box(u256::max())
+    let min = black_box(i256::min())
+    assert!(zero ** 0 == 1)
+    assert!(zero ** 1 == 0)
+    assert!(max ** 0 == 1)
+    assert!(max ** 1 == max)
+    assert!(min ** 0 == 1)
+    assert!(min ** 1 == min)
+}
+
+#[test]
+fn narrow_positive_and_negative_powers() {
+    for i in 0 .. 16 {
+        let x: u8 = black_box(i.downcast_truncate())
+        assert!(x ** 2 == x * x)
+        if i <= 6 {
+            assert!(x ** 3 == x * x * x)
+        }
+        if i <= 3 {
+            assert!(x ** 4 == x * x * x * x)
+        }
+    }
+    for i in 0 .. 23 {
+        let index: i8 = i.downcast_truncate()
+        let x = black_box(index - 11)
+        assert!(x ** 2 == x * x)
+        if x >= -5 && x <= 5 {
+            assert!(x ** 3 == x * x * x)
+        }
+        if x >= -3 && x <= 3 {
+            assert!(x ** 4 == x * x * x * x)
+        }
+    }
+}
+
+#[test]
+fn wide_boundaries_and_signed_minimum_cube() {
+    let square = black_box(((1 as u256) << 128) - 1)
+    assert!(square ** 2 == square * square)
+    let fourth = black_box(((1 as u256) << 64) - 1)
+    assert!(fourth ** 4 == (fourth * fourth) * (fourth * fourth))
+    let negative = black_box(-((1 as i256) << 85))
+    assert!(negative ** 3 == i256::min())
+    let positive = black_box(((1 as i256) << 85) - 1)
+    assert!(positive ** 3 == positive * positive * positive)
+}
+
+#[test]
+fn wrapping_powers_keep_modular_results() {
+    assert!(black_box(u8::max()).wrapping_pow(2) == 1)
+    assert!(black_box(u256::max()).wrapping_pow(4) == 1)
+    assert!(black_box(-7 as i8).wrapping_pow(3) == -87)
+    assert!(black_box(i256::min()).wrapping_pow(2) == 0)
+}
+
+fn tick(_ count: mut u256) -> u256 {
+    count += 1
+    0
+}
+
+#[test]
+fn zero_exponent_still_evaluates_the_base() {
+    var count: u256 = 0
+    assert!(tick(mut count) ** 0 == 1)
+    assert!(count == 1)
+}
+
+#[test(should_revert, panic = 0x11)]
+fn unused_base_still_panics() {
+    let _ = (black_box(u8::max()) + 1) ** 0
+}
+
+#[test(should_revert, panic = 0x11)]
+fn unsigned_square_overflow() {
+    let _ = black_box(16 as u8) ** 2
+}
+#[test(should_revert, panic = 0x11)]
+fn unsigned_cube_overflow() {
+    let _ = black_box(7 as u8) ** 3
+}
+#[test(should_revert, panic = 0x11)]
+fn unsigned_fourth_overflow() {
+    let _ = black_box(4 as u8) ** 4
+}
+#[test(should_revert, panic = 0x11)]
+fn signed_square_overflow() {
+    let _ = black_box(-12 as i8) ** 2
+}
+#[test(should_revert, panic = 0x11)]
+fn signed_cube_overflow() {
+    let _ = black_box(-6 as i8) ** 3
+}
+#[test(should_revert, panic = 0x11)]
+fn signed_fourth_overflow() {
+    let _ = black_box(-4 as i8) ** 4
+}
+#[test(should_revert, panic = 0x11)]
+fn wide_square_overflow() {
+    let _ = black_box((1 as u256) << 128) ** 2
+}
+#[test(should_revert, panic = 0x11)]
+fn wide_fourth_overflow() {
+    let _ = black_box((1 as u256) << 64) ** 4
+}
+#[test(should_revert, panic = 0x11)]
+fn signed_minimum_cube_overflow() {
+    let _ = black_box(-((1 as i256) << 85) - 1) ** 3
+}

@@ -32,10 +32,10 @@ pub struct WasmTestModule {
 }
 
 /// Compiles `tests` to one module. A panic or revert with data calls the test
-/// host's `__fe_revert`, as in a native test. The `balance` attribute has no
-/// meaning outside the EVM and is an error, as is anything else the backend
-/// cannot build: the caller builds fewer tests at once to find the test at
-/// fault.
+/// host's `__fe_revert`, as in a native test. The `balance`, `timestamp` and
+/// `block_number` attributes have no meaning outside the EVM and are an error,
+/// as is anything else the backend cannot build: the caller builds fewer tests
+/// at once to find the test at fault.
 pub fn emit_test_wasm(
     db: &DriverDataBase,
     tests: &[TestFunc<'_>],
@@ -47,9 +47,9 @@ pub fn emit_test_wasm(
     for object in package.root_objects(db) {
         for section in object.sections(db) {
             let metadata = runtime_test_root_metadata(db, section.entry.owner(db))?;
-            if metadata.initial_balance.is_some() {
+            if let Some(arg) = metadata.evm_only_arg() {
                 return Err(LowerError::Unsupported(format!(
-                    "WebAssembly test `{}` cannot use the EVM `balance` attribute",
+                    "WebAssembly test `{}` cannot use the EVM `{arg}` attribute",
                     metadata.name
                 )));
             }

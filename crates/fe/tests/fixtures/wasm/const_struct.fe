@@ -21,6 +21,7 @@ const TABLE: [Entry; 3] = [
 ]
 const GRID: [[u8; 3]; 2] = [[1, 2, 3], [4, 5, 6]]
 
+#[unsafe(export)]
 pub fn find_scale(key: u16) -> i32 {
     var i: usize = 0
     while i < 3 {
@@ -32,11 +33,13 @@ pub fn find_scale(key: u16) -> i32 {
     0
 }
 
+#[unsafe(export)]
 pub fn brightness(i: u32) -> u32 {
     let e = TABLE[i as usize]
     (e.color.r as u32) + (e.color.g as u32) + (e.color.b as u32)
 }
 
+#[unsafe(export)]
 pub fn origin_distance(r: u8, g: u8, b: u8) -> u32 {
     let d1: u32 = if r > ORIGIN.r { (r - ORIGIN.r) as u32 } else { 0 }
     let d2: u32 = if g > ORIGIN.g { (g - ORIGIN.g) as u32 } else { 0 }
@@ -44,6 +47,7 @@ pub fn origin_distance(r: u8, g: u8, b: u8) -> u32 {
     d1 + d2 + d3
 }
 
+#[unsafe(export)]
 pub fn grid(row: u32, col: u32) -> u8 {
     GRID[row as usize][col as usize]
 }

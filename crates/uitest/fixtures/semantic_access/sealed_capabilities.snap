@@ -1,6 +1,5 @@
 ---
 source: crates/uitest/tests/semantic_access.rs
-assertion_line: 32
 expression: diags
 input_file: fixtures/semantic_access/sealed_capabilities.fe
 ---
@@ -26,9 +25,9 @@ error[16-0001]: access conflict in `fn hidden_call_with_entry`
    │     ^^^^^^ this call may write storage while a `mut` access of it is open
 
 error[16-0001]: access conflict in `fn same_type`
-   ┌─ sealed_capabilities.fe:69:13
+   ┌─ sealed_capabilities.fe:70:17
    │
-68 │     let entry = mut a[1]
+69 │     let entry = mut a[1]
    │                 -------- access opened here
-69 │     entry = b[1]
-   │             ^^^^ cannot read this place while a `mut` access of it is open
+70 │     let other = b[1]
+   │                 ^^^^ cannot read this place while a `mut` access of it is open

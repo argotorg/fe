@@ -5,10 +5,10 @@ use hir::analysis::{
         ExecutableBlock, PlaceProvenance, SLocal, SLocalId, SemOrigin, SemanticBody,
         SemanticInstance, SemanticLocalRole,
         normalized::{
-            NBlock, NBlockId, NDataProjection, NEffectArgValue, NExpr, NIndex,
-            NLayoutBackingSource, NLayoutLocals, NLayoutPlan, NOperand, NPlace, NPlaceBase,
-            NRootId, NRootKind, NStatementKind, NSuccessor, NTerminator, NTerminatorKind,
-            NValueDefinition, NValueId, NormalizedBody, normalize_runtime_semantic_body,
+            NBlock, NBlockId, NDataProjection, NExpr, NIndex, NLayoutBackingSource, NLayoutLocals,
+            NLayoutPlan, NOperand, NPlace, NPlaceBase, NRootId, NRootKind, NStatementKind,
+            NSuccessor, NTerminator, NTerminatorKind, NValueDefinition, NValueId, NormalizedBody,
+            normalize_runtime_semantic_body,
         },
         semantic_executable_control_flow,
     },
@@ -130,6 +130,18 @@ impl<'db> RuntimeSemanticBody<'db> {
                         .position(|statement| statement.source == Some(*call))
                         .expect("a diverging call survives runtime normalization");
                     block.statements.truncate(end + 1);
+                    block.terminator.kind = NTerminatorKind::Unreachable;
+                }
+                ExecutableBlock::TrapsAfter(anchor) => {
+                    let keep = anchor.map_or(0, |anchor| {
+                        block
+                            .statements
+                            .iter()
+                            .position(|statement| statement.source == Some(anchor))
+                            .expect("a trap's anchor survives runtime normalization")
+                            + 1
+                    });
+                    block.statements.truncate(keep);
                     block.terminator.kind = NTerminatorKind::Unreachable;
                 }
                 ExecutableBlock::Continues(feasible) => {
@@ -322,32 +334,13 @@ impl<'db> RuntimeSemanticBody<'db> {
                             .unwrap_or(false)
                 });
                 for arg in effect_args {
-                    match &arg.arg {
-                        // A provider the callee takes by value is only read.
-                        NEffectArgValue::Place(place)
-                            if self.place_source(place) == Some(local)
-                                && runtime_effect_binding_plan_for_binding_idx(
-                                    db,
-                                    callee,
-                                    arg.binding_idx,
-                                )
-                                .is_none_or(|plan| plan.class.is_transport()) =>
-                        {
-                            demand.passed_by_place = true;
-                            demand.mut_borrowed_or_addr_taken |= arg.required_mut;
-                        }
-                        NEffectArgValue::Value(value)
-                            if arg.required_mut
-                                && matches!(
-                                    arg.pass_mode,
-                                    hir::analysis::ty::ty_check::EffectPassMode::ByTempPlace
-                                )
-                                && self.operand_local(*value) == Some(local) =>
-                        {
-                            demand.passed_by_place = true;
-                            demand.mut_borrowed_or_addr_taken = true;
-                        }
-                        NEffectArgValue::Place(_) | NEffectArgValue::Value(_) => {}
+                    // A provider the callee takes by value is only read.
+                    if self.place_source(&arg.place) == Some(local)
+                        && runtime_effect_binding_plan_for_binding_idx(db, callee, arg.binding_idx)
+                            .is_none_or(|plan| plan.class.is_transport())
+                    {
+                        demand.passed_by_place = true;
+                        demand.mut_borrowed_or_addr_taken |= arg.required_mut;
                     }
                 }
             }

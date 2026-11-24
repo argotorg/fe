@@ -1,0 +1,98 @@
+use core::hint::black_box
+use core::num::IntDowncast
+use core::ptr::MemBuffer
+use std::evm::packed::Packed
+use std::abi::FixedBytes
+fn check<const N: usize>(_ prefix: usize, _ extra: usize, _ raw: u256) {
+    // 99 selects growth from an empty buffer; other values are spare bytes.
+    let capacity = black_box(if extra == 99 { 0 } else { prefix + N + extra })
+    var p = Packed::with_capacity(bytes: capacity)
+    for i in 0 .. prefix {
+        p.u8(0x7d)
+    }
+    var guard = MemBuffer::new(64)
+    for i in 0 .. 64 {
+        guard[i] = 0xa5
+    }
+    let mask: u256 = if N == 32 {
+        u256::max()
+    } else {
+        (1 << ((N as u256) * 8)) - 1
+    }
+    let value = black_box(raw & mask)
+    p.fixed_bytes(FixedBytes<N> { val: value })
+    assert!(p.len() == prefix + N)
+    p.u8(0xa6)
+    p.u16(0x1234)
+    assert!(p.len() == prefix + N + 3)
+    for i in 0 .. prefix {
+        assert!(p.span().byte_at(i) == 0x7d)
+    }
+    for i in 0 .. N {
+        let expected: u8 = (value >> (((N - 1 - i) * 8) as u256)).downcast_truncate()
+        assert!(p.span().byte_at(prefix + i) == expected)
+    }
+    assert!(p.span().byte_at(prefix + N) == 0xa6)
+    assert!(p.span().byte_at(prefix + N + 1) == 0x12)
+    assert!(p.span().byte_at(prefix + N + 2) == 0x34)
+    for i in 0 .. 64 {
+        assert!(guard[i] == 0xa5)
+    }
+}
+fn width<const N: usize>() {
+    for prefix in [0, 1, 3, 17, 31] {
+        for extra in [0, 1, 31, 32, 99] {
+            for value in [
+                0,
+                u256::max(),
+                0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef,
+            ] {
+                check<N>(prefix, extra, value)
+            }
+        }
+    }
+}
+#[test]
+fn widths_1_through_8() {
+    width<1>()
+    width<2>()
+    width<3>()
+    width<4>()
+    width<5>()
+    width<6>()
+    width<7>()
+    width<8>()
+}
+#[test]
+fn widths_9_through_16() {
+    width<9>()
+    width<10>()
+    width<11>()
+    width<12>()
+    width<13>()
+    width<14>()
+    width<15>()
+    width<16>()
+}
+#[test]
+fn widths_17_through_24() {
+    width<17>()
+    width<18>()
+    width<19>()
+    width<20>()
+    width<21>()
+    width<22>()
+    width<23>()
+    width<24>()
+}
+#[test]
+fn widths_25_through_32() {
+    width<25>()
+    width<26>()
+    width<27>()
+    width<28>()
+    width<29>()
+    width<30>()
+    width<31>()
+    width<32>()
+}

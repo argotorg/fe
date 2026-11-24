@@ -1,0 +1,21 @@
+use core::ptr
+use std::evm::{Evm, RawOps}
+
+trait Tick { fn tick(mut self) -> u256 }
+
+fn tick() -> u256 uses (c: mut Tick) { c.tick() }
+
+#[contract_init(M)]
+fn init() uses (evm: mut Evm) {
+    let len = evm.code_region_len(runtime)
+    let offset = evm.code_region_offset(runtime)
+    var dest = ptr::MemBuffer::new(len.downcast_unchecked())
+    evm.codecopy(dest: mut dest, dest_offset: 0, src_offset: offset, len)
+    evm.return_data(data: dest.span())
+}
+
+#[contract_runtime(M)]
+fn runtime() uses (evm: mut Evm, k: mut Tick) {
+    let ticks = tick()
+    evm.return_data(data: ptr::MemSpan::empty())
+}

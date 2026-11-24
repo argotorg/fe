@@ -44,7 +44,7 @@ use mir::{
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec1::{SmallVec, smallvec};
-use sonatina_codegen::cfg_edit::{CfgEditor, CleanupMode};
+use sonatina_codegen::cfg_edit::CfgEditor;
 use sonatina_ir::{
     BlockId, GlobalVariableData, GlobalVariableRef, HasInst, I256, Immediate, InstExt, InstId,
     InstSetBase, Linkage, Module, Signature, Type, Value, ValueId,
@@ -56,9 +56,9 @@ use sonatina_ir::{
         cmp::{Eq, Gt, IsZero, Lt, Ne, Slt},
         control_flow::{Br, BrTable, Call, Jump, Phi, PhiArgs, Return, Unreachable},
         data::{
-            Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef, EnumAssertVariant,
-            EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant, EnumMake, EnumProj,
-            EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, InsertValue, Memcopy,
+            AggMake, Alloca, BlackBox, ConstIndex, ConstLoad, ConstProj, ConstRef,
+            EnumAssertVariant, EnumAssertVariantRef, EnumExtract, EnumGetTag, EnumIsVariant,
+            EnumMake, EnumProj, EnumSetTag, EnumTag, EnumWriteVariant, ExtractValue, Gep, Memcopy,
             Memzero, Mload, Mstore, ObjAlloc, ObjFromPtr, ObjIndex, ObjLoad, ObjMaterializeStack,
             ObjProj, ObjStore, Sha256Compress, SymAddr, SymSize, SymbolRef,
         },
@@ -70,10 +70,11 @@ use sonatina_ir::{
             EvmCoinBase, EvmCreate, EvmCreate2, EvmDelegateCall, EvmExp, EvmExtCodeCopy,
             EvmExtCodeHash, EvmExtCodeSize, EvmGas, EvmGasLimit, EvmGasPrice, EvmInvalid,
             EvmKeccak256, EvmKeccak256Words, EvmLog0, EvmLog1, EvmLog2, EvmLog3, EvmLog4,
-            EvmMalloc, EvmMcopy, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber, EvmOrigin,
-            EvmPrevRandao, EvmReturn, EvmReturnDataCopy, EvmReturnDataSize, EvmRevert, EvmSdiv,
-            EvmSelfBalance, EvmSelfDestruct, EvmSignExtend, EvmSload, EvmSmod, EvmSstore,
-            EvmStaticCall, EvmStop, EvmTimestamp, EvmTload, EvmTstore, EvmUdiv, EvmUmod,
+            EvmMalloc, EvmMcopy, EvmMloadBytes, EvmMsize, EvmMstore8, EvmMulMod, EvmNumber,
+            EvmOrigin, EvmPrevRandao, EvmReturn, EvmReturnCode, EvmReturnDataCopy,
+            EvmReturnDataSize, EvmRevert, EvmSdiv, EvmSelfBalance, EvmSelfDestruct, EvmSignExtend,
+            EvmSload, EvmSmod, EvmSstore, EvmStaticCall, EvmStop, EvmTimestamp, EvmTload,
+            EvmTstore, EvmUdiv, EvmUmod,
         },
         logic::{And, Bswap, Clz, Ctz, Not, Or, Xor},
     },
@@ -111,13 +112,9 @@ define_lowering_inst_set!(
     Add,
     Mul,
     Sar,
-    Sdiv,
     Shl,
     Shr,
-    Smod,
     Sub,
-    Udiv,
-    Umod,
     Bitcast,
     IntToPtr,
     PtrToInt,
@@ -137,6 +134,7 @@ define_lowering_inst_set!(
     Phi,
     Return,
     Unreachable,
+    AggMake,
     Alloca,
     ConstIndex,
     ConstLoad,
@@ -154,7 +152,6 @@ define_lowering_inst_set!(
     EnumWriteVariant,
     ExtractValue,
     Gep,
-    InsertValue,
     Memcopy,
     Memzero,
     Mload,
@@ -291,7 +288,7 @@ where
         isa,
         false,
         exports,
-        NativePanics::Trap,
+        NativePanics::HostRevertOrTrap,
         adapters,
     )?;
     for (instance, _) in exports {
@@ -517,12 +514,8 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                     // A `HostText` is a struct of the address and the length, held
                     // in an object when the function takes it by reference.
                     let value_ty = pointee.unwrap_or(ty);
-                    let mut text = fb.make_undef_value(value_ty);
-                    for field in 0..2u64 {
-                        let part = next()?;
-                        let index = fb.make_imm_value(I256::from(field));
-                        text = fb.insert_inst(InsertValue::new(is, text, index, part), value_ty);
-                    }
+                    let parts = smallvec![next()?, next()?];
+                    let text = fb.insert_inst(AggMake::new(is, value_ty, parts), value_ty);
                     if pointee.is_some() {
                         let object = fb.insert_inst(ObjAlloc::new(is, value_ty), ty);
                         fb.insert_inst_no_result(ObjStore::new(is, object, text));
@@ -757,6 +750,7 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
             Some(ret) => Signature::new_single(&symbol, linkage, &args, ret),
             None => Signature::new_unit(&symbol, linkage, &args),
         };
+        signature.set_variadic(instance.key(self.db).is_variadic(self.db));
         // No access outlives the call it is passed to: Fe stores, returns
         // and captures none. Nothing writes through a read-only access.
         let accesses = if self.argument_packs.contains_key(&instance) {
@@ -1045,6 +1039,11 @@ impl<'db, 'a, I: LoweringInstSet + 'static> ModuleLowerer<'db, 'a, I> {
                 self.builder.declare_array_type(elem, data.len as usize)
             }
             Layout::Enum(data) => {
+                if data.variants.is_empty() {
+                    return Err(LowerError::Internal(
+                        "cannot lower empty enum layout to Sonatina".to_string(),
+                    ));
+                }
                 let variants = data
                     .variants
                     .iter()
@@ -1682,7 +1681,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         if dead.is_empty() {
             return;
         }
-        let mut editor = CfgEditor::new(func, CleanupMode::Strict);
+        let mut editor = CfgEditor::new(func);
         for block in dead {
             // The branch takes its first edge, to the revert, out of bounds.
             editor.retain_out_edges(block, &[true, false]);
@@ -1940,14 +1939,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     ) -> Result<SmallVec<[ValueId; 8]>, LowerError> {
         let Some(&pack_ty) = self.module.argument_packs.get(&callee) else {
             let (params, _) = self.module.signature_tys(callee)?;
-            return args
+            let mut values = args
                 .iter()
-                .zip(params)
+                .zip(&params)
                 .map(|(arg, ty)| {
                     let value = self.local_value(*arg)?;
-                    self.coerce_value_to_ty(value, ty)
+                    self.coerce_value_to_ty(value, *ty)
                 })
-                .collect();
+                .collect::<Result<SmallVec<_>, _>>()?;
+            // A variadic call passes its extra arguments as they are, each a
+            // value C takes.
+            for arg in args.get(params.len()..).unwrap_or_default() {
+                let value = self.local_value(*arg)?;
+                let ty = self.fb.type_of(value);
+                if !is_c_abi_value(&ty, &self.fb.module_builder.ctx) {
+                    return Err(LowerError::Internal(format!(
+                        "a variadic call passes an extra argument of type {ty:?}, which C does not take"
+                    )));
+                }
+                values.push(value);
+            }
+            return Ok(values);
         };
         let ref_ty = self.fb.module_builder.objref_type(pack_ty);
         let pack = self
@@ -2134,9 +2146,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 self.module
                     .immediate_for_const(value, dst.and_then(|dst| self.body.value_class(dst)))?,
             ),
-            RExpr::Placeholder { class } => {
-                zero_for_type(&mut self.fb, self.module.ty_for_class(class)?)
-            }
+            RExpr::Placeholder { class } => self.unread_value(class)?,
             RExpr::Builtin(builtin) => {
                 let value = self.lower_builtin(builtin)?;
                 self.coerce_to_dst(value, dst)?
@@ -2727,6 +2737,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let ptr = self.local_value(*ptr)?;
                 let len = self.local_value(*len)?;
                 let inst_set = self.module.inst_set();
+                // On EVM a constant length picks its read here, so no
+                // `evm_mload_bytes` of more than 32 bytes is emitted even on a
+                // path the length rules out.
+                if !self.module.is_native_target()
+                    && let Some(imm) = self.fb.func.dfg.value_imm(len)
+                {
+                    return if imm.as_i256() < I256::from(32u64) {
+                        self.read_short_word(ptr, len)
+                    } else {
+                        Ok(self
+                            .fb
+                            .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256))
+                    };
+                }
                 let word_len = self.fb.make_imm_value(Immediate::from_i256(
                     I256::from(32u64),
                     self.fb.type_of(len),
@@ -2777,32 +2801,24 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     self.fb.insert_inst_no_result(Jump::new(inst_set, done));
                     smallvec![(word, full), (zero, partial), (copied, copy)]
                 } else {
-                    // EVM reads past an allocation are defined: read the whole
-                    // word and clear the bytes from `len` on.
-                    let word = self
-                        .fb
-                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
+                    // On EVM, read only `len` bytes when `len < 32` via
+                    // `evm_mload_bytes` so short/empty reads never touch bytes
+                    // past `ptr + len`, then left-align into the high bytes.
+                    let full = self.fb.append_block();
                     let short = self
                         .fb
                         .insert_inst(Lt::new(inst_set, len, word_len), Type::I1);
-                    let entry = self.fb.current_block().expect("read requires a block");
                     self.fb
-                        .insert_inst_no_result(Br::new(inst_set, short, partial, done));
-                    self.fb.switch_to_block(partial);
-                    let three = self.fb.make_imm_value(I256::from(3u64));
-                    let bits = self
+                        .insert_inst_no_result(Br::new(inst_set, short, partial, full));
+                    self.fb.switch_to_block(full);
+                    let word = self
                         .fb
-                        .insert_inst(Shl::new(inst_set, three, len), Type::I256);
-                    let ones = self.fb.make_imm_value(Immediate::all_one(Type::I256));
-                    let tail = self
-                        .fb
-                        .insert_inst(Shr::new(inst_set, bits, ones), Type::I256);
-                    let mask = self.fb.insert_inst(Not::new(inst_set, tail), Type::I256);
-                    let masked = self
-                        .fb
-                        .insert_inst(And::new(inst_set, word, mask), Type::I256);
+                        .insert_inst(Mload::new(inst_set, ptr, Type::I256), Type::I256);
                     self.fb.insert_inst_no_result(Jump::new(inst_set, done));
-                    smallvec![(word, entry), (masked, partial)]
+                    self.fb.switch_to_block(partial);
+                    let aligned = self.read_short_word(ptr, len)?;
+                    self.fb.insert_inst_no_result(Jump::new(inst_set, done));
+                    smallvec![(word, full), (aligned, partial)]
                 };
                 self.fb.switch_to_block(done);
                 self.fb
@@ -3598,6 +3614,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         ))
                     })
                     .collect::<Result<Vec<_>, LowerError>>()?;
+                if table.is_empty() && default.is_none() {
+                    return Err(LowerError::Internal(
+                        "cannot lower MatchEnumTag with no cases and no default".to_string(),
+                    ));
+                }
                 self.fb.insert_inst_no_result(BrTable::new(
                     self.module.inst_set(),
                     tag,
@@ -3627,6 +3648,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 let len = self.local_value(*len)?;
                 self.fb.insert_inst_no_result(EvmReturn::new(
                     self.module.required_inst::<EvmReturn>()?,
+                    offset,
+                    len,
+                ));
+            }
+            RTerminator::ReturnCode { offset, len } => {
+                let offset = self.local_value(*offset)?;
+                let len = self.local_value(*len)?;
+                self.fb.insert_inst_no_result(EvmReturnCode::new(
+                    self.module.required_inst::<EvmReturnCode>()?,
                     offset,
                     len,
                 ));
@@ -4670,6 +4700,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 "enum copy source layout must be an enum".to_string(),
             ));
         };
+        if dst_variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot copy empty enum layout into object".to_string(),
+            ));
+        }
         if src_enum.variants.len() != dst_variants.len() {
             return Err(LowerError::Internal(format!(
                 "enum copy source/destination variant count mismatch: src={} dst={}",
@@ -5164,6 +5199,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         data: &mir::runtime::EnumLayout<'db>,
         src: ValueId,
     ) -> Result<(), LowerError> {
+        if data.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot copy empty enum layout to pointer".to_string(),
+            ));
+        }
         let tag = self.fb.insert_inst(
             EnumTag::new(self.module.inst_set(), src),
             self.module.enum_tag_ty(layout)?,
@@ -5336,10 +5376,8 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                 };
                 let field = self.lane_value(&fields[0], scalar)?;
                 let ty = self.module.ty_for_layout(*layout)?;
-                let undef = self.fb.make_undef_value(ty);
-                let idx = self.index_value(0);
                 Ok(self.fb.insert_inst(
-                    InsertValue::new(self.module.inst_set(), undef, idx, field),
+                    AggMake::new(self.module.inst_set(), ty, smallvec![field]),
                     ty,
                 ))
             }
@@ -5619,7 +5657,7 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         match layout.data(self.module.db) {
             Layout::Struct(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 // Packed fields of one word share a single load.
                 let mut packed: Option<(u64, ValueId)> = None;
                 for (idx, field) in data.fields.iter().enumerate() {
@@ -5661,17 +5699,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             "aggregate ptr load field type mismatch: layout={layout:?} idx={idx} class={field:?} expected_ty={expected_ty:?} actual_ty={actual_ty:?}"
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, field_value),
-                        ty,
-                    );
+                    values.push(field_value);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
+                let mut values = SmallVec::new();
                 for idx in 0..data.len as usize {
                     let elem_addr = self.referent_field_address(addr, memory, &class, idx)?;
                     let elem = self.load_memory_value(elem_addr, memory, &data.elem)?;
@@ -5683,13 +5719,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                             data.elem
                         )));
                     }
-                    let idx = self.index_value(idx as u64);
-                    value = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), value, idx, elem),
-                        ty,
-                    );
+                    values.push(elem);
                 }
-                Ok(value)
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(data) => {
                 self.load_enum_from_ptr(addr, memory, layout, &data, EnumLoad::Value)
@@ -5705,6 +5739,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         data: &mir::runtime::EnumLayout<'db>,
         load: EnumLoad,
     ) -> Result<ValueId, LowerError> {
+        if data.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot load empty enum layout from pointer".to_string(),
+            ));
+        }
         let ty = match load {
             EnumLoad::Value => self.module.ty_for_layout(layout)?,
             EnumLoad::Tag => self.module.enum_tag_ty(layout)?,
@@ -5831,11 +5870,26 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         space: AddressSpace,
         scalar: &ScalarClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        if self.module.is_native_target() && matches!(space, AddressSpace::Memory) {
-            let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
-            return Ok(self
-                .fb
-                .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+        if matches!(space, AddressSpace::Memory) {
+            if self.module.is_native_target() {
+                let ty = self.native_memory_ty(&RuntimeClass::Scalar(scalar.clone()))?;
+                return Ok(self
+                    .fb
+                    .insert_inst(Mload::new(self.module.inst_set(), addr, ty), ty));
+            }
+            let width = scalar_raw_memory_size_bytes(Target::Evm, scalar);
+            if width < 32 {
+                let len = self.index_value(width);
+                let value = self.fb.insert_inst(
+                    EvmMloadBytes::new(self.module.required_inst::<EvmMloadBytes>()?, addr, len),
+                    Type::I256,
+                );
+                return self.cast_scalar_with_signedness(
+                    value,
+                    scalar_ty(scalar),
+                    scalar.is_signed_int(),
+                );
+            }
         }
         let word = self.load_word(addr, space)?;
         let value = if space.is_byte_addressed() {
@@ -6034,12 +6088,14 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, (field, class)) in fields.iter().zip(data.fields.iter()).enumerate() {
-                    let field_value = self.aggregate_make_field_value(*field, class)?;
-                    value = self.insert_aggregate_field(value, ty, idx, field_value);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .zip(data.fields.iter())
+                    .map(|(field, class)| self.aggregate_make_field_value(*field, class))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Array(data) => {
                 if data.len as usize != fields.len() {
@@ -6050,12 +6106,13 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                     )));
                 }
                 let ty = self.module.ty_for_layout(layout)?;
-                let mut value = self.fb.make_undef_value(ty);
-                for (idx, field) in fields.iter().enumerate() {
-                    let elem = self.aggregate_make_field_value(*field, &data.elem)?;
-                    value = self.insert_aggregate_field(value, ty, idx, elem);
-                }
-                Ok(value)
+                let values = fields
+                    .iter()
+                    .map(|field| self.aggregate_make_field_value(*field, &data.elem))
+                    .collect::<Result<_, _>>()?;
+                Ok(self
+                    .fb
+                    .insert_inst(AggMake::new(self.module.inst_set(), ty, values), ty))
             }
             Layout::Enum(_) => Err(LowerError::Internal(
                 "aggregate make should not build enum layouts".to_string(),
@@ -6068,26 +6125,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         field: RLocalId,
         class: &RuntimeClass<'db>,
     ) -> Result<ValueId, LowerError> {
-        let ty = self.module.ty_for_class(class)?;
+        // An erased field has no runtime value to read.
         if self.body.value_class(field).is_none() {
-            return Ok(zero_for_type(&mut self.fb, ty));
+            return self.unread_value(class);
         }
+        let ty = self.module.ty_for_class(class)?;
         let value = self.local_value(field)?;
         self.coerce_value_to_ty(value, ty)
     }
 
-    fn insert_aggregate_field(
-        &mut self,
-        value: ValueId,
-        ty: Type,
-        idx: usize,
-        field: ValueId,
-    ) -> ValueId {
-        let idx = self.index_value(idx as u64);
-        self.fb.insert_inst(
-            InsertValue::new(self.module.inst_set(), value, idx, field),
-            ty,
-        )
+    /// A value of `class` where nothing reads it, as for a MIR placeholder:
+    /// the zero value of `class`'s lowered Sonatina type.
+    fn unread_value(&mut self, class: &RuntimeClass<'db>) -> Result<ValueId, LowerError> {
+        let ty = self.module.ty_for_class(class)?;
+        Ok(zero_for_type(&mut self.fb, ty))
     }
 
     fn retype_value_for_class(
@@ -6156,19 +6207,20 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "struct retype field count mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for (idx, (source_field, target_field)) in
-                    source.fields.iter().zip(target.fields.iter()).enumerate()
-                {
-                    let field = self.extract_aggregate_field(value, idx, source_field)?;
-                    let field = self.retype_value_for_class(field, source_field, target_field)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, field),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let fields = source
+                    .fields
+                    .iter()
+                    .zip(target.fields.iter())
+                    .enumerate()
+                    .map(|(idx, (source_field, target_field))| {
+                        let field = self.extract_aggregate_field(value, idx, source_field)?;
+                        self.retype_value_for_class(field, source_field, target_field)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, fields),
+                    target_ty,
+                ))
             }
             (Layout::Array(source), Layout::Array(target)) => {
                 if source.len != target.len {
@@ -6176,17 +6228,16 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
                         "array retype length mismatch: source={source_layout:?} target={target_layout:?}"
                     )));
                 }
-                let mut retyped = self.fb.make_undef_value(target_ty);
-                for idx in 0..source.len as usize {
-                    let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
-                    let elem = self.retype_value_for_class(elem, &source.elem, &target.elem)?;
-                    let idx = self.index_value(idx as u64);
-                    retyped = self.fb.insert_inst(
-                        InsertValue::new(self.module.inst_set(), retyped, idx, elem),
-                        target_ty,
-                    );
-                }
-                Ok(retyped)
+                let elems = (0..source.len as usize)
+                    .map(|idx| {
+                        let elem = self.extract_aggregate_field(value, idx, &source.elem)?;
+                        self.retype_value_for_class(elem, &source.elem, &target.elem)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(self.fb.insert_inst(
+                    AggMake::new(self.module.inst_set(), target_ty, elems),
+                    target_ty,
+                ))
             }
             (Layout::Enum(source), Layout::Enum(target)) => {
                 self.retype_enum_value(value, source_layout, &source, target_layout, &target)
@@ -6205,6 +6256,11 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         target_layout: LayoutId<'db>,
         target: &mir::runtime::EnumLayout<'db>,
     ) -> Result<ValueId, LowerError> {
+        if source.variants.is_empty() {
+            return Err(LowerError::Internal(
+                "cannot retype empty enum layout".to_string(),
+            ));
+        }
         if source.variants.len() != target.variants.len() {
             return Err(LowerError::Internal(format!(
                 "enum retype variant count mismatch: source={source_layout:?} target={target_layout:?}"
@@ -6595,6 +6651,67 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             self.emit_empty_revert(negative)?;
         }
 
+        // A constant base greater than one has monotonically growing powers. On
+        // the EVM, bound the exponent once and use EXP instead of a checked
+        // multiplication loop. Native targets and negative bases keep the loop.
+        if checked
+            && !self.module.is_native_target()
+            && let Value::Immediate { imm, .. } = self.fb.func.dfg.value(base)
+            && (!signed || !imm.is_negative())
+        {
+            let constant = *imm;
+            if constant != Immediate::zero(ty) && constant != Immediate::one(ty) {
+                let mut power = Immediate::one(ty);
+                let mut limit = 0u64;
+                loop {
+                    let (next, overflow) = if signed {
+                        power.overflowing_smul(constant)
+                    } else {
+                        power.overflowing_umul(constant)
+                    };
+                    if overflow {
+                        break;
+                    }
+                    power = next;
+                    limit += 1;
+                }
+                let limit = self
+                    .fb
+                    .make_imm_value(Immediate::from_i256(I256::from(limit), ty));
+                let overflow = self
+                    .fb
+                    .insert_inst(Gt::new(self.module.inst_set(), exp, limit), Type::I1);
+                self.emit_panic_revert(overflow, PANIC_OVERFLOW)?;
+            }
+            return Ok(self.fb.insert_inst(
+                EvmExp::new(self.module.required_inst::<EvmExp>()?, base, exp),
+                ty,
+            ));
+        }
+
+        // Preserve small constant exponents before expanding power into a loop.
+        // At most two checked multiplications suffice for exponents up to four;
+        // unlike general unrolling this does not duplicate a long multiply chain.
+        if let Value::Immediate { imm, .. } = self.fb.func.dfg.value(exp)
+            && let Some(exponent) = immediate_to_u64_index(*imm)
+            && exponent <= 4
+        {
+            return match exponent {
+                0 => Ok(one),
+                1 => Ok(base),
+                _ => {
+                    let square =
+                        self.lower_arith(ArithBinOp::Mul, checked, base, base, ty, signed)?;
+                    match exponent {
+                        2 => Ok(square),
+                        3 => self.lower_arith(ArithBinOp::Mul, checked, square, base, ty, signed),
+                        4 => self.lower_arith(ArithBinOp::Mul, checked, square, square, ty, signed),
+                        _ => unreachable!(),
+                    }
+                }
+            };
+        }
+
         let entry = self
             .fb
             .current_block()
@@ -6805,9 +6922,29 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
     }
 
     /// Ends the block at a revert with Solidity `Panic(code)` data for the
-    /// word `code`. On the EVM, the data is in scratch memory at 0.
+    /// word `code`. On the EVM, the data is in scratch memory at 0. Native code
+    /// that passes revert data to the host passes that of a constant code from
+    /// a constant global, so the check that panics allocates nothing and makes
+    /// a call of two arguments.
     fn insert_panic_revert(&mut self, code: ValueId) -> Result<(), LowerError> {
         let Some(has_revert) = EvmRevert::belongs_to(self.module.inst_set()) else {
+            if self.module.panics.reverts_to_host()
+                && let Value::Immediate { imm, .. } = self.fb.func.dfg.value(code)
+            {
+                let word = imm.as_i256().to_u256();
+                let mut data = [0; 36];
+                data[..4].copy_from_slice(&PANIC_SELECTOR);
+                for (index, byte) in data[4..].iter_mut().rev().enumerate() {
+                    *byte = word.byte(index);
+                }
+                let gv = self.module.const_bytes_global(&data);
+                let address = self.fb.insert_inst(
+                    SymAddr::new(self.module.inst_set(), SymbolRef::Global(gv)),
+                    self.fb.module_builder.ctx.type_layout.pointer_repl(),
+                );
+                let len = self.fb.make_imm_value(data.len() as i64);
+                return self.insert_native_panic(NativePanic::Revert, &[address, len]);
+            }
             return self.insert_native_panic(NativePanic::Code, &[code]);
         };
         let zero = self.fb.make_imm_value(I256::zero());
@@ -6914,11 +7051,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
         Ok(if self.module.is_native_target() && signed {
-            self.fb
-                .insert_inst(Sdiv::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Sdiv::new(self.module.required_inst::<Sdiv>()?, lhs, rhs),
+                ty,
+            )
         } else if self.module.is_native_target() {
-            self.fb
-                .insert_inst(Udiv::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Udiv::new(self.module.required_inst::<Udiv>()?, lhs, rhs),
+                ty,
+            )
         } else if signed {
             self.fb.insert_inst(
                 EvmSdiv::new(self.module.required_inst::<EvmSdiv>()?, lhs, rhs),
@@ -6940,11 +7081,15 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
         signed: bool,
     ) -> Result<ValueId, LowerError> {
         Ok(if self.module.is_native_target() && signed {
-            self.fb
-                .insert_inst(Smod::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Smod::new(self.module.required_inst::<Smod>()?, lhs, rhs),
+                ty,
+            )
         } else if self.module.is_native_target() {
-            self.fb
-                .insert_inst(Umod::new(self.module.inst_set(), lhs, rhs), ty)
+            self.fb.insert_inst(
+                Umod::new(self.module.required_inst::<Umod>()?, lhs, rhs),
+                ty,
+            )
         } else if signed {
             self.fb.insert_inst(
                 EvmSmod::new(self.module.required_inst::<EvmSmod>()?, lhs, rhs),
@@ -7077,6 +7222,27 @@ impl<'ctx, 'db, 'a, I: LoweringInstSet + 'static> FunctionLowerer<'ctx, 'db, 'a,
             .ctx
             .with_ty_store(|_store| EnumVariantRef::new(compound, variant.index as u32))
             .pipe(Ok)
+    }
+
+    /// The `len < 32` bytes at `ptr` in the high bytes of a word, the rest
+    /// zero, read with `evm_mload_bytes` so no byte past `ptr + len` is read.
+    fn read_short_word(&mut self, ptr: ValueId, len: ValueId) -> Result<ValueId, LowerError> {
+        let inst_set = self.module.inst_set();
+        let raw = self.fb.insert_inst(
+            EvmMloadBytes::new(self.module.required_inst::<EvmMloadBytes>()?, ptr, len),
+            Type::I256,
+        );
+        let three = self.fb.make_imm_value(I256::from(3u64));
+        let bits = self
+            .fb
+            .insert_inst(Shl::new(inst_set, three, len), Type::I256);
+        let word_bits = self.fb.make_imm_value(I256::from(256u64));
+        let shift = self
+            .fb
+            .insert_inst(Sub::new(inst_set, word_bits, bits), Type::I256);
+        Ok(self
+            .fb
+            .insert_inst(Shl::new(inst_set, shift, raw), Type::I256))
     }
 
     fn index_value(&mut self, value: u64) -> ValueId {
@@ -7404,19 +7570,22 @@ fn bytes_to_i256(bytes: &[u8], signed: bool) -> I256 {
     I256::from_be_bytes(bytes)
 }
 
+/// The selector of Solidity's `Panic(uint256)`.
+const PANIC_SELECTOR: [u8; 4] = [0x4e, 0x48, 0x7b, 0x71];
+
 fn panic_selector_immediate() -> Immediate {
     let mut bytes = [0; 32];
-    bytes[..4].copy_from_slice(&[0x4e, 0x48, 0x7b, 0x71]);
+    bytes[..4].copy_from_slice(&PANIC_SELECTOR);
     Immediate::from_i256(bytes_to_i256(&bytes, false), Type::I256)
 }
 
+/// The value of `ty` whose bits are all zero: an immediate for an integer or
+/// enum tag, `zero.T` for the unit value and compound types.
 fn zero_for_type(fb: &mut FunctionBuilder<InstInserter>, ty: Type) -> ValueId {
-    if ty.is_unit() || ty.is_compound() {
-        fb.make_undef_value(ty)
-    } else if ty.is_integral() || ty.is_enum_tag() {
+    if ty.is_integral() || ty.is_enum_tag() {
         fb.make_imm_value(Immediate::zero(ty))
     } else {
-        fb.make_undef_value(ty)
+        fb.make_zero_value(ty)
     }
 }
 

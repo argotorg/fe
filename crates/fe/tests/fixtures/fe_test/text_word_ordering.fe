@@ -1,0 +1,68 @@
+use core::abi::DynString
+use core::ptr::{MemBuffer, MemSpan}
+use core::hint::black_box
+fn reference(_ a: MemSpan, _ b: MemSpan) -> bool {
+    let len = if a.len() < b.len() { a.len() } else { b.len() }
+    for i in 0 .. len {
+        if a.byte_at(i) != b.byte_at(i) {
+            return a.byte_at(i) < b.byte_at(i)
+        }
+    }
+    a.len() < b.len()
+}
+fn check(_ a: MemBuffer, _ b: MemBuffer) {
+    let lt = reference(a.span(), b.span())
+    let gt = reference(b.span(), a.span())
+    assert!((a < b) == lt)
+    assert!((a <= b) == !gt)
+    assert!((a > b) == gt)
+    assert!((a >= b) == !lt)
+    let sa = DynString::from_payload(source: a.span())
+    let sb = DynString::from_payload(source: b.span())
+    assert!((sa < sb) == lt)
+    assert!((sa <= sb) == !gt)
+    assert!((sa > sb) == gt)
+    assert!((sa >= sb) == !lt)
+}
+#[test]
+fn every_length_and_mismatch_position() {
+    for len in 0 .. 98 {
+        var a = MemBuffer::new(len + 33)
+        var b = MemBuffer::new(len + 33)
+        for i in 0 .. len + 33 {
+            a[i] = 0xff
+        }
+        for i in 0 .. len {
+            a[i] = black_box(0x80 as u8)
+            b[i] = black_box(0x80 as u8)
+        }
+        a.truncate(len)
+        b.truncate(len)
+        check(a, b)
+        for i in 0 .. len {
+            b[i] = 0x7f
+            check(a, b)
+            b[i] = 0xff
+            check(a, b)
+            b[i] = 0x80
+        }
+    }
+}
+#[test]
+fn prefix_lengths_and_large_inputs() {
+    for len in [0, 1, 2, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 1023, 1024, 1025] {
+        var a = MemBuffer::new(len)
+        var b = MemBuffer::new(len + 1)
+        for i in 0 .. len {
+            a[i] = black_box(0x41 as u8)
+            b[i] = black_box(0x41 as u8)
+        }
+        b[len] = 0
+        check(a, b)
+        check(b, a)
+        if len != 0 {
+            a[len - 1] = 0x42
+            check(a, b)
+        }
+    }
+}

@@ -2,8 +2,9 @@
 // parameters and a reply result. Lines that start with `//host:` belong to the
 // build that calls the imports of the host; lines that start with `//mock:`
 // belong to the build with files held in Fe, which has no imports.
+use core::ptr::MemArray
 use std::wasm::{HostText, Reply}
-use std::wasm::files::{Files, close, open, read_byte, reply, size}
+use std::wasm::files::{Files, close, open, read, read_byte, reply, size}
 
 //mock: use std::wasm::files::{MemFiles, mock}
 //mock: fn provider() -> MemFiles {
@@ -73,6 +74,39 @@ fn checksum_impl(_ name: HostText) -> Reply uses (files: mut Files) {
     }
 }
 
+// The sum of the bytes of a file, read `chunk` bytes at a time.
+fn read_sum_impl(_ name: HostText, _ chunk: u32) -> Reply uses (files: mut Files) {
+    match open(name.copy()) {
+        Result::Ok(handle) => {
+            var buf: MemArray<u8> = MemArray::new_zeroed(chunk as usize)
+            var sum: u32 = 0
+            var offset: u32 = 0
+            var failure: u32 = 0
+            var reading = true
+            while reading {
+                match read(handle, offset, mut buf.as_slice()) {
+                    Result::Ok(count) => {
+                        var i: usize = 0
+                        while i < count as usize {
+                            sum += buf[i] as u32
+                            i += 1
+                        }
+                        offset += count
+                        reading = count > 0
+                    }
+                    Result::Err(e) => {
+                        failure = e.code()
+                        reading = false
+                    }
+                }
+            }
+            close(handle)
+            if failure == 0 { Reply::ok(sum) } else { Reply::error(failure) }
+        }
+        Result::Err(e) => Reply::error(e.code())
+    }
+}
+
 fn open_n_impl(_ name: HostText, _ n: u32) -> Reply uses (files: mut Files) {
     var i: u32 = 0
     while i < n {
@@ -119,57 +153,82 @@ fn leak_impl(_ name: HostText) -> Reply uses (files: mut Files) {
     }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn byte_at(name: HostText, index: u32) -> Reply uses (files: mut Files) {
 //host:     byte_at_impl(name, index)
+//mock: #[unsafe(export)]
 //mock: pub fn byte_at(name: HostText, index: u32) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { byte_at_impl(name, index) }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn size_of(name: HostText) -> Reply uses (files: mut Files) {
 //host:     size_of_impl(name)
+//mock: #[unsafe(export)]
 //mock: pub fn size_of(name: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { size_of_impl(name) }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn size_unwrapped(name: HostText) -> Reply uses (files: mut Files) {
 //host:     size_unwrapped_impl(name)
+//mock: #[unsafe(export)]
 //mock: pub fn size_unwrapped(name: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { size_unwrapped_impl(name) }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn checksum(name: HostText) -> Reply uses (files: mut Files) {
 //host:     checksum_impl(name)
+//mock: #[unsafe(export)]
 //mock: pub fn checksum(name: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { checksum_impl(name) }
 }
 
+//host: #[unsafe(export)]
+//host: pub fn read_sum(name: HostText, chunk: u32) -> Reply uses (files: mut Files) {
+//host:     read_sum_impl(name, chunk)
+//mock: #[unsafe(export)]
+//mock: pub fn read_sum(name: HostText, chunk: u32) -> Reply {
+//mock:     var p = provider()
+//mock:     with (Files = p) { read_sum_impl(name, chunk) }
+}
+
+//host: #[unsafe(export)]
 //host: pub fn open_n(name: HostText, n: u32) -> Reply uses (files: mut Files) {
 //host:     open_n_impl(name, n)
+//mock: #[unsafe(export)]
 //mock: pub fn open_n(name: HostText, n: u32) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { open_n_impl(name, n) }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn sizes_two(first: HostText, second: HostText) -> Reply uses (files: mut Files) {
 //host:     sizes_two_impl(first, second)
+//mock: #[unsafe(export)]
 //mock: pub fn sizes_two(first: HostText, second: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { sizes_two_impl(first, second) }
 }
 
+//host: #[unsafe(export)]
 //host: pub fn leak(name: HostText) -> Reply uses (files: mut Files) {
 //host:     leak_impl(name)
+//mock: #[unsafe(export)]
 //mock: pub fn leak(name: HostText) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) { leak_impl(name) }
 }
 
 // An export with a text parameter and no result.
+//host: #[unsafe(export)]
 //host: pub fn touch(name: HostText) uses (files: mut Files) {
+//mock: #[unsafe(export)]
 //mock: pub fn touch(name: HostText) {
 //mock:     var p = provider()
 //mock:     with (Files = p) {
@@ -181,10 +240,12 @@ fn leak_impl(_ name: HostText) -> Reply uses (files: mut Files) {
 }
 
 // Text alone: no host call.
+#[unsafe(export)]
 pub fn text_len(name: HostText) -> Reply {
     Reply::ok(name.len())
 }
 
+#[unsafe(export)]
 pub fn text_byte(name: HostText, index: u32) -> Reply {
     let copy = name.copy()
     if index as usize >= copy.len() {
@@ -194,16 +255,19 @@ pub fn text_byte(name: HostText, index: u32) -> Reply {
 }
 
 // Numbers on both sides of a text.
+#[unsafe(export)]
 pub fn mixed(a: u32, name: HostText, b: u64) -> Reply {
     Reply::ok(a + name.len() + b.downcast_truncate())
 }
 
+#[unsafe(export)]
 pub fn plain(a: u32, b: u32) -> u32 {
     a + b
 }
 
 //mock: // How many handles a call leaves open, for the calls that the mock can
 //mock: // count. `which` selects the operation as in the tests.
+//mock: #[unsafe(export)]
 //mock: pub fn open_after(which: u32, a: HostText, b: HostText, n: u32) -> Reply {
 //mock:     var p = provider()
 //mock:     with (Files = p) {

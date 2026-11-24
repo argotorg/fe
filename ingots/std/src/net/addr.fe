@@ -1,0 +1,450 @@
+/// IP addresses and socket addresses, and their text.
+use core::{MemBuffer, Option}
+use core::hash::{Hash, Hasher}
+use core::ops::Eq
+use core::text::Text
+use ingot::io::Display
+
+/// An IPv4 address.
+pub struct Ipv4Addr { bits: u32 }
+
+impl Copy for Ipv4Addr {}
+
+impl Ipv4Addr {
+    /// `127.0.0.1`, this host on the loopback network.
+    pub const LOCALHOST: Ipv4Addr = Ipv4Addr { bits: 0x7f000001 }
+    /// `0.0.0.0`, which a socket binds to receive on every interface.
+    pub const UNSPECIFIED: Ipv4Addr = Ipv4Addr { bits: 0 }
+
+    /// The address `a.b.c.d`.
+    pub fn new(_ a: u8, _ b: u8, _ c: u8, _ d: u8) -> Self {
+        Ipv4Addr { bits: (a as u32) << 24 | (b as u32) << 16 | (c as u32) << 8 | d as u32 }
+    }
+
+    /// The address whose 32 bits are `bits`, the first octet highest.
+    pub fn from_bits(_ bits: u32) -> Self {
+        Ipv4Addr { bits }
+    }
+
+    pub fn to_bits(self) -> u32 {
+        self.bits
+    }
+
+    /// Parses four decimal octets separated by `.`, as `192.168.0.1`. `None`
+    /// for any other text, including an octet above 255 or with a leading
+    /// zero.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        let (bits, end) = read_ipv4(text, from: 0)?
+        if end == text.text_len() { Option::Some(Ipv4Addr { bits }) } else { Option::None }
+    }
+}
+
+impl Eq for Ipv4Addr {
+    fn eq(self, _ other: Self) -> bool {
+        self.bits == other.bits
+    }
+}
+
+impl Hash for Ipv4Addr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.bits.hash(mut state)
+    }
+}
+
+/// The octets in decimal, separated by `.`: `127.0.0.1`.
+impl Display for Ipv4Addr {
+    fn fmt(self, _ out: mut MemBuffer) {
+        let bits = self.bits
+        write!(mut out, low_byte(bits >> 24), ".", low_byte(bits >> 16), ".", low_byte(bits >> 8), ".", low_byte(bits))
+    }
+}
+
+/// An IPv6 address.
+pub struct Ipv6Addr { bits: u128 }
+
+impl Copy for Ipv6Addr {}
+
+impl Ipv6Addr {
+    /// `::1`, this host on the loopback network.
+    pub const LOCALHOST: Ipv6Addr = Ipv6Addr { bits: 1 }
+    /// `::`, which a socket binds to receive on every interface.
+    pub const UNSPECIFIED: Ipv6Addr = Ipv6Addr { bits: 0 }
+
+    /// The address of the eight 16-bit groups `a:b:c:d:e:f:g:h`.
+    pub fn new(_ a: u16, _ b: u16, _ c: u16, _ d: u16, _ e: u16, _ f: u16, _ g: u16, _ h: u16) -> Self {
+        let high = (a as u128) << 112 | (b as u128) << 96 | (c as u128) << 80 | (d as u128) << 64
+        Ipv6Addr { bits: high | (e as u128) << 48 | (f as u128) << 32 | (g as u128) << 16 | h as u128 }
+    }
+
+    /// The address whose 128 bits are `bits`, the first group highest.
+    pub fn from_bits(_ bits: u128) -> Self {
+        Ipv6Addr { bits }
+    }
+
+    pub fn to_bits(self) -> u128 {
+        self.bits
+    }
+
+    /// Parses eight groups of one to four hex digits separated by `:`, as
+    /// `2001:db8:0:0:0:0:0:1`. A `::` once stands for one or more zero
+    /// groups, as in `2001:db8::1`, and an IPv4 address for the last two, as
+    /// in `::ffff:192.0.2.1`. `None` for any other text, including a zone
+    /// (`%eth0`).
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        let (bits, end) = read_ipv6(text, from: 0)?
+        if end == text.text_len() { Option::Some(Ipv6Addr { bits }) } else { Option::None }
+    }
+
+    // Group `index`, from the first, 0.
+    fn group(self, _ index: usize) -> u16 {
+        let shift: u128 = (16 * (7 - index)).downcast_unchecked()
+        (self.bits >> shift).downcast_truncate()
+    }
+}
+
+impl Eq for Ipv6Addr {
+    fn eq(self, _ other: Self) -> bool {
+        self.bits == other.bits
+    }
+}
+
+impl Hash for Ipv6Addr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.bits.hash(mut state)
+    }
+}
+
+/// The text RFC 5952 recommends: the groups in lowercase hex without
+/// leading zeros, with the longest run of two or more zero groups, the
+/// first of equal ones, as `::`, and an IPv4-mapped address with its IPv4
+/// text: `2001:db8::1`, `::ffff:192.0.2.1`.
+impl Display for Ipv6Addr {
+    fn fmt(self, _ out: mut MemBuffer) {
+        if self.bits >> 32 == 0xffff {
+            write!(mut out, "::ffff:", Ipv4Addr { bits: self.bits.downcast_truncate() })
+            return
+        }
+        var run_start: usize = 8
+        var run_len: usize = 1
+        var start: usize = 0
+        while start < 8 {
+            var end = start
+            while end < 8 && self.group(end) == 0 {
+                end += 1
+            }
+            if end - start > run_len {
+                run_start = start
+                run_len = end - start
+            }
+            start = end + 1
+        }
+        var i: usize = 0
+        while i < 8 {
+            if i == run_start {
+                write!(mut out, "::")
+                i += run_len
+                continue
+            }
+            if i > 0 && i != run_start + run_len {
+                out.push(b':')
+            }
+            push_hex(mut out, self.group(i))
+            i += 1
+        }
+    }
+}
+
+/// An IPv4 or IPv6 address.
+pub enum IpAddr {
+    V4(Ipv4Addr),
+    V6(Ipv6Addr),
+}
+
+impl Copy for IpAddr {}
+
+impl IpAddr {
+    /// Parses an IPv4 or IPv6 address, as `Ipv4Addr::parse` and
+    /// `Ipv6Addr::parse` do.
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        match Ipv4Addr::parse(text) {
+            Option::Some(ip) => Option::Some(IpAddr::V4(ip)),
+            Option::None => Option::Some(IpAddr::V6(Ipv6Addr::parse(text)?)),
+        }
+    }
+}
+
+impl Eq for IpAddr {
+    fn eq(self, _ other: Self) -> bool {
+        match (self, other) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => a == b,
+            (IpAddr::V6(a), IpAddr::V6(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// The family, then the address, so that an IPv4 address and an IPv6 one
+/// with the same bits hash apart, as they compare.
+impl Hash for IpAddr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        match self {
+            IpAddr::V4(ip) => {
+                state.write_u64(4)
+                ip.hash(mut state)
+            }
+            IpAddr::V6(ip) => {
+                state.write_u64(6)
+                ip.hash(mut state)
+            }
+        }
+    }
+}
+
+impl Display for IpAddr {
+    fn fmt(self, _ out: mut MemBuffer) {
+        match self {
+            IpAddr::V4(ip) => ip.fmt(mut out),
+            IpAddr::V6(ip) => ip.fmt(mut out),
+        }
+    }
+}
+
+/// An IP address and a port, and for an IPv6 address a scope id: the number
+/// of the network interface a link-local address is on, zero for none.
+pub struct SocketAddr { ip: IpAddr, port: u16, scope_id: u32 }
+
+impl Copy for SocketAddr {}
+
+impl SocketAddr {
+    /// `ip` and `port`, without a scope id.
+    pub fn new(_ ip: IpAddr, _ port: u16) -> Self {
+        SocketAddr { ip, port, scope_id: 0 }
+    }
+
+    /// The IPv6 address `ip` and `port`, with the scope id `scope_id`.
+    pub fn new_v6(_ ip: Ipv6Addr, _ port: u16, scope_id: u32) -> Self {
+        SocketAddr { ip: IpAddr::V6(ip), port, scope_id }
+    }
+
+    pub fn ip(self) -> IpAddr {
+        self.ip
+    }
+
+    pub fn port(self) -> u16 {
+        self.port
+    }
+
+    /// The scope id of an IPv6 address: zero for none, and for IPv4.
+    pub fn scope_id(self) -> u32 {
+        self.scope_id
+    }
+
+    /// Parses an IPv4 address and a decimal port, as `127.0.0.1:8080`, or an
+    /// IPv6 address in brackets, with a decimal scope id after `%` or none,
+    /// and a port, as `[::1]:8080` and `[fe80::1%2]:8080`. `None` for any
+    /// other text, including a port above 65535 or a zone name (`%eth0`).
+    pub fn parse<T: Text>(_ text: T) -> Option<Self> {
+        var addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)
+        var end: usize = 0
+        if byte_is(text, 0, b'[') {
+            let (bits, after) = read_ipv6(text, from: 1)?
+            addr.ip = IpAddr::V6(Ipv6Addr { bits })
+            end = after
+            if byte_is(text, end, b'%') {
+                let (id, id_end) = read_decimal(text, from: end + 1, max_digits: 10)?
+                if id > 0xffffffff {
+                    return Option::None
+                }
+                addr.scope_id = id.downcast_unchecked()
+                end = id_end
+            }
+            if !byte_is(text, end, b']') {
+                return Option::None
+            }
+            end += 1
+        } else {
+            let (bits, after) = read_ipv4(text, from: 0)?
+            addr.ip = IpAddr::V4(Ipv4Addr { bits })
+            end = after
+        }
+        if !byte_is(text, end, b':') {
+            return Option::None
+        }
+        let (port, after) = read_decimal(text, from: end + 1, max_digits: 5)?
+        if port > 65535 || after != text.text_len() {
+            return Option::None
+        }
+        addr.port = port.downcast_unchecked()
+        Option::Some(addr)
+    }
+}
+
+impl Eq for SocketAddr {
+    fn eq(self, _ other: Self) -> bool {
+        self.ip == other.ip && self.port == other.port && self.scope_id == other.scope_id
+    }
+}
+
+/// The address, the port and the scope id, all of which `==` compares.
+impl Hash for SocketAddr {
+    fn hash<H: Hasher>(self, _ state: mut H) {
+        self.ip.hash(mut state)
+        self.port.hash(mut state)
+        self.scope_id.hash(mut state)
+    }
+}
+
+/// `127.0.0.1:8080`, and for IPv6 `[::1]:8080`, or `[fe80::1%2]:8080` with a
+/// scope id.
+impl Display for SocketAddr {
+    fn fmt(self, _ out: mut MemBuffer) {
+        match self.ip {
+            IpAddr::V4(ip) => write!(mut out, ip, ":", self.port),
+            IpAddr::V6(ip) => {
+                write!(mut out, "[", ip)
+                if self.scope_id != 0 {
+                    write!(mut out, "%", self.scope_id)
+                }
+                write!(mut out, "]:", self.port)
+            }
+        }
+    }
+}
+
+// The IPv4 address at `from` in `text`, and the offset after it.
+fn read_ipv4<T: Text>(_ text: T, from: usize) -> Option<(u32, usize)> {
+    var bits: u32 = 0
+    var pos = from
+    for i in 0..4 {
+        if i > 0 {
+            if !byte_is(text, pos, b'.') {
+                return Option::None
+            }
+            pos += 1
+        }
+        let (octet, end) = read_decimal(text, from: pos, max_digits: 3)?
+        if octet > 255 || (end - pos > 1 && text.text_byte(pos) == b'0') {
+            return Option::None
+        }
+        bits = bits << 8 | octet.downcast_unchecked()
+        pos = end
+    }
+    Option::Some((bits, pos))
+}
+
+// The IPv6 address at `from` in `text`, and the offset after it.
+fn read_ipv6<T: Text>(_ text: T, from: usize) -> Option<(u128, usize)> {
+    let (head, head_count, head_ipv4, end) = read_groups(text, from, limit: 8)
+    if head_count == 8 {
+        return Option::Some((head, end))
+    }
+    // An IPv4 address only ends an address, and `::` stands for one or more
+    // groups.
+    if head_ipv4 || !byte_is(text, end, b':') || !byte_is(text, end + 1, b':') {
+        return Option::None
+    }
+    let (tail, _, _, end) = read_groups(text, from: end + 2, limit: 7 - head_count)
+    let shift: u128 = (16 * (8 - head_count)).downcast_unchecked()
+    Option::Some((head << shift | tail, end))
+}
+
+// Up to `limit` groups separated by `:` at `from` in `text`, the last two
+// of which may be an IPv4 address: their bits, how many there are, whether
+// an IPv4 address ends them, and the offset after them.
+fn read_groups<T: Text>(_ text: T, from: usize, limit: usize) -> (u128, usize, bool, usize) {
+    var bits: u128 = 0
+    var count: usize = 0
+    var pos = from
+    while count < limit {
+        // A group after the first follows a `:`.
+        if count > 0 && !byte_is(text, pos, b':') {
+            break
+        }
+        let start = if count > 0 { pos + 1 } else { pos }
+        if count + 2 <= limit {
+            match read_ipv4(text, from: start) {
+                Option::Some((ipv4, end)) => return (bits << 32 | ipv4 as u128, count + 2, true, end),
+                Option::None => {}
+            }
+        }
+        match read_hex_group(text, from: start) {
+            Option::Some((group, end)) => {
+                bits = bits << 16 | group as u128
+                count += 1
+                pos = end
+            }
+            Option::None => break,
+        }
+    }
+    (bits, count, false, pos)
+}
+
+// The one to four hex digits at `from` in `text`, and the offset after them.
+fn read_hex_group<T: Text>(_ text: T, from: usize) -> Option<(u16, usize)> {
+    var value: u16 = 0
+    var pos = from
+    while pos < text.text_len() && pos - from < 4 {
+        let digit = hex_value(text.text_byte(pos))
+        if digit > 15 {
+            break
+        }
+        value = value << 4 | digit as u16
+        pos += 1
+    }
+    if pos == from { Option::None } else { Option::Some((value, pos)) }
+}
+
+// The one to `max_digits` decimal digits at `from` in `text`, and the offset
+// after them.
+fn read_decimal<T: Text>(_ text: T, from: usize, max_digits: usize) -> Option<(u64, usize)> {
+    var value: u64 = 0
+    var pos = from
+    while pos < text.text_len() && pos - from < max_digits {
+        let byte = text.text_byte(pos)
+        if byte < b'0' || byte > b'9' {
+            break
+        }
+        value = value * 10 + (byte - b'0') as u64
+        pos += 1
+    }
+    if pos == from { Option::None } else { Option::Some((value, pos)) }
+}
+
+// Whether `text` has `byte` at `pos`.
+fn byte_is<T: Text>(_ text: T, _ pos: usize, _ byte: u8) -> bool {
+    pos < text.text_len() && text.text_byte(pos) == byte
+}
+
+// The value of a hex digit of either case, 16 for any other byte.
+fn hex_value(_ byte: u8) -> u8 {
+    if byte >= b'0' && byte <= b'9' {
+        byte - b'0'
+    } else if byte >= b'a' && byte <= b'f' {
+        byte - b'a' + 10
+    } else if byte >= b'A' && byte <= b'F' {
+        byte - b'A' + 10
+    } else {
+        16
+    }
+}
+
+// The low eight bits of `bits`.
+fn low_byte(_ bits: u32) -> u8 {
+    (bits & 0xff).downcast_truncate()
+}
+
+// Appends `group` in lowercase hex without leading zeros.
+fn push_hex(_ out: mut MemBuffer, _ group: u16) {
+    var shift: u16 = 12
+    while shift > 0 && group >> shift == 0 {
+        shift -= 4
+    }
+    while true {
+        let digit: u8 = (group >> shift & 15).downcast_truncate()
+        out.push(if digit < 10 { b'0' + digit } else { b'a' + digit - 10 })
+        if shift == 0 {
+            break
+        }
+        shift -= 4
+    }
+}

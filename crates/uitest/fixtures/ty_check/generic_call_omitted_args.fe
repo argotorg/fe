@@ -1,0 +1,75 @@
+// A call gives its callee's generic arguments from the left. An omitted
+// parameter takes its default, or else is inferred.
+use core::functional::Fn
+
+trait Rules {
+    const BONUS: u64
+}
+
+struct Osaka {}
+
+impl Rules for Osaka {
+    const BONUS: u64 = 1
+}
+
+struct Cursor<F: Rules> { gas: u64 }
+
+fn op<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+    c.gas + N + F::BONUS
+}
+
+fn op_default<const N: u64, F: Rules, const M: u64 = 2>(_ c: Cursor<F>) -> u64 {
+    c.gas + N * M + F::BONUS
+}
+
+// A default may name a parameter that is inferred.
+fn dependent<T, U, V = U>(_ t: T, _ u: U, _ v: own V) -> V {
+    v
+}
+
+fn apply<shape A, F: Fn<A, Out = u64>>(_ f: F) -> u64 {
+    0
+}
+
+struct Vm {}
+
+impl Vm {
+    fn op<const N: u64, F: Rules>(self, _ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+
+    fn assoc<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+}
+
+trait Maker {
+    fn make<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64
+}
+
+impl Maker for Vm {
+    fn make<const N: u64, F: Rules>(_ c: Cursor<F>) -> u64 {
+        c.gas + N
+    }
+}
+
+fn through_bound<M: Maker, F: Rules>(_ c: Cursor<F>) -> u64 {
+    M::make<1>(c)
+}
+
+fn calls<F: Rules>(_ c: Cursor<F>, vm: Vm) -> u64 {
+    let d: bool = dependent<u8>(1, true, false)
+    let e: u16 = dependent<u8, bool, u16>(1, true, 2)
+    op<1>(c)
+        + op<1, F>(c)
+        + op_default<1>(c)
+        + op_default<1, F>(c)
+        + op_default<1, F, 3>(c)
+        + vm.op<1>(c)
+        + Vm::assoc<1>(c)
+        + <Vm as Maker>::make<1>(c)
+        + through_bound<Vm>(c)
+        + apply<(u8,)>(|x: u8| x as u64)
+        + apply(|x: u8| x as u64)
+        + e as u64
+}

@@ -1,0 +1,205 @@
+// Directly decoded calls must validate the received extent and ABI words,
+// preserve surplus decoder input, and preserve the complete revert payload.
+use core::abi::{AbiDecoder, AbiSize, ByteInput, Decode, store_word}
+use core::ptr::MemBuffer
+use std::abi::{Bytes, Sol}
+use std::evm::{RawOps, encode_msg_calldata, staticcall_decode}
+
+msg WordMsg {
+    #[selector = sol("response(uint256,uint256,bool)")]
+    Response { len: u256, value: u256, fail: bool } -> u256,
+}
+
+msg BoolMsg {
+    #[selector = sol("response(uint256,uint256,bool)")]
+    Response { len: u256, value: u256, fail: bool } -> bool,
+}
+
+msg PairMsg {
+    #[selector = sol("response(uint256,uint256,bool)")]
+    Response { len: u256, value: u256, fail: bool } -> (u256, u256),
+}
+
+// Decode is open to user implementations. Even a static decoder can observe
+// the complete input length, so surplus data cannot simply be discarded.
+struct InputLength { len: u256 }
+
+impl AbiSize for InputLength {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Decode<Sol> for InputLength {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Self { len: input.len() }
+    }
+}
+
+msg LengthMsg {
+    #[selector = sol("response(uint256,uint256,bool)")]
+    Response { len: u256, value: u256, fail: bool } -> InputLength,
+}
+
+pub contract Response {
+    recv WordMsg {
+        Response { len, value, fail } -> u256 uses (raw: RawOps) {
+            var data = MemBuffer::new(1024)
+            unsafe {
+                store_word(ptr: data.ptr(), value: value)
+            }
+            unsafe {
+                data.set_len(len.downcast().unwrap())
+            }
+            if fail {
+                raw.revert(data: data.span())
+            }
+            raw.return_data(data: data.span())
+        }
+    }
+}
+
+msg ProbeMsg {
+    #[selector = sol("word(address,uint256,uint256,uint256,bool)")]
+    Word { target: Address, mode: u256, len: u256, value: u256, fail: bool } -> u256,
+    #[selector = sol("boolean(address,uint256,uint256)")]
+    Boolean { target: Address, len: u256, value: u256 } -> bool,
+    #[selector = sol("pair(address,uint256)")]
+    Pair { target: Address, len: u256 } -> (u256, u256),
+}
+
+pub contract Probe uses (call: mut Call) {
+    recv ProbeMsg {
+        Word { target, mode, len, value, fail } -> u256
+        uses (mut call)
+        {
+            let message = WordMsg::Response { len, value, fail }
+            match mode {
+                0 => call.call(addr: target, gas: 100000, value: Wei::zero(), message),
+                1 => call.static(addr: target, gas: 100000, message),
+                2 => call.delegate(addr: target, gas: 100000, message),
+                _ => staticcall_decode<u256>(
+                    addr: target,
+                    gas: 100000,
+                    args: encode_msg_calldata(message).span(),
+                ),
+            }
+        }
+        Boolean { target, len, value } -> bool uses (call) {
+            call.static(
+                addr: target,
+                gas: 100000,
+                message: BoolMsg::Response { len, value, fail: false },
+            )
+        }
+        Pair { target, len } -> (u256, u256) uses (call) {
+            call.static(
+                addr: target,
+                gas: 100000,
+                message: PairMsg::Response { len, value: 42, fail: false },
+            )
+        }
+    }
+}
+
+fn deploy() -> (Address, Address) uses (evm: mut Evm) {
+    let target = evm.create2<Response>(value: Wei::zero(), args: (), salt: 0)
+    let probe = evm.create2<Probe>(value: Wei::zero(), args: (), salt: 0)
+    (target, probe)
+}
+
+#[test]
+fn words_accept_exact_and_surplus_data() uses (evm: mut Evm) {
+    let (target, probe) = deploy()
+    with (Call = evm) {
+        for mode in 0 .. 4 {
+            let mode = mode as u256
+            for len in [32, 64, 1024] {
+                let value = probe.call(
+                        ProbeMsg::Word { target, mode, len, value: 42, fail: false },
+                    )
+                assert!(value == 42)
+            }
+        }
+    }
+}
+
+#[test]
+fn words_reject_short_and_empty_data() uses (evm: mut Evm) {
+    let (target, probe) = deploy()
+    with (Call = evm) {
+        for mode in 0 .. 4 {
+            let mode = mode as u256
+            for len in [0, 1, 31] {
+                let result = probe
+                    .try_call(
+                        ProbeMsg::Word { target, mode, len, value: 42, fail: false },
+                    )
+                assert!(!result.success())
+                assert!(result.returndata_len() == 0)
+            }
+        }
+    }
+}
+
+#[test]
+fn all_call_kinds_bubble_complete_revert_data() uses (evm: mut Evm) {
+    let (target, probe) = deploy()
+    with (Call = evm) {
+        for mode in 0 .. 4 {
+            let mode = mode as u256
+            for len in [0, 4, 32, 96] {
+                let message = WordMsg::Response { len, value: u256::max(), fail: true }
+                let direct = target.try_call(message)
+                let result = probe
+                    .try_call(
+                        ProbeMsg::Word { target, mode, len, value: u256::max(), fail: true },
+                    )
+                assert!(!result.success())
+                assert!(result.returndata_len() as u256 == len)
+                assert!(
+                    Bytes::from_payload(source: result.returndata())
+                        == Bytes::from_payload(source: direct.returndata()),
+                )
+            }
+        }
+    }
+}
+
+#[test]
+fn static_words_still_validate_canonical_values() uses (evm: mut Evm) {
+    let (target, probe) = deploy()
+    with (Call = evm) {
+        assert!(
+            probe.call(ProbeMsg::Boolean { target, len: 32, value: 1 }),
+        )
+        assert!(
+            !probe.call(ProbeMsg::Boolean { target, len: 64, value: 0 }),
+        )
+        let invalid = probe.try_call(ProbeMsg::Boolean { target, len: 32, value: 2 })
+        assert!(!invalid.success())
+        assert!(invalid.returndata_len() == 0)
+    }
+}
+
+#[test]
+fn static_aggregate_requires_all_its_words() uses (evm: mut Evm) {
+    let (target, probe) = deploy()
+    with (Call = evm) {
+        let (a, b) = probe.call(ProbeMsg::Pair { target, len: 64 })
+        assert!(a == 42 && b == 0)
+        let short = probe.try_call(ProbeMsg::Pair { target, len: 63 })
+        assert!(!short.success())
+        assert!(short.returndata_len() == 0)
+    }
+}
+
+#[test]
+fn custom_static_decoder_sees_complete_input() uses (evm: mut Evm) {
+    let (target, _) = deploy()
+    with (Call = evm) {
+        for len in [32, 64, 1024] {
+            let result = target.static(LengthMsg::Response { len, value: 0, fail: false })
+            assert!(result.len == len)
+        }
+    }
+}

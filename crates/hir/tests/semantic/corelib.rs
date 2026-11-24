@@ -55,7 +55,7 @@ fn standalone_root_exported_core_and_std_helpers_resolve() {
     );
 
     let func = top_mod.all_funcs(&db)[0];
-    assert!(resolve_core_trait(&db, func.scope(), &["EffectRef"]).is_some());
+    assert!(resolve_core_trait(&db, func.scope(), &["message", "MsgVariant"]).is_some());
     assert!(resolve_lib_type_path(&db, func.scope(), "core::range::Range").is_some());
     assert!(resolve_lib_func_path(&db, func.scope(), "core::panic").is_some());
     assert!(resolve_lib_type_path(&db, func.scope(), "std::abi::Sol").is_some());

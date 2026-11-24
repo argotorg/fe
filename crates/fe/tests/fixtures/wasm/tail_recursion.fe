@@ -7,6 +7,7 @@ fn count(n: u64, acc: u64) -> u64 {
     count(n: n - 1, acc: acc + n)
 }
 
+#[unsafe(export)]
 pub fn sum_to(n: u64) -> u64 {
     count(n: n, acc: 0)
 }
@@ -25,6 +26,7 @@ fn is_odd(n: u32) -> bool {
     is_even(n: n - 1)
 }
 
+#[unsafe(export)]
 pub fn even(n: u32) -> bool {
     is_even(n: n)
 }

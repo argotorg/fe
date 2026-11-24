@@ -1,0 +1,232 @@
+// Effects follow the parameters' aliasing rule: a call's effects reach
+// disjoint places, unless one provider satisfies several of them, which are
+// then one place. Each test runs at every optimization level
+// (`effect_aliasing_at_all_optimization_levels`).
+use core::MemVec
+
+pub struct Log { entries: MemVec<u256> }
+
+impl Log {
+    pub fn changes(self) -> ref MemVec<u256> { ref self.entries }
+}
+
+pub struct Totals { sum: u256, count: u256 }
+
+impl Totals {
+    pub fn add(mut self, _ x: u256) {
+        self.sum += x
+        self.count += 1
+    }
+}
+
+// Effects of distinct keys are disjoint, so a view of one is iterated while
+// the other is written.
+fn settle() uses (log: Log, totals: mut Totals) {
+    for entry in log.changes() {
+        totals.add(entry)
+    }
+}
+
+#[test]
+fn distinct_keys_are_disjoint() {
+    var entries = MemVec<u256>::new()
+    entries.push(3)
+    entries.push(4)
+    let log = Log { entries }
+    var totals = Totals { sum: 0, count: 0 }
+    with (log, totals) { settle() }
+    assert(totals.sum == 7 && totals.count == 2)
+}
+
+struct Counter { n: u256 }
+
+trait Bump {
+    fn bump(mut self) -> u256
+}
+
+impl Bump for Counter {
+    fn bump(mut self) -> u256 {
+        self.n += 1
+        self.n
+    }
+}
+
+trait Jump {
+    fn jump(mut self) -> u256
+}
+
+impl Jump for Counter {
+    fn jump(mut self) -> u256 {
+        self.n += 10
+        self.n
+    }
+}
+
+fn two_traits() -> u256 uses (b: mut Bump, j: mut Jump) {
+    let first = b.bump()
+    let second = j.jump()
+    let third = b.bump()
+    first * 10000 + second * 100 + third
+}
+
+fn trait_and_type() -> u256 uses (b: mut Bump, c: mut Counter) {
+    let first = b.bump()
+    c.n += 10
+    let second = b.bump()
+    first * 10000 + c.n * 100 + second
+}
+
+// One provider for two trait keys, or a trait key and a type key, is one
+// place: each effect sees the others' writes.
+#[test]
+fn one_provider_for_two_keys() {
+    var c = Counter { n: 0 }
+    assert(with (c) { two_traits() } == 11112)
+    assert(c.n == 12)
+    assert(with (c) { trait_and_type() } == 132424)
+    assert(c.n == 24)
+}
+
+fn pair<T: Bump, U: Jump>() -> u256 uses (x: mut T, y: mut U) {
+    let first = x.bump()
+    let second = y.jump()
+    first * 100 + second
+}
+
+fn forward<T: Bump, U: Jump>() -> u256 uses (a: mut T, b: mut U) {
+    pair<T, U>()
+}
+
+// Generic keys that become one type take one provider, whole; forwarded,
+// two effects that may be one place stay so.
+#[test]
+fn generic_keys_of_one_type() {
+    var c = Counter { n: 0 }
+    assert(with (c) { pair<Counter, Counter>() } == 111)
+    assert(with (c) { forward<Counter, Counter>() } == 1222)
+    assert(c.n == 22)
+}
+
+struct Other { n: u256 }
+
+impl Jump for Other {
+    fn jump(mut self) -> u256 {
+        self.n += 10
+        self.n
+    }
+}
+
+#[test]
+fn generic_keys_of_two_types() {
+    var c = Counter { n: 0 }
+    var o = Other { n: 0 }
+    assert(with (c, o) { forward<Counter, Other>() } == 110)
+    assert(c.n == 1 && o.n == 10)
+}
+
+pub struct Cell { v: u256 }
+
+impl Copy for Cell {}
+
+// A read-only effect that may be one place with a `mut` one is no copy: it
+// sees the writes.
+fn write_then_read<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: Cell) {
+    w = x
+    r.v
+}
+
+#[test]
+fn shared_read_only_effect_sees_writes() {
+    var c = Cell { v: 1 }
+    assert(with (c) { write_then_read<Cell>(Cell { v: 7 }) } == 7)
+    assert(c.v == 7)
+}
+
+struct Pair { n: u256, m: u256 }
+
+fn read_n() -> u256 uses (n: u256, p: mut Pair) {
+    p.n += 10
+    n
+}
+
+fn write_then_read_snapshot<T: Copy>(_ x: T) -> u256 uses (w: mut T, r: u256) {
+    w = x
+    r
+}
+
+// A read-only effect of a snapshot type is a copy taken at the call, as a
+// snapshot argument is, so another effect of the call may write its place.
+#[test]
+fn snapshot_effect_is_a_copy() {
+    var p = Pair { n: 1, m: 0 }
+    assert(with (Pair = p, u256 = p.n) { read_n() } == 1)
+    assert(p.n == 11)
+    var v: u256 = 1
+    assert(with (v) { write_then_read_snapshot<u256>(7) } == 1)
+    assert(v == 7)
+}
+
+trait Count {
+    uses E
+    fn count(mut self) -> u256 uses E
+}
+
+pub struct Store { n: u256 }
+pub struct Tally { n: u256 }
+
+struct Ones {}
+
+impl Count for Ones {
+    uses E = (store: mut Store)
+    fn count(mut self) -> u256 uses E {
+        store.n += 1
+        store.n
+    }
+}
+
+struct Hundreds {}
+
+impl Count for Hundreds {
+    uses E = (store: mut Store)
+    fn count(mut self) -> u256 uses E {
+        store.n += 100
+        store.n
+    }
+}
+
+struct Tallied<C> { inner: C }
+
+impl<C: Count> Count for Tallied<C> {
+    uses E = (C::E, tally: mut Tally)
+    fn count(mut self) -> u256 uses E {
+        tally.n += 1
+        self.inner.count()
+    }
+}
+
+fn both<A: Count, B: Count>(_ a: mut A, _ b: mut B) -> u256 uses (A::E, B::E) {
+    let first = a.count()
+    let second = b.count()
+    let third = a.count()
+    first * 10000 + second * 100 + third
+}
+
+fn own_and_row<A: Count>(_ a: mut A) -> u256 uses (A::E, store: mut Store) {
+    store.n += 1000
+    let counted = a.count()
+    counted + store.n
+}
+
+// Composed rows that need one key take one provider for it, and so does a
+// function's own effect of a key its row needs too.
+#[test]
+fn rows_of_one_key() {
+    var store = Store { n: 0 }
+    var tally = Tally { n: 0 }
+    var ones = Ones {}
+    var tallied = Tallied { inner: Hundreds {} }
+    assert(with (store, tally) { both(mut ones, mut tallied) } == 20202)
+    assert(store.n == 102 && tally.n == 1)
+    assert(with (store) { own_and_row(mut ones) } == 2206)
+    assert(store.n == 1103)
+}

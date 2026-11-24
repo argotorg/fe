@@ -1,0 +1,269 @@
+use core::{MemBuffer, MemSpan}
+use std::io::{BufReader, Error, ErrorKind, MemReader, Read, Write}
+
+// A sink that takes a byte a write, and nothing once it holds `room`.
+struct Narrow { taken: MemBuffer, room: usize }
+
+impl Write for Narrow {
+    fn write(mut self, _ bytes: MemSpan) -> Result<Error, usize> {
+        if bytes.is_empty() || self.taken.len() == self.room {
+            return Result::Ok(0)
+        }
+        self.taken.push(bytes[0])
+        Result::Ok(1)
+    }
+}
+
+fn greet<W: Write>(_ out: mut W) -> Result<Error, ()> {
+    out.write_all(format!("hello").span())
+}
+
+// The value of `result`, which must not be an error. (`unwrap` would need
+// an `Error` that EVM revert data can hold.)
+fn ok<T>(_ result: own Result<Error, T>) -> T {
+    match result {
+        Result::Ok(value) => value,
+        Result::Err(_) => core::panic(),
+    }
+}
+
+// Whether `result` failed with an error of the kind whose text is `kind`.
+fn failed_with<T>(_ result: own Result<Error, T>, _ kind: String<31>) -> bool {
+    match result {
+        Result::Err(error) => format!(error.kind()).span() == kind,
+        Result::Ok(_) => false,
+    }
+}
+
+#[test]
+fn buffers_append_what_they_write() {
+    var out = MemBuffer::empty()
+    assert!(ok(out.write(format!("ab").span())) == 2)
+    assert!(ok(out.write(MemBuffer::empty().span())) == 0)
+    ok(greet(mut out))
+    assert!(out.span() == "abhello")
+}
+
+#[test]
+fn write_all_writes_until_done() {
+    var narrow = Narrow { taken: MemBuffer::empty(), room: 8 }
+    ok(greet(mut narrow))
+    assert!(narrow.taken.span() == "hello")
+    // A write of nothing would never end.
+    assert!(failed_with(greet(mut narrow), "other error"))
+    assert!(narrow.taken.span() == "hellohel")
+}
+
+#[test]
+fn readers_read_their_bytes() {
+    var reader = MemReader::new(format!("hello, world"))
+    var buf = MemBuffer::new(5)
+    assert!(ok(reader.read(buf.span())) == 5)
+    assert!(buf.span() == "hello")
+    ok(reader.read_exact(buf.span()))
+    assert!(buf.span() == ", wor")
+    // Two bytes are left.
+    assert!(failed_with(reader.read_exact(buf.span()), "unexpected end of input"))
+    assert!(buf.span().head(2) == "ld")
+    assert!(ok(reader.read(buf.span())) == 0)
+    var rest = MemBuffer::empty()
+    assert!(ok(reader.read_to_end(mut rest)) == 0)
+    assert!(rest.is_empty())
+}
+
+#[test]
+fn readers_read_to_the_end() {
+    var bytes = MemBuffer::empty()
+    for i in 0..5000 {
+        bytes.push((i % 251).downcast_unchecked())
+    }
+    var reader = MemReader::new(MemBuffer::from_span(bytes.span()))
+    var all = format!("x")
+    assert!(ok(reader.read_to_end(mut all)) == 5000)
+    assert!(all.span().tail(1) == bytes.span())
+}
+
+#[test]
+fn errors_without_host_numbers_have_kinds() {
+    let error = Error::new(ErrorKind::TimedOut)
+    assert!(error.code().is_none())
+    assert!(format!(error.kind()).span() == "timed out")
+    // An error's text is its kind's on every target.
+    assert!(format!(error).span() == "timed out")
+    assert!(format!(ErrorKind::ConnectionRefused).span() == "connection refused")
+}
+
+// A reader of `bytes` that reads at most `chunk` of them at once, and fails
+// with `WouldBlock` once when the read would start at `stall`.
+struct Trickle {
+    bytes: MemBuffer,
+    position: usize,
+    chunk: usize,
+    stall: usize,
+    reads: usize,
+}
+
+impl Trickle {
+    fn new(_ bytes: own MemBuffer, chunk: usize, stall: usize) -> Self {
+        Trickle { bytes, position: 0, chunk, stall, reads: 0 }
+    }
+}
+
+impl Read for Trickle {
+    fn read(mut self, _ buf: mut MemSpan) -> Result<Error, usize> {
+        self.reads += 1
+        if self.position == self.stall {
+            self.stall = self.bytes.len() + 1
+            return Result::Err(Error::new(ErrorKind::WouldBlock))
+        }
+        let rest = self.bytes.len() - self.position
+        var count = if buf.len() < rest { buf.len() } else { rest }
+        if count > self.chunk {
+            count = self.chunk
+        }
+        buf.head(count).copy_from(self.bytes.slice(offset: self.position, len: count))
+        self.position += count
+        Result::Ok(count)
+    }
+}
+
+// Whether the next line of `reader` is `text`.
+fn next_line<R: Read>(_ reader: mut BufReader<R>, _ text: String<31>) -> bool {
+    var line = MemBuffer::empty()
+    ok(reader.read_line(mut line)) && line.span() == text
+}
+
+#[test]
+fn buffered_readers_read_lines() {
+    // A line longer than a read of the buffer, an empty line, a `\r` that
+    // stays, and a last line without a newline.
+    var text = format!("first\n")
+    for _ in 0..5000 {
+        text.push(b'x')
+    }
+    write!(mut text, "\n\nwith cr\r\nlast")
+    var reader = BufReader::new(Trickle::new(text, chunk: 3000, stall: 1000000))
+    assert!(next_line(mut reader, "first"))
+    var long = MemBuffer::empty()
+    assert!(ok(reader.read_line(mut long)) && long.len() == 5000 && long[0] == b'x' && long[4999] == b'x')
+    assert!(next_line(mut reader, ""))
+    assert!(next_line(mut reader, "with cr\r"))
+    assert!(next_line(mut reader, "last"))
+    var none = MemBuffer::empty()
+    assert!(!ok(reader.read_line(mut none)) && none.is_empty())
+    assert!(ok(reader.read_byte()).is_none())
+    // The reader ended, and isn't read again.
+    let reads = reader.inner().reads
+    assert!(!ok(reader.read_line(mut none)))
+    assert!(reader.inner().reads == reads)
+}
+
+#[test]
+fn buffered_readers_read_bytes() {
+    var reader = BufReader::new(MemReader::new(format!("ab\nc")))
+    assert!(ok(reader.read_byte()).unwrap() == b'a')
+    assert!(next_line(mut reader, "b"))
+    assert!(ok(reader.read_byte()).unwrap() == b'c')
+    assert!(ok(reader.read_byte()).is_none())
+    var empty = BufReader::new(MemReader::new(MemBuffer::empty()))
+    var line = MemBuffer::empty()
+    assert!(!ok(empty.read_line(mut line)))
+}
+
+#[test]
+fn buffered_readers_keep_a_line_an_error_interrupts() {
+    var reader = BufReader::new(Trickle::new(format!("abc\ndef\nghi"), chunk: 2, stall: 6))
+    assert!(next_line(mut reader, "abc"))
+    var line = format!("kept")
+    assert!(failed_with(reader.read_line(mut line), "operation would block"))
+    assert!(line.span() == "kept")
+    line.clear()
+    assert!(ok(reader.read_line(mut line)) && line.span() == "def")
+    assert!(next_line(mut reader, "ghi"))
+}
+
+#[test]
+fn buffered_readers_are_readers() {
+    var reader = BufReader::new(Trickle::new(format!("head\nbody of the message"), chunk: 7, stall: 1000000))
+    assert!(next_line(mut reader, "head"))
+    // The rest of the first read, then the reader's own reads.
+    var buf = MemBuffer::new(4)
+    assert!(ok(reader.read(buf.span())) == 2 && buf.span().head(2) == "bo")
+    ok(reader.read_exact(buf.span()))
+    assert!(buf.span() == "dy o")
+    var rest = MemBuffer::empty()
+    assert!(ok(reader.read_to_end(mut rest)) == 13)
+    assert!(rest.span() == "f the message")
+}
+
+#[test]
+fn buffered_readers_reach_their_reader() {
+    var reader = BufReader::new(Trickle::new(format!("one\ntwo\n"), chunk: 100, stall: 1000000))
+    assert!(next_line(mut reader, "one"))
+    // The buffer holds `two\n`, which a read of the reader itself skips.
+    reader.inner().chunk = 1
+    assert!(reader.inner().position == 8)
+    let inner = reader.into_inner()
+    assert!(inner.position == 8 && inner.chunk == 1)
+}
+
+// Whether the next line of `reader`, of at most `max` bytes, is `text`.
+fn next_line_max<R: Read>(_ reader: mut BufReader<R>, max: usize, _ text: String<31>) -> bool {
+    var line = MemBuffer::empty()
+    ok(reader.read_line_max(mut line, max)) && line.span() == text
+}
+
+#[test]
+fn capped_lines_may_reach_the_cap() {
+    var reader = BufReader::new(MemReader::new(format!("hello\n\nworld")))
+    assert!(next_line_max(mut reader, max: 5, "hello"))
+    assert!(next_line_max(mut reader, max: 0, ""))
+    // The last line needs no newline.
+    assert!(next_line_max(mut reader, max: 5, "world"))
+    var line = MemBuffer::empty()
+    assert!(!ok(reader.read_line_max(mut line, max: 5)))
+    // A line split across reads.
+    var split = BufReader::new(Trickle::new(format!("abcde\nfg\n"), chunk: 2, stall: 1000000))
+    assert!(next_line_max(mut split, max: 5, "abcde"))
+    assert!(next_line_max(mut split, max: 2, "fg"))
+}
+
+#[test]
+fn capped_lines_fail_one_byte_over() {
+    var reader = BufReader::new(MemReader::new(format!("hello!\nnext\n")))
+    var line = format!("kept")
+    assert!(failed_with(reader.read_line_max(mut line, max: 5), "invalid data"))
+    assert!(line.span() == "kept")
+    // The line stays unread, and fails again.
+    assert!(failed_with(reader.read_line_max(mut line, max: 5), "invalid data"))
+    assert!(line.span() == "kept")
+}
+
+#[test]
+fn capped_lines_fail_over_the_cap_at_the_end() {
+    var reader = BufReader::new(MemReader::new(format!("abcdefgh")))
+    var line = MemBuffer::empty()
+    assert!(failed_with(reader.read_line_max(mut line, max: 7), "invalid data"))
+    assert!(line.is_empty())
+    var exact = BufReader::new(MemReader::new(format!("abcdefgh")))
+    assert!(next_line_max(mut exact, max: 8, "abcdefgh"))
+}
+
+#[test]
+fn capped_lines_stop_reading_over_the_cap() {
+    // A long line in reads of 3 bytes: the reader stops once it holds more
+    // than the cap, long before the newline.
+    var long = MemBuffer::empty()
+    for _ in 0..1000 {
+        long.push(b'a')
+    }
+    long.push(b'\n')
+    var reader = BufReader::new(Trickle::new(long, chunk: 3, stall: 1000000))
+    var line = MemBuffer::empty()
+    assert!(failed_with(reader.read_line_max(mut line, max: 10), "invalid data"))
+    assert!(line.is_empty())
+    assert!(reader.inner().position <= 13)
+    let reads = reader.inner().reads
+    assert!(failed_with(reader.read_line_max(mut line, max: 10), "invalid data"))
+    assert!(reader.inner().reads == reads)
+}

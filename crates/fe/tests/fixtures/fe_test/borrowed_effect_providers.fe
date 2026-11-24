@@ -1,0 +1,96 @@
+// A provider's type is never a borrow type: a borrowed value given as a
+// provider provides the place it borrows, and a generic key is inferred
+// from a borrowed argument's target.
+struct Z { v: u256 }
+
+trait Tick { fn tick(mut self) -> u256 }
+impl Tick for Z {
+    fn tick(mut self) -> u256 {
+        self.v += 1
+        self.v
+    }
+}
+
+fn read<T>() -> u256 uses (x: T) { 1 }
+fn write<T>() -> u256 uses (x: mut T) { 2 }
+fn bump() -> u256 uses (z: mut Z) {
+    z.v += 1
+    z.v
+}
+fn tick() -> u256 uses (t: mut Tick) { t.tick() }
+fn tick_twice() -> u256 uses (t: mut Tick) { tick() + tick() }
+
+fn through_param(p: mut Z) -> u256 {
+    let a = with (p) { bump() }
+    let b = with (Z = p) { bump() }
+    let c = with (Z = mut p) { bump() }
+    a + b + c + p.v
+}
+
+fn through_generic_param<T>(p: mut T) -> u256 {
+    with (p) { read<T>() + write<T>() }
+}
+
+fn through_view_param<T>(p: ref T) -> u256 {
+    with (p) { read<T>() }
+}
+
+fn through_own_param<T>(p: own T) -> u256 {
+    let a = with (p) { read<T>() }
+    var q = p
+    a + with (q) { write<T>() }
+}
+
+fn through_bounded_param<T: Tick>(p: mut T) -> u256 {
+    with (Tick = p) { tick_twice() }
+}
+
+fn key_of_view<T>(_ x: T) -> u256 uses (e: T) { 3 }
+fn key_of_ref<T>(_ x: ref T) -> u256 uses (e: mut T) { 4 }
+fn key_of_mut<T>(_ x: mut T) -> u256 uses (e: mut T) { 5 }
+
+fn id<T>(_ x: own T) -> T { x }
+fn first<T>(_ pair: mut (T, T)) -> mut T { mut pair.0 }
+
+#[test]
+fn borrowed_param_as_provider() {
+    var z = Z { v: 0 }
+    assert(through_param(p: mut z) == 1 + 2 + 3 + 3)
+    assert(through_generic_param(p: mut z) == 3)
+    assert(through_view_param(p: ref z) == 1)
+    assert(through_own_param(p: Z { v: 9 }) == 3)
+    assert(through_bounded_param(p: mut z) == 4 + 5)
+    assert(z.v == 5)
+}
+
+#[test]
+fn borrowed_local_as_provider() {
+    var z = Z { v: 0 }
+    let r = mut z
+    assert(with (r) { read<Z>() + write<Z>() + bump() } == 4)
+    let n = with (Tick = r) { with (Z = r) { tick() + bump() } }
+    assert(n == 2 + 3)
+    assert(through_bounded_param(p: mut r) == 4 + 5)
+    assert(z.v == 5)
+}
+
+#[test]
+fn provider_from_generic_call() {
+    var pair = (Z { v: 10 }, Z { v: 20 })
+    let n = with (Tick = mut first(mut pair)) { tick() } + with (Z = mut first(mut pair)) { bump() }
+    assert(n == 11 + 12)
+    assert(with (Tick = id(Z { v: 0 })) { tick_twice() } == 1 + 2)
+    assert(pair.0.v == 12 && pair.1.v == 20)
+}
+
+#[test]
+fn generic_key_from_borrowed_arg() {
+    var z = Z { v: 1 }
+    var other = Z { v: 2 }
+    let view = ref other
+    assert(with (z) { key_of_view(view) + key_of_ref(view) } == 7)
+    let r = mut other
+    assert(with (z) { key_of_mut(mut r) } == 5)
+    let p = mut z
+    assert(with (p) { key_of_mut(mut r) + key_of_view(r) } == 8)
+}

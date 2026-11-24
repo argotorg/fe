@@ -30,9 +30,9 @@ extern {
 ///
 /// The origin is unspecified. Subtract readings to measure CPU work, excluding
 /// time waiting for input. Tick frequency is the host C CLOCKS_PER_SEC constant;
-/// it is not necessarily the same on different platforms. Supported native hosts
-/// (AArch64 macOS and x86_64 Linux) use a 64-bit clock_t. Its bits are read
-/// as i64: the C failure sentinel is -1, and counts beyond i64::MAX are negative.
+/// it is not necessarily the same on different platforms. Every supported native
+/// host uses a 64-bit clock_t. Its bits are read as i64: the C failure sentinel
+/// is -1, and counts beyond i64::MAX are negative.
 pub fn cpu_clock_ticks() -> i64 {
     clock()
 }

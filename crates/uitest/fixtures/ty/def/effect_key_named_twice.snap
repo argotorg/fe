@@ -1,0 +1,64 @@
+---
+source: crates/uitest/tests/ty.rs
+expression: diags
+input_file: fixtures/ty/def/effect_key_named_twice.fe
+---
+error[3-0092]: effect `Store` is required twice
+  ┌─ effect_key_named_twice.fe:9:38
+  │
+9 │ fn type_key() uses (a: mut Store, b: Store) {}
+  │                            -----     ^^^^^ `Store` is required again here
+  │                            │
+  │                            `Store` is first required here
+  │
+  = an effect is identified by its key, and a caller provides one value per key
+
+error[3-0092]: effect `T` is required twice
+   ┌─ effect_key_named_twice.fe:11:40
+   │
+11 │ fn generic_key<T>() uses (a: T, b: mut T) {}
+   │                              -         ^ `T` is required again here
+   │                              │
+   │                              `T` is first required here
+   │
+   = an effect is identified by its key, and a caller provides one value per key
+
+error[3-0092]: effect `Counter` is required twice
+   ┌─ effect_key_named_twice.fe:13:41
+   │
+13 │ fn trait_key() uses (a: Counter, b: mut Counter) {}
+   │                         -------         ^^^^^^^ `Counter` is required again here
+   │                         │
+   │                         `Counter` is first required here
+   │
+   = an effect is identified by its key, and a caller provides one value per key
+
+error[3-0092]: effect `Store` is required twice
+   ┌─ effect_key_named_twice.fe:28:40
+   │
+28 │     uses E = (store: mut Store, again: Store)
+   │                          -----         ^^^^^ `Store` is required again here
+   │                          │
+   │                          `Store` is first required here
+   │
+   = an effect is identified by its key, and a caller provides one value per key
+
+error[3-0092]: effect `Log` is required twice
+   ┌─ effect_key_named_twice.fe:44:37
+   │
+44 │     fn log(mut self) uses (E, also: Log) {
+   │                            -        ^^^ `Log` is required again here
+   │                            │
+   │                            `Log` is first required here
+   │
+   = an effect is identified by its key, and a caller provides one value per key
+
+error[3-0092]: effect `A::E` is required twice
+   ┌─ effect_key_named_twice.fe:52:40
+   │
+52 │ fn row_twice<A: Counter>() uses (A::E, A::E) {}
+   │                                  ----  ^^^^ `A::E` is required again here
+   │                                  │
+   │                                  `A::E` is first required here
+   │
+   = an effect is identified by its key, and a caller provides one value per key

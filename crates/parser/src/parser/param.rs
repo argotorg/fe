@@ -124,6 +124,10 @@ impl super::Parse for FnParamScope {
             parse_type(parser, None)?;
             return Ok(());
         }
+        // `...`: the arguments a C variadic function takes after the others.
+        if parser.bump_if(SyntaxKind::Dot3) {
+            return Ok(());
+        }
         let has_mut = parser.bump_if(SyntaxKind::MutKw);
         let has_maybe_mut = !has_mut && parser.bump_if(SyntaxKind::MaybeMutKw);
         let has_var = !has_mut && !has_maybe_mut && parser.bump_if(SyntaxKind::VarKw);
@@ -553,6 +557,13 @@ impl super::Parse for GenericArgScope {
 
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.set_newline_as_trivia(false);
+
+        // `_` is an argument a call infers.
+        if parser.current_kind() == Some(SyntaxKind::Underscore) {
+            parser.set_scope_kind(SyntaxKind::InferGenericArg);
+            parser.bump();
+            return Ok(());
+        }
 
         // `ref` or `mut` alone is the mode of an associated shape.
         if matches!(

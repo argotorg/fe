@@ -1,13 +1,7 @@
 use dir_test::{Fixture, dir_test};
 use serde_json::Value;
 use std::{fs, io::IsTerminal, path::Path, process::Command};
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 use std::{
     path::PathBuf,
     thread,
@@ -781,13 +775,7 @@ fn test_cli_build_emit_sizes_accounts_for_every_code_byte() {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
     let temp = tempdir().expect("tempdir");
@@ -819,13 +807,7 @@ fn test_cli_build_native_executable_uses_main_return_as_exit_code() {
     assert_eq!(status.code(), Some(42));
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
     let fixture_dir =
@@ -850,26 +832,14 @@ fn test_cli_build_native_executes_representative_programs_at_o0_and_o1() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn native_exit_code(source: &str, level: &str) -> Option<i32> {
     let temp = tempdir().expect("tempdir");
     let executable = build_native_program(source, level, temp.path());
     native_program_exit_code(&executable, &[], level)
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     let source_path = temp.join("program.fe");
     fs::write(&source_path, source).expect("write native source");
@@ -891,13 +861,7 @@ fn build_native_program(source: &str, level: &str, temp: &Path) -> PathBuf {
     out_dir.join("program")
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Option<i32> {
     test_utils::skip_crash_reports();
     let mut child = Command::new(executable)
@@ -918,13 +882,7 @@ fn native_program_exit_code(executable: &Path, args: &[&str], level: &str) -> Op
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_native_trait_provider_repeated_calls_retain_state() {
     for copy_impl in ["impl Copy for Counter {}", ""] {
@@ -956,13 +914,7 @@ pub fn main() -> i32 {{
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_native_trait_provider_source_capture() {
     let source = include_str!("fixtures/fe_test/trait_provider_identity.fe");
@@ -971,13 +923,7 @@ fn test_cli_native_trait_provider_source_capture() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_unchecked_div_rem_integer_widths() {
     for bits in [8, 16, 32, 64, 128, 256] {
@@ -1019,13 +965,7 @@ pub fn main() -> i32 {{
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_arithmetic_traps() {
     let mut cases = Vec::new();
@@ -1159,13 +1099,7 @@ pub fn main() -> i32 {{ if verify() {{ 0 }} else {{ 1 }} }}
     )
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_power_edges() {
     for bits in [8, 128, 256] {
@@ -1201,13 +1135,7 @@ fn test_cli_evm_power_edges() {
     }
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    not(any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    ))
-))]
+#[cfg(all(feature = "cranelift", not(native_host)))]
 #[test]
 fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     let temp = tempdir().expect("tempdir");
@@ -1222,9 +1150,10 @@ fn test_cli_build_native_rejects_executable_on_unsupported_host() {
     ]);
     assert_eq!(exit_code, 1, "expected native host rejection:\n{output}");
     assert!(
-        output.contains(
-            "native executable and library output currently require an x86-64 Linux or AArch64 macOS host"
-        ),
+        output.contains(&format!(
+            "native executable and library output requires one of these hosts: {}",
+            common::compilation::Platform::supported_hosts()
+        )),
         "unexpected output:\n{output}"
     );
 }
@@ -1253,13 +1182,7 @@ fn test_cli_build_native_rejects_evm_artifacts() {
     );
 }
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[test]
 fn test_cli_build_native_library_needs_exports_and_no_executable() {
     let temp = tempdir().expect("tempdir");
@@ -3865,16 +3788,7 @@ fn test_fe_test(fixture: Fixture<&str>) {
     );
 }
 
-#[cfg(any(
-    feature = "wasm",
-    all(
-        feature = "cranelift",
-        any(
-            all(target_arch = "x86_64", target_os = "linux"),
-            all(target_arch = "aarch64", target_os = "macos")
-        )
-    )
-))]
+#[cfg(any(feature = "wasm", all(feature = "cranelift", native_host)))]
 /// `fe_test` fixtures that need the EVM: contracts, storage, EVM
 /// instructions or EVM effects. Sorted.
 const EVM_ONLY_FE_TESTS: &[&str] = &[
@@ -3896,6 +3810,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "assoc_type_fields",
     "assoc_type_lanes",
     "associated_shape_forwarding",
+    "block_env",
     "bytes_view_overflow_revert",
     "call_with_default",
     "clear_place",
@@ -3922,6 +3837,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "dyn_array_from_slice",
     "dyn_array_get",
     "dynamic_offset_overflow",
+    "effect_aliasing_lanes",
     "effect_handle_field_deref",
     "eip712_domain",
     "encode_msg_calldata",
@@ -3946,6 +3862,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "factory",
     "fixed_bytes_constant_return",
     "for_mut_index_base",
+    "forward_delegatecall",
     "forwarded_projection_spaces",
     "gcd",
     "generated_type_param_names",
@@ -3964,6 +3881,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "loop_base_mutation",
     "mandelbrot",
     "mandelbrot_minimal",
+    "manual_root_zero_sized_effect",
     "maybe_mut_effect_calls",
     "mem_replace_take",
     "mem_vec",
@@ -4013,6 +3931,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "reentrancy_mutex_storage_map",
     "reentrancy_tstor_ptr",
     "revert_helpers",
+    "root_effect_projection_key",
     "runtime_handle_preservation",
     "safe_erc20",
     "shape",
@@ -4064,11 +3983,14 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "storage_packing_value_types",
     "storage_slots_closures",
     "time_units",
+    "trait_effect_lane_writes",
+    "trait_effect_storage_param_provider",
     "tslot_values",
     "tstorptr_field_projection_shapes",
     "tstorptr_struct_field",
     "tuple_return_abi_params",
     "tuple_struct",
+    "typed_call_returns",
     "typed_calls",
     "unchecked_signed_negation",
     "unchecked_storage_compound_assignment",
@@ -4081,20 +4003,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "zero_option_result",
 ];
 
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
-#[cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#[cfg(all(feature = "cranelift", native_host))]
 #[dir_test(
     dir: "$CARGO_MANIFEST_DIR/tests/fixtures/fe_test",
     glob: "*.fe",
@@ -4224,6 +4133,75 @@ fn non_integer_balance_value() {}
         assert!(
             output.contains(expected),
             "expected malformed balance error, got:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_fe_test_rejects_bad_block_args() {
+    let temp = tempdir().expect("tempdir");
+    let cases = [
+        (
+            "missing_timestamp",
+            "#[test(timestamp)]
+fn missing_timestamp() {}
+",
+            "invalid #[test] function `missing_timestamp`: #[test(timestamp = ...)] expects an integer literal",
+        ),
+        (
+            "non_integer_timestamp",
+            "#[test(timestamp = \"1000\")]
+fn non_integer_timestamp() {}
+",
+            "invalid #[test] function `non_integer_timestamp`: #[test(timestamp = ...)] expects an integer literal",
+        ),
+        (
+            "negative_timestamp",
+            "#[test(timestamp = -1)]
+fn negative_timestamp() {}
+",
+            "attribute value must be an ident or literal value",
+        ),
+        (
+            "oversized_timestamp",
+            "#[test(timestamp = 0x10000000000000000000000000000000000000000000000000000000000000000)]
+fn oversized_timestamp() {}
+",
+            "invalid #[test] function `oversized_timestamp`: #[test(timestamp = ...)] must fit in u256",
+        ),
+        (
+            "non_integer_block_number",
+            "#[test(block_number = true)]
+fn non_integer_block_number() {}
+",
+            "invalid #[test] function `non_integer_block_number`: #[test(block_number = ...)] expects an integer literal",
+        ),
+        (
+            "oversized_block_number",
+            "#[test(block_number = 0x10000000000000000000000000000000000000000000000000000000000000000)]
+fn oversized_block_number() {}
+",
+            "invalid #[test] function `oversized_block_number`: #[test(block_number = ...)] must fit in u256",
+        ),
+    ];
+
+    for (filename, source, expected) in cases {
+        let path = temp.path().join(format!("{filename}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let path = path
+            .to_str()
+            .unwrap_or_else(|| panic!("fixture path is not utf-8: {}", path.display()));
+
+        let (output, exit_code) = run_fe_main(&["test", path]);
+        assert_ne!(
+            exit_code, 0,
+            "expected fe test to reject {filename}:
+{output}"
+        );
+        assert!(
+            output.contains(expected),
+            "expected `{expected}` for {filename}, got:
+{output}"
         );
     }
 }
@@ -5606,6 +5584,26 @@ fn immutable_aggregate_forwarding_at_all_optimization_levels() {
             exit_code, 0,
             "aggregate forwarding failed at -O {level}:\n{output}"
         );
+    }
+}
+
+#[test]
+fn effect_aliasing_at_all_optimization_levels() {
+    // The fixture tests cover the default level (1).
+    for name in ["effect_aliasing", "effect_aliasing_lanes"] {
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("tests/fixtures/fe_test/{name}.fe"));
+        for level in ["0", "2", "s"] {
+            let (output, exit_code) = run_fe_main(&[
+                "test",
+                "--jobs",
+                "1",
+                "--optimize",
+                level,
+                fixture.to_str().expect("fixture path utf8"),
+            ]);
+            assert_eq!(exit_code, 0, "{name} failed at -O {level}:\n{output}");
+        }
     }
 }
 

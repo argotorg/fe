@@ -12,6 +12,7 @@ fn fallible(_ ok: bool) -> Result<PlainError, i32> {
     }
 }
 
+#[unsafe(export)]
 pub fn unwrapped(ok: bool) -> i32 {
     fallible(ok).unwrap()
 }

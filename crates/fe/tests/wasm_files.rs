@@ -63,10 +63,12 @@ enum Want {
     Nothing,
     /// The module traps.
     Trap,
+    /// The module reverts with `Panic(uint256)` data that means this.
+    Revert(&'static str),
 }
 
 use Arg::{Num, Text, Wide};
-use Want::{Bad, Good, Nothing, Scalar, Trap};
+use Want::{Bad, Good, Nothing, Revert, Scalar, Trap};
 
 struct Case {
     export: &'static str,
@@ -132,6 +134,13 @@ const CASES: &[Case] = &[
     case("checksum", &[Text("empty")], Good(0), 1),
     case("checksum", &[Text("grüß")], Good(954), 1),
     case("checksum", &[Text("nope")], Bad("NotFound"), 0),
+    // `read` in chunks, which ends with a short chunk or one of nothing.
+    case("read_sum", &[Text("hello.txt"), Num(5)], Good(1128), 1),
+    case("read_sum", &[Text("digits"), Num(3)], Good(525), 1),
+    case("read_sum", &[Text("digits"), Num(100)], Good(525), 1),
+    case("read_sum", &[Text("grüß"), Num(1)], Good(954), 1),
+    case("read_sum", &[Text("empty"), Num(4)], Good(0), 1),
+    case("read_sum", &[Text("nope"), Num(4)], Bad("NotFound"), 0),
     case("open_n", &[Text("digits"), Num(0)], Good(0), 0),
     case("open_n", &[Text("digits"), Num(1)], Good(1), 1),
     case("open_n", &[Text("digits"), Num(50)], Good(50), 50),
@@ -178,9 +187,19 @@ const CASES: &[Case] = &[
         Good(10),
         0,
     ),
-    case("mixed", &[Num(4294967295), Text("ab"), Wide(0)], Trap, 0),
+    case(
+        "mixed",
+        &[Num(4294967295), Text("ab"), Wide(0)],
+        Revert("arithmetic overflow"),
+        0,
+    ),
     case("plain", &[Num(3), Num(4)], Scalar(7), 0),
-    case("plain", &[Num(4294967295), Num(1)], Trap, 0),
+    case(
+        "plain",
+        &[Num(4294967295), Num(1)],
+        Revert("arithmetic overflow"),
+        0,
+    ),
     // An export with no result.
     case("touch", &[Text("digits")], Nothing, 1),
     case("touch", &[Text("nope")], Nothing, 0),
@@ -309,6 +328,7 @@ fn matches_want(got: &Value, want: &Want) -> bool {
         Scalar(value) => got["kind"] == "value" && got["value"] == json!(value.to_string()),
         Nothing => got["kind"] == "none",
         Trap => got["kind"] == "trap",
+        Revert(reason) => got["kind"] == "revert" && got["reason"] == *reason,
     }
 }
 
@@ -678,18 +698,28 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
     let (_, mock) = build("file_ops", Flavour::Mock, "2", temp.path());
     let host = Module::new(engine(), &host).unwrap();
     let mock = Module::new(engine(), &mock).unwrap();
-    // Four imports, text as an address and a length, the reply as one i64.
+    // The five imports of the contract, text as an address and a length, the
+    // reply as one i64, and the revert of `core::rt` in both builds.
     assert_eq!(
         imports_of(&host),
         [
+            ("env", "__fe_revert", "i32,i32->"),
             ("env", "sys_wasm_files_close", "i32->"),
             ("env", "sys_wasm_files_open", "i32,i32->i64"),
+            ("env", "sys_wasm_files_read", "i32,i32,i32,i32->i64"),
             ("env", "sys_wasm_files_read_byte", "i32,i32->i64"),
             ("env", "sys_wasm_files_size", "i32->i64"),
         ]
         .map(|(m, n, s)| (m.to_string(), n.to_string(), s.to_string()))
     );
-    assert_eq!(imports_of(&mock), []);
+    assert_eq!(
+        imports_of(&mock),
+        [("env", "__fe_revert", "i32,i32->")].map(|(m, n, s)| (
+            m.to_string(),
+            n.to_string(),
+            s.to_string()
+        ))
+    );
     let mut want = pairs(&[
         ("alloc", "i32->i32"),
         ("arena_mark", "->i32"),
@@ -700,6 +730,7 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
         ("mixed", "i32,i32,i32,i64->i64"),
         ("open_n", "i32,i32,i32->i64"),
         ("plain", "i32,i32->i32"),
+        ("read_sum", "i32,i32,i32->i64"),
         ("size_of", "i32,i32->i64"),
         ("size_unwrapped", "i32,i32->i64"),
         ("sizes_two", "i32,i32,i32,i32->i64"),
@@ -720,7 +751,11 @@ fn the_signatures_of_the_module_are_the_documented_ones() {
 fn a_module_without_text_has_no_allocator() {
     let temp = tempdir().unwrap();
     let path = temp.path().join("scalar.fe");
-    fs::write(&path, "pub fn add(a: u32, b: u32) -> u32 { a + b }\n").unwrap();
+    fs::write(
+        &path,
+        "#[unsafe(export)]\npub fn add(a: u32, b: u32) -> u32 { a + b }\n",
+    )
+    .unwrap();
     let bytes = build_wasm(&path, "2", &temp.path().join("out"));
     let module = Module::new(engine(), &bytes).unwrap();
     assert_eq!(exports_of(&module), pairs(&[("add", "i32,i32->i32")]));
@@ -790,7 +825,7 @@ const RULE: &str = "exports take `bool` and integers of at most 64 bits, `std::w
 #[test]
 fn other_shapes_are_named_errors() {
     rejected(
-        "use std::abi::DynString\npub fn f(a: DynString) -> u32 { 1 }\n",
+        "use std::abi::DynString\n#[unsafe(export)]\npub fn f(a: DynString) -> u32 { 1 }\n",
         &[
             "cannot export `f` to WebAssembly",
             "parameter `a: DynString`",
@@ -798,15 +833,15 @@ fn other_shapes_are_named_errors() {
         ],
     );
     rejected(
-        "pub fn f(a: u32) -> Option<u32> { Option::None }\n",
+        "#[unsafe(export)]\npub fn f(a: u32) -> Option<u32> { Option::None }\n",
         &["cannot export `f`", "the result type `Option<u32>`", RULE],
     );
     rejected(
-        "pub fn f(a: (u32, u32)) -> u32 { 1 }\n",
+        "#[unsafe(export)]\npub fn f(a: (u32, u32)) -> u32 { 1 }\n",
         &["cannot export `f`", "parameter `a: (u32, u32)`", RULE],
     );
     rejected(
-        "use std::wasm::HostText\npub fn f(a: mut HostText) -> u32 { 1 }\n",
+        "use std::wasm::HostText\n#[unsafe(export)]\npub fn f(a: mut HostText) -> u32 { 1 }\n",
         &[
             "parameter `a: HostText`",
             "is a `HostText` that is not passed by value",
@@ -814,7 +849,7 @@ fn other_shapes_are_named_errors() {
         ],
     );
     rejected(
-        "use std::wasm::HostText\npub fn f(a: u32) -> HostText { unsafe { HostText::from_raw_parts(addr: a, len: 0) } }\n",
+        "use std::wasm::HostText\n#[unsafe(export)]\npub fn f(a: u32) -> HostText { unsafe { HostText::from_raw_parts(addr: a, len: 0) } }\n",
         &[
             "the result type `HostText`",
             "is a `HostText`, which can only be a parameter of an export",
@@ -822,7 +857,7 @@ fn other_shapes_are_named_errors() {
         ],
     );
     rejected(
-        "use std::wasm::Reply\npub fn f(a: Reply) -> u32 { 1 }\n",
+        "use std::wasm::Reply\n#[unsafe(export)]\npub fn f(a: Reply) -> u32 { 1 }\n",
         &[
             "parameter `a: Reply`",
             "is a `Reply`, which can only be the result of an export",
@@ -830,11 +865,11 @@ fn other_shapes_are_named_errors() {
         ],
     );
     rejected(
-        "use std::wasm::HostText\npub fn f(a: [HostText; 2]) -> u32 { 1 }\n",
+        "use std::wasm::HostText\n#[unsafe(export)]\npub fn f(a: [HostText; 2]) -> u32 { 1 }\n",
         &["parameter `a: [HostText; 2]`", "is not a scalar", RULE],
     );
     rejected(
-        "use std::wasm::HostText\npub fn f(a: *HostText) -> u32 { 1 }\n",
+        "use std::wasm::HostText\n#[unsafe(export)]\npub fn f(a: *HostText) -> u32 { 1 }\n",
         &["is a pointer into Fe memory", RULE],
     );
 }
@@ -842,7 +877,7 @@ fn other_shapes_are_named_errors() {
 #[test]
 fn a_text_or_a_reply_cannot_cross_an_import() {
     rejected(
-        "use std::wasm::HostText\nextern { fn h(_ t: HostText) -> u32 }\npub fn run(t: HostText) -> u32 { unsafe { h(t) } }\n",
+        "use std::wasm::HostText\nextern { fn h(_ t: HostText) -> u32 }\n#[unsafe(export)]\npub fn run(t: HostText) -> u32 { unsafe { h(t) } }\n",
         &[
             "cannot import `h` from the WebAssembly host",
             "parameter `t: HostText`",
@@ -851,7 +886,7 @@ fn a_text_or_a_reply_cannot_cross_an_import() {
         ],
     );
     rejected(
-        "use std::wasm::Reply\nextern { fn h(_ a: u32) -> Reply }\npub fn run(a: u32) -> u32 { unsafe { h(a) }.tag }\n",
+        "use std::wasm::Reply\nextern { fn h(_ a: u32) -> Reply }\n#[unsafe(export)]\npub fn run(a: u32) -> u32 { unsafe { h(a) }.tag }\n",
         &[
             "cannot import `h` from the WebAssembly host",
             "the result type `Reply`",
@@ -864,7 +899,7 @@ fn a_text_or_a_reply_cannot_cross_an_import() {
 fn the_names_of_the_allocator_are_reserved_when_the_module_takes_text() {
     for name in ["alloc", "arena_mark", "arena_release"] {
         let with_text = format!(
-            "use std::wasm::HostText\npub fn {name}(a: u32) -> u32 {{ a }}\npub fn len(t: HostText) -> u32 {{ t.len() }}\n"
+            "use std::wasm::HostText\n#[unsafe(export)]\npub fn {name}(a: u32) -> u32 {{ a }}\n#[unsafe(export)]\npub fn len(t: HostText) -> u32 {{ t.len() }}\n"
         );
         rejected(
             &with_text,
@@ -874,32 +909,35 @@ fn the_names_of_the_allocator_are_reserved_when_the_module_takes_text() {
             ],
         );
         // With no text the name is an ordinary export.
-        compile(&format!("pub fn {name}(a: u32) -> u32 {{ a }}\n")).unwrap();
+        compile(&format!(
+            "#[unsafe(export)]\npub fn {name}(a: u32) -> u32 {{ a }}\n"
+        ))
+        .unwrap();
     }
 }
 
 #[test]
 fn safe_code_cannot_make_a_handle_or_a_text_and_cannot_use_a_handle_twice() {
     rejected(
-        "use std::wasm::files::Handle\npub fn f(a: u32) -> u32 {\n    let h = Handle { id: a }\n    a\n}\n",
+        "use std::wasm::files::Handle\n#[unsafe(export)]\npub fn f(a: u32) -> u32 {\n    let h = Handle { id: a }\n    a\n}\n",
         &["initializing an `unsafe` field requires an `unsafe` block"],
     );
     rejected(
-        "use std::wasm::HostText\npub fn f(a: u32) -> u32 {\n    let t = HostText { addr: a, len: 1 }\n    a\n}\n",
+        "use std::wasm::HostText\n#[unsafe(export)]\npub fn f(a: u32) -> u32 {\n    let t = HostText { addr: a, len: 1 }\n    a\n}\n",
         &["initializing an `unsafe` field requires an `unsafe` block"],
     );
     rejected(
-        "use std::wasm::files::{Files, Handle, close}\nfn twice(_ h: own Handle) uses (files: mut Files) {\n    close(h)\n    close(h)\n}\npub fn f(a: u32) -> u32 { a }\n",
+        "use std::wasm::files::{Files, Handle, close}\nfn twice(_ h: own Handle) uses (files: mut Files) {\n    close(h)\n    close(h)\n}\n#[unsafe(export)]\npub fn f(a: u32) -> u32 { a }\n",
         &["cannot use a value after it was moved"],
     );
     rejected(
-        "use std::wasm::files::{Files, Handle, close, size}\nfn late(_ h: own Handle) -> u32 uses (files: mut Files) {\n    close(h)\n    match size(h) {\n        Result::Ok(n) => n\n        Result::Err(_) => 0\n    }\n}\npub fn f(a: u32) -> u32 { a }\n",
+        "use std::wasm::files::{Files, Handle, close, size}\nfn late(_ h: own Handle) -> u32 uses (files: mut Files) {\n    close(h)\n    match size(h) {\n        Result::Ok(n) => n\n        Result::Err(_) => 0\n    }\n}\n#[unsafe(export)]\npub fn f(a: u32) -> u32 { a }\n",
         &["cannot use a value after it was moved"],
     );
     // A handle that is dropped is accepted: the compiler does not require the
     // close, so the host counts it (see the test of the leaked handle).
     compile(
-        "use std::wasm::files::{Files, Handle, open}\nuse std::abi::DynString\nfn drop_it(_ name: DynString) -> u32 uses (files: mut Files) {\n    match open(name) {\n        Result::Ok(h) => 1\n        Result::Err(_) => 0\n    }\n}\npub fn f(a: u32) -> u32 { a }\n",
+        "use std::wasm::files::{Files, Handle, open}\nuse std::abi::DynString\nfn drop_it(_ name: DynString) -> u32 uses (files: mut Files) {\n    match open(name) {\n        Result::Ok(h) => 1\n        Result::Err(_) => 0\n    }\n}\n#[unsafe(export)]\npub fn f(a: u32) -> u32 { a }\n",
     )
     .unwrap();
 }

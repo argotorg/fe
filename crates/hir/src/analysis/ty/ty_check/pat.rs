@@ -78,9 +78,14 @@ impl<'db> TyChecker<'db> {
 
         match pat_data {
             Pat::WildCard => {
-                let ty_var = self.table.new_var(TyVarSort::General, &Kind::Star);
+                let expected_resolved = expected.fold_with(self.db, &mut self.table);
+                let ty = if expected_resolved.is_never(self.db) {
+                    expected_resolved
+                } else {
+                    self.table.new_var(TyVarSort::General, &Kind::Star)
+                };
                 let analysis = self.ready_wildcard(expected, None);
-                self.finish_pat_check(pat, expected, ty_var, analysis)
+                self.finish_pat_check(pat, expected, ty, analysis)
             }
 
             Pat::Rest => {

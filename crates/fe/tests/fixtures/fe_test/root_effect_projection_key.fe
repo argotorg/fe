@@ -1,0 +1,19 @@
+use core::contracts::Target
+use std::evm::{Evm, EvmTarget}
+
+// A test may name the root effect by a projection that normalizes to it.
+type Root = <EvmTarget as Target>::RootEffect
+
+trait Answer { fn answer(self) -> u256 }
+impl Answer for Evm { fn answer(self) -> u256 { 5 } }
+
+fn answer() -> u256 uses (a: Answer) { a.answer() }
+fn answer_through() -> u256 uses (a: Answer) { answer() }
+fn direct() -> u256 uses (evm: mut Evm) { 7 }
+
+#[test]
+fn projected_root_effect_provides_trait_key() uses (root: mut Root) {
+    let through = with (Answer = root) { answer_through() }
+    assert(through == 5)
+    assert(direct() == 7)
+}

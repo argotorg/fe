@@ -150,6 +150,12 @@ impl<'db> BodyOwner<'db> {
         Self::Func(func, if func.is_maybe_mut(db) { mode } else { None })
     }
 
+    /// Whether this is the body of a variadic function, whose calls pass
+    /// extra arguments after its parameters.
+    pub fn is_variadic(self, db: &'db dyn HirAnalysisDb) -> bool {
+        matches!(self, Self::Func(func, _) if func.is_variadic(db))
+    }
+
     /// The mode this body is checked at: a `mut?` function's.
     pub fn mode(self) -> Option<BorrowKind> {
         match self {

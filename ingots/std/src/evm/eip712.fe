@@ -41,19 +41,9 @@ pub fn domain_separator(
     chain_id: u256,
     verifying_contract: Address,
 ) -> u256 {
-    let buf = unsafe { FixedMemBuffer<160>::alloc_uninit() }
-    let p = buf.ptr()
-    unsafe {
-        ops::mstore(addr: p, value: DOMAIN_TYPEHASH)
-        ops::mstore(addr: ptr::offset_bytes(p, 32), value: name_hash)
-        ops::mstore(addr: ptr::offset_bytes(p, 64), value: version_hash)
-        ops::mstore(addr: ptr::offset_bytes(p, 96), value: chain_id)
-        ops::mstore(
-            addr: ptr::offset_bytes(p, 128),
-            value: verifying_contract.inner,
-        )
-        ops::keccak256(offset: p, len: 160)
-    }
+    super::crypto::keccak_words([
+        DOMAIN_TYPEHASH, name_hash, version_hash, chain_id, verifying_contract.inner,
+    ])
 }
 
 /// EIP-712 typed-data digest,

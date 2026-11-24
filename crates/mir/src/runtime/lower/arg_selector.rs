@@ -4,8 +4,7 @@ use hir::analysis::{
     semantic::{
         SLocalId, SemanticLocalKind,
         normalized::{
-            NEffectArg, NEffectArgValue, NOperand as SemanticOperand, NPlace, NPlaceBase,
-            NValueDefinition,
+            NEffectArg, NOperand as SemanticOperand, NPlace, NPlaceBase, NValueDefinition,
         },
     },
     ty::ty_def::TyId,
@@ -22,13 +21,12 @@ use super::{
         specialize_boundary_for_runtime_source_in_context,
     },
     call_input::{
-        CompiledCallInputPlan, CompiledEffectArgPlan, CompiledEffectPlacePlan,
-        CompiledEffectValuePlan, CompiledMaterializationPlan, CompiledValuePassPlan,
+        CompiledCallInputPlan, CompiledMaterializationPlan, CompiledValuePassPlan,
         compile_value_pass_plan,
     },
     classify::{
         BodyEnv, InferClassCache, carrier_value_class, provider_root_space,
-        runtime_class_for_direct_value_provider_in_env,
+        runtime_class_for_provider,
     },
     realize::SelectedRuntimeArg,
     semantic_body::RuntimeOperand,
@@ -139,34 +137,67 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         self.select_materialized_operand_value(operand.local, operand)
     }
 
+    /// The inputs a call passes to its callee's parameters and effects. A
+    /// variadic call's extra arguments are not among them
+    /// (`selected_variadic_args`).
     pub(super) fn selected_call_inputs(
         &mut self,
         args: &[SemanticOperand],
         effect_args: &[NEffectArg<'db>],
         plan: &CompiledCallInputPlan<'db>,
     ) -> Vec<SelectedRuntimeArg<'db>> {
-        assert_eq!(
-            args.len(),
-            plan.param_plans.len(),
+        assert!(
+            args.len() == plan.param_plans.len()
+                || plan.variadic && args.len() > plan.param_plans.len(),
             "runtime call arg count mismatch during value evaluation: caller={:?} args={args:?} plans={:?}",
             self.env.body().owner().key(self.env.db()),
             plan.param_plans,
         );
+        let args = &args[..plan.param_plans.len()];
         assert_eq!(
             effect_args.len(),
-            plan.effect_plans.len(),
-            "runtime effect arg count mismatch during value evaluation: caller={:?} effect_args={effect_args:?} plans={:?}",
+            plan.effect_boundaries.len(),
+            "runtime effect arg count mismatch during value evaluation: caller={:?} effect_args={effect_args:?} boundaries={:?}",
             self.env.body().owner().key(self.env.db()),
-            plan.effect_plans,
+            plan.effect_boundaries,
         );
         let mut selected = self.selected_param_inputs(args, &plan.param_plans);
         selected.extend(
             effect_args
                 .iter()
-                .zip(plan.effect_plans.iter())
-                .filter_map(|(arg, effect_plan)| self.select_effect_arg(arg, effect_plan)),
+                .zip(plan.effect_boundaries.iter())
+                .filter_map(|(arg, boundary)| {
+                    Some(self.select_effect_arg(arg, boundary.as_ref()?))
+                }),
         );
         selected
+    }
+
+    /// The extra arguments of a variadic call, which it passes after all
+    /// its other inputs as plain values. They take no part in choosing the
+    /// callee's runtime instance, so every call shares one.
+    pub(super) fn selected_variadic_args(
+        &mut self,
+        args: &[SemanticOperand],
+        plan: &CompiledCallInputPlan<'db>,
+    ) -> Vec<SelectedRuntimeArg<'db>> {
+        args[plan.param_plans.len()..]
+            .iter()
+            .map(|arg| {
+                self.env
+                    .body()
+                    .runtime_operand(*arg)
+                    .and_then(|arg| {
+                        self.selected_value_pass_plan(arg, &CompiledValuePassPlan::VisibleValue)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "a variadic call's extra argument has no runtime value: caller={:?} arg={arg:?}",
+                            self.env.body().owner().key(self.env.db()),
+                        )
+                    })
+            })
+            .collect()
     }
 
     pub(super) fn selected_param_inputs(
@@ -272,7 +303,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             CompiledValuePassPlan::VisibleValue => {
                 self.select_materialized_operand_value(local, arg)
             }
-            CompiledValuePassPlan::ActualValue => self.select_actual_operand_value(local, arg),
             CompiledValuePassPlan::ExactTransport(exact) => {
                 Some(self.selected_semantic_operand_for_class(arg, exact))
             }
@@ -552,19 +582,20 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
             return Some(SelectedRuntimeArg::local_value(local, selected));
         }
         if let Some(value_class) = self.env.semantic_value_class(self.carriers, local) {
-            if let Some(provider) = local_data.role.root_provider(&self.env.body().locals)
-                && let Some(root_class) = self
+            if let Some(provider) = local_data.role.root_provider(&self.env.body().locals) {
+                let root_class = self
                     .env
                     .actual_runtime_visible_root_provider_class(self.carriers, &provider)
-                    .map(|(_, class)| class)
-                    .or_else(|| {
-                        runtime_class_for_direct_value_provider_in_env(
-                            self.env.db(),
-                            self.env.type_env(),
-                            &provider,
-                        )
-                    })
-            {
+                    .map_or_else(
+                        || {
+                            runtime_class_for_provider(
+                                self.env.db(),
+                                self.env.type_env(),
+                                &provider,
+                            )
+                        },
+                        |(_, class)| class,
+                    );
                 let class = crate::runtime::place::ref_class_for_place_result(
                     self.env.db(),
                     &root_class,
@@ -715,51 +746,26 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
     fn select_effect_arg(
         &mut self,
         arg: &NEffectArg<'db>,
-        plan: &CompiledEffectArgPlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        match (EffectArgInput::new(arg), plan) {
-            (_, CompiledEffectArgPlan::Erased) => None,
-            (EffectArgInput::Value(value), CompiledEffectArgPlan::Value(plan)) => {
-                self.select_value_effect_arg(value, plan)
-            }
-            (EffectArgInput::Place(place), CompiledEffectArgPlan::Place(plan)) => {
-                Some(self.select_place_effect_arg(arg, place, plan))
-            }
-            (EffectArgInput::Value(_), CompiledEffectArgPlan::Place(_))
-            | (EffectArgInput::Place(_), CompiledEffectArgPlan::Value(_)) => {
+        boundary: &StagedBoundary<'db>,
+    ) -> SelectedRuntimeArg<'db> {
+        let db = self.env.db();
+        // Like value arguments, place arguments carry their actual aggregate
+        // layout. Project the whole place: a field or indexed provider need not
+        // have the same layout as its containing root.
+        let layout = self
+            .env
+            .normalized_place_class(self.carriers, &arg.place)
+            .and_then(|class| class.aggregate_layout());
+        let boundary =
+            specialize_boundary_for_aggregate_layout(db, &boundary.boundary, layout).into_owned();
+        let target_ty = arg.provider_target_ty.unwrap_or_else(|| TyId::unit(db));
+        self.select_place_for_boundary(arg.place.clone(), target_ty, boundary.clone())
+            .unwrap_or_else(|| {
                 panic!(
-                    "compiled effect arg source kind mismatch: owner={:?}; arg={arg:?}; plan={plan:?}",
-                    self.env
-                        .body()
-                        .owner()
-                        .key(self.env.db())
-                        .owner(self.env.db()),
+                    "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
+                    self.env.body().owner().key(db).owner(db),
                 )
-            }
-        }
-    }
-
-    fn select_value_effect_arg(
-        &mut self,
-        value: SemanticOperand,
-        plan: &CompiledEffectValuePlan<'db>,
-    ) -> Option<SelectedRuntimeArg<'db>> {
-        let value = self.env.body().runtime_operand(value)?;
-        match plan {
-            CompiledEffectValuePlan::ErasedPlainValue => {
-                self.select_materialized_operand_value(value.local, value)
-            }
-            CompiledEffectValuePlan::ByValue(plan) => self.selected_value_pass_plan(value, plan),
-            CompiledEffectValuePlan::ByValueFallback(fallback) => self
-                .try_selected_semantic_operand_for_class(value, fallback)
-                .or_else(|| self.select_actual_operand_value(value.local, value))
-                .or_else(|| {
-                    Some(SelectedRuntimeArg::placeholder(
-                        self.env.body().locals[value.local.index()].ty,
-                        fallback.clone(),
-                    ))
-                }),
-        }
+            })
     }
 
     fn select_materializable_semantic_value(
@@ -801,57 +807,6 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         Some(selected)
     }
 
-    fn select_place_effect_arg(
-        &self,
-        arg: &NEffectArg<'db>,
-        place: &NPlace<'db>,
-        plan: &CompiledEffectPlacePlan<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        match plan {
-            CompiledEffectPlacePlan::Boundary(boundary) => {
-                self.select_effect_place_for_boundary(arg, place, boundary.boundary.clone())
-            }
-            CompiledEffectPlacePlan::Fallback(fallback) => self.select_effect_place_for_boundary(
-                arg,
-                place,
-                RuntimeBoundarySpec::ExactTransport(fallback.clone()),
-            ),
-        }
-    }
-
-    fn select_effect_place_for_boundary(
-        &self,
-        arg: &NEffectArg<'db>,
-        place: &NPlace<'db>,
-        boundary: RuntimeBoundarySpec<'db>,
-    ) -> SelectedRuntimeArg<'db> {
-        // Like value arguments, place arguments carry their actual aggregate
-        // layout. Project the whole place: a field or indexed provider need not
-        // have the same layout as its containing root.
-        let layout = self
-            .env
-            .normalized_place_class(self.carriers, place)
-            .and_then(|class| class.aggregate_layout());
-        let boundary =
-            specialize_boundary_for_aggregate_layout(self.env.db(), &boundary, layout).into_owned();
-        self.select_place_for_boundary(
-            place.clone(),
-            self.effect_arg_target_ty(arg),
-            boundary.clone(),
-        )
-        .unwrap_or_else(|| {
-            panic!(
-                "effect place arg boundary has no runtime use plan: owner={:?}; arg={arg:?}; boundary={boundary:?}",
-                self.env.body().owner().key(self.env.db()).owner(self.env.db()),
-            )
-        })
-    }
-
-    fn effect_arg_target_ty(&self, arg: &NEffectArg<'db>) -> TyId<'db> {
-        arg.provider_target_ty
-            .unwrap_or_else(|| TyId::unit(self.env.db()))
-    }
-
     fn specialized_boundary(
         &mut self,
         local: SLocalId,
@@ -879,19 +834,5 @@ impl<'a, 'carriers, 'roots, 'cache, 'db> RuntimeArgSelector<'a, 'carriers, 'root
         self.concrete_value_classes?
             .get(arg.value?.index())?
             .clone()
-    }
-}
-
-enum EffectArgInput<'arg, 'db> {
-    Value(SemanticOperand),
-    Place(&'arg NPlace<'db>),
-}
-
-impl<'arg, 'db> EffectArgInput<'arg, 'db> {
-    fn new(arg: &'arg NEffectArg<'db>) -> Self {
-        match &arg.arg {
-            NEffectArgValue::Value(value) => Self::Value(*value),
-            NEffectArgValue::Place(place) => Self::Place(place),
-        }
     }
 }

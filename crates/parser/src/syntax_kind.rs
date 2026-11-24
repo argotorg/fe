@@ -62,6 +62,9 @@ pub enum SyntaxKind {
     /// `..`
     #[token("..")]
     Dot2,
+    /// `...`
+    #[token("...")]
+    Dot3,
     /// `,`
     #[token(",")]
     Comma,
@@ -307,6 +310,8 @@ pub enum SyntaxKind {
     /// `ref` or `mut`: the mode an associated shape is named at,
     /// `D::Step<ref>`
     ModeGenericArg,
+    /// `_`: a generic argument a call infers, `f<_, u8>(x)`
+    InferGenericArg,
     /// `FOO::Bar`
     PathExpr,
     /// `Foo { x: 1, y: "String"` }`
@@ -655,6 +660,7 @@ impl SyntaxKind {
             SyntaxKind::SemiColon => "`;`",
             SyntaxKind::Dot => "`.`",
             SyntaxKind::Dot2 => "`..`",
+            SyntaxKind::Dot3 => "`...`",
             SyntaxKind::Comma => "`,`",
             SyntaxKind::Arrow => "`->`",
             SyntaxKind::FatArrow => "`=>`",
@@ -759,6 +765,7 @@ impl SyntaxKind {
             SyntaxKind::ConstGenericArg => "generic const argument",
             SyntaxKind::AssocTypeGenericArg => "associated type argument",
             SyntaxKind::ModeGenericArg => "mode argument",
+            SyntaxKind::InferGenericArg => "inferred generic argument",
             SyntaxKind::PathExpr => "path",
             SyntaxKind::RecordInitExpr => "record initialization expression",
             SyntaxKind::RecordFieldList => "record field list",
@@ -895,6 +902,7 @@ impl SyntaxKind {
                 | SyntaxKind::SemiColon
                 | SyntaxKind::Dot
                 | SyntaxKind::Dot2
+                | SyntaxKind::Dot3
                 | SyntaxKind::Comma
                 | SyntaxKind::Arrow
                 | SyntaxKind::FatArrow

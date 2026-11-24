@@ -1,0 +1,59 @@
+// `_` stands only for a whole generic argument of a call. Signatures and
+// the types a body writes take no `_`.
+trait Tr<T> {
+    type A
+}
+
+trait Sub: Tr<_> {}
+
+trait HasA {
+    type A: Tr<_>
+}
+
+struct S<T> {
+    x: Option<_>,
+}
+
+struct Tup(Option<_>)
+
+enum E<T> {
+    A(Option<_>),
+    B { x: Option<_> },
+}
+
+type Alias = Option<_>
+
+const C: Option<_> = Option<u8>::None
+
+fn sig(_ x: Option<_>) -> Option<_> {
+    x
+}
+
+fn bound<T: Tr<_>>(_ t: T) {}
+
+fn where_bound<T>(_ t: T)
+where
+    T: Tr<_>,
+{}
+
+fn effect() uses (k: Option<_>) {}
+
+impl Tr<_> for u8 {
+    type A = u8
+}
+
+impl Tr<u8> for u16 {
+    type A = Option<_>
+}
+
+impl S<_> {}
+
+fn take<T>(_ x: own T) {}
+
+fn body(s: S<u8>) {
+    let x: Option<_> = Option<u8>::Some(1)
+    let y = Option<_>::Some(1)
+    let z = S<_> { x: Option::None }
+    let S<_> { x } = s
+    take<Option<_>>(Option::Some(1))
+}

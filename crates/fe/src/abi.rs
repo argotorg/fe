@@ -1575,6 +1575,7 @@ pub contract Info {
     #[test]
     fn recv_mutability_uses_effective_contract_scoped_bindings() {
         let code = r#"
+use core::ptr::MemBuffer
 use std::abi::sol
 use std::evm::{Address, Call, Ctx}
 
@@ -1583,6 +1584,8 @@ msg FooMsg {
     Who -> u256,
     #[selector = sol("ping(address)")]
     Ping { b: Address },
+    #[selector = sol("peek(address)")]
+    Peek { b: Address } -> bool,
 }
 
 msg BarMsg {
@@ -1596,8 +1599,13 @@ pub contract Foo uses (ctx: Ctx, call: mut Call) {
             ctx.caller().word()
         }
 
-        Ping { b } uses (call) {
+        Ping { b } uses (mut call) {
             call.call(addr: b, gas: 100000, value: Wei::zero(), message: BarMsg::Pong {})
+        }
+
+        Peek { b } -> bool uses (call) {
+            var ret = MemBuffer::with_capacity(32)
+            call.raw_staticcall(addr: b, gas: 100000, args: MemBuffer::new(0).span(), ret: mut ret).success()
         }
     }
 }
@@ -1619,8 +1627,14 @@ pub contract Bar {
             .find(|entry| entry["type"] == "function" && entry["name"] == "ping")
             .expect("ping entry");
 
+        let peek = entries
+            .iter()
+            .find(|entry| entry["type"] == "function" && entry["name"] == "peek")
+            .expect("peek entry");
+
         assert_eq!(who["stateMutability"], "view");
         assert_eq!(ping["stateMutability"], "nonpayable");
+        assert_eq!(peek["stateMutability"], "view");
     }
 
     #[test]

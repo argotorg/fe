@@ -20,8 +20,8 @@
 //! take the input they were decoded from.
 //!
 //! Specification: https://ethereum.org/developers/docs/data-structures-and-encoding/rlp
-use core::abi::Bytes
-use core::num::IntDowncast
+use core::abi::{Bytes, ByteSource}
+use core::num::{IntDowncast, leading_zeros}
 use core::option::Option
 use core::ptr::{self, MemArray, MemSpan}
 use super::effects::Address
@@ -104,13 +104,8 @@ fn write_header(_ dest: *u8, offset: u256, len: usize) {
 }
 
 fn byte_len(_ value: u256) -> usize {
-    var len: usize = 0
-    var rest = value
-    while rest != 0 {
-        len += 1
-        rest >>= 8
-    }
-    len
+    // Round the significant bit count up to bytes; zero needs no payload.
+    ((256 - leading_zeros(value) + 7) >> 3).downcast_unchecked()
 }
 
 // Writes the low `len` bytes of `value` big-endian.
@@ -251,11 +246,12 @@ fn split(_ input: MemSpan) -> Option<(Item, usize)> {
 
 // Reads at most 32 bytes as a big-endian integer.
 fn read_be(_ bytes: MemSpan) -> u256 {
-    var value: u256 = 0
-    var i: usize = 0
-    while i < bytes.len() {
-        value = (value << 8) | (bytes.byte_at(i) as u256)
-        i += 1
+    if bytes.is_empty() {
+        return 0
     }
-    value
+    if bytes.len() == 1 {
+        return bytes.byte_at(0) as u256
+    }
+    // word_at pads after the span without reading beyond it.
+    bytes.word_at(0) >> ((32 - bytes.len() as u256) * 8)
 }

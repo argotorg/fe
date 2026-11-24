@@ -37,7 +37,6 @@ use driver::project_target::dependency_target_mismatch;
 use hir::hir_def::{HirIngot, TopLevelMod};
 use mir::{build_runtime_package, build_test_runtime_package, format_runtime_package};
 use rustc_hash::{FxHashMap, FxHashSet};
-use salsa::Setter;
 use std::{
     fmt::{self, Write as _},
     io,
@@ -1520,20 +1519,9 @@ fn prepare_suite_job(
     let cached = databases.take(workspace_url);
     let initialized_workspace = cached.is_some();
     let mut db = cached.unwrap_or_else(|| {
-        let mut db = DriverDataBase::default();
-        db.compiler_options()
-            .set_recovery_mode(&mut db)
-            .to(shared.use_recovery);
-        db.compilation_settings()
-            .set_profile(&mut db)
-            .to(shared.profile.clone().into());
-        db.compilation_settings()
-            .set_target(&mut db)
-            .to(shared.backend.target());
-        db.compilation_settings()
-            .set_os(&mut db)
-            .to(shared.backend.os());
-        db
+        shared
+            .backend
+            .database(&shared.profile, shared.use_recovery)
     });
     let prep = if plan.path.is_file() && plan.path.extension() == Some("fe") {
         prepare_tests_single_file(
@@ -2582,15 +2570,10 @@ fn run_evm_test(
 ) -> TestOutcome {
     let started = Instant::now();
     let test = &case.test;
-    let (result, logs, trace) = match test
-        .initial_balance
-        .as_deref()
-        .map(be_bytes_to_u256)
-        .transpose()
-    {
-        Ok(initial_balance) => execute_test(
+    let (result, logs, trace) = match evm_test_args(test) {
+        Ok([initial_balance, timestamp, block_number]) => execute_test(
             &test.name,
-            case.suite.instance(),
+            evm_test_instance(case, timestamp, block_number),
             &test.selector.to_be_bytes(),
             show_logs,
             test.expected_revert.as_ref(),
@@ -2603,7 +2586,7 @@ fn run_evm_test(
                 name: test.name.clone(),
                 passed: false,
                 error_message: Some(format!(
-                    "invalid initial balance for test `{}`: {err}",
+                    "invalid #[test] argument for test `{}`: {err}",
                     test.name
                 )),
             },
@@ -2617,6 +2600,39 @@ fn run_evm_test(
         trace,
         elapsed: started.elapsed(),
     }
+}
+
+/// The test's `balance`, `timestamp` and `block_number` arguments.
+fn evm_test_args(test: &TestMetadata) -> Result<[Option<U256>; 3], String> {
+    let arg = |key: &str, bytes: &Option<Vec<u8>>| {
+        bytes
+            .as_deref()
+            .map(be_bytes_to_u256)
+            .transpose()
+            .map_err(|err| format!("`{key}`: {err}"))
+    };
+    Ok([
+        arg("balance", &test.initial_balance)?,
+        arg("timestamp", &test.timestamp)?,
+        arg("block_number", &test.block_number)?,
+    ])
+}
+
+/// An instance of the suite's deployed object, at the block the test sets
+/// with `#[test(timestamp = ..., block_number = ...)]`.
+fn evm_test_instance(
+    case: &EvmTestCase,
+    timestamp: Option<U256>,
+    block_number: Option<U256>,
+) -> RuntimeInstance {
+    let mut instance = case.suite.instance();
+    if let Some(timestamp) = timestamp {
+        instance.set_block_timestamp(timestamp);
+    }
+    if let Some(block_number) = block_number {
+        instance.set_block_number(block_number);
+    }
+    instance
 }
 
 /// Writes the suite's object, and the selector that runs each of its tests.
@@ -2710,7 +2726,7 @@ fn write_report_manifest(
 
 fn be_bytes_to_u256(bytes: &[u8]) -> Result<U256, &'static str> {
     if bytes.len() > 32 {
-        return Err("initial balance exceeds u256");
+        return Err("value exceeds u256");
     }
     let mut buf = [0u8; 32];
     // Pad on the left (big-endian): short value goes into the low bytes.
@@ -2957,12 +2973,9 @@ mod tests {
         // `prepare_suite_job` initializes a new one.
         let counters = Arc::new(Mutex::new(SalsaEventCounters::default()));
         let mut db = DriverDataBase::with_salsa_event_counters(Arc::clone(&counters));
-        db.compiler_options()
-            .set_recovery_mode(&mut db)
-            .to(cfg.shared.use_recovery);
-        db.compilation_settings()
-            .set_profile(&mut db)
-            .to(cfg.shared.profile.clone().into());
+        cfg.shared
+            .backend
+            .configure(&mut db, &cfg.shared.profile, cfg.shared.use_recovery);
         assert!(!driver::init_workspace(&mut db, &workspace));
         let mut databases = WorkspaceDatabaseCache::new(cfg.database_cleanup.clone());
         databases.store(Some(workspace.clone()), db);

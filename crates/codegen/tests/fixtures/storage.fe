@@ -1,6 +1,6 @@
 use core::ptr
 use core::abi::store_word
-use std::evm::{Evm, RawOps, RawStorage, StorPtr}
+use std::evm::{Evm, RawOps, RawStorage, storage_at}
 
 enum User {
     Alice,
@@ -131,10 +131,13 @@ fn init() uses (evm: mut Evm) {
 
 #[contract_runtime(Coin)]
 fn runtime() uses (evm: mut Evm) {
-    let store = 0 as u256 as StorPtr<CoinStore>
-    let supply = 2 as u256 as StorPtr<TotalSupply>
-    unsafe {
-        with (mut *store, mut *supply, RawOps = evm) {
+    with (RawStorage = evm) {
+        // One unsafe split proves the two raw places disjoint, as
+        // `credit_alice` and `credit_bob` require.
+        let (mut store, mut supply) = unsafe {
+            (storage_at<CoinStore>(0), storage_at<TotalSupply>(2))
+        }
+        with (store, supply, RawOps = evm) {
             let selector = evm.calldataload(0) >> 224
             match selector {
                 0xab7ccc1c => {

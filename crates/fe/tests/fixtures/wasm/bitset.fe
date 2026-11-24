@@ -34,6 +34,7 @@ fn popcount(b: BitSet) -> u32 {
     total
 }
 
+#[unsafe(export)]
 pub fn count_after(a: u32, b: u32, c: u32, d: u32) -> u32 {
     var s = BitSet { words: [0; 4] }
     set(b: mut s, bit: a)
@@ -43,6 +44,7 @@ pub fn count_after(a: u32, b: u32, c: u32, d: u32) -> u32 {
     popcount(b: s)
 }
 
+#[unsafe(export)]
 pub fn has(a: u32, b: u32, q: u32) -> bool {
     var s = BitSet { words: [0; 4] }
     set(b: mut s, bit: a)

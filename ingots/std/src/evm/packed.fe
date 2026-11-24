@@ -44,7 +44,7 @@
 /// - No decoding counterpart: packed encoding is not self-describing,
 ///   and Solidity has none either.
 use core::abi::{Bytes, ptr_offset, store_word}
-use core::num::IntDowncast
+use core::num::{IntDowncast, to_be}
 use core::ptr::{self, MemSpan}
 use core::result::Result
 use ingot::abi::FixedBytes
@@ -303,7 +303,7 @@ impl Packed {
     /// capacity. When a whole word fits below `limit` a single
     /// left-aligned `mstore` is used (the bytes it zeroes past `width`
     /// are inside our own capacity and overwritten by later appends);
-    /// otherwise the bytes are written individually.
+    /// otherwise smaller integer stores write exactly the requested bytes.
     #[arithmetic(unchecked)]
     pub(ingot) fn append_word(mut self, value: u256, width: u256) {
         assert!(width <= 32)
@@ -316,11 +316,49 @@ impl Packed {
         if len + 32 <= self.buffer.capacity() {
             unsafe { store_word(ptr: cursor, value: value << ((32 - width) * 8)) }
         } else {
-            var i: u256 = 0
-            while i < width {
-                let b: u8 = (value >> ((width - 1 - i) * 8)).downcast_truncate()
-                unsafe { *ptr_offset(cursor, i) = b }
-                i += 1
+            // reserve(width) makes every destination byte valid. Split the
+            // remaining width into 16/8/4/2/1-byte stores, never touching slack
+            // outside the allocation; to_be also preserves byte order on hosts.
+            if width == 1 {
+                unsafe { *cursor = value.downcast_truncate() }
+            } else if width == 2 {
+                let chunk: u16 = value.downcast_truncate()
+                unsafe { *ptr::cast<u8, u16>(cursor) = to_be(chunk) }
+            } else {
+                var word = value << ((32 - width) * 8)
+                var remaining = width
+                var dest = cursor
+                if remaining >= 16 {
+                    let chunk: u128 = (word >> 128).downcast_truncate()
+                    unsafe { *ptr::cast<u8, u128>(dest) = to_be(chunk) }
+                    word <<= 128
+                    dest = ptr::offset_bytes(dest, 16)
+                    remaining -= 16
+                }
+                if remaining >= 8 {
+                    let chunk: u64 = (word >> 192).downcast_truncate()
+                    unsafe { *ptr::cast<u8, u64>(dest) = to_be(chunk) }
+                    word <<= 64
+                    dest = ptr::offset_bytes(dest, 8)
+                    remaining -= 8
+                }
+                if remaining >= 4 {
+                    let chunk: u32 = (word >> 224).downcast_truncate()
+                    unsafe { *ptr::cast<u8, u32>(dest) = to_be(chunk) }
+                    word <<= 32
+                    dest = ptr::offset_bytes(dest, 4)
+                    remaining -= 4
+                }
+                if remaining >= 2 {
+                    let chunk: u16 = (word >> 240).downcast_truncate()
+                    unsafe { *ptr::cast<u8, u16>(dest) = to_be(chunk) }
+                    word <<= 16
+                    dest = ptr::offset_bytes(dest, 2)
+                    remaining -= 2
+                }
+                if remaining != 0 {
+                    unsafe { *dest = (word >> 248).downcast_truncate() }
+                }
             }
         }
         unsafe { self.buffer.set_len(len + width.downcast_unchecked()) }

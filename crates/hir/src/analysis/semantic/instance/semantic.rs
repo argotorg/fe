@@ -4,11 +4,12 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::{
     analysis::{
         HirAnalysisDb,
-        place::{Place, PlaceBase},
         semantic::{
             CallSiteId, PlaceProvenance, RuntimeSizeError, SExpr, SLocalId, SStmtKind, SemOrigin,
             SemanticBody, SemanticCalleeRef, SemanticLocalRole, ValueProvenance, VariantIndex,
-            access::{CallSiteRefinements, provisional_call_site_provider_refinements},
+            access::{
+                CallSiteRefinements, keys_may_share, provisional_call_site_provider_refinements,
+            },
             concrete_layout_fault,
             diagnostics::{
                 SemanticDiagnostic, SemanticDiagnosticId, SemanticDiagnosticKind,
@@ -37,9 +38,8 @@ use crate::{
                 tree_size_within,
             },
             provider::{
-                AddressSpace, ProviderKind, ProviderTransport, RootProviderRegistration,
-                RootProviderScope, provider_semantics_for_specialized_call,
-                registered_root_providers,
+                AddressSpace, ProviderKind, RootProviderRegistration, RootProviderScope,
+                provider_semantics_for_specialized_call,
             },
             shape::Shape,
             subst::substitute_complete,
@@ -48,32 +48,35 @@ use crate::{
                 GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
-                BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectParamSite,
-                EffectPassMode, EffectProviderProvenance, EffectProviderSpecialization,
-                ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, RowArg,
-                SemanticExprLowering, SmirLoweringIssue, TypedBody,
+                BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
+                EffectParamSite, EffectProviderProvenance, EffectProviderSpecialization,
+                ForLoopStep, LocalBinding, ParamSite, ResolvedEffectArg, SemanticExprLowering,
+                SmirLoweringIssue, TypedBody,
             },
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
             ty_lower::{ParamSchemaId, SubstError},
-            visitor::collect_flags,
+            visitor::{TyVisitable, TyVisitor, collect_flags},
         },
     },
-    hir_def::{CallableDef, Contract, ExprId, FuncParamMode, StmtId, scope_graph::ScopeId},
+    hir_def::{
+        CallableDef, Contract, ExprId, FuncParamMode, IdentId, StmtId, scope_graph::ScopeId,
+    },
     semantic::{
         EffectEnvView, EffectRequirement, EffectRequirementKey, ProviderBinding, ProviderSource,
-        ResolvedEffectBinding, effect_param_provider_semantics, effect_requirements_for_site,
+        ResolvedEffectBinding, effect_resolutions_for_site, provider_bindings_for_site,
         storage_slot_span,
     },
 };
 use common::{compilation::Target, indexmap::IndexMap};
 use indexmap::IndexSet;
 use salsa::SalsaValue;
+use std::cell::LazyCell;
 use thin_vec::ThinVec;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv,
-    const_ref::{is_ground, root_impl_env},
+    const_ref::{body_effect, is_ground, root_impl_env},
     instantiate_typed_body, provisional_semantic_callee_key,
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
@@ -180,10 +183,51 @@ pub(crate) enum SemanticBodyAdmissionError<'db> {
     InstanceLimit(crate::analysis::semantic::SemanticDiagnosticId<'db>),
 }
 
+/// A call's effect argument, at the callee effect it is passed as.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub struct CallEffectArg<'db> {
+    pub binding_idx: u32,
+    pub arg: EffectArg<'db>,
+    pub required_mut: bool,
+    pub instantiated_key_ty: Option<TyId<'db>>,
+    pub provider_target_ty: Option<TyId<'db>>,
+    pub provider: Option<AddressSpace>,
+}
+
+impl<'db> CallEffectArg<'db> {
+    fn new(binding_idx: u32, arg: &ResolvedEffectArg<'db>) -> Self {
+        Self {
+            binding_idx,
+            arg: arg.arg,
+            required_mut: arg.required_mut,
+            instantiated_key_ty: arg.instantiated_key_ty,
+            provider_target_ty: arg.provider_target_ty,
+            provider: arg.provider,
+        }
+    }
+}
+
+impl<'db> TyVisitable<'db> for CallEffectArg<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.arg.visit_with(visitor);
+        for ty in self
+            .instantiated_key_ty
+            .iter()
+            .chain(&self.provider_target_ty)
+        {
+            ty.visit_with(visitor);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub struct CallSiteLowering<'db> {
     pub callee: Option<SemanticCalleeRef<'db>>,
-    pub effect_args: Box<[ResolvedEffectArg<'db>]>,
+    /// In the order the callee's body numbers its effects.
+    pub effect_args: Box<[CallEffectArg<'db>]>,
     pub effect_pairs: Box<[(usize, usize)]>,
     pub provider_pairs: Box<[(u32, u32)]>,
     /// Whether the callee takes the operands after the call's receiver (a
@@ -237,13 +281,12 @@ struct ProvisionalCallSiteData<'db, T: SalsaValue + PartialEq + Eq + Clone> {
 #[derive(Debug, Clone)]
 pub enum RootSemanticInstanceError<'db> {
     UnsupportedGenericParam {
-        owner: BodyOwner<'db>,
-        owner_scope: ScopeId<'db>,
         offending_ty: TyId<'db>,
         param_idx: usize,
     },
+    /// Nothing provides the named effect of a root.
     MissingRootProvider {
-        owner: BodyOwner<'db>,
+        effect: Option<IdentId<'db>>,
     },
     UnclosedEffectEnv(SemanticEffectEnvInstantiationError<'db>),
 }
@@ -456,73 +499,78 @@ fn provisional_for_loop_call_sites<'db>(
     ProvisionalCallSiteData { sites, diagnostic }
 }
 
-/// A call's row arguments in the instance's view. The call numbered the
-/// components of the callee's rows as its own view expanded them; the
-/// instance renumbers them by path. A row the call forwards passes as the
-/// components the instance expands it to, each from the caller's component
-/// at the same place in the caller's own row. What stays abstract carries
-/// nothing and is dropped.
-fn expand_row_args<'db>(
+/// A call's effect arguments and providers as `instance` numbers the
+/// callee's effects: a declared effect by its index, and a component of the
+/// callee's rows by where the instance's expansion of them puts its path. A
+/// row the call forwards passes as the components the instance expands it
+/// to, each from the caller's component at the same place in the caller's
+/// own row. What stays abstract carries nothing and is dropped.
+fn instance_effect_args<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     callable: &Callable<'db>,
     args: &[ResolvedEffectArg<'db>],
-) -> (Callable<'db>, Vec<ResolvedEffectArg<'db>>) {
-    let mut callable = callable.clone();
-    let CallableDef::Func(func) = callable.callable_def() else {
-        return (callable, args.to_vec());
-    };
-    if args.iter().all(|arg| arg.row_arg.is_none()) {
-        return (callable, args.to_vec());
-    }
-    let key = instance.key(db);
-    let scope = key.owner(db).scope();
-    let assumptions = semantic_instance_base_assumptions_for_key(db, key);
-    let requirements: Vec<_> = func
-        .effect_requirements(db, callable.mode())
-        .iter()
-        .map(|requirement| match requirement.key {
-            EffectRequirementKey::Row(row) => EffectRequirement {
-                key: EffectRequirementKey::Row(RowKey {
-                    inst: normalize_ty(
-                        db,
-                        instantiate_trait_effect_key(db, row.inst, &callable),
-                        scope,
-                        assumptions,
-                    ),
-                    row: row.row,
-                }),
-                ..requirement.clone()
-            },
-            _ => requirement.clone(),
-        })
-        .collect();
-    let callee_rows = expand_rows(db, &requirements, scope, assumptions);
-    let caller_rows = row_expansion_for_key(db, key);
-    let caller_providers = instantiated_effect_env(db, instance)
-        .map(|env| env.providers(db).clone())
-        .unwrap_or_default();
-    let mut slots = FxHashMap::default();
+) -> (
+    Vec<CallEffectArg<'db>>,
+    Vec<EffectProviderSpecialization<'db>>,
+) {
+    let mut providers = callable.effect_providers().to_vec();
     let mut expanded = Vec::with_capacity(args.len());
-    let mut forwarded_providers = Vec::new();
+    // Only a function has effects.
+    let CallableDef::Func(func) = callable.callable_def() else {
+        return (expanded, providers);
+    };
+    let key = instance.key(db);
+    let callee_rows = LazyCell::new(|| {
+        let scope = key.owner(db).scope();
+        let assumptions = semantic_instance_base_assumptions_for_key(db, key);
+        let requirements: Vec<_> = func
+            .effect_requirements(db, callable.mode())
+            .iter()
+            .map(|requirement| match requirement.key {
+                EffectRequirementKey::Row(row) => EffectRequirement {
+                    key: EffectRequirementKey::Row(RowKey {
+                        inst: normalize_ty(
+                            db,
+                            instantiate_trait_effect_key(db, row.inst, callable),
+                            scope,
+                            assumptions,
+                        ),
+                        row: row.row,
+                    }),
+                    ..requirement.clone()
+                },
+                _ => requirement.clone(),
+            })
+            .collect();
+        expand_rows(db, &requirements, scope, assumptions)
+    });
+    let caller_rows = LazyCell::new(|| row_expansion_for_key(db, key));
+    let caller_providers = LazyCell::new(|| {
+        instantiated_effect_env(db, instance)
+            .map(|env| env.providers(db).clone())
+            .unwrap_or_default()
+    });
+    // A component's provider is the callee's own at its slot.
+    let slot_source = |slot| ProviderSource::UsesParam {
+        site: EffectParamSite::Func(func, callable.mode()).slot_site(db, slot),
+        requirement_idx: slot,
+    };
     for arg in args {
-        let (path, own) = match &arg.row_arg {
-            None => {
-                expanded.push(arg.clone());
+        let (path, own) = match &arg.target {
+            &EffectArgTarget::Declared(binding_idx) => {
+                expanded.push(CallEffectArg::new(binding_idx, arg));
                 continue;
             }
-            Some(RowArg::Component(path)) => {
+            EffectArgTarget::Component { path, provider } => {
                 if let Some(component) = callee_rows.component(path) {
                     let slot = component.requirement.binding_idx;
-                    slots.insert(arg.binding_idx, slot);
-                    expanded.push(ResolvedEffectArg {
-                        binding_idx: slot,
-                        ..arg.clone()
-                    });
+                    expanded.push(CallEffectArg::new(slot, arg));
+                    providers.push(provider.clone().in_slot(slot, slot_source(slot)));
                 }
                 continue;
             }
-            Some(RowArg::Forwarded { callee, own }) => (callee, own),
+            EffectArgTarget::Forwarded { callee, own } => (callee, own),
         };
         for callee in &callee_rows.components {
             let Some(caller) = callee
@@ -547,37 +595,19 @@ fn expand_row_args<'db>(
             else {
                 continue;
             };
-            let (arg_value, pass_mode) = match provider.semantics.transport {
-                ProviderTransport::ByValue => {
-                    (EffectArg::Binding(binding), EffectPassMode::ByValue)
-                }
-                ProviderTransport::ByPlace | ProviderTransport::ByTempPlace => (
-                    EffectArg::Place(Place::new(PlaceBase::Binding(binding))),
-                    EffectPassMode::ByPlace,
-                ),
-            };
             let target = callee.requirement.binding_idx;
-            expanded.push(ResolvedEffectArg {
-                param_idx: expanded.len(),
+            expanded.push(CallEffectArg {
                 binding_idx: target,
-                key: callee.requirement.binding_ty,
-                arg: arg_value,
-                with_source: None,
-                pass_mode,
+                arg: EffectArg::Binding(binding),
                 required_mut: callee.requirement.is_mut,
-                key_kind: callee.requirement.key.kind(),
                 instantiated_key_ty: callee.requirement.key.key_ty(),
                 provider_target_ty: provider.semantics.target_ty,
-                provider: provider.semantics.address_space,
-                row_arg: Some(RowArg::Component(callee.path.clone())),
+                provider: Some(provider.semantics.address_space),
             });
-            forwarded_providers.push(EffectProviderSpecialization {
+            providers.push(EffectProviderSpecialization {
                 provider: ProviderBinding {
                     provider_idx: target,
-                    source: ProviderSource::UsesParam {
-                        site: EffectParamSite::Func(func, callable.mode()).slot_site(db, target),
-                        requirement_idx: target,
-                    },
+                    source: slot_source(target),
                     ..provider.clone()
                 },
                 provenance: EffectProviderProvenance::Binding {
@@ -587,16 +617,7 @@ fn expand_row_args<'db>(
             });
         }
     }
-    // Renumber the callee's slots, not their origins: a provider's source can
-    // name a caller effect whose index happens to overlap a callee row slot.
-    for specialization in callable.effect_providers_mut() {
-        let provider = &mut specialization.provider;
-        if let Some(&slot) = slots.get(&provider.provider_idx) {
-            provider.provider_idx = slot;
-        }
-    }
-    callable.effect_providers_mut().extend(forwarded_providers);
-    (callable, expanded)
+    (expanded, providers)
 }
 
 /// Plans a call before provider refinement. The first argument-mapping
@@ -611,9 +632,8 @@ fn provisional_call_site<'db>(
     origin: SemOrigin<'db>,
     diagnostic: &mut Option<SemanticDiagnosticId<'db>>,
 ) -> CallSiteLowering<'db> {
-    let (callable, nominal_effect_args) =
-        expand_row_args(db, instance, callable, nominal_effect_args);
-    let (callable, nominal_effect_args) = (&callable, nominal_effect_args.as_slice());
+    let (nominal_effect_args, effect_providers) =
+        instance_effect_args(db, instance, callable, nominal_effect_args);
     let mut report = |error| {
         diagnostic.get_or_insert_with(|| method_arg_map_diagnostic(db, instance, error, origin));
     };
@@ -621,7 +641,8 @@ fn provisional_call_site<'db>(
         db,
         instance.key(db),
         callable,
-        nominal_effect_args,
+        &nominal_effect_args,
+        &effect_providers,
         assumptions,
     )
     .unwrap_or_else(|error| {
@@ -632,7 +653,7 @@ fn provisional_call_site<'db>(
         .as_ref()
         .map_or(&[][..], |plan| plan.effect_pairs.as_slice());
     let effect_args =
-        rebase_effect_args(nominal_effect_args, effect_pairs).unwrap_or_else(|error| {
+        body_effect_args(&nominal_effect_args, effect_pairs).unwrap_or_else(|error| {
             report(error);
             nominal_effect_args.into()
         });
@@ -909,29 +930,27 @@ fn call_sites_have_effect_args<'db>(
             .any(|site| !site.effect_args.is_empty())
 }
 
-fn rebase_effect_args<'db>(
-    args: &[ResolvedEffectArg<'db>],
+/// A call's effect arguments at the effects of the callee's body, in the
+/// body's order.
+fn body_effect_args<'db>(
+    args: &[CallEffectArg<'db>],
     effect_pairs: &[(usize, usize)],
-) -> Result<Box<[ResolvedEffectArg<'db>]>, MethodArgMapError<'db>> {
-    if effect_pairs.is_empty() {
-        return Ok(args.to_vec().into_boxed_slice());
-    }
-    let mut rebased = Vec::with_capacity(args.len());
-    for arg in args {
-        let nominal = arg.binding_idx as usize;
-        let Some((_, body_idx)) = effect_pairs.iter().find(|(index, _)| *index == nominal) else {
-            return Err(MethodArgMapError::MissingEffectRole(nominal));
-        };
-        let Ok(binding_idx) = u32::try_from(*body_idx) else {
-            return Err(MethodArgMapError::MissingEffectRole(nominal));
-        };
-        let mut arg = arg.clone();
-        arg.binding_idx = binding_idx;
-        arg.param_idx = *body_idx;
-        rebased.push(arg);
-    }
-    rebased.sort_by_key(|arg| arg.param_idx);
-    Ok(rebased.into_boxed_slice())
+) -> Result<Box<[CallEffectArg<'db>]>, MethodArgMapError<'db>> {
+    let mut args = args
+        .iter()
+        .map(|arg| {
+            let nominal = arg.binding_idx as usize;
+            let binding_idx = body_effect(effect_pairs, nominal)
+                .and_then(|body| u32::try_from(body).ok())
+                .ok_or(MethodArgMapError::MissingEffectRole(nominal))?;
+            Ok(CallEffectArg {
+                binding_idx,
+                ..arg.clone()
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    args.sort_by_key(|arg| arg.binding_idx);
+    Ok(args.into_boxed_slice())
 }
 
 fn method_arg_map_diagnostic<'db>(
@@ -993,9 +1012,8 @@ fn finalize_call_site<'db>(
     origin: SemOrigin<'db>,
     same_assumptions: bool,
 ) -> Result<(), SemanticDiagnosticId<'db>> {
-    let (callable, nominal_effect_args) =
-        expand_row_args(db, instance, callable, nominal_effect_args);
-    let (callable, nominal_effect_args) = (&callable, nominal_effect_args.as_slice());
+    let (nominal_effect_args, effect_providers) =
+        instance_effect_args(db, instance, callable, nominal_effect_args);
     // A plain call without provider refinements or effect providers, under the
     // provisional assumptions, resolves exactly as its provisional plan did:
     // the provider resolution modes differ only for providers and for selected
@@ -1003,7 +1021,7 @@ fn finalize_call_site<'db>(
     if refinements.is_none()
         && same_assumptions
         && callable.trait_inst().is_none()
-        && callable.effect_providers().is_empty()
+        && effect_providers.is_empty()
     {
         return Ok(());
     }
@@ -1013,23 +1031,26 @@ fn finalize_call_site<'db>(
         callable,
         site,
         nominal_effect_args,
+        effect_providers,
         refinements,
         origin,
     )
 }
 
+/// Plans the call at `site` again, with the effect arguments and providers
+/// `instance_effect_args` gives it.
+#[allow(clippy::too_many_arguments)]
 fn replan_call_site<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     callable: &Callable<'db>,
     site: &mut CallSiteLowering<'db>,
-    nominal_effect_args: &[ResolvedEffectArg<'db>],
+    mut nominal_effect_args: Vec<CallEffectArg<'db>>,
+    mut effect_providers: Vec<EffectProviderSpecialization<'db>>,
     refinements: Option<&[CallSiteProviderRefinement]>,
     origin: SemOrigin<'db>,
 ) -> Result<(), SemanticDiagnosticId<'db>> {
-    let mut effect_providers = callable.effect_providers().to_vec();
     let mapping_diag = |error| method_arg_map_diagnostic(db, instance, error, origin);
-    let mut refined_nominal_effect_args = nominal_effect_args.to_vec();
     let mut param_spaces = Vec::new();
     for refinement in refinements.into_iter().flatten() {
         let (binding_idx, provider_idx) = match refinement.input {
@@ -1042,23 +1063,11 @@ fn replan_call_site<'db>(
                 provider_idx,
             } => (binding_idx, provider_idx),
         };
-        let nominal_binding_idx = if site.effect_pairs.is_empty() {
-            binding_idx
-        } else {
-            let Some((nominal, _)) = site
-                .effect_pairs
-                .iter()
-                .find(|(_, body)| *body == binding_idx as usize)
-            else {
-                return Err(mapping_diag(MethodArgMapError::MissingEffectRole(
-                    binding_idx as usize,
-                )));
-            };
-            u32::try_from(*nominal)
-                .map_err(|_| mapping_diag(MethodArgMapError::MissingEffectRole(*nominal)))?
-        };
-        for arg in &mut refined_nominal_effect_args {
-            if arg.binding_idx == nominal_binding_idx {
+        // A refinement names the effect as the site's callee body does.
+        for arg in &mut nominal_effect_args {
+            if body_effect(&site.effect_pairs, arg.binding_idx as usize)
+                == Some(binding_idx as usize)
+            {
                 arg.provider = Some(refinement.address_space);
             }
         }
@@ -1078,13 +1087,13 @@ fn replan_call_site<'db>(
         db,
         instance.key(db),
         callable,
-        &refined_nominal_effect_args,
+        &nominal_effect_args,
         &effect_providers,
     )
     .map_err(mapping_diag)?;
     if let Some(callee) = callee {
-        site.effect_args = rebase_effect_args(&refined_nominal_effect_args, &callee.effect_pairs)
-            .map_err(mapping_diag)?;
+        site.effect_args =
+            body_effect_args(&nominal_effect_args, &callee.effect_pairs).map_err(mapping_diag)?;
         site.effect_pairs = callee.effect_pairs.into_boxed_slice();
         site.provider_pairs = callee.provider_pairs.into_boxed_slice();
         site.drops_receiver = callee.drops_receiver;
@@ -1152,7 +1161,6 @@ fn specialize_provider_address_space<'db>(
         provider.provider_ty,
         provider.semantics.target_ty,
         Some(address_space),
-        provider.semantics.transport,
     );
     specialization.provider.semantics = semantics;
 }
@@ -1309,6 +1317,60 @@ impl<'db> SemanticInstance<'db> {
                     .filter(|component| component.requirement.key.key_row().is_none())
                     .map(|component| component.requirement.clone()),
             )
+            .collect()
+    }
+
+    /// The instance's effects, instantiated: its owner's declared effects,
+    /// then the components of the rows they name.
+    pub fn effect_requirements(self, db: &'db dyn HirAnalysisDb) -> &'db [EffectRequirement<'db>] {
+        instantiated_effect_env(db, self).map_or(&[], |env| env.requirements(db).as_slice())
+    }
+
+    /// The binding indices of the instance's effects that may be one place
+    /// with another of its effects, one of the two `mut`: a provider may
+    /// satisfy both keys, as of generic keys that are one type here or two
+    /// trait keys. A caller gives such effects one place or disjoint ones,
+    /// so neither is exclusive to its slot. A snapshot effect is a copy, no
+    /// place.
+    #[salsa::tracked(returns(ref))]
+    pub fn shared_effects(self, db: &'db dyn HirAnalysisDb) -> Vec<u32> {
+        let copies: Vec<_> = self
+            .effect_bindings(db)
+            .into_iter()
+            .filter_map(|binding| match binding {
+                LocalBinding::EffectParam {
+                    idx, is_mut: false, ..
+                } if self.binding_role(db, binding)
+                    == SemanticLocalRole::DirectValue {
+                        provenance: ValueProvenance::Ordinary,
+                    } =>
+                {
+                    Some(idx as u32)
+                }
+                _ => None,
+            })
+            .collect();
+        let effects: Vec<_> = self
+            .effect_requirements(db)
+            .iter()
+            .filter(|effect| {
+                matches!(
+                    effect.key.kind(),
+                    EffectKeyKind::Type | EffectKeyKind::Trait
+                ) && !copies.contains(&effect.binding_idx)
+            })
+            .collect();
+        let (scope, assumptions) = (self.normalization_scope(db), self.assumptions(db));
+        effects
+            .iter()
+            .filter(|effect| {
+                effects.iter().any(|other| {
+                    other.binding_idx != effect.binding_idx
+                        && (effect.is_mut || other.is_mut)
+                        && keys_may_share(db, scope, assumptions, &effect.key, &other.key)
+                })
+            })
+            .map(|effect| effect.binding_idx)
             .collect()
     }
 
@@ -1811,8 +1873,36 @@ impl<'db> SemanticInstance<'db> {
         self.key(db).owner(db).scope()
     }
 
-    pub fn is_intrinsically_never_returning(self, db: &'db dyn HirAnalysisDb) -> bool {
-        self.is_nonreturning_builtin(db) || self.normalized_result_ty(db).is_never(db)
+    /// Whether a call to this instance never returns whatever its body does:
+    /// it is a builtin that never returns, or its result or an input is
+    /// uninhabited. A provisional analysis asks it of the provisional input
+    /// types, under the instance's base assumptions.
+    pub fn is_intrinsically_never_returning(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        provisional: bool,
+    ) -> bool {
+        let scope = Some(self.normalization_scope(db));
+        let assumptions = if provisional {
+            semantic_instance_base_assumptions_for_key(db, self.key(db))
+        } else {
+            self.assumptions(db)
+        };
+        let uninhabited = |ty: TyId<'db>| ty.is_uninhabited_in(db, scope, assumptions);
+        self.is_nonreturning_builtin(db)
+            || uninhabited(self.normalized_result_ty(db))
+            || self
+                .key(db)
+                .typed_body(db)
+                .input_bindings()
+                .iter()
+                .any(|&binding| {
+                    uninhabited(if provisional {
+                        self.provisional_binding_ty(db, binding)
+                    } else {
+                        self.binding_ty(db, binding)
+                    })
+                })
     }
 
     fn is_nonreturning_builtin(self, db: &'db dyn HirAnalysisDb) -> bool {
@@ -2102,14 +2192,9 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
     };
     match binding {
         LocalBinding::EffectParam {
-            site,
-            idx,
-            provider_idx,
-            is_mut,
-            ..
-        } => provider_from_subst(provider_idx).or_else(|| {
-            provisional_provider_binding_for_effect(db, key, site, idx as u32, provider_idx, is_mut)
-        }),
+            site, provider_idx, ..
+        } => provider_from_subst(provider_idx)
+            .or_else(|| provisional_provider_binding_for_effect(db, key, site, provider_idx)),
         LocalBinding::Param {
             site: ParamSite::EffectField(effect_site),
             idx,
@@ -2122,14 +2207,7 @@ pub(crate) fn provisional_provider_binding_for_instance_effect<'db>(
             let provider_idx =
                 provisional_provider_idx_for_requirement(db, effect_site, requirement.binding_idx)?;
             provider_from_subst(provider_idx).or_else(|| {
-                provisional_provider_binding_for_effect(
-                    db,
-                    key,
-                    effect_site,
-                    requirement.binding_idx,
-                    provider_idx,
-                    requirement.is_mut,
-                )
+                provisional_provider_binding_for_effect(db, key, effect_site, provider_idx)
             })
         }
         LocalBinding::Local { .. }
@@ -2144,14 +2222,10 @@ pub(crate) fn provisional_provider_idx_for_requirement<'db>(
     requirement_idx: u32,
 ) -> Option<u32> {
     match site {
-        EffectParamSite::Func(func, _) => place_effect_provider_param_index_map(db, func)
-            .get(requirement_idx as usize)
-            .and_then(|param_idx| param_idx.map(|_| requirement_idx))
-            .or_else(|| {
-                registered_root_providers(db, site)
-                    .first()
-                    .map(RootProviderRegistration::func_provider_idx)
-            }),
+        EffectParamSite::Func(..) => effect_resolutions_for_site(db, site)
+            .iter()
+            .find(|resolution| resolution.requirement_idx == requirement_idx)
+            .map(|resolution| resolution.provider_idx),
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
@@ -2184,36 +2258,9 @@ fn provisional_provider_binding_for_effect<'db>(
     db: &'db dyn HirAnalysisDb,
     key: SemanticInstanceKey<'db>,
     site: EffectParamSite<'db>,
-    requirement_idx: u32,
     provider_idx: u32,
-    is_mut: bool,
 ) -> Option<ProviderBinding<'db>> {
     match site {
-        EffectParamSite::Func(func, _) => {
-            let provider_map = place_effect_provider_param_index_map(db, func);
-            if provider_map
-                .get(requirement_idx as usize)
-                .is_some_and(Option::is_some)
-                && provider_idx == requirement_idx
-            {
-                let provider_param_idx = provider_map[requirement_idx as usize]?;
-                let provider_ty = *CallableDef::Func(func).params(db).get(provider_param_idx)?;
-                let requirement = effect_requirements_for_site(db, site)
-                    .into_iter()
-                    .find(|requirement| requirement.binding_idx == requirement_idx)?;
-                return Some(ProviderBinding {
-                    provider_idx,
-                    provider_ty,
-                    is_mut,
-                    source: ProviderSource::UsesParam {
-                        site: site.slot_site(db, requirement_idx),
-                        requirement_idx,
-                    },
-                    semantics: effect_param_provider_semantics(db, provider_ty, &requirement.key),
-                });
-            }
-            provisional_root_provider_binding(db, key, site, provider_idx)
-        }
         EffectParamSite::Contract(contract)
         | EffectParamSite::ContractInit { contract }
         | EffectParamSite::ContractRecvArm { contract, .. } => {
@@ -2231,19 +2278,19 @@ fn provisional_provider_binding_for_effect<'db>(
                     semantics: crate::analysis::ty::provider::ProviderSemantics {
                         provider_ty,
                         kind: ProviderKind::Place,
-                        address_space: Some(field.address_space),
+                        address_space: field.address_space,
                         target_ty: Some(provider_ty),
-                        transport: ProviderTransport::ByValue,
                     },
                 });
             }
             provisional_root_provider_binding(db, key, site, provider_idx)
         }
-        EffectParamSite::Closure(_) => EffectEnvView::new(site)
-            .providers(db)
-            .into_iter()
-            .find(|provider| provider.provider_idx == provider_idx)
-            .and_then(|provider| instantiate_provider_binding(db, key, provider).ok()),
+        EffectParamSite::Func(..) | EffectParamSite::Closure(_) => {
+            provider_bindings_for_site(db, site)
+                .iter()
+                .find(|provider| provider.provider_idx == provider_idx)
+                .and_then(|provider| instantiate_provider_binding(db, key, provider.clone()).ok())
+        }
     }
 }
 
@@ -2436,16 +2483,20 @@ fn classify_binding_role<'db>(
     let scope = owner.scope();
     let ty = normalize_ty(db, ty, scope, assumptions);
     if let Some((_, value_ty)) = ty.as_capability(db) {
+        assert!(
+            provider.is_none(),
+            "an effect binding's type is never a borrow type"
+        );
         let value_ty = normalize_ty(db, value_ty, scope, assumptions);
-        return SemanticLocalRole::PlaceCarrier { provider, value_ty };
+        return SemanticLocalRole::PlaceCarrier { value_ty };
     }
-    // A read-only effect of a snapshot type provided by a memory place is
-    // passed as a copy, as a view parameter is: nothing can write the place
-    // during the call, and a reentrant call has memory of its own.
+    // A read-only effect of a snapshot type is a copy taken at the call, as
+    // a snapshot view parameter is, in any space: the call's other effects
+    // and arguments may write its place. An entry's effects are its own.
     if let Some(provider) = &provider
+        && matches!(owner, BodyOwner::Func(..) | BodyOwner::Closure { .. })
         && matches!(binding, LocalBinding::EffectParam { is_mut: false, .. })
-        && provider.semantics.kind == ProviderKind::Place
-        && provider.semantics.address_space == Some(AddressSpace::Memory)
+        && !matches!(provider.source, ProviderSource::RootProvider { .. })
         && ty_is_snapshot(db, scope, ty, assumptions)
     {
         return SemanticLocalRole::DirectValue {
@@ -2724,13 +2775,15 @@ fn root_owner_effect_providers<'db>(
                     specialized_root_provider_target_ty(db, &requirement, root_provider),
                 )
             } else {
-                let target_ty = requirement.key.binding_ty(db)?;
-                let provider_ty = if requirement.is_mut {
-                    TyId::borrow_mut_of(db, target_ty)
-                } else {
-                    TyId::borrow_ref_of(db, target_ty)
+                // A root has no caller to provide the effect. A type key
+                // stands for a place of its own type, which only a
+                // zero-sized type needs no storage for. A trait key names no
+                // type to stand for it.
+                let EffectRequirementKey::Type(key_ty) = requirement.key else {
+                    return None;
                 };
-                (provider_ty, slot.source.clone(), Some(target_ty))
+                let target_ty = normalize_ty(db, key_ty, func.scope(), assumptions);
+                (target_ty, slot.source.clone(), Some(target_ty))
             };
             Some(ProviderBinding {
                 provider_idx: slot.provider_idx,
@@ -2742,7 +2795,6 @@ fn root_owner_effect_providers<'db>(
                     provider_ty,
                     target_ty,
                     Some(AddressSpace::Memory),
-                    ProviderTransport::ByValue,
                 ),
             })
         })
@@ -2757,7 +2809,9 @@ fn root_provider_satisfies_effect_requirement<'db>(
     requirement: &EffectRequirement<'db>,
 ) -> bool {
     match requirement.key {
-        EffectRequirementKey::Type(provider_ty) => provider_ty == root_provider.provider_ty,
+        EffectRequirementKey::Type(provider_ty) => {
+            normalize_ty(db, provider_ty, func.scope(), assumptions) == root_provider.provider_ty
+        }
         EffectRequirementKey::Trait(trait_inst) => {
             let goal = instantiate_trait_self(db, trait_inst, root_provider.provider_ty);
             matches!(
@@ -2789,8 +2843,6 @@ fn root_func_generic_args<'db>(
     if provider_param_idxs.is_empty() {
         if let Some((param_idx, &offending_ty)) = params.iter().enumerate().next() {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty,
                 param_idx,
             });
@@ -2802,7 +2854,9 @@ fn root_func_generic_args<'db>(
         .into_iter()
         .map(|provider| (provider.provider_idx, provider.provider_ty))
         .collect::<FxHashMap<_, _>>();
-    let resolved_provider_by_effect = EffectEnvView::new(site)
+    let view = EffectEnvView::new(site);
+    let requirements = view.requirements(db);
+    let resolved_provider_by_effect = view
         .resolutions(db)
         .into_iter()
         .map(|resolution| (resolution.requirement_idx as usize, resolution.provider_idx))
@@ -2821,8 +2875,6 @@ fn root_func_generic_args<'db>(
         );
         if !is_effect_provider {
             return Err(RootSemanticInstanceError::UnsupportedGenericParam {
-                owner,
-                owner_scope,
                 offending_ty: param_ty,
                 param_idx,
             });
@@ -2832,18 +2884,17 @@ fn root_func_generic_args<'db>(
         .iter()
         .enumerate()
         .map(|(param_idx, _)| {
-            let effect_idx = effect_idx_by_param
-                .get(&param_idx)
+            let effect_idx = effect_idx_by_param.get(&param_idx);
+            effect_idx
+                .and_then(|effect_idx| resolved_provider_by_effect.get(effect_idx))
+                .and_then(|provider_idx| provider_ty_by_idx.get(provider_idx))
                 .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            let provider_idx = resolved_provider_by_effect
-                .get(&effect_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })?;
-            provider_ty_by_idx
-                .get(&provider_idx)
-                .copied()
-                .ok_or(RootSemanticInstanceError::MissingRootProvider { owner })
+                .ok_or_else(|| RootSemanticInstanceError::MissingRootProvider {
+                    effect: requirements
+                        .iter()
+                        .find(|requirement| Some(&(requirement.binding_idx as usize)) == effect_idx)
+                        .map(|requirement| requirement.binding_name),
+                })
         })
         .collect()
 }
@@ -2910,21 +2961,12 @@ fn instantiate_provider_binding<'db>(
             ..provider.semantics
         }
     } else {
-        let mut semantics = provider_semantics_for_specialized_call(
+        provider_semantics_for_specialized_call(
             db,
             provider_ty,
             target_ty,
-            provider.semantics.address_space,
-            provider.semantics.transport,
-        );
-        // A root object lies where its binding says, which its type alone
-        // cannot tell (`effect_param_provider_semantics`).
-        if provider_ty.as_capability(db).is_none()
-            && provider.semantics.provider_ty.as_capability(db).is_none()
-        {
-            semantics.address_space = provider.semantics.address_space;
-        }
-        semantics
+            Some(provider.semantics.address_space),
+        )
     };
     Ok(ProviderBinding {
         provider_ty,
@@ -3058,12 +3100,19 @@ mod tests {
             assert!(callable.effect_providers().is_empty());
             let site = provisional.sites[expr.index()].as_ref().unwrap();
             let mut replanned = site.clone();
+            let (effect_args, effect_providers) = instance_effect_args(
+                db,
+                instance,
+                callable,
+                typed_body.call_effect_args(expr).unwrap_or(&[]),
+            );
             replan_call_site(
                 db,
                 instance,
                 callable,
                 &mut replanned,
-                typed_body.call_effect_args(expr).unwrap_or(&[]),
+                effect_args,
+                effect_providers,
                 None,
                 SemOrigin::Expr(expr),
             )

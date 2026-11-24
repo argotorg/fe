@@ -1,9 +1,8 @@
 use core::ptr
 use std::evm::Evm
 
-// A read-only effect of a scalar or pointer type provided by a memory place
-// is passed as a copy; a storage provider and a `mut` effect keep their
-// place.
+// A read-only effect of a scalar or pointer type is a copy taken at the
+// call, from memory or storage; a `mut` effect keeps its place.
 
 fn read() -> u256 uses (x: u256) {
     x

@@ -1,10 +1,4 @@
-#![cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#![cfg(all(feature = "cranelift", native_host))]
 
 use std::{
     fs,
@@ -40,6 +34,7 @@ const WASM_ONLY: &str = r#"
 #[cfg(target = "wasm")]
 fn answer() -> i32 { 0 }
 
+#[unsafe(export)]
 pub fn called() -> i32 { answer() }
 
 #[test]

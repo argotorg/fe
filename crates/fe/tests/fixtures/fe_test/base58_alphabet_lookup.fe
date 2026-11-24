@@ -1,0 +1,22 @@
+use core::abi::{Bytes, DynString}
+use core::text
+
+#[test]
+fn base58_alphabet_matches_every_one_and_two_digit_value() {
+    let alphabet: DynString = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    for n in 0 .. 3364 {
+        let value = n as u256
+        let width: usize = if value < 256 { 1 } else { 2 }
+        let input = Bytes::from_word_prefix(word: value << ((32 - width) as u256 * 8), len: width)
+        let encoded = text::base58(input.span())
+        if n < 58 {
+            assert!(encoded.len() == 1)
+            assert!(encoded.byte_at(0) == alphabet.byte_at(n))
+        } else {
+            assert!(encoded.len() == 2)
+            assert!(encoded.byte_at(0) == alphabet.byte_at(n / 58))
+            assert!(encoded.byte_at(1) == alphabet.byte_at(n % 58))
+        }
+        assert!(text::decode_base58(encoded).unwrap() == input)
+    }
+}

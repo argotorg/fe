@@ -13,6 +13,7 @@ fn pick(flag: bool, x: Pair, y: Pair) -> Pair {
     if flag { x } else { y }
 }
 
+#[unsafe(export)]
 pub fn fib(n: u32) -> u64 {
     var state = Pair { a: 0, b: 1 }
     var i: u32 = 0
@@ -23,6 +24,7 @@ pub fn fib(n: u32) -> u64 {
     state.a
 }
 
+#[unsafe(export)]
 pub fn lucas_or_fib(n: u32, lucas: bool) -> u64 {
     var state = pick(flag: lucas, x: Pair { a: 2, b: 1 }, y: Pair { a: 0, b: 1 })
     var i: u32 = 0
@@ -33,6 +35,7 @@ pub fn lucas_or_fib(n: u32, lucas: bool) -> u64 {
     state.a
 }
 
+#[unsafe(export)]
 pub fn alternate(n: u32) -> u64 {
     var left = Pair { a: 1, b: 2 }
     var right = Pair { a: 10, b: 20 }

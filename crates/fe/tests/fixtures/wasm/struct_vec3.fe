@@ -32,6 +32,7 @@ impl Vec3 {
     }
 }
 
+#[unsafe(export)]
 pub fn triple_product(a: i64, b: i64, c: i64) -> i64 {
     let u = Vec3::new(x: a, y: 1, z: 0)
     let v = Vec3::new(x: 0, y: b, z: 1)
@@ -39,6 +40,7 @@ pub fn triple_product(a: i64, b: i64, c: i64) -> i64 {
     u.cross(o: v).dot(o: w)
 }
 
+#[unsafe(export)]
 pub fn lincomb(a: i64, b: i64) -> i64 {
     let e1 = Vec3::new(x: 1, y: 0, z: 0)
     let e2 = Vec3::new(x: 0, y: 1, z: 0)
@@ -46,6 +48,7 @@ pub fn lincomb(a: i64, b: i64) -> i64 {
     v.x * 10000 + v.y * 100 + v.z
 }
 
+#[unsafe(export)]
 pub fn cross_z(ax: i64, ay: i64, bx: i64, by: i64) -> i64 {
     Vec3::new(x: ax, y: ay, z: 0).cross(o: Vec3::new(x: bx, y: by, z: 0)).z
 }

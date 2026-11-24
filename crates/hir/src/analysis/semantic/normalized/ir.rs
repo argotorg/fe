@@ -11,7 +11,7 @@ use crate::{
         },
         ty::{
             provider::AddressSpace,
-            ty_check::{BodyOwner, EffectPassMode, LocalBinding},
+            ty_check::{BodyOwner, LocalBinding},
             ty_def::{BorrowKind, TyId},
         },
     },
@@ -545,17 +545,10 @@ pub struct NOperand {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct NEffectArg<'db> {
     pub binding_idx: u32,
-    pub arg: NEffectArgValue<'db>,
-    pub pass_mode: EffectPassMode,
+    pub place: NPlace<'db>,
     pub required_mut: bool,
     pub provider_target_ty: Option<TyId<'db>>,
     pub provider: Option<AddressSpace>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum NEffectArgValue<'db> {
-    Place(NPlace<'db>),
-    Value(NOperand),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -664,18 +657,7 @@ impl<'db> NExpr<'db> {
             Self::AggregateMake { fields, .. } | Self::EnumMake { fields, .. } => {
                 fields.iter().copied().for_each(f);
             }
-            Self::Call {
-                args, effect_args, ..
-            } => {
-                args.iter().copied().for_each(&mut f);
-                effect_args
-                    .iter()
-                    .filter_map(|arg| match arg.arg {
-                        NEffectArgValue::Value(value) => Some(value),
-                        NEffectArgValue::Place(_) => None,
-                    })
-                    .for_each(f);
-            }
+            Self::Call { args, .. } => args.iter().copied().for_each(f),
             Self::Load { .. }
             | Self::Borrow { .. }
             | Self::MakeView { .. }
@@ -691,13 +673,7 @@ impl<'db> NExpr<'db> {
             Self::Load { place, .. }
             | Self::Borrow { place, .. }
             | Self::MakeView { place, .. } => f(place),
-            Self::Call { effect_args, .. } => effect_args
-                .iter()
-                .filter_map(|arg| match &arg.arg {
-                    NEffectArgValue::Place(place) => Some(place),
-                    NEffectArgValue::Value(_) => None,
-                })
-                .for_each(f),
+            Self::Call { effect_args, .. } => effect_args.iter().map(|arg| &arg.place).for_each(f),
             Self::Forward { .. }
             | Self::ProjectValue { .. }
             | Self::StructuralRepack { .. }

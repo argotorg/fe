@@ -8,10 +8,7 @@ use crate::{
         path::LazyPathSpan,
         types::LazyTySpan,
     },
-    visitor::{
-        Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_generic_arg_list,
-        walk_type,
-    },
+    visitor::{Visitor, VisitorCtxt, prelude::DynLazySpan, walk_generic_arg, walk_type},
 };
 
 use crate::analysis::{
@@ -52,7 +49,8 @@ pub(crate) fn path_generic_args<'db>(
 }
 
 /// Diagnostics for the types a trait reference writes as generic arguments,
-/// each at its own span. The reference's own checks cover the
+/// each at its own span, and for a trait (or a module on its path) that is
+/// not visible from `scope`. The reference's own checks cover the
 /// well-formedness of the arguments it lowers.
 pub(crate) fn trait_ref_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -62,8 +60,45 @@ pub(crate) fn trait_ref_arg_diags<'db>(
     assumptions: PredicateListId<'db>,
 ) -> Vec<TyDiagCollection<'db>> {
     tr.path(db).to_opt().map_or_else(Vec::new, |path| {
-        path_arg_diags(db, path, span.path(), scope, assumptions)
+        let mut diags: Vec<_> =
+            trait_path_visibility_diag(db, path, span.clone().path(), scope, assumptions)
+                .into_iter()
+                .collect();
+        diags.extend(path_arg_diags(db, path, span.path(), scope, assumptions));
+        diags
     })
+}
+
+/// `2-0003` for the first segment of a trait path that is not visible from
+/// `scope`. Trait-ref lowering resolves the path without a visibility check,
+/// so every place that names a trait (an `impl` header, a bound, a
+/// super-trait) reports it here; a private trait is otherwise usable from
+/// anywhere, including one used as a seal. A path that does not resolve is
+/// reported by lowering instead.
+fn trait_path_visibility_diag<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    path_span: LazyPathSpan<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Option<TyDiagCollection<'db>> {
+    let mut invisible = None;
+    let resolved = resolve_trait_path_with_observer_and_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        &mut |p: PathId<'db>, reso: &PathRes<'db>| {
+            if invisible.is_none() && !reso.is_visible_from(db, scope) {
+                invisible = Some((p, reso.name_span(db)));
+            }
+        },
+        &LoweringContext::for_const_bodies(ConstBodyLowering::Eager),
+    );
+    let (p, deriv_span) = invisible.filter(|_| resolved.is_ok())?;
+    let ident = p.ident(db).to_opt()?;
+    let span = path_span.segment(p.segment_index(db)).ident();
+    Some(PathResDiag::Invisible(span.into(), ident, deriv_span).into())
 }
 
 /// Diagnostics for the types `path`'s last segment writes as generic
@@ -212,6 +247,7 @@ pub(crate) fn path_arg_diags<'db>(
                 }
                 GenericArg::Const(_) => Vec::new(),
                 GenericArg::Mode(_) => vec![TyLowerDiag::ModeArgNotShape(span.into()).into()],
+                GenericArg::Infer => vec![TyLowerDiag::InferArgOutsideCall(span.into()).into()],
             }
         })
         .chain(duplicates)
@@ -220,13 +256,15 @@ pub(crate) fn path_arg_diags<'db>(
 
 /// Diagnostics for the types written as generic arguments of `path`'s
 /// segments, each at its own span, as a written type reports them. `path`
-/// itself isn't resolved: its resolution reports its own segments.
+/// itself isn't resolved: its resolution reports its own segments. With
+/// `call`, the last segment's arguments are a call's, which infers a `_`.
 pub(crate) fn path_generic_arg_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     path: PathId<'db>,
     path_span: LazyPathSpan<'db>,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    call: bool,
 ) -> Vec<TyDiagCollection<'db>> {
     let mut checker = WrittenTyChecker {
         db,
@@ -234,12 +272,13 @@ pub(crate) fn path_generic_arg_diags<'db>(
         const_bodies: ConstBodyLowering::Eager,
         diags: Vec::new(),
     };
-    checker.visit_path_args(path, path_span, scope);
+    checker.visit_path_args(path, path_span, scope, call);
     checker.diags
 }
 
 /// Diagnostics for the types written in `args`, a method call's generic
-/// arguments, each at its own span, as a written type reports them.
+/// arguments, each at its own span, as a written type reports them. The
+/// call infers a `_`.
 pub(crate) fn generic_arg_list_diags<'db>(
     db: &'db dyn HirAnalysisDb,
     args: GenericArgListId<'db>,
@@ -253,7 +292,11 @@ pub(crate) fn generic_arg_list_diags<'db>(
         const_bodies: ConstBodyLowering::Eager,
         diags: Vec::new(),
     };
-    walk_generic_arg_list(&mut checker, &mut VisitorCtxt::new(db, scope, span), args);
+    for (idx, arg) in args.data(db).iter().enumerate() {
+        if !matches!(arg, GenericArg::Infer) {
+            checker.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span.clone().arg(idx)), arg);
+        }
+    }
     checker.diags
 }
 
@@ -327,15 +370,18 @@ impl<'db> WrittenTyChecker<'db> {
 
     /// Visits what `path`'s segments write. A trait's arguments are checked as
     /// a trait reference's are, since a binding's value depends on what it binds.
+    /// With `call`, the last segment's arguments are a call's, which infers a
+    /// `_`.
     fn visit_path_args(
         &mut self,
         path: PathId<'db>,
         path_span: LazyPathSpan<'db>,
         scope: ScopeId<'db>,
+        call: bool,
     ) {
         let db = self.db;
         if let Some(parent) = path.parent(db) {
-            self.visit_path_args(parent, path_span.clone(), scope);
+            self.visit_path_args(parent, path_span.clone(), scope, false);
         }
         if path.generic_args(db).is_given(db)
             && let Some(NameResKind::Scope(ScopeId::Item(ItemKind::Trait(_)))) =
@@ -357,7 +403,9 @@ impl<'db> WrittenTyChecker<'db> {
             );
         }
         for (arg, span) in path_generic_args(db, path, path_span) {
-            self.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+            if !(call && matches!(arg, GenericArg::Infer)) {
+                self.visit_generic_arg(&mut VisitorCtxt::new(db, scope, span), arg);
+            }
         }
     }
 }
@@ -371,6 +419,14 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
         // A trait checks its own bindings. Anywhere else, lowering rejects a
         // binding whatever it binds.
         if matches!(arg, GenericArg::AssocType(_)) {
+            return;
+        }
+
+        if matches!(arg, GenericArg::Infer)
+            && let Some(span) = ctxt.span()
+        {
+            self.diags
+                .push(TyLowerDiag::InferArgOutsideCall(span.into()).into());
             return;
         }
 
@@ -500,7 +556,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
 
                     // Walk the underlying path to validate any nested generic arguments,
                     // but don't validate the path itself as a type.
-                    self.visit_path_args(path, path_span, ctxt.scope());
+                    self.visit_path_args(path, path_span, ctxt.scope(), false);
                 }
                 return;
             }
@@ -619,7 +675,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             Err(err) => {
                 let before = self.diags.len();
                 if !err.is_independent_of_args(self.db) {
-                    self.visit_path_args(path, path_span.clone(), scope);
+                    self.visit_path_args(path, path_span.clone(), scope, false);
                 }
                 if self.diags.len() == before
                     && let Some(diag) =
@@ -647,7 +703,7 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
             self.diags.push(diag.into());
         }
 
-        self.visit_path_args(path, path_span, scope);
+        self.visit_path_args(path, path_span, scope, false);
     }
 
     fn visit_trait_ref(
@@ -712,13 +768,28 @@ impl<'db> Visitor<'db> for WrittenTyChecker<'db> {
                     self.diags.push(diag.into());
                 }
             }
+            // Written arguments that could be why the trait failed report their
+            // own errors, as a bound's do, and what fails through them reports
+            // nothing more.
             Err(err) => {
-                if let Some(diag) = err.into_diag(
-                    self.db,
-                    path,
-                    span.clone().path(),
-                    crate::analysis::name_resolution::ExpectedPathKind::Trait,
-                ) {
+                let before = self.diags.len();
+                if !err.is_independent_of_args(self.db) {
+                    self.diags.extend(path_arg_diags(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        scope,
+                        self.assumptions,
+                    ));
+                }
+                if self.diags.len() == before
+                    && let Some(diag) = err.into_diag(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        crate::analysis::name_resolution::ExpectedPathKind::Trait,
+                    )
+                {
                     self.diags.push(diag);
                 }
             }
@@ -836,6 +907,8 @@ pub(crate) fn diag_from_invalid_cause<'db>(
         InvalidCause::ModeNotType => TyLowerDiag::ModeNotType(span).into(),
 
         InvalidCause::ModeArgNotShape => TyLowerDiag::ModeArgNotShape(span).into(),
+
+        InvalidCause::InferArgOutsideCall => TyLowerDiag::InferArgOutsideCall(span).into(),
 
         InvalidCause::AssocBindingNotOnTrait => TyLowerDiag::AssocBindingNotOnTrait(span).into(),
 

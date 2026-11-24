@@ -470,9 +470,16 @@ pub fn dyn_array_from<T, const N: usize>(_ values: [T; N]) -> DynArray<T>
 /// A decoded `DynArray` keeps the wire layout it was sent with, including
 /// unusual tail offsets or gaps between dynamic elements. The copy re-encodes
 /// every element in order, as Solidity does when it re-encodes a memory array.
+/// Codecs that opt into `Decode::IS_CANONICAL_WORD` already have canonical
+/// payloads and copy their encoded words as one block.
 pub fn canonical_dyn_array<T>(_ values: DynArray<T>) -> DynArray<T>
     where T: Decode<Sol> + Encode<Sol> + AbiSize
 {
+    if !T::IS_DYNAMIC && T::HEAD_SIZE == 32 && <T as Decode<Sol>>::IS_CANONICAL_WORD {
+        // The tail's extent was validated on construction. Every word is
+        // already canonical, including signed words and bytes32 values.
+        return values.clone()
+    }
     let count = values.len()
     let head = abi_field_head_size<T>()
     if !T::IS_DYNAMIC {

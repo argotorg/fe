@@ -25,8 +25,8 @@ use super::{
     classify::{BodyEnv, InferClassCache, carrier_value_class_ref},
     type_info::{
         RuntimeTypeEnv, provider_class_for_target_in_env, runtime_interface_ty_in_env,
-        runtime_repr_ty_in_env, runtime_transport_sensitive_aggregate, runtime_zero_sized_ty,
-        stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
+        runtime_repr_ty_in_env, runtime_transport_sensitive_aggregate, runtime_uninhabited_ty,
+        runtime_zero_sized_ty, stored_class_for_ty_in_env, top_level_class_for_ty_in_env,
     },
 };
 
@@ -866,6 +866,9 @@ fn runtime_boundary_spec<'db>(
 ) -> Option<RuntimeBoundarySpec<'db>> {
     let env = RuntimeTypeEnv::new(scope, assumptions);
     let interface_ty = runtime_interface_ty_in_env(db, env, ty);
+    if runtime_uninhabited_ty(db, interface_ty, scope, assumptions) {
+        return None;
+    }
     if let Some((CapabilityKind::View, inner)) = interface_ty.as_capability(db) {
         let inner_boundary = runtime_boundary_spec(db, inner, default_space, scope, assumptions);
         if runtime_zero_sized_ty(db, inner, scope, assumptions) {
@@ -946,24 +949,6 @@ fn runtime_boundary_source_uses_transport_sensitive_aggregate<'db>(
     }
     let repr_ty = runtime_repr_ty_in_env(db, env, interface_ty);
     runtime_transport_sensitive_aggregate(db, repr_ty, scope, assumptions)
-}
-
-pub(crate) fn default_by_place_boundary<'db>(
-    db: &'db dyn MirDb,
-    type_env: RuntimeTypeEnv<'db>,
-    target_ty: Option<TyId<'db>>,
-    space: AddressSpace,
-) -> RuntimeBoundarySpec<'db> {
-    let Some(target_ty) = target_ty else {
-        return RuntimeBoundarySpec::ExactShape(provider_class_for_target_in_env(
-            db, type_env, None, space,
-        ));
-    };
-    RuntimeBoundarySpec::BorrowLike {
-        pointee: stored_class_for_ty_in_env(db, type_env, target_ty),
-        access: BorrowAccess::ReadWrite,
-        allow: default_borrow_transport_set(BorrowAccess::ReadWrite, space),
-    }
 }
 
 #[cfg(test)]

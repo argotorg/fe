@@ -1,16 +1,10 @@
-#![cfg(all(
-    feature = "cranelift",
-    any(
-        all(target_arch = "x86_64", target_os = "linux"),
-        all(target_arch = "aarch64", target_os = "macos")
-    )
-))]
+#![cfg(all(feature = "cranelift", native_host))]
 
 use std::{
     array,
     ffi::OsString,
     fs,
-    io::Write,
+    io::{self, Write},
     os::unix::{
         ffi::OsStringExt,
         fs::symlink,
@@ -1400,6 +1394,9 @@ fn fail_assertion() { core::assert(false) }
 
 #[test]
 fn native_runner_bounds_time_and_combined_output() {
+    // Bounds each `fe test` run, which also builds the test. With a debug build of
+    // `fe`, the build alone took over 15 seconds on an AArch64 Linux host.
+    const DEADLINE: Duration = Duration::from_secs(60);
     let temp = tempdir().unwrap();
     let source = temp.path().join("limits.fe");
     fs::write(
@@ -1441,7 +1438,7 @@ fn noisy() uses (out: mut Stdout) {
             .process_group(0)
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
+        let deadline = Instant::now() + DEADLINE;
         loop {
             if child.try_wait().unwrap().is_some() {
                 break;
@@ -1449,7 +1446,7 @@ fn noisy() uses (out: mut Stdout) {
             if Instant::now() >= deadline {
                 unsafe { libc::killpg(child.id() as i32, libc::SIGKILL) };
                 child.wait().unwrap();
-                panic!("native {filter} test did not terminate within 15 seconds");
+                panic!("native {filter} test did not terminate within {DEADLINE:?}");
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -3422,6 +3419,27 @@ fn keep_beta() {
 }
 
 #[test]
+fn native_variadic_calls_pass_extra_arguments() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/variadic.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("variadic")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&result.stdout),
+            "-7 4000000000 1099511627779 18446744073709551615 abc 42 5 -1234567890123 xyz 2147483647\n\
+             length 87\n\
+             nonblocking before: false\n\
+             set: 0\n\
+             nonblocking after: true\n",
+            "O{level}"
+        );
+    }
+}
+
+#[test]
 fn native_fs_reads_writes_and_lists_files() {
     let temp = tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/fs.fe");
@@ -3462,6 +3480,14 @@ read_dir a: 3 entries
   empty file
   new file
 canonicalize a/b/../b/./c/file: {}/a/b/c/file
+create a/lines: descriptor past the standard streams: true, close-on-exec: true
+line: one
+line: two
+line: three
+from_raw_fd: one
+read after write: 10 bytes
+create_new a/fresh: fresh
+a/lines holds: 13 bytes
 read missing: NotFound (No such file or directory)
 read a: IsADirectory (Is a directory)
 write a: IsADirectory (Is a directory)
@@ -3469,11 +3495,160 @@ create_dir_all a/empty: AlreadyExists (File exists)
 create_dir_all a/empty/x: NotADirectory (Not a directory)
 metadata missing: NotFound (No such file or directory)
 read_dir a/empty: NotADirectory (Not a directory)
-read a\0: InvalidInput (Invalid argument)"#,
+read a\0: InvalidInput (Invalid argument)
+open missing: NotFound (No such file or directory)
+create a: IsADirectory (Is a directory)
+open_with nothing: InvalidInput (Invalid argument)
+open_with read truncate: InvalidInput (Invalid argument)
+open_with append truncate: InvalidInput (Invalid argument)
+open_with create_new a/lines: AlreadyExists (File exists)
+write to a file open for reading: Other (Bad file descriptor)"#,
             canonical.display()
         );
         assert_eq!(lines.join("\n"), expected, "O{level}");
         assert_eq!(fs::read(dir.join("a/b/c/file")).unwrap(), b"hello world");
+    }
+}
+
+// One poller serves non-blocking clients and their server ends on 127.0.0.1.
+#[test]
+fn native_net_poller_serves_many_sockets() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/poll.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("poll")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            "serve: client got echo hello
+serve: client got echo hello
+serve: client got echo hello
+serve: more than one wait: true
+reregister: events before: 0
+reregister: events after: 1, readable: true, its token: true
+reregister: both: true true
+reregister: removed the replacement: true
+reregister: then get: true, remove: true
+reregister: then set_interest: NotFound
+kept: events before: 1
+kept: events after reregister: 0
+kept: events before: 1
+kept: events after remove: 0
+kept: removed the third: true
+hangup: readable: true, hangup: true
+refused: ConnectionRefused
+stale interest: the new source's event: true, as the replaced one's: false
+half close: events of a writer: 0
+half close: waited for both: readable true, writable false, hangup true
+done
+",
+            "O{level}"
+        );
+    }
+}
+
+// TCP and UDP on 127.0.0.1, each socket at a free port.
+#[test]
+fn native_net_sockets_talk_over_loopback() {
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/net.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("net")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            "echo: peers: true true
+echo: echo hello
+echo: echo world
+udp: sent 4
+udp: b received ping, from a: true
+udp: a received pong
+udp: recv with a timeout: TimedOut
+udp: non-blocking recv: WouldBlock
+refused: connect: ConnectionRefused
+refused: connect_timeout: ConnectionRefused
+read timeout: read: TimedOut
+read timeout: zero: InvalidInput
+read timeout: 1 ns: ok
+read timeout: then read 1 byte
+broken pipe: client writes: BrokenPipe
+broken pipe: server writes: BrokenPipe
+broken pipe: imported stream writes: BrokenPipe
+nonblocking accept: nothing waiting: WouldBlock
+nonblocking accept: accepted stream blocks: true
+nonblocking accept: read y
+nonblocking accept: from_raw_fd read z
+nonblocking connect: stream blocks: false
+nonblocking connect: failure: false
+nonblocking connect: read with nothing sent: WouldBlock
+nonblocking connect: read hi
+connect_timeout: stream blocks: true
+connect_timeout: zero: InvalidInput
+connect_timeout: server reads 0 bytes after the shutdown
+lookup: localhost first is a loopback address: true
+lookup: connected to the first: true true
+lookup: 127.0.0.1: 1 127.0.0.1:9
+lookup: no name: HostNotFound, error number: false
+still running
+",
+            "O{level}"
+        );
+    }
+}
+
+// Each host error number has the kind Rust gives it, among the kinds Fe has.
+#[test]
+fn native_errors_take_the_kinds_of_host_error_numbers() {
+    const KINDS: [&str; 21] = [
+        "NotFound",
+        "PermissionDenied",
+        "AlreadyExists",
+        "NotADirectory",
+        "IsADirectory",
+        "InvalidInput",
+        "WouldBlock",
+        "TimedOut",
+        "ConnectionRefused",
+        "ConnectionReset",
+        "ConnectionAborted",
+        "NotConnected",
+        "AddrInUse",
+        "AddrNotAvailable",
+        "NetworkUnreachable",
+        "HostUnreachable",
+        "BrokenPipe",
+        "UnexpectedEof",
+        "InvalidData",
+        "HostNotFound",
+        "Other",
+    ];
+    let mut expected = String::new();
+    for code in 1..=150 {
+        let kind = format!("{:?}", io::Error::from_raw_os_error(code).kind());
+        let kind = if KINDS.contains(&kind.as_str()) {
+            kind.as_str()
+        } else {
+            "Other"
+        };
+        expected.push_str(&format!("{code} {kind}\n"));
+    }
+    expected.push_str("new: UnexpectedEof, code: false, text: unexpected end of input\n");
+    let temp = tempdir().unwrap();
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native/error_kinds.fe");
+    for level in ["0", "1", "2"] {
+        let out = temp.path().join(format!("out-{level}"));
+        build(&source, &out, level, &[]);
+        let result = Command::new(out.join("error_kinds")).output().unwrap();
+        assert!(result.status.success(), "O{level}: {result:?}");
+        assert_eq!(
+            String::from_utf8(result.stdout).unwrap(),
+            expected,
+            "O{level}"
+        );
     }
 }
 

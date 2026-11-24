@@ -13,6 +13,7 @@
 use common::indexmap::IndexMap;
 
 use super::{
+    adt_def::AdtRef,
     corelib::resolve_core_trait,
     normalize::normalize_ty,
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
@@ -50,8 +51,14 @@ pub(crate) fn clearable_implementor<'db>(
 /// type, one with `unsafe` fields, a type the compiler does not decompose,
 /// or one still to be inferred.
 fn clearable_components<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<Vec<TyId<'db>>> {
+    if ty.is_uninhabited(db) {
+        return None;
+    }
     let (base, args) = ty.decompose_ty_app(db);
     match base.data(db) {
+        TyData::TyBase(TyBase::Prim(PrimTy::Array)) if ty.array_len(db) == Some(0) => {
+            Some(Vec::new())
+        }
         TyData::TyBase(TyBase::Prim(PrimTy::Tuple(_) | PrimTy::Array)) => Some(
             args.iter()
                 .copied()
@@ -67,10 +74,18 @@ fn clearable_components<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Optio
             {
                 return None;
             }
+            if matches!(adt.adt_ref(db), AdtRef::Enum(_)) && ty.is_enum_variant_uninhabited(db, 0) {
+                return None;
+            }
             Some(
                 adt.fields(db)
                     .iter()
-                    .flat_map(|variant| variant.iter_types(db))
+                    .enumerate()
+                    .filter(|&(variant_idx, _)| {
+                        !matches!(adt.adt_ref(db), AdtRef::Enum(_))
+                            || !ty.is_enum_variant_uninhabited(db, variant_idx)
+                    })
+                    .flat_map(|(_, variant)| variant.iter_types(db))
                     .map(|field| {
                         normalize_ty(
                             db,

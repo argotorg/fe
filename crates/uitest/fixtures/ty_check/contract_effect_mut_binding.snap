@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty_check.rs
+assertion_line: 26
+expression: diags
+input_file: fixtures/ty_check/contract_effect_mut_binding.fe
+---
+error[8-0037]: effect `Call` must be mutable when calling `pay`
+   ┌─ contract_effect_mut_binding.fe:36:13
+   │
+35 │         Pay { to } -> bool uses (call) {
+   │                                  ---- effect `Call` is provided here
+36 │             pay(to)
+   │             ^^^^^^^ `pay` requires `mut Call`
+   │
+   = use a mutable binding or pass a mutable reference in the `with` block
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ contract_effect_mut_binding.fe:24:13
+   │
+23 │         Pay { to } -> bool uses (ctx, call) {
+   │                                       ---- `call` does not provide mutable access
+24 │             call.try_call_raw(addr: to, gas: ctx.gas(), value: Wei::zero(), args: MemBuffer::new(0).span()).success()
+   │             ^^^^ cannot borrow as `mut`
+
+error[8-0066]: mutable borrow requires a mutable place
+   ┌─ contract_effect_mut_binding.fe:27:13
+   │
+26 │         Note -> bool uses (log) {
+   │                            --- `log` does not provide mutable access
+27 │             log.emit(Noted { value: 1 })
+   │             ^^^ cannot borrow as `mut`
+
+error[8-0162]: cannot bind immutable contract effect as `mut`
+   ┌─ contract_effect_mut_binding.fe:45:22
+   │
+44 │ contract ArmListsImmutableEffectAsMut uses (ctx: Ctx, call: Call) {
+   │                                             -------- `ctx` declared here
+45 │     init() uses (mut ctx) {}
+   │                      ^^^ `ctx` is not declared `mut`
+   │
+   = mark the contract's effect `mut` to use it mutably in `init` or a recv arm
+
+error[8-0162]: cannot bind immutable contract effect as `mut`
+   ┌─ contract_effect_mut_binding.fe:48:38
+   │
+44 │ contract ArmListsImmutableEffectAsMut uses (ctx: Ctx, call: Call) {
+   │                                                       ---------- `call` declared here
+   ·
+48 │         Pay { to } -> bool uses (mut call) {
+   │                                      ^^^^ `call` is not declared `mut`
+   │
+   = mark the contract's effect `mut` to use it mutably in `init` or a recv arm

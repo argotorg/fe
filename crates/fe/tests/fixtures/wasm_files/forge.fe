@@ -13,32 +13,39 @@ extern {
 }
 
 // The reply word of an honest `open`, so that a test learns a real handle.
+#[unsafe(export)]
 pub fn open_text(name: HostText) -> u64 {
     unsafe { sys_wasm_files_open(name.addr(), name.len()) }
 }
 
+#[unsafe(export)]
 pub fn open_raw(addr: u32, len: u32) -> u64 {
     unsafe { sys_wasm_files_open(addr, len) }
 }
 
+#[unsafe(export)]
 pub fn size_raw(handle: u32) -> u64 {
     unsafe { sys_wasm_files_size(handle) }
 }
 
+#[unsafe(export)]
 pub fn read_byte_raw(handle: u32, index: u32) -> u64 {
     unsafe { sys_wasm_files_read_byte(handle, index) }
 }
 
+#[unsafe(export)]
 pub fn close_raw(handle: u32) {
     unsafe { sys_wasm_files_close(handle) }
 }
 
 // Replies that a module can make up, since the fields of `Reply` are public.
+#[unsafe(export)]
 pub fn made_up_reply(tag: u32, payload: u32) -> Reply {
     Reply { tag, payload }
 }
 
 // The program side of the closed set of errors: a number outside it is a fault.
+#[unsafe(export)]
 pub fn error_of(code: u32) -> Reply {
     Reply::error(FileError::from_code(code).code())
 }

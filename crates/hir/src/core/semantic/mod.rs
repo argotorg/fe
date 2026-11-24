@@ -43,6 +43,7 @@ use crate::analysis::ty::ty_def::{AssocTy, BorrowKind, Kind, ShapeMode};
 use crate::analysis::ty::{ty_check::written_type_bounds, ty_error::check_written_ty};
 use crate::hir_def::params::{FuncParamMode, KindBound as HirKindBound};
 use crate::hir_def::scope_graph::ScopeId;
+use crate::span::types::LazyTySpan;
 use crate::{HirDb, SpannedHirDb};
 pub use reference::{
     FieldAccessView, HasReferences, MethodCallView, PathView, ReferenceView, Target, UsePathView,
@@ -53,7 +54,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -353,6 +354,9 @@ fn func_effect_requirements_canonical<'db>(
         .collect()
 }
 
+/// A function's providers: one per type-keyed or trait-keyed effect, then
+/// its root's. A type key's provider is a place of the key's type, and a
+/// trait key's is of the function's provider parameter for the effect.
 fn func_provider_bindings_canonical<'db>(
     db: &'db dyn HirAnalysisDb,
     func: Func<'db>,
@@ -363,18 +367,18 @@ fn func_provider_bindings_canonical<'db>(
     let provider_params = CallableDef::Func(func).params(db);
     let mut providers = requirements
         .iter()
-        .filter(|requirement| {
-            matches!(
-                requirement.key.kind(),
-                EffectKeyKind::Type | EffectKeyKind::Trait
-            )
-        })
         .filter_map(|requirement| {
-            let provider_param_idx = provider_map
-                .get(requirement.binding_idx as usize)
-                .copied()
-                .flatten()?;
-            let provider_ty = *provider_params.get(provider_param_idx)?;
+            let provider_ty = match requirement.key {
+                EffectRequirementKey::Type(key_ty) => key_ty,
+                EffectRequirementKey::Trait(_) => {
+                    let provider_param_idx = provider_map
+                        .get(requirement.binding_idx as usize)
+                        .copied()
+                        .flatten()?;
+                    *provider_params.get(provider_param_idx)?
+                }
+                EffectRequirementKey::Row(_) | EffectRequirementKey::Other => return None,
+            };
             Some(ProviderBinding {
                 provider_idx: requirement.binding_idx,
                 provider_ty,
@@ -420,10 +424,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|provider| match provider.source {
             ProviderSource::UsesParam {
                 requirement_idx, ..
-            } => Some((
-                requirement_idx,
-                (provider.provider_idx, provider.semantics.kind),
-            )),
+            } => Some((requirement_idx, provider.provider_idx)),
             ProviderSource::RootProvider { .. } | ProviderSource::ContractField { .. } => None,
         })
         .collect::<FxHashMap<_, _>>();
@@ -443,7 +444,7 @@ fn func_effect_resolutions_canonical<'db>(
         .filter_map(|requirement| {
             explicit_provider_idx
                 .get(&requirement.binding_idx)
-                .map(|(provider_idx, _)| *provider_idx)
+                .copied()
                 .or(root_provider_idx)
                 .map(|provider_idx| ResolvedEffectBinding {
                     requirement_idx: requirement.binding_idx,
@@ -905,11 +906,18 @@ pub enum CallSiteKind<'db> {
 }
 
 impl<'db> CallSiteView<'db> {
-    /// Resolve the callee of this call site via type checking.
+    /// Resolve the callee of this call site via type checking. A call of a
+    /// callable value, such as a closure, has none: it runs the method of the
+    /// value's `Fn` trait, which the call doesn't name.
     pub fn target(&self, db: &'db dyn HirAnalysisDb) -> Option<CallableDef<'db>> {
         use crate::analysis::ty::ty_check::check_func_body;
         let func = self.body.containing_func(db)?;
         let (_, typed_body) = check_func_body(db, func);
+        if matches!(self.kind, CallSiteKind::FnCall)
+            && typed_body.call_receiver(db, self.expr_id).is_some()
+        {
+            return None;
+        }
         typed_body
             .callable_expr(self.expr_id)
             .map(|c| c.callable_def)
@@ -2309,21 +2317,24 @@ pub fn effect_requirements_for_site<'db>(
 }
 
 /// The canonical provider of `requirement`, a component of a row the body at
-/// `owner` is generic over (the closure's at `closure`, if any): the provider
-/// parameter its instances substitute.
+/// `owner` is generic over (the closure's at `closure`, if any): a place of
+/// a type key's type, or of the provider parameter the body's instances
+/// substitute for a trait key.
 pub(crate) fn row_effect_provider<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: ScopeId<'db>,
     closure: Option<ExprId>,
     requirement: &EffectRequirement<'db>,
 ) -> ProviderBinding<'db> {
-    let provider_ty = TyParam::row_effect_provider(
-        requirement.binding_name,
-        requirement.binding_idx as usize,
-        owner,
-        closure,
-    )
-    .ty(db);
+    let provider_ty = requirement.key.key_ty().unwrap_or_else(|| {
+        TyParam::row_effect_provider(
+            requirement.binding_name,
+            requirement.binding_idx as usize,
+            owner,
+            closure,
+        )
+        .ty(db)
+    });
     ProviderBinding {
         provider_idx: requirement.binding_idx,
         provider_ty,
@@ -2350,7 +2361,7 @@ pub(crate) fn effect_param_provider_semantics<'db>(
     if semantics.kind == ProviderKind::RootObject
         && let EffectRequirementKey::Type(key_ty) = key
     {
-        semantics.address_space = Some(key_ty.default_space(db));
+        semantics.address_space = key_ty.default_space(db);
     }
     semantics
 }
@@ -2541,27 +2552,19 @@ fn contract_scoped_effect_requirements_canonical<'db>(
 
         if key_path.len(db) == 1
             && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(field) = fields.get(&name)
+            && let Some(key) = fields
+                .get(&name)
+                .map(|field| EffectRequirementKey::Type(field.declared))
+                .or_else(|| {
+                    contract_named_effects
+                        .get(&name)
+                        .map(|binding| binding.key.clone())
+                })
         {
             out.push(EffectRequirement {
                 binding_name: name,
-                key: EffectRequirementKey::Type(field.declared),
+                key,
                 is_mut: effect.is_mut(),
-                binding_site: list_site,
-                binding_idx: idx as u32,
-                binding_ty: key_syntax,
-            });
-            continue;
-        }
-
-        if key_path.len(db) == 1
-            && let Some(name) = key_path.ident(db).to_opt()
-            && let Some(binding) = contract_named_effects.get(&name)
-        {
-            out.push(EffectRequirement {
-                binding_name: name,
-                key: binding.key.clone(),
-                is_mut: binding.is_mut,
                 binding_site: list_site,
                 binding_idx: idx as u32,
                 binding_ty: key_syntax,
@@ -2611,15 +2614,12 @@ fn contract_provider_bindings_canonical<'db>(
                 semantics: ProviderSemantics {
                     provider_ty,
                     kind: ProviderKind::Place,
-                    address_space: Some(field.address_space).map(|space| {
-                        if is_init_site && space == AddressSpace::Code {
-                            AddressSpace::Memory
-                        } else {
-                            space
-                        }
-                    }),
+                    address_space: if is_init_site && field.address_space == AddressSpace::Code {
+                        AddressSpace::Memory
+                    } else {
+                        field.address_space
+                    },
                     target_ty: Some(provider_ty),
-                    transport: crate::analysis::ty::ProviderTransport::ByValue,
                 },
             }
         })
@@ -5192,27 +5192,27 @@ impl<'db> ImplAssocTypeView<'db> {
     /// All type-related diagnostics for this associated type.
     pub fn ty_diags(self, db: &'db dyn HirAnalysisDb) -> Vec<TyDiagCollection<'db>> {
         let def = self.owner.types(db)[self.idx];
-        let Some(hir) = def.type_ref.to_opt() else {
+        let (Some(hir), Some(ty)) = (def.type_ref.to_opt(), self.ty(db)) else {
             return Vec::new();
         };
-
         let ty_span = self.span().ty();
-        let scope = self.owner.scope();
-        let assumptions = constraints_for(db, self.owner.into());
-        let errors = if def.is_shape {
-            check_shape_value(db, hir, scope, ty_span.clone(), assumptions)
-        } else {
-            check_written_ty(
-                db,
-                scope,
-                hir,
-                ty_span.clone(),
-                assumptions,
-                ConstBodyLowering::Eager,
-            )
-        };
-        if !errors.is_empty() {
-            return errors;
+        let trait_ = self.owner.trait_def(db);
+        let decl = trait_.and_then(|trait_| {
+            trait_
+                .assoc_types(db)
+                .find(|assoc| assoc.name(db) == def.name.to_opt())
+        });
+        let diags = assoc_ty_value_diags(
+            db,
+            self.owner.into(),
+            decl,
+            def.is_shape,
+            hir,
+            ty,
+            ty_span.clone(),
+        );
+        if !diags.is_empty() {
+            return diags;
         }
         // A definition that can't be normalized is reported here, and not
         // where a projection resolves through it.
@@ -5220,34 +5220,6 @@ impl<'db> ImplAssocTypeView<'db> {
             && impl_assoc_ty_diverges(db, self.owner, name)
         {
             return vec![TyLowerDiag::TypeNormalizationLimit(ty_span.into()).into()];
-        }
-
-        let Some(ty) = self.ty(db) else {
-            return Vec::new();
-        };
-        if let Some(diag) = ty.emit_diag(db, ty_span.clone().into()) {
-            return vec![diag];
-        }
-        // A type is of its declaration's kind: `*`, unless a bound gives
-        // another.
-        if !def.is_shape
-            && let Some(trait_) = self.owner.trait_def(db)
-            && let Some(decl) = trait_
-                .assoc_types(db)
-                .find(|assoc| assoc.name(db) == def.name.to_opt())
-            && !decl.is_shape(db)
-        {
-            let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
-            if !ty.kind(db).does_match(&expected) {
-                return vec![
-                    TyLowerDiag::InvalidTypeArgKind {
-                        span: ty_span.into(),
-                        expected: Some(expected),
-                        given: ty,
-                    }
-                    .into(),
-                ];
-            }
         }
         // A definition whose bounds don't hold is reported with the impl's
         // written types, and what it must satisfy isn't checked.
@@ -5259,7 +5231,7 @@ impl<'db> ImplAssocTypeView<'db> {
             && let Some(name) = def.name.to_opt()
             && let Some(diag) = shape_contract_diag(
                 db,
-                self.owner.trait_def(db),
+                trait_,
                 name,
                 ty,
                 param_env(db, self.owner.into()),
@@ -5271,6 +5243,59 @@ impl<'db> ImplAssocTypeView<'db> {
 
         Vec::new()
     }
+}
+
+/// Diagnostics for an associated type's value, `ty` written as `hir` in
+/// `owner`: an impl's, or a trait's default. What lowering the written type
+/// reports (see [`check_written_ty`]), and else a type that is invalid or
+/// not of the kind `decl` declares (`*`, unless a bound gives another).
+pub(crate) fn assoc_ty_value_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: ItemKind<'db>,
+    decl: Option<TraitAssocTypeView<'db>>,
+    is_shape: bool,
+    hir: TypeId<'db>,
+    ty: TyId<'db>,
+    span: LazyTySpan<'db>,
+) -> Vec<TyDiagCollection<'db>> {
+    let scope = owner.scope();
+    let assumptions = constraints_for(db, owner);
+    let errors = if is_shape {
+        check_shape_value(db, hir, scope, span.clone(), assumptions)
+    } else {
+        check_written_ty(
+            db,
+            scope,
+            hir,
+            span.clone(),
+            assumptions,
+            ConstBodyLowering::Eager,
+        )
+    };
+    if !errors.is_empty() {
+        return errors;
+    }
+
+    if let Some(diag) = ty.emit_diag(db, span.clone().into()) {
+        return vec![diag];
+    }
+    if !is_shape
+        && let Some(decl) = decl
+        && !decl.is_shape(db)
+    {
+        let expected = lower_kind_in_bounds(decl.bounds_raw(db)).unwrap_or(Kind::Star);
+        if !ty.kind(db).does_match(&expected) {
+            return vec![
+                TyLowerDiag::InvalidTypeArgKind {
+                    span: span.into(),
+                    expected: Some(expected),
+                    given: ty,
+                }
+                .into(),
+            ];
+        }
+    }
+    Vec::new()
 }
 
 /// The contract an associated shape's value `ty`, given for the shape `name`
@@ -5512,7 +5537,7 @@ impl<'db> TraitAssocTypeView<'db> {
         &self.decl(db).bounds
     }
 
-    /// The written default type, if any.
+    /// The default as written, if any.
     pub(crate) fn default_hir(self, db: &'db dyn HirDb) -> Option<TypeId<'db>> {
         self.decl(db).default
     }
@@ -6206,11 +6231,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {
