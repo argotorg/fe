@@ -6234,6 +6234,24 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary.resolve(db),
                 error_code,
             ),
+            BodyDiag::QuoteKindMismatch {
+                primary,
+                found,
+                expected,
+            } => primary_diag(
+                Severity::Error,
+                format!("this quotation is `Code<{found}>` code, but `Code<{expected}>` is expected"),
+                format!("the syntax of this quotation is `Code<{found}>`"),
+                primary.resolve(db),
+                error_code,
+            ),
+            BodyDiag::QuoteSpliceMismatch { primary, reason } => primary_diag(
+                Severity::Error,
+                *reason,
+                "this splice cannot fill its position in the quotation",
+                primary.resolve(db),
+                error_code,
+            ),
             BodyDiag::UnsafeCallRequiresUnsafe { primary, callee } => {
                 let name = callee
                     .name(db)

@@ -501,69 +501,86 @@ impl<'db> TyChecker<'db> {
 
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
-            Expr::ItemQuote(holes) => {
+            Expr::ItemQuote(holes) => 'quote: {
+                use crate::core::meta::{
+                    Admit, hole_slot, quote_holes, quote_is_all_hole_stmts, quote_syntax_kinds,
+                };
+                use common::generation::FrozenCodeKind;
                 let hole_tys = holes
                     .iter()
                     .map(|&hole| self.check_expr_unknown(hole).ty)
                     .collect::<Vec<_>>();
                 let expected_resolved = expected.fold_with(self.db, &mut self.table);
-                let kind = crate::core::meta::code_kind_from_ty(self.db, expected_resolved)
-                    .unwrap_or_else(|| {
-                        use common::generation::FrozenCodeKind;
-                        use parser::ast::{self, prelude::*};
-                        let body = self.env.body();
-                        if let crate::span::HirOrigin::Raw(ptr) =
-                            body.source_map(self.db).expr_map.node_to_source(expr)
+                let expected_kind =
+                    crate::core::meta::code_kind_from_ty(self.db, expected_resolved);
+                let quote = self.quote_syntax_node(expr);
+                // A quotation has type `Code<K>` only if its syntax admits
+                // the kind `K`.
+                if let (Some(expected_kind), Some(quote)) = (expected_kind, &quote) {
+                    let kinds = quote_syntax_kinds(quote);
+                    if let Some(&found) = kinds.first()
+                        && !kinds.contains(&expected_kind)
+                    {
+                        self.push_diag(BodyDiag::QuoteKindMismatch {
+                            primary: expr.span(self.body()).into(),
+                            found: code_kind_name(found),
+                            expected: code_kind_name(expected_kind),
+                        });
+                        break 'quote ExprProp::invalid(self.db);
+                    }
+                }
+                let kind = expected_kind.unwrap_or_else(|| {
+                    let Some(quote) = &quote else {
+                        return FrozenCodeKind::Expr;
+                    };
+                    // A quotation made only of holes has the kind that all of
+                    // its holes agree on.
+                    if quote_is_all_hole_stmts(quote) {
+                        let stmts = quote.body().map_or(0, |block| block.stmts().count());
+                        if let Some(&first) = hole_tys.first()
+                            && let Some(hole_kind) = crate::core::meta::code_kind_from_ty(
+                                self.db,
+                                first.fold_with(self.db, &mut self.table),
+                            )
+                            && (stmts == 1 || hole_kind != FrozenCodeKind::Pat)
+                            && hole_tys[1..].iter().all(|ty| {
+                                crate::core::meta::code_kind_from_ty(
+                                    self.db,
+                                    ty.fold_with(self.db, &mut self.table),
+                                ) == Some(hole_kind)
+                            })
                         {
-                            let root = crate::lower::top_mod_ast(self.db, body.top_mod(self.db));
-                            if let ast::ExprKind::Quote(quote) = ptr.to_node(root.syntax()).kind() {
-                                if quote.pattern().is_some() {
-                                    return FrozenCodeKind::Pat;
-                                }
-                                if quote.item_list().is_some() {
-                                    return FrozenCodeKind::Item;
-                                }
-                                if quote.where_clause().is_some() {
-                                    return FrozenCodeKind::Where;
-                                }
-                                if quote.arm_list().is_some() {
-                                    return FrozenCodeKind::Arm;
-                                }
-                                if let Some(block) = quote.body() {
-                                    let stmts = block.stmts().collect::<Vec<_>>();
-                                    if stmts.is_empty() && block.items().next().is_some() {
-                                        return FrozenCodeKind::Item;
-                                    }
-                                    if !stmts.is_empty()
-                                        && block.items().next().is_none()
-                                        && stmts.iter().all(|stmt| {
-                                            matches!(
-                                                stmt.kind(),
-                                                ast::StmtKind::Expr(inner)
-                                                    if inner.expr().is_some_and(|e| matches!(e.kind(), ast::ExprKind::QuoteHole(_)))
-                                            )
-                                        })
-                                        && !hole_tys.is_empty()
-                                        && let Some(hole_kind) =
-                                            crate::core::meta::code_kind_from_ty(
-                                                self.db,
-                                                hole_tys[0].fold_with(self.db, &mut self.table),
-                                            )
-                                        && (stmts.len() == 1 || hole_kind != FrozenCodeKind::Pat)
-                                        && hole_tys[1..].iter().all(|ty| {
-                                            crate::core::meta::code_kind_from_ty(
-                                                self.db,
-                                                ty.fold_with(self.db, &mut self.table),
-                                            ) == Some(hole_kind)
-                                        })
-                                    {
-                                        return hole_kind;
-                                    }
-                                }
-                            }
+                            return hole_kind;
                         }
-                        FrozenCodeKind::Expr
-                    });
+                        return FrozenCodeKind::Expr;
+                    }
+                    quote_syntax_kinds(quote)
+                        .first()
+                        .copied()
+                        .unwrap_or(FrozenCodeKind::Expr)
+                });
+                // Each splice must fit its position: the same table that
+                // checks the value of the quotation when it is evaluated.
+                if let Some(quote) = &quote
+                    && !quote_is_all_hole_stmts(quote)
+                    && let Ok(syntax_holes) = quote_holes(quote)
+                    && syntax_holes.len() == hole_tys.len()
+                {
+                    for ((syntax_hole, &hole), ty) in syntax_holes.iter().zip(holes).zip(&hole_tys)
+                    {
+                        let Ok(slot) = hole_slot(quote, syntax_hole, kind) else {
+                            continue;
+                        };
+                        let ty = ty.fold_with(self.db, &mut self.table);
+                        if let Admit::No(reason) = slot.admits_ty(self.db, ty) {
+                            self.push_diag(BodyDiag::QuoteSpliceMismatch {
+                                primary: hole.span(self.body()).into(),
+                                reason,
+                            });
+                            break 'quote ExprProp::invalid(self.db);
+                        }
+                    }
+                }
                 let marker_path = match kind {
                     common::generation::FrozenCodeKind::Item => "core::meta::Item",
                     common::generation::FrozenCodeKind::Expr => "core::meta::Expr",
@@ -7016,5 +7033,36 @@ impl<'db> TyChecker<'db> {
             scope = current.parent(self.db);
         }
         None
+    }
+}
+
+fn code_kind_name(kind: common::generation::FrozenCodeKind) -> String {
+    use common::generation::FrozenCodeKind;
+    match kind {
+        FrozenCodeKind::Item => "Item",
+        FrozenCodeKind::Expr => "Expr",
+        FrozenCodeKind::Pat => "Pat",
+        FrozenCodeKind::Arm => "Arm",
+        FrozenCodeKind::Where => "Where",
+    }
+    .to_string()
+}
+
+impl<'db> TyChecker<'db> {
+    /// The syntax of the quotation `expr`, in the module that holds the text
+    /// of the body: a generated body's text is its producer's.
+    fn quote_syntax_node(&self, expr: ExprId) -> Option<parser::ast::QuoteExpr> {
+        use parser::ast::{self, prelude::*};
+        let body = self.env.body();
+        let crate::span::HirOrigin::Raw(ptr) =
+            body.source_map(self.db).expr_map.node_to_source(expr)
+        else {
+            return None;
+        };
+        let root = crate::lower::top_mod_ast(self.db, body.syntax_top_mod(self.db));
+        match ptr.to_node(root.syntax()).kind() {
+            ast::ExprKind::Quote(quote) => Some(quote),
+            _ => None,
+        }
     }
 }

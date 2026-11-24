@@ -5154,6 +5154,34 @@ fn test_cli_test_generated_code_of_another_package_sees_only_what_is_public() {
 }
 
 #[test]
+fn test_cli_check_types_a_quotation_by_its_syntax() {
+    // A quotation has type `Code<K>` only if its syntax admits `K`. `x + 1` is
+    // an expression, not a list of items, and an item with a function is not a
+    // pattern. Each was accepted until it was evaluated, then failed late or
+    // with an internal error.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let check = |name: &str| {
+        let path = fixtures.join(name);
+        run_fe_main(&["check", path.to_str().expect("fixture path utf8")])
+    };
+    // The control: a quotation of items as `Code<Item>` is accepted.
+    let (output, exit_code) = check("quote_kind_ok.fe");
+    assert_eq!(exit_code, 0, "{output}");
+    let (output, exit_code) = check("quote_kind_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
+    assert!(
+        output.contains("but `Code<Item>` is expected"),
+        "unexpected diagnostics:\n{output}"
+    );
+    let (output, exit_code) = check("quote_splice_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
+    assert!(
+        output.contains("but `Code<Pat>` is expected") && !output.contains("16-0004"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_does_not_trust_a_package_by_its_name() {
     // The package `evil` calls itself `std` in its fe.toml. A package is
     // trusted as `core` or `std` only if it is the embedded library or is

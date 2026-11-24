@@ -597,6 +597,18 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         name: String,
     },
+    /// A quotation whose syntax cannot be the kind of code that its context
+    /// expects.
+    QuoteKindMismatch {
+        primary: DynLazySpan<'db>,
+        found: String,
+        expected: String,
+    },
+    /// A splice whose type cannot fill the position of its hole.
+    QuoteSpliceMismatch {
+        primary: DynLazySpan<'db>,
+        reason: &'static str,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -1759,6 +1771,8 @@ impl<'db> BodyDiag<'db> {
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
             Self::ChosenTypeRead { .. } => 138,
             Self::QuotedOpenNameUnbound { .. } => 140,
+            Self::QuoteKindMismatch { .. } => 163,
+            Self::QuoteSpliceMismatch { .. } => 164,
         }
     }
 }
