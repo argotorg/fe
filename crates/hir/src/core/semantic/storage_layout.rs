@@ -1235,12 +1235,17 @@ pub fn contract_field_lane<'db>(
 }
 
 /// The slots a value of `ty` takes in storage, as the layout places a
-/// contract field of its type, or why `ty` has no storage layout.
+/// contract field of its type, or why `ty` has no storage layout. A type
+/// that still names a parameter has no slots yet: it is laid out at each
+/// instance.
 #[salsa::tracked(returns(clone))]
 pub(crate) fn storage_slot_span<'db>(
     db: &'db dyn HirAnalysisDb,
     ty: TyId<'db>,
-) -> Result<usize, ContractLayoutError<'db>> {
+) -> Result<Option<usize>, ContractLayoutError<'db>> {
+    if ty.has_param(db) || ty.has_var(db) {
+        return Ok(None);
+    }
     let mut walker = FieldWalker {
         db,
         errors: Vec::new(),
@@ -1249,7 +1254,7 @@ pub(crate) fn storage_slot_span<'db>(
     let output = walker.walk_ty(ConcreteTypeView::identity(ty), &[], &[]);
     match walker.errors.into_iter().next() {
         Some(error) => Err(error),
-        None => Ok(output.span),
+        None => Ok(Some(output.span)),
     }
 }
 

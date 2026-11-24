@@ -1,0 +1,120 @@
+// A trait's default body is checked once for every implementor, so a const
+// that names `Self` waits for the implementor, as one naming an ordinary type
+// parameter does. So does one that names the provider of a trait-keyed
+// effect.
+trait Padded {
+    const SIZE: usize = core::size_of<Self>()
+
+    fn padded(self) -> u256 {
+        var buf: [u8; { core::size_of<Self>() + 1 }] = [0; { core::size_of<Self>() + 1 }]
+        buf[core::size_of<Self>()] = 42
+        assert!(buf[core::size_of<Self>()] == 42)
+        buf.len() as u256
+    }
+
+    fn make_buf(self) -> [u8; { core::size_of<Self>() + 1 }] {
+        [7; { core::size_of<Self>() + 1 }]
+    }
+
+    fn by_size_const(self) -> u256 {
+        let buf: [u8; { Self::SIZE }] = [0; { Self::SIZE }]
+        buf.len() as u256
+    }
+
+    const fn const_size() -> usize {
+        core::size_of<Self>()
+    }
+
+    fn pair_size() -> u256 {
+        let buf: [u8; { core::size_of<[Self; 2]>() }] = [0; { core::size_of<[Self; 2]>() }]
+        buf.len() as u256
+    }
+
+    fn with_other<U>(self, _ other: U) -> u256 {
+        let buf: [u8; { core::size_of<(Self, U)>() }] = [0; { core::size_of<(Self, U)>() }]
+        buf.len() as u256
+    }
+
+    fn runtime_size(self) -> u256 {
+        core::size_of<Self>() as u256
+    }
+}
+
+trait SubPadded: Padded {
+    fn sub_padded(self) -> u256 {
+        let buf: [u8; { core::size_of<Self>() + 2 }] = [0; { core::size_of<Self>() + 2 }]
+        buf.len() as u256
+    }
+}
+
+struct Two {
+    a: u256,
+    b: u256,
+}
+
+impl Padded for Two {}
+
+impl SubPadded for Two {}
+
+struct Empty {}
+
+impl Padded for Empty {}
+
+const TWO_SIZE: usize = Two::const_size()
+
+fn padded_generic<T: Padded>(_ value: T) -> u256 {
+    value.padded()
+}
+
+fn padded_free<T>(_ value: ref T) -> u256 {
+    let buf: [u8; { core::size_of<T>() + 1 }] = [0; { core::size_of<T>() + 1 }]
+    buf.len() as u256
+}
+
+fn padded_effect() -> u256 uses (p: Padded) {
+    p.padded()
+}
+
+fn made_by_effect() -> u256 uses (p: Padded) {
+    let buf = p.make_buf()
+    assert!(buf[buf.len() - 1] == 7)
+    buf.len() as u256
+}
+
+fn padded_free_effect() -> u256 uses (p: Padded) {
+    padded_free(ref p)
+}
+
+#[test]
+fn test_size_of_trait_self() {
+    let two = Two { a: 1, b: 2 }
+    assert!(Two::SIZE == 64)
+    assert!(TWO_SIZE == 64)
+    assert!(two.padded() == 65)
+    assert!(two.make_buf().len() == 65)
+    assert!(two.by_size_const() == 64)
+    assert!(Two::pair_size() == 128)
+    assert!(two.with_other(5 as u256) == 96)
+    assert!(two.runtime_size() == 64)
+    assert!(two.sub_padded() == 66)
+    assert!(padded_generic(two) == 65)
+    assert!(padded_free(ref two) == 65)
+
+    assert!(Empty::SIZE == 0)
+    assert!(Empty {}.padded() == 1)
+    assert!(Empty::pair_size() == 0)
+    assert!(Empty {}.runtime_size() == 0)
+}
+
+#[test]
+fn test_size_of_trait_effect_provider() {
+    with (Padded = Two { a: 1, b: 2 }) {
+        assert!(padded_effect() == 65)
+        assert!(made_by_effect() == 65)
+        assert!(padded_free_effect() == 65)
+    }
+    with (Padded = Empty {}) {
+        assert!(padded_effect() == 1)
+        assert!(made_by_effect() == 1)
+    }
+}

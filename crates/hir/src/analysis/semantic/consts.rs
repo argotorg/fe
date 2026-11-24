@@ -1034,10 +1034,6 @@ pub(crate) fn runtime_size_bytes_with_source<'db>(
             None
         } else if ty.is_never(db) {
             Some((EMPTY, true))
-        } else if let TyData::TyParam(param) = ty.data(db)
-            && (param.is_effect_provider() || param.is_trait_self())
-        {
-            Some((EMPTY, false))
         } else if ty.has_param(db) {
             None
         } else if ty.is_tuple(db) || ty.as_closure(db).is_some() {
