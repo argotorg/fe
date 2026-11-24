@@ -328,6 +328,14 @@ impl<'db> TyId<'db> {
         if self.is_param(db) {
             return false;
         };
+        // A trait family and a constraint term describe goals. They are not
+        // types an inherent implementation can extend.
+        if matches!(
+            self.base_ty(db).data(db),
+            TyData::TraitFamily(_) | TyData::ConstraintTerm(_)
+        ) {
+            return false;
+        }
 
         let ty_ingot = self.ingot(db);
         match ingot.kind(db) {

@@ -220,3 +220,32 @@ fn omitted_and_written_defaults_name_one_family() {
         0
     );
 }
+
+#[test]
+fn family_arguments_satisfy_parameter_bounds() {
+    let header = "trait Bar {}\ntrait Foo<T: Bar> {}\nstruct NoBar {}\nstruct HasBar {}\nimpl Bar for HasBar {}\ntrait Sup {}\ntrait Sub<T>: Sup {}\nstruct Family<P: * -> Constraint> {}\n";
+    let codes = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_bounds.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).error_code.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // The argument of a family must satisfy the trait's bound on that parameter.
+    let refused = codes("fn f(_ x: Family<trait Foo<NoBar>>) {}\n");
+    assert!(refused.iter().any(|code| code == "6-0003"), "{refused:?}");
+    assert_eq!(
+        codes("fn f(_ x: Family<trait Foo<HasBar>>) {}\n"),
+        Vec::<String>::new()
+    );
+    // A requirement on the subject alone is checked where the family is applied.
+    assert_eq!(
+        codes("fn g(_ x: Family<trait Sub<u8>>) {}\n"),
+        Vec::<String>::new()
+    );
+}

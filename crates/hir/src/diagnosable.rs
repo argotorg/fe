@@ -2604,13 +2604,23 @@ impl<'db> Diagnosable<'db> for Trait<'db> {
         let assumptions = constraints_for(db, self.into());
         for assoc in self.assoc_consts(db) {
             if let Some(hir_ty) = assoc.hir_ty(db) {
-                out.extend(ty::ty_error::collect_hir_ty_diags(
+                let ty_diags = ty::ty_error::collect_hir_ty_diags(
                     db,
                     self.scope(),
                     hir_ty,
                     assoc.span().ty(),
                     assumptions,
-                ));
+                );
+                if ty_diags.is_empty()
+                    && let Some(ty) = assoc.ty(db)
+                {
+                    out.extend(ty::ty_check::const_type_diag(
+                        db,
+                        assoc.span().ty().into(),
+                        ty,
+                    ));
+                }
+                out.extend(ty_diags);
             }
         }
         out.extend(self.diags_assoc_defaults(db));
