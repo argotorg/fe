@@ -1688,7 +1688,7 @@ fn impl_component<'db>(
         return ImplComponent::Own;
     };
     let basis = selected.constraints(db);
-    let cx = TraitSolveCx::new(db, implementation.scope()).with_assumptions(basis);
+    let cx = TraitSolveCx::new(db, implementation.scope(), Tier::All).with_assumptions(basis);
     let answers = assumption_matcher(db, cx, declared);
     let closed = is_closed_goal(db, declared);
     let scope = implementation.scope();
@@ -1794,7 +1794,7 @@ pub(crate) fn project_step<'db>(
             let Some(goal) = goal.or_else(|| step_bound(db, selected.trait_inst(db), step)) else {
                 return Projection::Refused;
             };
-            return prove(db, TraitSolveCx::new(db, contract.scope()), goal)
+            return prove(db, TraitSolveCx::new(db, contract.scope(), Tier::All), goal)
                 .map_or(Projection::Refused, Projection::Proof);
         }
         _ => return Projection::Refused,
@@ -1892,7 +1892,7 @@ pub(crate) fn implied_bound_evidence<'db>(
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
 ) -> Projection<'db> {
-    let cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+    let cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
     let answers = assumption_matcher(db, cx, goal);
     if answers(root) {
         return Projection::Proof(proof);
@@ -3354,7 +3354,7 @@ fn plain<B: Tr>() {}
             vec![adt_ty(&db, module, "W", &[foo])],
         );
         let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope()), goal).expect("W<Foo> implements Tr");
+            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
         let expected = dictionary.conds(&db)[0];
         let supplied = BoundEvidence {
             schema,
@@ -3445,7 +3445,7 @@ fn plain<B: Tr>() {}
         // Under an implementation's conditions it is found as well.
         let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
         let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope()), goal).expect("W<Foo> implements Tr");
+            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
         assert!(dictionary.unresolved_component(&db).is_none());
         let Evidence::Impl {
             selected,
@@ -3485,7 +3485,7 @@ fn plain<B: Tr>() {}
         let w_foo = adt_ty(&db, module, "W", &[foo]);
         let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
         let dictionary =
-            prove(&db, TraitSolveCx::new(&db, module.scope()), goal).expect("W<Foo> implements Tr");
+            prove(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal).expect("W<Foo> implements Tr");
         assert_eq!(
             implied_bound_evidence(
                 &db,
@@ -3528,7 +3528,7 @@ fn ctx<B: Tr<A = Foo>, C: Tr<A = Foo>>() {}
             signature.list(&db)[0].self_ty(&db),
             signature.list(&db)[1].self_ty(&db),
         );
-        let cx = TraitSolveCx::new(&db, module.scope()).with_assumptions(signature);
+        let cx = TraitSolveCx::new(&db, module.scope(), Tier::All).with_assumptions(signature);
         let tx = trait_named(&db, module, "Tx");
         let source = TraitInstId::new_simple(&db, tx, vec![adt_ty(&db, module, "Pair", &[b, c])]);
         let bounds = DeferredProofBounds::capture(&db, source, cx);
@@ -3556,7 +3556,7 @@ fn ctx<B: Tr<A = Foo>, C: Tr<A = Foo>>() {}
         let goal =
             TraitInstId::new_simple(&db, tx, vec![adt_ty(&db, module, "Pair", &[w_foo, w_foo])]);
         let Selection::Unique(resolved) =
-            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, module.scope()), goal)
+            resolve_trait_impl_instance(&db, TraitSolveCx::new(&db, module.scope(), Tier::All), goal)
         else {
             panic!("Pair<W<Foo>, W<Foo>> implements Tx")
         };

@@ -17,7 +17,7 @@ use crate::analysis::{
         method_table::{MethodProbe, ProbedMethod, probe_method},
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_and_ty, impls_for_ty},
         trait_resolution::{
-            CanonicalGoalQuery, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
+            ChoiceEntry, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
             TraitSolveCx, goal_query_has_solution, is_goal_query_satisfiable,
         },
         ty_def::{TyData, TyId},
@@ -524,7 +524,7 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             .choices
             .map(|choices| choices.items(self.db).clone())
             .unwrap_or_default();
-        for choice in chosen {
+        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
             self.insert_chosen_trait_method_cand(choice);
         }
 
@@ -1233,6 +1233,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     self.choices
                         .iter()
                         .flat_map(|choices| choices.items(self.db))
+                        .filter_map(|entry| entry.implementation())
                         .map(|choice| choice.implementation().trait_def(self.db)),
                 ),
         )

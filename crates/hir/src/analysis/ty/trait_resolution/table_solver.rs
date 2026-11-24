@@ -169,6 +169,7 @@ pub(super) fn match_choice_entry<'db>(
         ChosenImpl {
             template: choice.template,
             applied: Some(candidate),
+            inherited: None,
         },
     ))
 }

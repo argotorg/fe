@@ -2321,7 +2321,7 @@ pub(crate) fn written_const_bodies_of<'db>(
 ) -> Vec<(Body<'db>, TyId<'db>)> {
     let mut bodies = Vec::new();
     for entry in written_types(db, item) {
-        if let WrittenEntry::ConstBodies(found) = entry {
+        if let WrittenEntry::ConstBodies(found, _) = entry {
             for &(body, expected) in found {
                 if !bodies.contains(&(body, expected)) {
                     bodies.push((body, expected));

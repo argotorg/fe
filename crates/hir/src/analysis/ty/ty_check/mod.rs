@@ -1164,7 +1164,7 @@ pub(crate) fn module_body_owners<'db>(
             }
         }
         let typed = &infer_body(db, owner).1;
-        for (nested, expected) in
+        for (nested, expected, _) in
             const_requirements::expression_const_bodies(db, owner, body, typed)
         {
             let anon = BodyOwner::AnonConstBody {

@@ -1401,7 +1401,7 @@ pub(crate) fn concrete_goal_output_mismatch<'db>(
     if !trait_def.has_assoc_outputs(db) && trait_def.assoc_consts(db).next().is_none() {
         return None;
     }
-    match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope), goal) {
+    match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope, Tier::All), goal) {
         Selection::Unique(ordinary) => {
             if ordinary.selected() == own.selected()
                 && ordinary.instantiated() == own.instantiated()

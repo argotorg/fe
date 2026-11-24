@@ -766,7 +766,7 @@ impl<'db> NamedTraits<'db> {
                 self.name_used(use_.inst());
                 use_.inst().visit_with(self);
             }
-            ConstRef::InherentConst(use_) => self.read_inherent_const(use_),
+            ConstRef::InherentConst { use_, .. } => self.read_inherent_const(use_),
         }
     }
 

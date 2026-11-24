@@ -112,6 +112,7 @@ use crate::analysis::{
     ty::{
         const_ty::{ConstTyId, const_ty_from_sem_const, try_eval_const_int_expr},
         normalize::normalize_ty,
+        trait_resolution::ChosenImpls,
         ty_check::{RecordInitLowering, TyChecker, path::RecordInitChecker},
         ty_def::{InvalidCause, TyId},
     },

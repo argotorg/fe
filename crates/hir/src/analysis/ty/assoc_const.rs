@@ -154,7 +154,7 @@ impl<'db> InherentConstUse<'db> {
     }
 
     pub fn solve_cx(self, db: &'db dyn HirAnalysisDb) -> TraitSolveCx<'db> {
-        TraitSolveCx::new(db, self.origin_scope).with_assumptions(self.assumptions)
+        TraitSolveCx::new(db, self.origin_scope, Tier::All).with_assumptions(self.assumptions)
     }
 }
 

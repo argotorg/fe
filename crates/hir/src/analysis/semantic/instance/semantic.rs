@@ -2152,7 +2152,7 @@ impl<'db> SemanticInstance<'db> {
                 && let Some(proof) = callable.evidence()
                 && let Some(diagnostic) = self.proof_output_diagnostic(db, expr, proof)
             {
-                return Err(diagnostic);
+                return Err(EntryCodecFailure::Diagnostic(diagnostic));
             }
             let callee =
                 semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
