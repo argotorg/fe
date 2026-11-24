@@ -804,11 +804,15 @@ impl<'db> TyAlias<'db> {
         self.param_set.params(db)
     }
 
+    /// Instantiates the alias with `args` and the defaults of the parameters
+    /// after them. `missing` gives the argument of each parameter left
+    /// without one, if it can; otherwise the alias is unbound.
     pub(crate) fn instantiate(
         &self,
         db: &'db dyn HirAnalysisDb,
         args: &[TyId<'db>],
         lowering_cx: &LoweringContext<'db>,
+        mut missing: impl FnMut(TyId<'db>) -> Option<TyId<'db>>,
     ) -> TyId<'db> {
         let expected = self.param_set.explicit_param_count(db);
         debug_assert!(
@@ -824,15 +828,15 @@ impl<'db> TyAlias<'db> {
                 DefaultApplication::StructuralMetadata(lowering_cx),
             )
             .map_err(|error| error.cause)
-            .and_then(|args| {
-                if args.len() < expected {
-                    Err(InvalidCause::UnboundTypeAliasParam {
+            .and_then(|mut args| {
+                let n_given_args = args.len();
+                for &param in &self.params(db)[n_given_args..expected] {
+                    args.push(missing(param).ok_or(InvalidCause::UnboundTypeAliasParam {
                         alias: self.alias,
-                        n_given_args: args.len(),
-                    })
-                } else {
-                    Ok(args)
+                        n_given_args,
+                    })?);
                 }
+                Ok(args)
             });
         match completed {
             Ok(args) => self.alias_to.instantiate(db, &args),

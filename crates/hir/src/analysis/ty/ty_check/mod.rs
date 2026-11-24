@@ -106,7 +106,10 @@ use super::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
         int_literal_fits_prim,
     },
-    ty_lower::{CompleteSubst, collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
+    ty_lower::{
+        CompleteSubst, collect_generic_params, lower_generic_arg_list, lower_hir_ty,
+        lower_hir_ty_deferred,
+    },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
     unsafe_check::check_unsafe_ops,
 };
@@ -4171,10 +4174,29 @@ impl<'db> TyChecker<'db> {
         site: DynLazySpan<'db>,
         lowering_cx: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
+        let db = self.db;
         let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let table = &mut self.table;
         let mut invisible = None;
         let mut applications = Vec::new();
-        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
+        let mut observe_segment = |path: PathId<'db>, reso: &mut PathRes<'db>| {
+            // An alias named without all its arguments infers the rest, as a
+            // generic type named without its arguments does.
+            if let PathRes::TyAlias(alias, ty) = reso
+                && let Some(InvalidCause::UnboundTypeAliasParam { .. }) = ty.invalid_cause(db)
+            {
+                let args = lower_generic_arg_list(
+                    db,
+                    path.generic_args(db),
+                    scope,
+                    assumptions,
+                    lowering_cx,
+                );
+                *ty = alias.instantiate(db, &args, lowering_cx, |param| {
+                    Some(table.new_var_from_param(param))
+                });
+            }
             applications.extend(const_requirements::constrained_applications(self.db, reso));
             if invisible.is_some() {
                 return;
@@ -4185,10 +4207,10 @@ impl<'db> TyChecker<'db> {
         };
 
         let res = resolve_path_with_observer_and_minter(
-            self.db,
+            db,
             path,
             scope,
-            self.env.assumptions(),
+            assumptions,
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
@@ -7529,6 +7551,17 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
             self.check_unknown(callable_ty, span.into(), false);
+        }
+
+        // An associated constant's receiver is not part of the expression's
+        // type, so inference can leave it unknown, as in `List::CAP`.
+        let receiver_args = match self.body.expr_const_ref(expr) {
+            Some(ConstRef::InherentConst(use_)) => vec![use_.receiver_ty()],
+            Some(ConstRef::TraitConst { use_, .. }) => use_.inst().args(self.db).to_vec(),
+            Some(ConstRef::Const(_)) | None => Vec::new(),
+        };
+        for ty in receiver_args {
+            self.check_unknown(ty, ctxt.span().unwrap().into(), false);
         }
 
         match expr_data {
