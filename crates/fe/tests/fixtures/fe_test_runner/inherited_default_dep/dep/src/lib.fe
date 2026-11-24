@@ -1,0 +1,6 @@
+// The default has type `i8` and is declared as `Self::X`, so it is checked
+// for each implementation that inherits it.
+pub trait Narrow {
+    type X
+    const NEG: Self::X = -3 as i8
+}

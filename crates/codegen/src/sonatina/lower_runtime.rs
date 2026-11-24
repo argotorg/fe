@@ -1335,7 +1335,9 @@ fn describe_runtime_instance<'db>(
                     |name| format!("func {}", name.data(db)),
                 ),
                 BodyOwner::Const(const_) => format!("const {const_:?}"),
-                BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => format!("{owner:?}"),
+                BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
+                | BodyOwner::Closure { .. } => format!("{owner:?}"),
                 BodyOwner::ContractInit { contract } => contract.name(db).to_opt().map_or_else(
                     || format!("{owner:?}"),
                     |name| format!("contract-init {}", name.data(db)),

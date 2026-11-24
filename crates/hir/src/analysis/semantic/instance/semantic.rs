@@ -3312,6 +3312,7 @@ pub fn root_semantic_instance_key<'db>(
         BodyOwner::Func(func, _) => GenericSubst::for_owner(db, func.into(), generic_args),
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::InheritedConst { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. }
         | BodyOwner::Closure { .. } => GenericSubst::none(db),
@@ -3621,6 +3622,7 @@ fn root_owner_generic_args<'db>(
         BodyOwner::Func(func, mode) => root_func_generic_args(db, func, mode),
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::InheritedConst { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. }
         | BodyOwner::Closure { .. } => Ok(Vec::new()),

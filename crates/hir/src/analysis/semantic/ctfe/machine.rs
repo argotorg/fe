@@ -1253,6 +1253,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .collect::<Vec<_>>(),
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::ContractInit { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => Vec::new(),
@@ -1401,7 +1402,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             | BodyOwner::Closure { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             owner @ (BodyOwner::Func(_, _)
             | BodyOwner::Const(_)
-            | BodyOwner::AnonConstBody { .. }) => {
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }) => {
                 if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }

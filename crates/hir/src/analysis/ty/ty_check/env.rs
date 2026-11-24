@@ -18,6 +18,7 @@ use salsa::SalsaValue;
 use thin_vec::ThinVec;
 
 use super::effect_env as keyed_effect_env;
+use super::inherited_const::{inherited_const_setup, mentions_param_of};
 use super::owner::BodyOwner;
 use super::{
     BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, SumShapeOp, TyChecker,
@@ -48,6 +49,7 @@ use crate::analysis::{
         normalize::normalize_ty,
         provider::AddressSpace,
         shape::Shape,
+        subst::substitute_complete,
         trait_def::TraitInstId,
         trait_resolution::{
             ChosenImpls, PredicateListId, TraitSolveCx,
@@ -57,7 +59,7 @@ use crate::analysis::{
             BorrowKind, ClosureDef, ClosureTy, InvalidCause, StringFallback, TyData, TyId,
             TyVarSort,
         },
-        ty_lower::lower_hir_ty,
+        ty_lower::{CompleteSubst, lower_hir_ty},
         unify::UnificationTable,
     },
 };
@@ -232,9 +234,11 @@ pub(crate) struct TyCheckEnv<'db> {
     place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
     /// The expressions of type `!` typed as their context's type.
     never_coercions: FxHashSet<ExprId>,
-    /// Whether the body is a constant checked against a declared type that
-    /// mentions a parameter, and typed as its tail.
-    tail_depends_on_instantiation: bool,
+    /// For the default of a trait's constant checked for an implementation
+    /// (`BodyOwner::InheritedConst`): the instantiation of the trait's
+    /// parameters, `Self` included, that every type the body takes from its
+    /// scope goes through (`TyCheckEnv::instantiate_scope_ty`).
+    scope_subst: Option<InheritedScope<'db>>,
     /// The newtype layers that each cast sees through (`TyChecker::accept_cast`).
     cast_layers: FxHashMap<ExprId, super::CastLayers>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
@@ -265,6 +269,20 @@ pub(crate) struct TyCheckEnv<'db> {
     /// passed through, each with the span of the expression or pattern whose
     /// path it is.
     path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
+}
+
+/// What a trait's default checked for an implementation reads its names
+/// through: the trait's parameters, `Self` included, are the implementation's
+/// trait arguments.
+#[derive(Debug, Clone)]
+pub(super) struct InheritedScope<'db> {
+    pub(super) sigma: CompleteSubst<'db>,
+    /// The bounds the names of the body resolve under, as the trait wrote
+    /// them.
+    pub(super) written: PredicateListId<'db>,
+    /// The scope of the trait: a type that still mentions one of its
+    /// parameters after the instantiation is a site that did not instantiate.
+    pub(super) trait_scope: ScopeId<'db>,
 }
 
 /// A closure expression's parameters and captured bindings, in the order of
@@ -311,6 +329,7 @@ impl<'db> TyCheckEnv<'db> {
         };
 
         let owner_scope = owner.scope();
+        let mut inherited = None;
 
         // Compute base assumptions (without effect-derived bounds) up-front
         let (base_preds, base_assumptions) = match owner {
@@ -325,6 +344,20 @@ impl<'db> TyCheckEnv<'db> {
             BodyOwner::AnonConstBody { .. } | BodyOwner::Const(_) => {
                 let preds = const_body_assumptions(db, owner_scope);
                 let assumptions = preds.extend_all_bounds(db);
+                (preds, assumptions)
+            }
+            BodyOwner::InheritedConst {
+                implementation,
+                body: default,
+            } => {
+                let setup = inherited_const_setup(db, implementation, default).ok_or(())?;
+                let preds = setup.assumptions;
+                let assumptions = preds.extend_all_bounds(db);
+                inherited = Some(InheritedScope {
+                    sigma: setup.sigma,
+                    written: setup.written.extend_all_bounds(db),
+                    trait_scope: setup.trait_.scope(),
+                });
                 (preds, assumptions)
             }
             _ => {
@@ -414,7 +447,7 @@ impl<'db> TyCheckEnv<'db> {
             inspected_places: FxHashSet::default(),
             place_entries: FxHashMap::default(),
             never_coercions: FxHashSet::default(),
-            tail_depends_on_instantiation: false,
+            scope_subst: inherited,
             cast_layers: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
@@ -444,7 +477,9 @@ impl<'db> TyCheckEnv<'db> {
                 env.input_bindings = bindings.inputs;
                 env.param_products = bindings.products;
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. } => {}
             BodyOwner::ContractInit { contract } => {
                 let Some(init) = contract.init(db) else {
                     return Ok(env);
@@ -499,7 +534,10 @@ impl<'db> TyCheckEnv<'db> {
     fn register_effect_bindings(&mut self, base_assumptions: PredicateListId<'db>) {
         match self.owner {
             BodyOwner::Func(func, mode) => self.register_func_effect_bindings(func, mode),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } => {
                 self.register_contract_effect_bindings(base_assumptions)
             }
@@ -575,6 +613,7 @@ impl<'db> TyCheckEnv<'db> {
             BodyOwner::Func(_, _)
             | BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::Closure { .. } => None,
         }
     }
@@ -967,6 +1006,13 @@ impl<'db> TyCheckEnv<'db> {
                     TyId::invalid(self.db, InvalidCause::Other)
                 }
             }
+            BodyOwner::InheritedConst {
+                implementation,
+                body,
+            } => match inherited_const_setup(self.db, implementation, body) {
+                Some(setup) if setup.expected.is_star_kind(self.db) => setup.expected,
+                _ => TyId::invalid(self.db, InvalidCause::Other),
+            },
             BodyOwner::ContractInit { .. } => TyId::unit(self.db),
             BodyOwner::ContractRecvArm { .. } => {
                 let Some(arm) = self.owner.recv_arm(self.db) else {
@@ -1076,12 +1122,6 @@ impl<'db> TyCheckEnv<'db> {
         } else {
             self.never_coercions.remove(&expr);
         }
-    }
-
-    /// Records that the body is typed as its tail, not as the declared type
-    /// that it is coerced to (`TyChecker::check_tail_against_declared_type`).
-    pub(super) fn mark_tail_depends_on_instantiation(&mut self) {
-        self.tail_depends_on_instantiation = true;
     }
 
     /// Records the newtype layers that the cast `expr` sees through.
@@ -2002,16 +2042,6 @@ impl<'db> TyCheckEnv<'db> {
             for refused in refused {
                 diags.push(refused_proof(refused, expr.span(self.body).into()));
             }
-            if let Some((expected, given)) = (*const_ref).default_tail_mismatch(self.db) {
-                diags.push(
-                    super::super::diagnostics::BodyDiag::TypeMismatch {
-                        span: expr.span(self.body).into(),
-                        expected,
-                        given,
-                    }
-                    .into(),
-                );
-            }
             const_ref.qualify_evidence(self.db, self.owner);
         }
         self.closure_infos
@@ -2021,6 +2051,26 @@ impl<'db> TyCheckEnv<'db> {
         self.path_applications
             .iter_mut()
             .for_each(|(_, ty)| *ty = ty.fold_with(self.db, &mut prober));
+        // A default checked for an implementation takes every type from its
+        // scope through `instantiate_scope_ty`. A type that still mentions a
+        // parameter of the trait is a site that did not: refuse the body, so
+        // that a missed site never accepts a program.
+        if let Some(inherited) = &self.scope_subst {
+            let db = self.db;
+            let leaks = |ty: TyId<'db>| mentions_param_of(db, ty, inherited.trait_scope);
+            if self.expr_ty.values().flatten().any(|prop| leaks(prop.ty))
+                || self.pat_ty.values().flatten().any(|ty| leaks(*ty))
+            {
+                diags.push(
+                    super::super::diagnostics::BodyDiag::CompileTimePhase {
+                        primary: self.body.expr(db).span(self.body).into(),
+                        message: "internal error: a default constant was not instantiated for its implementation".to_string(),
+                        label: "this expression still has a type that mentions a parameter of its trait",
+                    }
+                    .into(),
+                );
+            }
+        }
         let mut expr_place = SecondaryMap::new();
         let mut expr_places: PrimaryMap<super::ExprPlaceId, Place<'db>> = PrimaryMap::new();
         for expr in self.body.exprs(self.db).keys() {
@@ -2060,7 +2110,6 @@ impl<'db> TyCheckEnv<'db> {
             place_entries: self.place_entries,
             unsafe_ops: Vec::new(),
             never_coercions: self.never_coercions,
-            tail_depends_on_instantiation: self.tail_depends_on_instantiation,
             cast_layers: self.cast_layers,
             unsafe_splits: self.unsafe_splits,
             product_args: self.product_args,
@@ -2111,6 +2160,56 @@ impl<'db> TyCheckEnv<'db> {
         self.var_env.last().unwrap().scope
     }
 
+    /// A type the body's scope gives, as it is for what the body is checked
+    /// for. In the default of a trait's constant checked for an implementation
+    /// (`BodyOwner::InheritedConst`), the trait's parameters and `Self` are
+    /// the implementation's values; anywhere else the type is as written. Every
+    /// type the checker takes from its scope goes through here.
+    pub(super) fn instantiate_scope_ty(&self, ty: TyId<'db>) -> TyId<'db> {
+        let Some(inherited) = &self.scope_subst else {
+            return ty;
+        };
+        match substitute_complete(self.db, ty, &inherited.sigma) {
+            Ok(ty) => normalize_ty(self.db, ty, self.scope(), self.assumptions),
+            Err(_) => TyId::invalid(self.db, InvalidCause::Other),
+        }
+    }
+
+    /// The bounds the names of the body resolve under: the assumptions of the
+    /// body, or, for a default checked for an implementation, the bounds as
+    /// the trait wrote them (the names are instantiated afterwards).
+    pub(super) fn written_assumptions(&self) -> PredicateListId<'db> {
+        self.scope_subst
+            .as_ref()
+            .map_or(self.assumptions, |inherited| inherited.written)
+    }
+
+    /// Whether the body is the default of a trait's constant checked for an
+    /// implementation, whose names are instantiated for it.
+    pub(super) fn is_instantiated_for_implementation(&self) -> bool {
+        self.scope_subst.is_some()
+    }
+
+    /// What a path resolves to, as it is for what the body is checked for
+    /// (`Self::instantiate_scope_ty`).
+    pub(super) fn instantiate_scope_res(
+        &self,
+        res: crate::analysis::name_resolution::PathRes<'db>,
+    ) -> crate::analysis::name_resolution::PathRes<'db> {
+        let Some(inherited) = &self.scope_subst else {
+            return res;
+        };
+        match substitute_complete(self.db, res, &inherited.sigma) {
+            Ok(res) => {
+                res.map_over_ty(|ty| normalize_ty(self.db, ty, self.scope(), self.assumptions))
+            }
+            Err(_) => crate::analysis::name_resolution::PathRes::Ty(TyId::invalid(
+                self.db,
+                InvalidCause::Other,
+            )),
+        }
+    }
+
     pub(super) fn current_block_idx(&self) -> usize {
         self.var_env.last().unwrap().idx
     }
@@ -2128,7 +2227,10 @@ impl<'db> TyChecker<'db> {
     pub(super) fn seed_effect_witnesses(&mut self) {
         match self.env.owner {
             BodyOwner::Func(func, mode) => self.seed_func_effect_witnesses(func, mode),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {}
             BodyOwner::ContractInit { .. } | BodyOwner::ContractRecvArm { .. } => {
                 self.seed_contract_effect_witnesses();
             }

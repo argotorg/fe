@@ -35,7 +35,7 @@ use crate::analysis::{
         canonical::Canonicalized,
         const_ty::{ConstBodyLowering, LoweringContext},
         diagnostics::{RevealedBy, TyDiagCollection, TyLowerDiag},
-        fold::TyFoldable as _,
+        fold::{TyFoldable, TyFolder},
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
@@ -49,8 +49,8 @@ use crate::analysis::{
             lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
         trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
-            is_goal_satisfiable,
+            ChoiceEntry, GoalSatisfiability, PredicateListId, TraitSolveCx,
+            constraint::collect_constraints, is_goal_satisfiable,
         },
         ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
         ty_error::emit_invalid_ty_error,
@@ -59,6 +59,7 @@ use crate::analysis::{
             lower_type_alias, lower_type_alias_deferred, lower_type_position_path,
         },
         unify::UnificationTable,
+        visitor::{TyVisitable, TyVisitor},
     },
 };
 
@@ -833,6 +834,67 @@ pub enum PathRes<'db> {
     /// An associated const defined in an inherent `impl` block,
     /// e.g. `Foo::SIZE` where `impl Foo { const SIZE: u256 = 32 }`.
     InherentConst(TyId<'db>, Impl<'db>, IdentId<'db>),
+}
+
+impl<'db> TyVisitable<'db> for PathRes<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            PathRes::Ty(ty)
+            | PathRes::TyAlias(_, ty)
+            | PathRes::Func(ty)
+            | PathRes::Const(_, ty)
+            | PathRes::InherentConst(ty, ..) => ty.visit_with(visitor),
+            PathRes::EnumVariant(variant) => variant.ty.visit_with(visitor),
+            PathRes::Trait(inst) | PathRes::TraitMethod(inst, _) => inst.visit_with(visitor),
+            PathRes::Method(ty, candidate) => {
+                ty.visit_with(visitor);
+                candidate.visit_with(visitor);
+            }
+            PathRes::TraitConst(ty, inst, _) => {
+                ty.visit_with(visitor);
+                inst.visit_with(visitor);
+            }
+            PathRes::Mod(_) | PathRes::FuncParam(..) => {}
+        }
+    }
+}
+
+/// Folds every type a resolution carries. A caller that reads the names of one
+/// scope for another (the default of a trait's constant, read for an
+/// implementation) instantiates what the names resolve to this way.
+impl<'db> TyFoldable<'db> for PathRes<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            PathRes::Ty(ty) => PathRes::Ty(ty.fold_with(db, folder)),
+            PathRes::TyAlias(alias, ty) => PathRes::TyAlias(alias, ty.fold_with(db, folder)),
+            PathRes::Func(ty) => PathRes::Func(ty.fold_with(db, folder)),
+            PathRes::Const(const_, ty) => PathRes::Const(const_, ty.fold_with(db, folder)),
+            PathRes::EnumVariant(variant) => PathRes::EnumVariant(ResolvedVariant {
+                ty: variant.ty.fold_with(db, folder),
+                ..variant
+            }),
+            PathRes::Trait(inst) => PathRes::Trait(inst.fold_with(db, folder)),
+            PathRes::TraitMethod(inst, method) => {
+                PathRes::TraitMethod(inst.fold_with(db, folder), method)
+            }
+            PathRes::Method(ty, candidate) => {
+                PathRes::Method(ty.fold_with(db, folder), candidate.fold_with(db, folder))
+            }
+            PathRes::TraitConst(ty, inst, name) => {
+                PathRes::TraitConst(ty.fold_with(db, folder), inst.fold_with(db, folder), name)
+            }
+            PathRes::InherentConst(ty, impl_, name) => {
+                PathRes::InherentConst(ty.fold_with(db, folder), impl_, name)
+            }
+            res @ (PathRes::Mod(_) | PathRes::FuncParam(..)) => res,
+        }
+    }
 }
 
 impl<'db> PathRes<'db> {
@@ -2572,6 +2634,37 @@ fn select_assoc_const_candidate<'db>(
                 }
                 cx.rollback_to(snapshot);
             }
+        }
+        // An implementation opened by `with`, or the named implementation whose
+        // body this is, is a candidate as it is for a method: whatever the
+        // receiver is, its parameters are fresh variables here, and a receiver
+        // that does not unify with its self type rejects it. It asserts nothing:
+        // the goal it answers is solved under the choices where the use is
+        // checked. A named implementation is not among the ordinary
+        // implementations of its type, so without this `Self::SIDES` written in
+        // the implementation, by its provider or by hand, names nothing.
+        let chosen = choices
+            .map(|choices| choices.items(db).clone())
+            .unwrap_or_default();
+        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
+            let implementation = choice.implementation();
+            let declared = implementation.trait_(db);
+            if declared.def(db).const_(db, name).is_none() {
+                continue;
+            }
+            let snapshot = cx.snapshot();
+            let inst = cx.instantiate_with_fresh_vars(declared);
+            if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
+                let inst = cx.try_extract::<TraitInstId<'db>>(inst).unwrap_or_else(|| {
+                    unresolved.insert(identity(declared));
+                    declared
+                });
+                matches.entry(identity(inst)).or_insert(inst);
+                if is_enclosing_impl(db, implementation, scope) {
+                    enclosing.insert(identity(inst));
+                }
+            }
+            cx.rollback_to(snapshot);
         }
     });
     use crate::analysis::ty::trait_resolution::ChoiceEntry;

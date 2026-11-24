@@ -3179,6 +3179,7 @@ fn function_effect_bindings_use_instantiated_provider_bindings() {
                 BodyOwner::Func(_, _)
                 | BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
                 | BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }
                 | BodyOwner::Closure { .. } => None,

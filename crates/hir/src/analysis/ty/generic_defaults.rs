@@ -538,6 +538,7 @@ fn instantiate_const_default<'db>(
         Partial::Present(value),
         Some(template_ty),
         Some(expected),
+        None,
         ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
         application.const_policy(),
     );

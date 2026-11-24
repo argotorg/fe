@@ -1147,10 +1147,15 @@ fn force_const_term_operand_impl<'db>(
             capture,
             ..
         } => {
-            let owner = BodyOwner::AnonConstBody {
-                body: *body,
-                expected: template_ty.unwrap_or(*expected),
-            };
+            let check_ty = template_ty.unwrap_or(*expected);
+            let owner =
+                const_ty
+                    .data(db)
+                    .unevaluated_owner(check_ty)
+                    .unwrap_or(BodyOwner::AnonConstBody {
+                        body: *body,
+                        expected: check_ty,
+                    });
             let key = SemanticInstanceKey::of(
                 db,
                 owner,
@@ -1799,10 +1804,15 @@ fn force_selected_const_ty<'db>(
             capture,
             ..
         } => {
-            let owner = BodyOwner::AnonConstBody {
-                body: *body,
-                expected: template_ty.or(*ty).unwrap_or(expected),
-            };
+            let check_ty = template_ty.or(*ty).unwrap_or(expected);
+            let owner =
+                const_ty
+                    .data(db)
+                    .unevaluated_owner(check_ty)
+                    .unwrap_or(BodyOwner::AnonConstBody {
+                        body: *body,
+                        expected: check_ty,
+                    });
             let key = SemanticInstanceKey::of(
                 db,
                 owner,
