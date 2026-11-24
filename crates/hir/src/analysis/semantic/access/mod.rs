@@ -55,7 +55,7 @@ use crate::{
             ty_def::TyId,
         },
     },
-    hir_def::{Contract, ExprId, HirIngot, ItemKind, StmtId, TopLevelMod},
+    hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
 };
 
 use self::{
