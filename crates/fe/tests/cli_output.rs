@@ -6311,3 +6311,21 @@ fn named_constant_computed_under_its_own_choice() {
     assert_ne!(exit, 0, "{output}");
     assert!(output.contains("5-0005"), "{output}");
 }
+
+#[test]
+fn named_output_walk_does_not_follow_a_body_with_errors() {
+    // `boom` fails internally because `gen<S>` under a named choice disagrees
+    // with ordinary normalization, so admission looks for a disagreement in the
+    // instances `boom` calls. The body of `deep` has an unresolved name, and
+    // its calls are not followed: `deep` calls itself at an ever-growing type,
+    // and no instance limit is reported for a body with errors.
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_walk_blocked_body.fe");
+    let (output, exit) = run_fe_main_within(
+        &["check", path.to_str().unwrap()],
+        std::time::Duration::from_secs(120),
+    );
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("8-0012"), "{output}");
+    assert!(!output.contains("16-"), "{output}");
+}

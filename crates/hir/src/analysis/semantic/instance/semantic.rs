@@ -963,8 +963,9 @@ fn output_agreement_diagnostic_query<'db>(
 /// The first disagreement with ordinary normalization (see
 /// `output_agreement_diagnostic_query`) in an instance that `instance` calls,
 /// directly or through other calls. Only instances within the instance limits
-/// are followed, so the walk ends for recursion that grows its generic
-/// arguments.
+/// are followed, and the calls of a body with lowering issues are not
+/// (`walk_may_follow_calls`), so the walk ends for recursion that grows its
+/// generic arguments.
 #[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
 fn callee_output_disagreement_query<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -975,8 +976,11 @@ fn callee_output_disagreement_query<'db>(
         .map(|(_, callee)| SemanticInstance::new(db, callee.key))
         .filter(|&callee| callee != instance && instance_limit_violation(db, callee).is_none())
         .find_map(|callee| {
-            output_agreement_diagnostic_query(db, callee)
-                .or_else(|| callee_output_disagreement_query(db, callee))
+            output_agreement_diagnostic_query(db, callee).or_else(|| {
+                walk_may_follow_calls(db, callee)
+                    .then(|| callee_output_disagreement_query(db, callee))
+                    .flatten()
+            })
         })
 }
 
@@ -2555,6 +2559,19 @@ fn unencodable_call_panic<'db>(
     .then_some(ty)
 }
 
+/// Whether a walk over the calls of instances may follow the calls of
+/// `instance`. A body with lowering issues has no instance limit to end a
+/// chain of calls, and an instance past the instance limits is rejected as
+/// itself, so neither has its calls followed.
+fn walk_may_follow_calls<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> bool {
+    instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+        && instance_limit_violation(db, instance).is_none()
+}
+
 /// The type `instance`, or any instance it calls, panics with that can't be
 /// revert data. An instance past the instance limits is rejected as itself,
 /// and its calls need not end, so this does not follow them.
@@ -2563,13 +2580,7 @@ fn unencodable_panic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<TyId<'db>> {
-    if !instance
-        .key(db)
-        .typed_body(db)
-        .smir_lowering_issues(db)
-        .is_empty()
-        || instance_limit_violation(db, instance).is_some()
-    {
+    if !walk_may_follow_calls(db, instance) {
         return None;
     }
     instance_calls(db, instance)
