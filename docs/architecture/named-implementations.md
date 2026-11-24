@@ -137,9 +137,15 @@ premise can change when the element becomes packed.
   representatives and are not compared.
 - There are no evidence values, `prove` expressions or constraint kinds in
   the language.
-- Inside a block, a generic function whose own bound fixes a bounded associated
-  type to a concrete type (`C: Collection<Cursor = usize>`) is refused, because
-  that bound's implied slot is not kept in the function's assumptions.
+- Implied bounds are followed four associated-type levels below a bound that
+  an equality fixes. Beyond that, a program whose dictionaries involve a named
+  implementation is refused (16-0019); a program that involves none is
+  unaffected.
+- A function item takes the choices in force where it is passed to a callable
+  bound, not where the item is written: after
+  `let f = with (Alt) { helper<u256> }`, `run(f)` uses the ordinary
+  implementation, while `let f = helper<u256>` followed by
+  `with (Alt) { run(f) }` uses `Alt`.
 - Inside a call cycle, which of several real disagreements in the callees is
   reported can depend on the order in which they are checked.
 - The message "no ordinary implementation defines its associated outputs" is
