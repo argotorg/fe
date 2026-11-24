@@ -988,6 +988,55 @@ fn callee_output_disagreement_cycle_initial<'db>(
     None
 }
 
+/// The header of an implementation as written, `impl<T: Marker> Foo for T`:
+/// its parameters with the bounds on them, then the other bounds in a `where`
+/// clause. The trait is printed without the associated types the
+/// implementation defines.
+fn implementation_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    let params = implementor.params(db);
+    let bounds = implementor.constraints(db).list(db);
+    let generics = params
+        .iter()
+        .map(|&param| {
+            let name = param.pretty_print(db).to_string();
+            let own = bounds
+                .iter()
+                .filter(|bound| bound.self_ty(db) == param)
+                .map(|bound| bound.pretty_print(db, false))
+                .collect::<Vec<_>>();
+            if own.is_empty() {
+                name
+            } else {
+                format!("{name}: {}", own.join(" + "))
+            }
+        })
+        .collect::<Vec<_>>();
+    let generics = if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", generics.join(", "))
+    };
+    let others = bounds
+        .iter()
+        .filter(|bound| !params.contains(&bound.self_ty(db)))
+        .map(|bound| bound.pretty_print(db, true))
+        .collect::<Vec<_>>();
+    let clause = if others.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", others.join(", "))
+    };
+    let header = implementor.trait_(db).without_assoc_bindings(db);
+    format!(
+        "impl{generics} {} for {}{clause}",
+        header.pretty_print(db, false),
+        header.self_ty(db).pretty_print(db)
+    )
+}
+
 /// How an implementation is named in a message: its name, or its header.
 fn implementation_label<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -996,7 +1045,7 @@ fn implementation_label<'db>(
     match implementor.origin(db) {
         ImplementorOrigin::Hir(implementation) => match implementation.selection_name(db) {
             Some(name) => format!("`{}`", name.data(db)),
-            None => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
+            None => format!("`{}`", implementation_header(db, implementor)),
         },
         _ => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
     }
@@ -1009,11 +1058,14 @@ fn output_disagreement_diagnostic<'db>(
     own: ResolvedImplInstance<'db>,
     mismatch: NamedOutputMismatch<'db>,
 ) -> SemanticDiagnosticId<'db> {
-    let goal = own.trait_inst().pretty_print(db, true);
+    let goal = own
+        .trait_inst()
+        .without_assoc_bindings(db)
+        .pretty_print(db, true);
     let answers = implementation_label(db, own.selected());
     let with_label = |with: crate::hir_def::ImplTrait<'db>| {
         crate::analysis::ty::trait_lower::lower_impl_trait(db, with)
-            .map(|implementor| format!("`{}`", implementor.trait_(db).pretty_print(db, true)))
+            .map(|implementor| implementation_label(db, implementor))
             .unwrap_or_else(|| "its implementation".to_string())
     };
     let message = match mismatch {
@@ -1910,11 +1962,6 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
-    /// Codec calls belonging to one checked entry. A codec is only required
-    /// after the ordinary associated layout says this entry is packed. The
-    /// callable may defer an obligation that becomes closed on substitution;
-    /// the shared callee finalizer owns that obligation, as for written calls.
-    #[salsa::tracked(returns(copy))]
     /// The first use in this instance's body whose proof answers a concrete
     /// goal through an implementation whose outputs differ from those
     /// ordinary normalization gives the goal (see
@@ -1955,6 +2002,11 @@ impl<'db> SemanticInstance<'db> {
         ))
     }
 
+    /// Codec calls belonging to one checked entry. A codec is only required
+    /// after the ordinary associated layout says this entry is packed. The
+    /// callable may defer an obligation that becomes closed on substitution;
+    /// the shared callee finalizer owns that obligation, as for written calls.
+    #[salsa::tracked(returns(copy))]
     pub fn entry_codec_callees(
         self,
         db: &'db dyn HirAnalysisDb,

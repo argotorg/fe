@@ -6125,6 +6125,11 @@ fn named_condition_cannot_change_ordinary_outputs() {
     assert!(output.contains("fn gen"), "{output}");
     assert!(output.contains("<T as Foo>::make()"), "{output}");
     assert!(!output.contains("16-0004"), "{output}");
+    assert!(
+        output.contains("`S: Foo` is answered here by `impl<T: Marker> Foo for T`"),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
 
     // No ordinary implementation defines the outputs at the goal.
     let path = fixtures.join("named_condition_no_ordinary_outputs.fe");
@@ -6280,9 +6285,12 @@ fn named_condition_answered_goal_needs_ordinary_outputs() {
     assert_ne!(exit, 0, "{output}");
     assert!(output.contains("16-0020"), "{output}");
     assert!(
-        output.contains("no ordinary implementation defines its associated outputs"),
+        output.contains(
+            "`S: Foo` is answered here by `impl<T: Marker> Foo for T`, but no ordinary implementation defines its associated outputs at `S: Foo`"
+        ),
         "{output}"
     );
+    assert!(!output.contains("Foo<Out"), "{output}");
     assert!(!output.contains("16-0004"), "{output}");
 }
 

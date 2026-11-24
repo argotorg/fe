@@ -2090,6 +2090,17 @@ impl<'db> TraitInstId<'db> {
         }
     }
 
+    /// The predicate without its associated equalities.
+    pub fn without_assoc_bindings(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(
+            db,
+            self.def(db),
+            self.args(db).clone(),
+            IndexMap::new(),
+            self.mode(db),
+        )
+    }
+
     /// The goal that the predicate's self type grants the trait's `mut?`
     /// methods at `mut`: `T: mut Trait`, which the predicate's associated
     /// equalities, checked with it, need not repeat.
