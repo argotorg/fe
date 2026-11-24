@@ -1,5 +1,6 @@
 ---
 source: crates/fe/tests/cli_output.rs
+assertion_line: 3934
 expression: output
 input_file: tests/fixtures/cli_output/single_files/msg_field_alias_array_div_zero.fe
 ---
@@ -11,6 +12,12 @@ error[3-0025]: division by zero in const context
   │
 1 │ type Arr<const N: usize> = [u8; { 10 / N }]
   │                                   ^^^^^^ cannot divide by zero
+
+error[16-0022]: the entry code of contract `C` cannot be generated
+   ┌─ msg_field_alias_array_div_zero.fe:10:9
+   │
+10 │         Read { value } -> u8 {
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Read: Decode<Sol>` is not satisfied
 
 
 === EXIT CODE: 1 ===
