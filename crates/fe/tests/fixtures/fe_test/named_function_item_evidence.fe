@@ -1,0 +1,80 @@
+// A function item passed to a callable bound carries proofs of its own bounds,
+// made where it is passed, as the closure `|| helper<u256>()` would.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+
+trait Store { fn get(self) -> u256 }
+struct S {}
+impl Store for S { fn get(self) -> u256 { 10 } }
+impl Store for S as AltStore { fn get(self) -> u256 { 20 } }
+
+fn helper<T: Pick>() -> u256 { T::pick() }
+fn target<T: Pick>() -> u256 uses (s: Store) { T::pick() + s.get() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn via<T: Pick>() -> u256 { run(helper<T>) }
+
+fn go_item() -> u256 { with (Alt) { run(helper<u256>) } }
+fn go_closure() -> u256 { with (Alt) { run(|| helper<u256>()) } }
+fn late_call() -> u256 {
+    let f = helper<u256>
+    with (Alt) { f() }
+}
+fn go_generic() -> u256 { with (Alt) { via<u256>() } }
+fn go_target() -> u256 {
+    let s = S {}
+    with (Alt, AltStore, Store = s) { run(target<u256>) }
+}
+fn go_target_direct() -> u256 {
+    let s = S {}
+    with (Alt, AltStore, Store = s) { target<u256>() }
+}
+fn ordinary_item() -> u256 { run(helper<u256>) }
+fn ordinary_generic() -> u256 { via<u256>() }
+fn ordinary_target() -> u256 {
+    let s = S {}
+    with (Store = s) { run(target<u256>) }
+}
+fn two_instances() -> u256 {
+    let a = run(helper<u256>)
+    let b = with (Alt) { run(helper<u256>) }
+    a * 10 + b
+}
+
+// A generic function item passed on from a generic body keeps the
+// prerequisites it was written with.
+struct I {}
+trait P { fn n() -> u256 }
+impl P for I { fn n() -> u256 { 31 } }
+impl P for I as Tiny { fn n() -> u256 { 7 } }
+fn read<T: P>() -> u256 { T::n() }
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+fn relay<T: P>() -> u256 { apply(read<T>) }
+fn relay_closure<T: P>() -> u256 { apply(|| read<T>()) }
+
+#[test]
+fn item_passed() { assert(go_item() == 2) }
+#[test]
+fn closure_passed() { assert(go_closure() == 2) }
+#[test]
+fn late_call_is_unchanged() { assert(late_call() == 2) }
+#[test]
+fn generic_item_passed() { assert(go_generic() == 2) }
+#[test]
+fn item_with_effect_passed() { assert(go_target() == 22) }
+#[test]
+fn item_with_effect_called() { assert(go_target_direct() == 22) }
+#[test]
+fn ordinary_item_value() { assert(ordinary_item() == 1) }
+#[test]
+fn ordinary_generic_value() { assert(ordinary_generic() == 1) }
+#[test]
+fn ordinary_effect_value() { assert(ordinary_target() == 11) }
+#[test]
+fn two_choices_two_instances() { assert(two_instances() == 12) }
+#[test]
+fn relayed_item() { assert(with (Tiny) { relay<I>() } == 7) }
+#[test]
+fn relayed_closure() { assert(with (Tiny) { relay_closure<I>() } == 7) }
+#[test]
+fn relayed_ordinary() { assert(relay<I>() == 31) }

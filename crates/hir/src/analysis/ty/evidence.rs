@@ -15,6 +15,7 @@ use rustc_hash::FxHashMap;
 use salsa::SalsaValue;
 
 use super::{
+    closure::settle_function_item_providers,
     const_ty::const_body_assumptions,
     effects::rows::RowPath,
     fold::{TyFoldable, TyFolder},
@@ -1076,6 +1077,7 @@ pub(crate) fn prove_outcome<'db>(
     solve_cx: TraitSolveCx<'db>,
     goal: TraitInstId<'db>,
 ) -> ProofOutcome<'db> {
+    let goal = settle_function_item_providers(db, goal);
     // Inference variables belong to the checker's unification table. Header
     // matching uses its own table and must only receive settled proof inputs.
     // Unresolved calls retain their ordinary inference diagnostics; evidence
@@ -1631,13 +1633,21 @@ fn expanded_condition_evidence<'db>(
     else {
         return EvidenceList::none(db);
     };
-    let ImplementorOrigin::Hir(implementation) = selected.origin(db) else {
-        return EvidenceList::none(db);
-    };
-    let Ok(subst) =
-        CompleteSubst::for_owner(db, implementation.into(), instantiated.params(db).clone())
-    else {
-        return EvidenceList::none(db);
+    // The conditions of a function item's callable implementation are written
+    // at the item's own arguments: it has no parameters to substitute.
+    let subst = match selected.origin(db) {
+        ImplementorOrigin::Hir(implementation) => {
+            let Ok(subst) = CompleteSubst::for_owner(
+                db,
+                implementation.into(),
+                instantiated.params(db).clone(),
+            ) else {
+                return EvidenceList::none(db);
+            };
+            Some(subst)
+        }
+        ImplementorOrigin::Callable => None,
+        _ => return EvidenceList::none(db),
     };
     let basis = selected.constraints(db);
     let slots = basis.extend_all_bounds(db);
@@ -1645,7 +1655,10 @@ fn expanded_condition_evidence<'db>(
     let goals: Vec<Option<TraitInstId<'db>>> = slots
         .list(db)
         .iter()
-        .map(|&bound| substitute_complete(db, bound, &subst).ok())
+        .map(|&bound| match &subst {
+            Some(subst) => substitute_complete(db, bound, subst).ok(),
+            None => Some(bound),
+        })
         .collect();
     let mut entries: Vec<Option<EvidenceId<'db>>> = vec![None; goals.len()];
     for (index, &bound) in slots.list(db).iter().enumerate() {
@@ -1891,7 +1904,9 @@ fn prove_selected<'db>(
                 BoundSchemaId::context(db, solve_cx.assumptions().extend_all_bounds(db))
                     .slot(db, answering_assumption(db, solve_cx, goal)?)?,
             ),
-            ImplementorOrigin::Hir(_) | ImplementorOrigin::Structural => {
+            ImplementorOrigin::Hir(_)
+            | ImplementorOrigin::Structural
+            | ImplementorOrigin::Callable => {
                 // A `mut` goal's conditions are its implementation's `mut?`
                 // bounds at `mut`.
                 let mode = Some(if goal.is_mut(db) {
@@ -1944,7 +1959,7 @@ fn prove_selected<'db>(
                 }
             }
 
-            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Callable => Evidence::Impl {
+            ImplementorOrigin::VirtualContract(_) => Evidence::Impl {
                 selected: resolved.selected(),
                 instantiated: resolved.instantiated(),
                 conds: Vec::new(),

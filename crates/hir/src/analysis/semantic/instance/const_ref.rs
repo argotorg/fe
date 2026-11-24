@@ -733,9 +733,12 @@ fn semantic_callee_key_with_assumptions<'db>(
                 Some(specialization)
             })
             .collect();
-        if let Some(evidence) = callable.bound_evidence() {
-            target.supply_function_item_effect_evidence(db, evidence, assumptions);
-        }
+        target.supply_function_item_evidence(
+            db,
+            callable.bound_evidence(),
+            callable.evidence(),
+            assumptions,
+        );
         let Some(callee) = semantic_callee_key_with_assumptions(
             db,
             caller,
@@ -1230,6 +1233,7 @@ fn semantic_callee_key_with_assumptions<'db>(
             subst.generic_args(db),
             evidence,
             &direct,
+            &[],
             assumptions,
         ) {
             Ok(supplied) => supplied.unwrap_or(evidence),

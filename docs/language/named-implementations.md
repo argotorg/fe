@@ -62,6 +62,10 @@ implementation appear in one `with` or either enclosing block, and when
 another function forwards the same effect. An unbounded helper that supplies
 its own provider still uses its ordinary dictionary.
 
+A function passed as a value to a callable bound, as in `run(helper<u256>)`,
+carries proofs of its own bounds made where it is passed, as the closure
+`|| helper<u256>()` would.
+
 ## Supertraits: one dictionary per bound
 
 An implied supertrait dictionary comes from its subtrait's proof. An unrelated

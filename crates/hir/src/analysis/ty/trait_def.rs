@@ -1757,9 +1757,12 @@ impl<'db> ImplementorId<'db> {
                     super::clearable::clearable_prerequisites(db, self.trait_inst(db));
                 PredicateListId::new(db, prerequisites.unwrap_or_default())
             }
-            ImplementorOrigin::VirtualContract(_)
-            | ImplementorOrigin::Assumption
-            | ImplementorOrigin::Callable => PredicateListId::empty_list(db),
+            ImplementorOrigin::Callable => {
+                super::closure::func_item_conditions(db, self.trait_(db).self_ty(db))
+            }
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
+                PredicateListId::empty_list(db)
+            }
         }
     }
 

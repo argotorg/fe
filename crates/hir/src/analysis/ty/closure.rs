@@ -17,10 +17,11 @@ use salsa::SalsaValue;
 use super::{
     binder::Binder,
     corelib::resolve_core_trait,
-    effects::rows::RowComponent,
+    effects::{place_effect_provider_param_index_map, rows::RowComponent},
     shape::Shape,
     trait_def::{AssocBinding, ImplementorId, ImplementorOrigin, TraitInstId},
-    ty_check::{BodyOwner, EffectParamSite, infer_body},
+    trait_resolution::PredicateListId,
+    ty_check::{BodyOwner, EffectParamSite, func_declared_bounds, infer_body},
     ty_def::{ClosureDef, ClosureTy, TyBase, TyData, TyId},
 };
 use crate::{
@@ -173,6 +174,78 @@ impl<'db> CallableValue<'db> {
             ModeMarker::None,
         ))
     }
+}
+
+/// The bounds the callable implementation of a function item `self_ty` is
+/// conditional on: those its function declares, at the item's arguments, but
+/// not those on the providers of its effects, which the call's effect
+/// arguments supply. A closure captures what it needs and has none.
+pub(crate) fn func_item_conditions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    self_ty: TyId<'db>,
+) -> PredicateListId<'db> {
+    let Some(CallableValue::Func(func, args)) = CallableValue::of(db, self_ty) else {
+        return PredicateListId::empty_list(db);
+    };
+    PredicateListId::new(
+        db,
+        func_declared_bounds(db, func, None)
+            .list(db)
+            .iter()
+            .filter(|bound| !is_effect_provider_bound(db, **bound))
+            .map(|&bound| Binder::bind(func.into(), bound).instantiate(db, args))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// `goal`, a callable goal of a function item, with the hidden provider
+/// arguments of the item that inference left open set to a placeholder. A
+/// call or a row supplies those providers later; the item's callable
+/// dictionary holds proofs of its other bounds only, so it is the same
+/// whatever they are, and it can be proved where the item is passed.
+pub(crate) fn settle_function_item_providers<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> TraitInstId<'db> {
+    let Some(CallableValue::Func(func, args)) = CallableValue::of(db, goal.self_ty(db)) else {
+        return goal;
+    };
+    if CallableTrait::of(db, goal.def(db)).is_none() {
+        return goal;
+    }
+    let mut settled = args.to_vec();
+    let mut changed = false;
+    for param in place_effect_provider_param_index_map(db, func)
+        .iter()
+        .flatten()
+    {
+        if let Some(arg) = settled.get_mut(*param)
+            && arg.has_var(db)
+        {
+            *arg = TyId::unit(db);
+            changed = true;
+        }
+    }
+    if !changed {
+        return goal;
+    }
+    let mut goal_args = goal.args(db).to_vec();
+    goal_args[0] = TyId::foldl(db, TyId::func(db, CallableDef::Func(func)), &settled);
+    TraitInstId::new(
+        db,
+        goal.def(db),
+        goal_args,
+        goal.assoc_type_bindings(db).clone(),
+        goal.mode(db),
+    )
+}
+
+/// Whether `bound` constrains the hidden provider parameter of an effect.
+pub(crate) fn is_effect_provider_bound<'db>(
+    db: &'db dyn HirAnalysisDb,
+    bound: TraitInstId<'db>,
+) -> bool {
+    matches!(bound.self_ty(db).data(db), TyData::TyParam(param) if param.is_effect_provider())
 }
 
 /// The instance of `goal`'s callable trait a function item, `goal`'s self

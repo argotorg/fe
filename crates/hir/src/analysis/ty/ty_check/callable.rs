@@ -19,14 +19,14 @@ use super::{
 use crate::analysis::{
     HirAnalysisDb,
     ty::{
-        closure::{CallableTrait, out_ident},
+        closure::{CallableTrait, is_effect_provider_bound, out_ident},
         const_ty::LoweringContext,
         corelib::resolve_lib_func_path,
         diagnostics::{BodyDiag, FuncBodyDiag},
         effects::{place_effect_provider_param_index_map, rows::RowPath},
         evidence::{
-            BoundEvidence, BoundOwner, BoundSchemaId, EvidenceId, EvidenceList, ProofOutcome,
-            Refusal, RefusedGoal, RowEvidence, UseEvidence, declared_bound_evidence,
+            BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceId, EvidenceList,
+            ProofOutcome, Refusal, RefusedGoal, RowEvidence, UseEvidence, declared_bound_evidence,
             declared_bound_evidence_from, instantiated_selection, prove_outcome,
         },
         fold::{TyFoldable, TyFolder},
@@ -34,7 +34,7 @@ use crate::analysis::{
         normalize::{normalize_ty, normalize_with_trait_evidence},
         provider::{ProviderSemantics, RootProviderRegistration},
         shape::Shape,
-        trait_def::{AssocBinding, ResolvedMethodInstance, TraitInstId},
+        trait_def::{AssocBinding, ImplementorOrigin, ResolvedMethodInstance, TraitInstId},
         trait_resolution::{
             PredicateListId, TraitSolveCx, check_trait_inst_wf,
             constraint::collect_func_decl_constraints,
@@ -432,8 +432,10 @@ impl<'db> TyFoldable<'db> for Callable<'db> {
 /// parameter of each listed effect (by effect index) is the given provider
 /// type, bounded by the proof given, and the bounds that implies are projected
 /// from it. Every other entry and every row of `base` is kept. A slot that
-/// already holds a different proof is a conflict, and names its goal. `None`
-/// when the call's arguments cannot be substituted.
+/// already holds a different proof is a conflict, and names its goal. The
+/// proofs in `conditions` are those of the declared bounds that are not on the
+/// provider of an effect, in declaration order: a function item's callable
+/// dictionary. `None` when the call's arguments cannot be substituted.
 pub(crate) fn supply_direct_effect_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     func: crate::hir_def::Func<'db>,
@@ -441,6 +443,7 @@ pub(crate) fn supply_direct_effect_evidence<'db>(
     generic_args: &[TyId<'db>],
     base: EvidenceList<'db>,
     direct: &[(usize, TyId<'db>, Option<EvidenceId<'db>>)],
+    conditions: &[EvidenceId<'db>],
     assumptions: PredicateListId<'db>,
 ) -> Result<Option<EvidenceList<'db>>, TraitInstId<'db>> {
     let provider_params = place_effect_provider_param_index_map(db, func);
@@ -458,9 +461,16 @@ pub(crate) fn supply_direct_effect_evidence<'db>(
         return Ok(None);
     };
     let signature = func_signature(db, func, mode);
+    let declared = func_declared_bounds(db, func, mode);
+    let conditioned: Vec<_> = declared
+        .list(db)
+        .iter()
+        .copied()
+        .filter(|&bound| !is_effect_provider_bound(db, bound))
+        .collect();
     let supplied = declared_bound_evidence_from(
         db,
-        func_declared_bounds(db, func, mode),
+        declared,
         signature,
         &subst,
         assumptions,
@@ -468,7 +478,10 @@ pub(crate) fn supply_direct_effect_evidence<'db>(
             TyData::TyParam(param) if param.is_effect_provider() => {
                 proofs.get(param.idx).copied().flatten()
             }
-            _ => None,
+            _ => conditioned
+                .iter()
+                .position(|&bound| bound == root)
+                .and_then(|index| conditions.get(index).copied()),
         },
     )
     .proofs;
@@ -702,22 +715,34 @@ impl<'db> Callable<'db> {
     /// The callable trait wraps a function item's effects in one row. After
     /// removing the wrapper, a declared trait-key effect supplies the bound
     /// on its hidden provider parameter. A nested component keeps its path.
-    pub(crate) fn supply_function_item_effect_evidence(
+    /// The callable dictionary of the item (`dispatch`, the proof of the
+    /// callable goal) holds the proofs of the function's other declared
+    /// bounds, made where the item was passed; a trait method's own
+    /// `Self: Trait` among them is the dispatch of this call.
+    pub(crate) fn supply_function_item_evidence(
         &mut self,
         db: &'db dyn HirAnalysisDb,
-        source: EvidenceList<'db>,
+        source: Option<EvidenceList<'db>>,
+        dispatch: Option<EvidenceId<'db>>,
         assumptions: PredicateListId<'db>,
     ) {
         let CallableDef::Func(func) = self.callable_def else {
             return;
         };
-        if source.rows(db).is_empty() {
+        let conditions = match dispatch.map(|proof| proof.data(db)) {
+            Some(Evidence::Impl {
+                selected, conds, ..
+            }) if selected.origin(db) == ImplementorOrigin::Callable => conds.clone(),
+            _ => Vec::new(),
+        };
+        let source_rows = source.map_or_else(Vec::new, |source| source.rows(db).clone());
+        if source_rows.is_empty() && conditions.is_empty() {
             return;
         }
         let mode = BodyOwner::func_at(db, func, self.mode).mode();
         let mut direct = Vec::new();
         let mut rows = Vec::new();
-        for row in source.rows(db) {
+        for row in source_rows {
             let Some((&entry, steps)) = row.path.steps.split_first() else {
                 continue;
             };
@@ -729,7 +754,7 @@ impl<'db> Callable<'db> {
                         entry,
                         steps: steps.to_vec(),
                     },
-                    ..row.clone()
+                    ..row
                 });
             }
         }
@@ -740,10 +765,28 @@ impl<'db> Callable<'db> {
             &self.generic_args,
             EvidenceList::none(db),
             &direct,
+            &conditions,
             assumptions,
         ) else {
             return;
         };
+        if let (Some(inst), Ok(subst)) = (
+            self.trait_inst,
+            CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()),
+        ) {
+            let own = func_declared_bounds(db, func, mode)
+                .list(db)
+                .iter()
+                .copied()
+                .filter(|&bound| !is_effect_provider_bound(db, bound))
+                .position(|bound| {
+                    crate::analysis::ty::subst::substitute_complete(db, bound, &subst).ok()
+                        == Some(inst)
+                });
+            if let Some(proof) = own.and_then(|index| conditions.get(index).copied()) {
+                self.use_evidence.record_dispatch(inst, Some(proof));
+            }
+        }
         self.set_bound_evidence(db, func, mode, evidence.with_rows(db, rows));
     }
 
