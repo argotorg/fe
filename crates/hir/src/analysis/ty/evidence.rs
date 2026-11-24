@@ -3314,7 +3314,7 @@ fn ctx<V: Sub>() {}
         let item = adt_ty(&db, module, "Item", &[]);
         let subst = CompleteSubst::for_owner(&db, func.into(), vec![item]).unwrap();
         let goals = substitute_complete(&db, signature, &subst).unwrap();
-        let cx = TraitSolveCx::new(&db, module.scope());
+        let cx = TraitSolveCx::new(&db, module.scope(), Tier::All);
         let base = goals.list(&db)[1];
         let named = module
             .children_non_nested(&db)
