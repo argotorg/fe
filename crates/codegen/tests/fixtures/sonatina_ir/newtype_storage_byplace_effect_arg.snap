@@ -416,6 +416,14 @@ func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_4 {
         return v4;
 }
 
+func private %impl_trait_i256__from_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
+}
+
 func private %impl_trait_u64__from_word(v0.i256) -> i64 {
     block0:
         jump block1;
@@ -423,14 +431,6 @@ func private %impl_trait_u64__from_word(v0.i256) -> i64 {
     block1:
         v2.i64 = trunc v0 i64;
         return v2;
-}
-
-func private %impl_trait_i256__from_word(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
 }
 
 func private %index_out_of_bounds() {
@@ -462,15 +462,6 @@ func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i25
         return v4;
 }
 
-func inline(always) private %impl_AbiFrame__len(v0.@layout_4) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = extract_value v0 1.i256;
-        return v3;
-}
-
 func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
     block0:
         jump block1;
@@ -478,6 +469,15 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
     block1:
         v2.i64 = call %size v0;
         v3.i256 = zext v2 i256;
+        return v3;
+}
+
+func inline(always) private %impl_AbiFrame__len(v0.@layout_4) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = extract_value v0 1.i256;
         return v3;
 }
 

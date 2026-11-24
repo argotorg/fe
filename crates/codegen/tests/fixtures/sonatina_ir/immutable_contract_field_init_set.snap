@@ -610,16 +610,6 @@ func inline(always) private %impl_AbiFrame__len(v0.@layout_2) -> i256 {
         return v3;
 }
 
-func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i64 = call %impl_trait_CallData__size v0;
-        v3.i256 = zext v2 i256;
-        return v3;
-}
-
 func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_2>) -> i256 {
     block0:
         jump block1;
@@ -628,6 +618,16 @@ func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_2>) -> i25
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = call %impl_trait_CallData__size v0;
+        v3.i256 = zext v2 i256;
+        return v3;
 }
 
 func inline(always) private %len__g140d(noalias nocapture readonly v0.objref<@layout_2>) -> i256 {
@@ -936,16 +936,6 @@ func private %sign_extend(v0.i256, v1.i256, v2.i256) -> i256 {
         return v17;
 }
 
-func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_2>) -> i64 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %len__g79ff v0;
-        v3.i64 = call %downcast_truncate__g3ef4 v2;
-        return v3;
-}
-
 func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block0:
         jump block1;
@@ -976,6 +966,16 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block6:
         v16.i64 = call %downcast_truncate__gaa81 v10;
         jump block4;
+}
+
+func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_2>) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %len__g79ff v0;
+        v3.i64 = call %downcast_truncate__g3ef4 v2;
+        return v3;
 }
 
 func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 {
@@ -1053,7 +1053,7 @@ func inline(always) private %tail(v0.@layout_2, v1.i256) -> @layout_2 {
         return v14;
 }
 
-func private %impl_trait_usize__to_word(v0.i256) -> i256 {
+func private %impl_trait_u256__to_word(v0.i256) -> i256 {
     block0:
         jump block1;
 
@@ -1061,7 +1061,7 @@ func private %impl_trait_usize__to_word(v0.i256) -> i256 {
         return v0;
 }
 
-func private %impl_trait_u256__to_word(v0.i256) -> i256 {
+func private %impl_trait_usize__to_word(v0.i256) -> i256 {
     block0:
         jump block1;
 

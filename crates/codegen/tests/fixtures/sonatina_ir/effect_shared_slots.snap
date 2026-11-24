@@ -273,29 +273,6 @@ func private %contract_runtime_root_C() {
         unreachable;
 }
 
-func private %impl_trait_Ones__count(noalias nocapture v0.objref<@layout_1>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.objref<i256> = obj.proj v0 0.i256;
-        v5.i256 = obj.load v4;
-        (v6.i256, v7.i1) = uaddo v5 1.i256;
-        br v7 block2 block3;
-
-    block2:
-        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
-        mstore 4.i256 17.i256 i256;
-        evm_revert 0.i256 36.i256;
-
-    block3:
-        v13.objref<i256> = obj.proj v0 0.i256;
-        obj.store v13 v6;
-        v14.objref<i256> = obj.proj v0 0.i256;
-        v15.i256 = obj.load v14;
-        return v15;
-}
-
 func private %impl_trait_Tallied__count(noalias nocapture v0.objref<@layout_1>, noalias nocapture v1.objref<@layout_1>) -> i256 {
     block0:
         jump block1;
@@ -325,6 +302,29 @@ func private %impl_trait_Tallied__count(noalias nocapture v0.objref<@layout_1>, 
         v23.objref<i256> = obj.proj v0 0.i256;
         v24.i256 = obj.load v23;
         return v24;
+}
+
+func private %impl_trait_Ones__count(noalias nocapture v0.objref<@layout_1>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v5.i256 = obj.load v4;
+        (v6.i256, v7.i1) = uaddo v5 1.i256;
+        br v7 block2 block3;
+
+    block2:
+        mstore 0.i256 35408467139433450592217433187231851964531694900788300625387963629091585785856.i256 i256;
+        mstore 4.i256 17.i256 i256;
+        evm_revert 0.i256 36.i256;
+
+    block3:
+        v13.objref<i256> = obj.proj v0 0.i256;
+        obj.store v13 v6;
+        v14.objref<i256> = obj.proj v0 0.i256;
+        v15.i256 = obj.load v14;
+        return v15;
 }
 
 func inline(always) private %decode_from(v0.@layout_1, v1.i256) {
