@@ -214,6 +214,7 @@ pub enum RecordInputError {
     WholeEnumHasNoFields,
     InvalidField,
     InvisibleField,
+    InvisibleVariant,
     FieldOutsideRecord,
     VariantOutsideEnum,
     SelectedPayloadIsNotWholeEnum,
@@ -323,6 +324,19 @@ impl<'db> RecordInput<'db> {
                 is_scope_visible_from(db, ScopeId::Field(parent, index as u16), requesting_scope)
             })
         };
+        // A variant is as visible as hand-written code finds it: naming it
+        // where the header is written must be lawful.
+        if let RecordOwner::Enum(declaration) = owner
+            && !(0..declaration.variants_list(db).data(db).len()).all(|index| {
+                is_scope_visible_from(
+                    db,
+                    ScopeId::Variant(EnumVariant::new(declaration, index)),
+                    requesting_scope,
+                )
+            })
+        {
+            return Err(RecordInputError::InvisibleVariant);
+        }
         let visible = match owner {
             RecordOwner::Struct(declaration) => fields_visible(
                 FieldParent::Struct(declaration),
@@ -1766,6 +1780,10 @@ fn finalized_derive_provider<'db>(
     .map_err(|cause| match cause {
         RecordInputError::InvisibleField => {
             "a derive header requires every field of its target to be visible where the header is written"
+                .to_string()
+        }
+        RecordInputError::InvisibleVariant => {
+            "a derive header requires every variant of its target to be visible where the header is written"
                 .to_string()
         }
         RecordInputError::NotAuthored => format!(

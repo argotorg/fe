@@ -128,3 +128,52 @@ fn enum_payload_fields_follow_the_same_requester_visibility_rule() {
     let output = prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
     assert_value(&output, "1");
 }
+
+const ALIAS_PROVIDER: &str = r#"
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, variant_count}
+struct Count {}
+impl DeriveInherent for Count {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = variant_count(record)
+        quote { pub fn arms() -> usize { ${n} } }
+    }
+}
+"#;
+
+#[test]
+fn a_header_on_an_enum_with_invisible_variants_is_refused() {
+    // The alias is public, but the variants of the private enum are not
+    // visible where the header is written: hand-written code that names
+    // `m::PE::B` there is refused as well.
+    let source = format!(
+        "{ALIAS_PROVIDER}\nmod m {{\n    enum E {{ A, B(u256) }}\n    pub type PE = E\n}}\nimpl m::PE with (Count)\n"
+    );
+    let cause = prepare(&source)
+        .err()
+        .expect("a private enum behind a public alias must be refused");
+    assert!(
+        cause.contains("every variant of its target to be visible"),
+        "{cause}"
+    );
+}
+
+#[test]
+fn a_header_on_a_public_enum_through_an_alias_is_lawful() {
+    let source = format!(
+        "{ALIAS_PROVIDER}\nmod m {{\n    pub enum E {{ A, B(u256) }}\n    pub type PE = E\n}}\nimpl m::PE with (Count)\n"
+    );
+    prepare(&source).unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+#[test]
+fn a_header_through_a_public_alias_of_a_struct_is_lawful() {
+    // Hand-written code can implement, build and destructure the struct
+    // through the alias, so a header may read its fields.
+    let source = "use core::derive::DeriveInherent\nuse core::meta::{Code, Item, Record, field_count}\n\
+        mod m {\n    struct Priv { pub secret: u256 }\n    pub type Pub = Priv\n}\n\
+        struct Count {}\n\
+        impl DeriveInherent for Count {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = field_count(record)\n        quote { pub fn arity() -> usize { ${n} } }\n    }\n}\n\
+        impl m::Pub with (Count)\n";
+    prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+}

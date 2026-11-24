@@ -210,7 +210,7 @@ fn variants_and_payloads_are_compared() {
 - `impl Type with (Provider)` adds inherent members. The provider implements `DeriveInherent`.
 - `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<trait Trait>`.
 
-A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
+A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field and every variant of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
 ```
 a derive header requires every field of its target to be visible where the header is written
