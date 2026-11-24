@@ -5446,7 +5446,9 @@ fn test_cli_check_reports_parse_and_type_errors_beside_a_short_form() {
         ),
         (
             "event",
-            format!("#[event]\nstruct Ev {{ #[indexed] a: u256, b: bool }}\n{tail}"),
+            format!(
+                "#[event]\nstruct Ev {{\n    #[indexed]\n    a: u256,\n    b: bool,\n}}\n{tail}"
+            ),
         ),
         (
             "msg",
