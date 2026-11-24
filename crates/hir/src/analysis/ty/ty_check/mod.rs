@@ -7768,14 +7768,14 @@ impl<'db> TyCheckerFinalizer<'db> {
     }
 
     /// Checks the well-formedness of each type written in the body where it is
-    /// written (`written_types`); its errors were reported when it was
+    /// written (`written_type_sites`); its errors were reported when it was
     /// lowered.
     fn check_written_tys(&mut self) {
         let Some(body) = self.body.body() else {
             return;
         };
         let (db, assumptions) = (self.db, self.assumptions);
-        let entries = const_requirements::written_types(db, ItemKind::Body(body));
+        let entries = const_requirements::written_type_sites(db, body);
         let failures = const_requirements::written_bound_failures(db, entries, |scope| {
             (
                 assumptions,

@@ -1744,7 +1744,8 @@ pub(super) struct WrittenType<'db> {
     pub(super) scope: ScopeId<'db>,
     /// The statement it is written in, in a body.
     pub(super) stmt: Option<StmtId>,
-    /// Its lowering, unless that is invalid.
+    /// Its lowering, unless that is invalid or the listing lowers nothing
+    /// (`written_type_sites`).
     lowered: Option<TyId<'db>>,
     /// The constrained applications its paths passed through.
     applications: Vec<TyId<'db>>,
@@ -1785,6 +1786,35 @@ fn written_types_query<'db>(
     db: &'db dyn HirAnalysisDb,
     region: WrittenTypeRegion<'db>,
 ) -> Vec<WrittenEntry<'db>> {
+    collect_written(db, region.item(db), true)
+}
+
+/// Where `body` writes a type or names a projection, with nothing lowered
+/// and no anonymous constants. Lowering a type takes the constraints of the
+/// item the body is in (`assumptions_at`), which can need the body: a
+/// constant in a function's bound is checked to lower the bound. The body's
+/// check lists its types this way, and lowers them under its own
+/// assumptions.
+pub(super) fn written_type_sites<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: Body<'db>,
+) -> &'db [WrittenEntry<'db>] {
+    written_type_sites_query(db, WrittenTypeRegion::new(db, ItemKind::Body(body)))
+}
+
+#[salsa::tracked]
+fn written_type_sites_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    region: WrittenTypeRegion<'db>,
+) -> Vec<WrittenEntry<'db>> {
+    collect_written(db, region.item(db), false)
+}
+
+fn collect_written<'db>(
+    db: &'db dyn HirAnalysisDb,
+    root: ItemKind<'db>,
+    lower: bool,
+) -> Vec<WrittenEntry<'db>> {
     use crate::hir_def::{TraitRefId, TypeKind};
     use crate::span::types::LazyTySpan;
     use crate::visitor::{
@@ -1797,6 +1827,8 @@ fn written_types_query<'db>(
     struct Collector<'db> {
         db: &'db dyn HirAnalysisDb,
         root: ItemKind<'db>,
+        /// Whether types are lowered and their anonymous constants listed.
+        lower: bool,
         entries: Vec<WrittenEntry<'db>>,
         /// Type parameter defaults, and how deep the walk is inside one.
         /// `check_generic_default_bodies` owns the anonymous constants there,
@@ -1845,6 +1877,7 @@ fn written_types_query<'db>(
             trait_ref: TraitRefId<'db>,
         ) {
             if let Some(path) = trait_ref.path(self.db).to_opt()
+                && self.lower
                 && self.default_depth == 0
             {
                 let scope = ctxt.scope();
@@ -1952,38 +1985,43 @@ fn written_types_query<'db>(
             walk_nested: impl FnOnce(&mut Self),
         ) {
             let db = self.db;
-            let assumptions = assumptions_at(db, scope);
-            let (ty, applications) = match hir_ty.data(db) {
-                // Only a path of two or more segments passes through types
-                // that its lowering does not hold. A one-segment path lowers
-                // to what it resolves to, its arguments are written types or
-                // anonymous constants of their own, and an alias's arguments
-                // are checked after expansion or as constants
-                // (`written_const_args`).
-                TypeKind::Path(Partial::Present(path)) if path.len(db) > 1 => {
-                    let (ty, resolutions) = lower_hir_ty_with_resolutions(
-                        db,
-                        hir_ty,
-                        scope,
-                        assumptions,
-                        ConstBodyLowering::Eager,
-                    );
-                    let applications = resolutions
-                        .iter()
-                        .flat_map(|(_, res)| constrained_applications(db, res))
-                        .collect();
-                    (ty, applications)
-                }
-                _ => (lower_hir_ty(db, hir_ty, scope, assumptions), Vec::new()),
-            };
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
-            if self.default_depth == 0 {
-                let bodies = written_const_args(db, hir_ty, scope, assumptions);
-                if !bodies.is_empty() {
-                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+            let (lowered, applications) = if self.lower {
+                let assumptions = assumptions_at(db, scope);
+                if self.default_depth == 0 {
+                    let bodies = written_const_args(db, hir_ty, scope, assumptions);
+                    if !bodies.is_empty() {
+                        self.entries.push(WrittenEntry::ConstBodies(bodies));
+                    }
                 }
-            }
+                let (ty, applications) = match hir_ty.data(db) {
+                    // Only a path of two or more segments passes through
+                    // types that its lowering does not hold. A one-segment
+                    // path lowers to what it resolves to, its arguments are
+                    // written types or anonymous constants of their own, and
+                    // an alias's arguments are checked after expansion or as
+                    // constants (`written_const_args`).
+                    TypeKind::Path(Partial::Present(path)) if path.len(db) > 1 => {
+                        let (ty, resolutions) = lower_hir_ty_with_resolutions(
+                            db,
+                            hir_ty,
+                            scope,
+                            assumptions,
+                            ConstBodyLowering::Eager,
+                        );
+                        let applications = resolutions
+                            .iter()
+                            .flat_map(|(_, res)| constrained_applications(db, res))
+                            .collect();
+                        (ty, applications)
+                    }
+                    _ => (lower_hir_ty(db, hir_ty, scope, assumptions), Vec::new()),
+                };
+                ((!ty.has_invalid(db)).then_some(ty), applications)
+            } else {
+                (None, Vec::new())
+            };
             let nested_from = self.entries.len();
             self.type_depth += 1;
             walk_nested(self);
@@ -1995,7 +2033,7 @@ fn written_types_query<'db>(
                     ty_span,
                     scope,
                     stmt: self.stmt,
-                    lowered: (!ty.has_invalid(db)).then_some(ty),
+                    lowered,
                     applications,
                     nested_from,
                 }));
@@ -2003,10 +2041,10 @@ fn written_types_query<'db>(
             self.default_depth -= usize::from(in_default);
         }
     }
-    let root = region.item(db);
     let mut collector = Collector {
         db,
         root,
+        lower,
         entries: Vec::new(),
         defaults: FxHashSet::default(),
         default_depth: 0,
