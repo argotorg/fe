@@ -267,6 +267,7 @@ mod tests {
         let range = TextRange::empty(1.into());
         let plan = |target_file, request_impl, kind| FrozenGenerationRequest {
             target_file,
+            scoped_impl: None,
             request_impl,
             code: FrozenCode::Empty { kind },
         };
