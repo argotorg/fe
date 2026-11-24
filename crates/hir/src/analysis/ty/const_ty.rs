@@ -26,14 +26,14 @@ use super::{
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{BodyOwner, infer_body},
-    ty_def::{InvalidCause, TyId, TyParam, TyVar, int_literal_fits_prim},
+    ty_def::{InvalidCause, TyFlags, TyId, TyParam, TyVar, int_literal_fits_prim},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
         CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
         collect_generic_params, param_schema,
     },
     unify::UnificationTable,
-    visitor::{TyVisitable, TyVisitor},
+    visitor::{TyVisitable, TyVisitor, collect_flags},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -2740,6 +2740,12 @@ pub(super) fn const_ty_from_trait_const<'db>(
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
+    // A goal that still has inference variables has no selected implementation
+    // yet, so its constant is not known: the use stays abstract. Selection
+    // takes only settled goals.
+    if collect_flags(db, inst).intersects(TyFlags::HAS_VAR) {
+        return None;
+    }
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, inst) else {
         return None;
     };
