@@ -283,7 +283,10 @@ impl Backend {
             .into_iter()
             .map(|url| (url, Vec::new()))
             .collect();
-        for files in saved.values() {
+        // The order of the roots decides the order of a file's diagnostics.
+        let mut roots: Vec<_> = saved.iter().collect();
+        roots.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+        for (_, files) in roots {
             for (url, diagnostics) in files {
                 if let Some(combined) = batch.get_mut(url) {
                     for diagnostic in diagnostics {
@@ -514,5 +517,49 @@ mod tests {
         tokio::task::spawn_blocking(move || drop(backend))
             .await
             .expect("backend drop task panicked");
+    }
+
+    /// The diagnostics published for a file that several roots report do not
+    /// depend on the order in which the roots were saved.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn diagnostics_of_several_roots_are_published_in_a_stable_order() {
+        use async_lsp::lsp_types::Diagnostic;
+        use rustc_hash::{FxHashMap, FxHashSet};
+
+        let shared = Url::parse("file:///tmp/shared.fe").unwrap();
+        let roots: Vec<Url> = (0..9)
+            .map(|index| Url::parse(&format!("file:///tmp/root-{index}/src/lib.fe")).unwrap())
+            .collect();
+        let publish = |order: &[Url]| {
+            let backend = test_backend();
+            let updates = order
+                .iter()
+                .map(|root| {
+                    let diagnostic = Diagnostic {
+                        message: root.to_string(),
+                        ..Diagnostic::default()
+                    };
+                    let files: FxHashMap<_, _> =
+                        [(shared.clone(), vec![diagnostic])].into_iter().collect();
+                    (root.clone(), files)
+                })
+                .collect();
+            let batch = backend.update_diagnostics(FxHashSet::from_iter([shared.clone()]), updates);
+            let messages: Vec<String> = batch[&shared]
+                .iter()
+                .map(|diagnostic| diagnostic.message.clone())
+                .collect();
+            (backend, messages)
+        };
+        let (forward_backend, forward) = publish(&roots);
+        let reversed: Vec<Url> = roots.iter().rev().cloned().collect();
+        let (reverse_backend, reverse) = publish(&reversed);
+        assert_eq!(forward, reverse);
+        tokio::task::spawn_blocking(move || {
+            drop(forward_backend);
+            drop(reverse_backend);
+        })
+        .await
+        .unwrap();
     }
 }
