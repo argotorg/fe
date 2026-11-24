@@ -3905,3 +3905,54 @@ fn caller<T: Assoc>(v: EmptyEffect<T::Item>) {
         );
     }
 }
+
+const CHAINED_SIBLINGS: &str = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Tr { fn op(self) -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct A { a: u256 }
+struct B { a: u256 }
+struct Slow {}
+impl Derive<trait Tr> for Slow {
+    const fn derive(_ record: Record) -> Code<Item> {
+        var i: u256 = 0
+        while true { i += 1 }
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+struct Other {}
+impl Derive<trait Seed> for Other {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 3 } }
+    }
+}
+const fn helper() -> u256 { with (Other) { B::seed() } }
+struct Chain {}
+impl Derive<trait Tr> for Chain {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let x: u256 = helper()
+        quote { fn op(self) -> u256 { 2 } }
+    }
+}
+BODY
+"#;
+
+#[test]
+fn chained_provider_refusal_precedes_earlier_sibling_provider() {
+    // The batch of one round holds a provider that never ends and a provider
+    // that opens another provider. The refusal comes before either runs,
+    // whichever block is written first, and whether the requests are scoped
+    // blocks or written headers.
+    let bodies = [
+        "fn f() -> u256 { with (Slow) { A { a: 0 }.op() } + with (Chain) { B { a: 0 }.op() } }",
+        "fn f() -> u256 { with (Chain) { B { a: 0 }.op() } + with (Slow) { A { a: 0 }.op() } }",
+        "impl Tr for A with (Slow)\nimpl Tr for B with (Chain)",
+        "impl Tr for B with (Chain)\nimpl Tr for A with (Slow)",
+    ];
+    for body in bodies {
+        let cause = prepare_err(&CHAINED_SIBLINGS.replace("BODY", body));
+        assert!(cause.contains(RULE), "{body}: {cause}");
+        assert!(!cause.contains("step limit"), "{body}: {cause}");
+    }
+}

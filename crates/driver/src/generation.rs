@@ -1123,10 +1123,19 @@ fn scoped_request_error(demand: &ScopedDeriveDemand, cause: impl Into<String>) -
     }
 }
 
-fn evaluate_scoped_request(
-    db: &DriverDataBase,
+/// A scoped request whose provider was admitted and has not run.
+struct CheckedScopedRequest<'db> {
     demand: ScopedDeriveDemand,
-) -> Result<FrozenGenerationRequest, GenerationError> {
+    provider: CheckedProvider<'db>,
+}
+
+/// Admit the provider of a scoped demand: rebinding, the demands of the bodies
+/// that decide whether it applies, target admission and the refusals of
+/// `check_provider_instance`. No provider runs.
+fn check_scoped_request<'db>(
+    db: &'db DriverDataBase,
+    demand: ScopedDeriveDemand,
+) -> Result<CheckedScopedRequest<'db>, GenerationError> {
     let request = hir::core::meta::rebind_generation_request(db, &demand)
         .map_err(|cause| scoped_request_error(&demand, cause))?;
     let requirements =
@@ -1169,13 +1178,28 @@ fn evaluate_scoped_request(
         .workspace()
         .get(db, &demand.opening.file)
         .expect("the authored view keeps every authored file");
-    let mut output =
-        evaluate_provider_instance(db, file, key, input, demand.opening.binding_range)?;
+    let provider = check_provider_instance(db, file, key, input, demand.opening.binding_range)?;
+    Ok(CheckedScopedRequest { demand, provider })
+}
+
+fn run_scoped_request<'db>(
+    db: &'db DriverDataBase,
+    checked: CheckedScopedRequest<'db>,
+) -> Result<FrozenGenerationRequest, GenerationError> {
+    let CheckedScopedRequest { demand, provider } = checked;
+    let mut output = run_provider_instance(db, provider)?;
     output.scoped_impl = Some(common::generation::FrozenScopedImpl {
         selection_name: scoped_selection_name(&demand),
         demand,
     });
     Ok(output)
+}
+
+fn evaluate_scoped_request<'db>(
+    db: &'db DriverDataBase,
+    demand: ScopedDeriveDemand,
+) -> Result<FrozenGenerationRequest, GenerationError> {
+    run_scoped_request(db, check_scoped_request(db, demand)?)
 }
 
 fn check_preparation_module(db: &DriverDataBase, url: &url::Url) -> Result<(), GenerationError> {
@@ -1280,18 +1304,24 @@ fn admit_requests(
     // a written implementation is.
     // `own` holds the places of the modules' own derive headers in `requests`,
     // and `sites` where each one was written, in the same order.
+    // Every provider is checked before any runs, so a refusal does not depend
+    // on which provider is written first.
     let mut sites = Vec::new();
+    let mut checked = Vec::new();
     for request in &admitted {
-        let mut plan = evaluate_provider_instance(
+        checked.push(check_provider_instance(
             db,
             request.file,
             request.provider,
             request.input,
             request.site.range,
-        )?;
-        plan.request_impl = Some(request.site.range);
-        requests.push(plan);
+        )?);
         sites.push(request.site.clone());
+    }
+    for (provider, site) in checked.into_iter().zip(&sites) {
+        let mut plan = run_provider_instance(db, provider)?;
+        plan.request_impl = Some(site.range);
+        requests.push(plan);
     }
     debug_assert_eq!(
         requests.len() - sealed_len,
@@ -1326,6 +1356,7 @@ fn admit_requests(
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
             let mut examined = Vec::new();
+            let mut checked = Vec::new();
             // Reject every invalid opening before any provider can run; the
             // order in which demands were found must never grant authority to
             // an earlier entry.
@@ -1370,7 +1401,11 @@ fn admit_requests(
                     ));
                 }
                 completed.insert(demand.clone());
-                new_requests.push(evaluate_scoped_request(db, demand)?);
+                checked.push(check_scoped_request(db, demand)?);
+            }
+            // Every provider of the round is admitted before any runs.
+            for request in checked {
+                new_requests.push(run_scoped_request(db, request)?);
             }
             last_round_first = examined
                 .first()
@@ -2024,13 +2059,24 @@ fn prepared_view(
     output
 }
 
-fn evaluate_provider_instance<'db>(
+/// A provider instance that admission accepted and that has not run: every
+/// refusal that does not need its output has been made.
+struct CheckedProvider<'db> {
+    file: File,
+    key: hir::analysis::semantic::SemanticInstanceKey<'db>,
+    input: RecordInput<'db>,
+    range: parser::TextRange,
+}
+
+/// Refuse a provider instance that cannot run, before any provider of its
+/// batch runs. Runs no compile-time code of the provider.
+fn check_provider_instance<'db>(
     db: &'db DriverDataBase,
     file: File,
     provider_key: hir::analysis::semantic::SemanticInstanceKey<'db>,
     input: RecordInput<'db>,
     range: parser::TextRange,
-) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+) -> Result<CheckedProvider<'db>, GenerationError> {
     let BodyOwner::Func(provider, _) = provider_key.owner(db) else {
         return Err(GenerationError {
             file: file.url(db).unwrap(),
@@ -2167,7 +2213,6 @@ fn evaluate_provider_instance<'db>(
             ),
         ));
     }
-    let owner = provider_key.owner(db);
     let instance = hir::analysis::semantic::SemanticInstance::new(db, provider_key);
     let mut helper_diagnostics = Vec::new();
     let mut validation_diagnostics = Vec::new();
@@ -2244,6 +2289,32 @@ fn evaluate_provider_instance<'db>(
             ),
         ));
     }
+    Ok(CheckedProvider {
+        file,
+        key: provider_key,
+        input,
+        range,
+    })
+}
+
+/// Run an admitted provider and freeze the code it returns.
+fn run_provider_instance<'db>(
+    db: &'db DriverDataBase,
+    checked: CheckedProvider<'db>,
+) -> Result<common::generation::FrozenGenerationRequest, GenerationError> {
+    let CheckedProvider {
+        file,
+        key: provider_key,
+        input,
+        range,
+    } = checked;
+    let url = file.url(db).expect("indexed generation input");
+    let error = |range, cause| GenerationError {
+        file: url.clone(),
+        range,
+        cause,
+    };
+    let owner = provider_key.owner(db);
     let value = match hir::analysis::semantic::ctfe::force_const_computation(
         db,
         hir::analysis::semantic::ctfe::const_computation_for_instance(
