@@ -1746,8 +1746,12 @@ fn prepare_tests_single_file(
         }
         Ok(None) => {}
         Err(error) => {
+            let msg = error.located(db);
+            if let Some(report) = report {
+                write_report_error(report, "compilation_errors.txt", &msg);
+            }
             return SuitePreparation {
-                results: suite_error_result(suite, "compile", format!("{error}")),
+                results: suite_error_result(suite, "compile", msg),
                 single_jobs: Vec::new(),
             };
         }
@@ -1941,7 +1945,7 @@ fn prepare_tests_ingot(
     let prepared = match driver::generation::prepare_ingots(db, std::slice::from_ref(&ingot_url)) {
         Ok(prepared) => prepared,
         Err(error) => {
-            let msg = format!("{error}");
+            let msg = error.located(db);
             let _ = writeln!(output, "{msg}");
             if let Some(report) = report {
                 write_report_error(report, "compilation_errors.txt", &msg);

@@ -138,9 +138,6 @@ pub(crate) struct LoweringContext<'db> {
     /// Set while lowering resolves a path that an anonymous constant's body
     /// writes (`without_recording`).
     recording_paused: std::cell::Cell<bool>,
-    /// The record whose field type is being lowered where generated code
-    /// spliced it (`with_spliced_record`).
-    spliced_record: std::cell::Cell<Option<GenericParamOwner<'db>>>,
     /// The generation requests that method discovery under `method_choices`
     /// stopped on. The caller that supplied the choices owes them to
     /// preparation (`take_generation_requests`).
@@ -172,7 +169,6 @@ impl<'db> LoweringContext<'db> {
             choices: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
-            spliced_record: std::cell::Cell::new(None),
             generation_requests: Default::default(),
             authored_names_only: false,
         }
@@ -264,24 +260,6 @@ impl<'db> LoweringContext<'db> {
         let result = resolve();
         self.recording_paused.set(paused);
         result
-    }
-
-    /// Runs `lower` with `record` as the record whose spliced field type is
-    /// being lowered, or with none. The anonymous constants of a spliced field
-    /// type are written in its record and are read there.
-    pub(crate) fn with_spliced_record<R>(
-        &self,
-        record: Option<GenericParamOwner<'db>>,
-        lower: impl FnOnce() -> R,
-    ) -> R {
-        let enclosing = self.spliced_record.replace(record);
-        let result = lower();
-        self.spliced_record.set(enclosing);
-        result
-    }
-
-    pub(crate) fn spliced_record(&self) -> Option<GenericParamOwner<'db>> {
-        self.spliced_record.get()
     }
 
     pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
@@ -2612,7 +2590,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                         }
                     })
                 }
-                ConstRef::InherentConst(use_) => {
+                ConstRef::InherentConst { use_, .. } => {
                     let use_ = if let Some(subst) = capture.complete(db) {
                         InherentConstUse::new(
                             use_.origin_scope(),

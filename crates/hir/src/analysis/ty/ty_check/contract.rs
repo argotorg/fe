@@ -15,7 +15,7 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{
-            ExpectedPathKind, PathRes, PathResError, diagnostics::PathResDiag,
+            ExpectedPathKind, PathRes, PathResError, Viewer, diagnostics::PathResDiag,
             resolve_path_with_observer_and_minter,
         },
         semantic::{
@@ -375,7 +375,7 @@ pub fn recv_arm_resolution<'db>(
         db,
         path,
         path_span.clone(),
-        contract.scope(),
+        Viewer::written_in(db, contract.scope()),
         PredicateListId::empty_list(db),
         false,
     );
@@ -444,6 +444,7 @@ fn resolve_recv_path<'db>(
     Option<FuncBodyDiag<'db>>,
 ) {
     let scope = contract.scope();
+    let viewer = Viewer::written_in(db, scope);
     let mut invisible = None;
     let mut applications = Vec::new();
     let mut observe_segment =
@@ -451,7 +452,7 @@ fn resolve_recv_path<'db>(
             applications.extend(constrained_applications(db, reso));
             if invisible.is_none()
                 && segment.segment_index(db) >= offset
-                && !quoted_visibility.unwrap_or_else(|| reso.is_visible_from(db, scope))
+                && !quoted_visibility.unwrap_or_else(|| reso.is_visible_to(db, viewer))
             {
                 invisible = Some((segment, reso.name_span(db)));
             }

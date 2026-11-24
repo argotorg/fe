@@ -28,16 +28,17 @@ use crate::analysis::{
         canonical::{Canonical, Canonicalized, Solution},
         clearable::clearable_implementor,
         closure::callable_implementor,
+        const_ty::ConstTyData,
         fold::{TyFoldable, TyFolder},
         sol_codec::sol_codec_implementor,
         trait_def::{ImplementorId, TraitInstId, impls_for_trait_in_ingots},
         trait_lower::complete_candidate_impl_assoc_ty,
-        ty_def::{BorrowKind, ShapeCon, TyBase, TyData, TyId, TyVarSort},
+        ty_def::{BorrowKind, TyData, TyFlags, TyId, TyVarSort},
         unify::{
             PersistentUnificationTable, UnificationError, UnificationResult, UnificationStore,
             UnificationTableBase,
         },
-        visitor::{TyVisitable, TyVisitor},
+        visitor::{TyVisitable, TyVisitor, walk_ty},
     },
 };
 use crate::hir_def::scope_graph::ScopeId;
@@ -257,6 +258,7 @@ pub(super) fn match_choice_entry<'db>(
         ChosenImpl {
             template: choice.template,
             applied: Some(candidate),
+            inherited: None,
         },
     ))
 }
@@ -303,6 +305,21 @@ pub(crate) fn match_header_type<'db, U: UnificationStore<'db>>(
     .map(|_| ())
 }
 
+/// As `match_header_args`, but headers that unresolved associated types or
+/// constants prevent from being proved disjoint are matched, and the result
+/// says whether the match is only possible, not exact.
+pub(crate) fn match_header_args_possible<'db, U: UnificationStore<'db>>(
+    db: &'db dyn HirAnalysisDb,
+    table: &mut UnificationTableBase<'db, U>,
+    left: TraitInstId<'db>,
+    right: TraitInstId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: [PredicateListId<'db>; 2],
+) -> Result<bool, UnificationError> {
+    compare_headers(db, table, left, right, scope, assumptions, true)
+        .map(|matched| matches!(matched, HeaderMatch::Possible))
+}
+
 /// Compare positional trait identity during normalization. Bind structural
 /// arguments before checking projection identities in the current table.
 /// Starting another normalizer here would restart the active cycle guards.
@@ -333,13 +350,39 @@ enum HeaderMatch {
     Possible,
 }
 
-fn is_shape_projection(db: &dyn HirAnalysisDb, ty: TyId<'_>) -> bool {
-    // The bare constructor is a type function. Its applications are queries.
-    matches!(ty.data(db), TyData::TyApp(..))
-        && matches!(
-            ty.base_ty(db).data(db),
-            TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
-        )
+/// Whether `ty` holds a constant whose value is not yet known: an abstract
+/// expression, or a deferred body that reads a parameter or variable. Two
+/// headers that differ only at such a constant are not provably disjoint.
+fn has_open_const<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool {
+    struct Open<'db> {
+        db: &'db dyn HirAnalysisDb,
+        open: bool,
+    }
+    impl<'db> TyVisitor<'db> for Open<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_ty(&mut self, ty: TyId<'db>) {
+            if self.open {
+                return;
+            }
+            if let TyData::ConstTy(const_ty) = ty.data(self.db) {
+                self.open |= match const_ty.data(self.db) {
+                    ConstTyData::Abstract(..) => true,
+                    ConstTyData::UnEvaluated { .. } => ty.flags(self.db).intersects(
+                        TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION,
+                    ),
+                    _ => false,
+                };
+            }
+            walk_ty(self, ty);
+        }
+    }
+
+    let mut open = Open { db, open: false };
+    open.visit_ty(ty);
+    open.open
 }
 
 fn compare_headers<'db, U: UnificationStore<'db>>(
@@ -381,10 +424,13 @@ fn compare_header_pairs<'db, U: UnificationStore<'db>>(
     if left.def(db) != right.def(db) || left.args(db).len() != right.args(db).len() {
         return Err(UnificationError::TypeMismatch);
     }
-    if ![left, right]
-        .iter()
-        .any(|head| head.args(db).iter().any(|ty| ty.has_projection(db)))
-    {
+    // A projection or, where a possible match is wanted, an open constant
+    // can make an argument that fails to unify still overlap.
+    if ![left, right].iter().any(|head| {
+        head.args(db)
+            .iter()
+            .any(|&ty| ty.has_projection(db) || (allow_possible && has_open_const(db, ty)))
+    }) {
         table.unify_header(trait_inst_head(db, left), trait_inst_head(db, right))?;
         return Ok(HeaderMatch::Exact);
     }
@@ -409,15 +455,23 @@ fn compare_type_pairs<'db, U: UnificationStore<'db>>(
 ) -> Result<HeaderMatch, UnificationError> {
     let mut deferred = Vec::new();
     while let Some((left, right)) = pairs.pop() {
-        if !left.has_projection(db) && !right.has_projection(db) {
+        let has_projection = left.has_projection(db) || right.has_projection(db);
+        let open = allow_possible && (has_open_const(db, left) || has_open_const(db, right));
+        if !has_projection && !open {
             table.unify_header(left, right)?;
         } else if let (TyData::TyApp(left_abs, left_arg), TyData::TyApp(right_abs, right_arg)) =
             (left.data(db), right.data(db))
-            && !is_shape_projection(db, left)
-            && !is_shape_projection(db, right)
+            && !left.is_shape_projection(db)
+            && !right.is_shape_projection(db)
         {
             pairs.push((*left_abs, *right_abs));
             pairs.push((*left_arg, *right_arg));
+        } else if !has_projection {
+            // An open constant against another type: equal only once the
+            // constant is known.
+            if table.unify_header(left, right).is_err() {
+                deferred.push((left, right));
+            }
         } else {
             deferred.push((left, right));
         }
@@ -457,11 +511,21 @@ fn possible_header_overlap<'db, U: UnificationStore<'db>>(
 
     impl<'db, U: UnificationStore<'db>> TyFolder<'db> for UnknownProjections<'_, 'db, U> {
         fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
-            if matches!(ty.data(db), TyData::AssocTy(_)) || is_shape_projection(db, ty) {
+            if matches!(ty.data(db), TyData::AssocTy(_)) || ty.is_shape_projection(db) {
                 *self
                     .outputs
                     .entry(ty)
                     .or_insert_with(|| self.table.new_var(TyVarSort::General, ty.kind(db)))
+            } else if let TyData::ConstTy(const_ty) = ty.data(db)
+                && has_open_const(db, ty)
+            {
+                // An unknown constant is any value of its type.
+                *self.outputs.entry(ty).or_insert_with(|| {
+                    let key = self
+                        .table
+                        .new_key(const_ty.ty(db).kind(db), TyVarSort::General);
+                    TyId::const_ty_var(db, const_ty.ty(db), TyVarSort::General, key)
+                })
             } else {
                 ty.super_fold_with(db, self)
             }

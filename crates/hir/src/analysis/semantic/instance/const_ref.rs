@@ -21,7 +21,7 @@ use crate::{
                 place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, RowPath, expand_rows},
             },
-            evidence::{Evidence, EvidenceList, impl_method_bound_evidence},
+            evidence::{Evidence, EvidenceList, UseEvidence, impl_method_bound_evidence},
             fold::{TyFoldable, TyFolder},
             method_cmp::{normalize_compare_assoc_consts, normalize_predicate_for_comparison},
             normalize::normalize_ty,
@@ -33,6 +33,7 @@ use crate::{
             },
             ty_check::{
                 BodyOwner, Callable, ConstRef, EffectParamSite, EffectProviderSpecialization,
+                supply_direct_effect_evidence,
             },
             ty_def::{BorrowKind, TyFlags, TyId},
             ty_lower::{ParamKey, ParamSchemaId},
@@ -543,6 +544,11 @@ fn semantic_callee_key_with_assumptions<'db>(
     assumptions: PredicateListId<'db>,
     provider_resolution_mode: ProviderResolutionMode,
 ) -> Result<Option<SemanticCallCallee<'db>>, MethodArgMapError<'db>> {
+    // Known gap: the proof completed here is not compared with ordinary
+    // normalization (`proof_output_mismatch`), as the proofs completed in
+    // `entry_codec_callees` are. No program was found whose completed proof
+    // disagrees: a named `SolPacked` needs an ordinary one it agrees with at
+    // its header, and an ordinary `LaneCodec` for `SolLanes` is an orphan.
     let mut completed;
     let callable = if callable.has_deferred_evidence(db) {
         completed = callable.clone();
@@ -759,9 +765,12 @@ fn semantic_callee_key_with_assumptions<'db>(
                 Some(specialization)
             })
             .collect();
-        if let Some(evidence) = callable.bound_evidence() {
-            target.supply_function_item_effect_evidence(db, evidence, assumptions);
-        }
+        target.supply_function_item_evidence(
+            db,
+            callable.bound_evidence(),
+            callable.evidence(),
+            assumptions,
+        );
         let Some(callee) = semantic_callee_key_with_assumptions(
             db,
             caller,
@@ -1229,12 +1238,26 @@ fn semantic_callee_key_with_assumptions<'db>(
             impl_env.normalization_scope(db),
             assumptions,
         );
+        // A component the implementation splices into direct effects is no
+        // component of the body's rows: its dictionary is the proof of the
+        // bound on that effect's provider.
+        let direct_effects = EffectEnvView::new(EffectParamSite::Func(body_func, owner.mode()))
+            .requirements(db)
+            .len();
+        let mut direct = Vec::new();
         let rows = callable
             .bound_evidence()
             .into_iter()
             .flat_map(|bounds| bounds.rows(db))
             .filter_map(|row| {
                 let nominal = nominal_rows.component(&row.path)?.requirement.binding_idx;
+                if let Some(&(_, effect)) = effect_pairs
+                    .iter()
+                    .find(|&&(from, effect)| from == nominal as usize && effect < direct_effects)
+                {
+                    direct.push((effect, row.goal.self_ty(db), row.proof));
+                    return None;
+                }
                 let body = provider_pairs.iter().find(|(from, _)| *from == nominal)?.1;
                 let path = body_rows
                     .components
@@ -1248,7 +1271,20 @@ fn semantic_callee_key_with_assumptions<'db>(
                 })
             })
             .collect();
-        evidence.with_rows(db, rows)
+        let evidence = evidence.with_rows(db, rows);
+        match supply_direct_effect_evidence(
+            db,
+            body_func,
+            owner.mode(),
+            subst.generic_args(db),
+            evidence,
+            &direct,
+            &[],
+            assumptions,
+        ) {
+            Ok(supplied) => supplied.unwrap_or(evidence),
+            Err(goal) => return Err(MethodArgMapError::ConflictingEffectEvidence(goal)),
+        }
     };
     let evidence = if collect_flags(db, evidence).contains(TyFlags::HAS_PROJECTION) {
         normalize_ty(db, evidence, impl_env.normalization_scope(db), assumptions)
@@ -1430,7 +1466,9 @@ pub(crate) fn resolve_semantic_const_ref_with_policy<'db>(
                 policy,
             ))
         }
-        ConstRef::InherentConst(use_) => semantic_const_key_for_inherent_const(db, use_),
+        ConstRef::InherentConst { use_, evidence } => {
+            semantic_const_key_for_inherent_const(db, use_, evidence, policy)
+        }
     }?;
     Some(SemanticConstRef::new(db, instance, ty, origin))
 }
@@ -1450,20 +1488,34 @@ fn semantic_const_key_for_const<'db>(
     ))
 }
 
+/// The instance of an inherent constant's value. It receives the proofs of
+/// the bounds its implementation declares that the use recorded, as a callee
+/// receives the proofs of its own.
 fn semantic_const_key_for_inherent_const<'db>(
     db: &'db dyn HirAnalysisDb,
     use_: InherentConstUse<'db>,
+    evidence: UseEvidence<'db>,
+    policy: InstanceEvidencePolicy,
 ) -> Option<SemanticInstanceKey<'db>> {
     let (body, impl_args) =
         inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name())?;
     let ty = inherent_const_decl_ty(db, use_.impl_(), use_.name())?;
-    Some(SemanticInstanceKey::of(
+    let received = evidence
+        .bound_proofs()
+        .unwrap_or_else(|| EvidenceList::none(db));
+    let received = if collect_flags(db, received).contains(TyFlags::HAS_PROJECTION) {
+        normalize_ty(db, received, use_.origin_scope(), use_.assumptions())
+    } else {
+        received
+    };
+    Some(SemanticInstanceKey::with_evidence_policy(
         db,
         BodyOwner::AnonConstBody { body, expected: ty },
         GenericSubst::for_owner(db, use_.impl_().into(), impl_args),
         EffectProviderSubst::empty(db),
         ImplEnv::new(db, use_.origin_scope(), use_.assumptions(), vec![]),
-        EvidenceList::none(db),
+        received,
+        policy,
     ))
 }
 

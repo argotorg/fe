@@ -1,0 +1,5 @@
+struct S {}
+impl S { const K: u256 = 5 }
+impl S with (prov::ConstArgSig)
+#[test]
+fn sig() { assert!(S::leak_sig(prov::Packed<5>::zero()) == 0) }

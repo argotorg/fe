@@ -153,18 +153,6 @@ func private %emit_transfer(v0.@layout_1, v1.@layout_1, v2.i256) {
         return;
 }
 
-func inline(always) private %encode__gac80(noalias nocapture readonly v0.objref<@layout_0>, v1.@layout_3) {
-    block0:
-        jump block1;
-
-    block1:
-        v4.objref<i256> = obj.proj v0 0.i256;
-        v7.@layout_3 = call %tail v1 32.i256;
-        v8.i256 = obj.load v4;
-        v9.@layout_3 = call %encode_field v8 v1 0.i256 v7;
-        return;
-}
-
 func inline(always) private %encode__gf13e(v0.i256, v1.@layout_3) {
     block0:
         jump block1;
@@ -199,6 +187,18 @@ func inline(always) private %encode_alloc(v0.@layout_0) -> @layout_4 {
         return v4;
 }
 
+func inline(always) private %encode__gac80(noalias nocapture readonly v0.objref<@layout_0>, v1.@layout_3) {
+    block0:
+        jump block1;
+
+    block1:
+        v4.objref<i256> = obj.proj v0 0.i256;
+        v7.@layout_3 = call %tail v1 32.i256;
+        v8.i256 = obj.load v4;
+        v9.@layout_3 = call %encode_field v8 v1 0.i256 v7;
+        return;
+}
+
 func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@layout_3) -> @layout_3 {
     block0:
         jump block1;
@@ -214,15 +214,15 @@ func inline(always) private %encode_field(v0.i256, v1.@layout_3, v2.i256, v3.@la
         call %impl_AbiFrame__store_word v1 v2 v11;
         v15.@layout_3 = call %slice v3 0.i256 v6;
         call %encode__gf13e v0 v15;
-        v17.@layout_3 = call %tail v3 v6;
-        return v17;
+        v16.@layout_3 = call %tail v3 v6;
+        return v16;
 
     block3:
         jump block4;
 
     block4:
-        v21.@layout_3 = call %slice v1 v2 32.i256;
-        call %encode__gf13e v0 v21;
+        v20.@layout_3 = call %slice v1 v2 32.i256;
+        call %encode__gf13e v0 v20;
         return v3;
 }
 
@@ -316,6 +316,14 @@ func private %new_uninit(v0.i256) -> @layout_4 {
         return v3;
 }
 
+func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return 32.i256;
+}
+
 func inline(always) private %impl_trait_____payload_size__ge513(noalias nocapture readonly v0.objref<@layout_0>) -> i256 {
     block0:
         jump block1;
@@ -326,14 +334,6 @@ func inline(always) private %impl_trait_____payload_size__ge513(noalias nocaptur
         v6.i256 = call %dynamic_payload_size v5;
         v7.i256 = add 32.i256 v6;
         return v7;
-}
-
-func private %trait_AbiSize__payload_size__ge513(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return 32.i256;
 }
 
 func private %ptr__g79ff(noalias nocapture readonly v0.objref<@layout_3>) -> i256 {

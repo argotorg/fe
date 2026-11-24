@@ -210,7 +210,14 @@ where
                 let (params1, params2) = (closure1.params(db), closure2.params(db));
                 let (lhs, rhs) = (components(*closure1), components(*closure2));
                 let (lhs_row, rhs_row) = (closure1.effects(db), closure2.effects(db));
+                // Closures that carry dictionaries are one type only when the
+                // dictionaries are equal.
+                let evidence_differs = matches!(
+                    (closure1.bound_evidence(db), closure2.bound_evidence(db)),
+                    (Some(lhs), Some(rhs)) if lhs != rhs
+                );
                 if closure1.def(db) != closure2.def(db)
+                    || evidence_differs
                     || params1.len() != params2.len()
                     || !params1
                         .iter()
@@ -380,7 +387,12 @@ where
         if left_args.len() != right_args.len() || left_assoc.len() != right_assoc.len() {
             return Err(UnificationError::TypeMismatch);
         }
-        let old = std::mem::replace(&mut self.comparison, TypeComparison::Header);
+        // Arguments of a constraint compare by header, but an overlap query must keep
+        // treating equal-named projections as possibly equal inside them.
+        let old = self.comparison;
+        if old == TypeComparison::Expression {
+            self.comparison = TypeComparison::Header;
+        }
         let result = left_args
             .iter()
             .zip(right_args)

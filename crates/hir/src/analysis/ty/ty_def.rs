@@ -20,7 +20,7 @@ use common::{
 use num_bigint::{BigInt, BigUint};
 use num_traits::ToPrimitive;
 use ruint::aliases::U256;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 use smallvec::SmallVec;
 
@@ -28,12 +28,12 @@ use super::{
     adt_def::{AdtDef, Pin, instantiate_adt_field_shape},
     const_ty::{
         ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext, TypePrintMode,
-        UnevaluatedConstPolicy, const_ty_from_sem_const,
+        UnevaluatedConstPolicy, const_ty_from_sem_const, demand_concrete_array_length,
     },
     diagnostics::{TraitConstraintDiag, TyDiagCollection},
     effects::{place_effect_provider_param_index_map, rows::RowComponent},
     fold::{TyFoldable, TyFolder},
-    generic_defaults::DefaultApplication,
+    generic_defaults::{DefaultApplication, default_mentions_self},
     normalize::normalize_ty,
     shape::Shape,
     trait_def::{AssocBinding, TraitInstId, TraitRefId},
@@ -281,6 +281,17 @@ impl<'db> TyId<'db> {
         self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
+    /// Whether this type is the value or carrier of a shape, which reduces
+    /// once the shape is known (`normalize`). The bare constructor is a type
+    /// function; only its applications are queries.
+    pub(crate) fn is_shape_projection(self, db: &dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::TyApp(..))
+            && matches!(
+                self.base_ty(db).data(db),
+                TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
+            )
+    }
+
     #[salsa::tracked]
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         self.pretty_print_with_mode(db, TypePrintMode::Concrete)
@@ -328,6 +339,14 @@ impl<'db> TyId<'db> {
         if self.is_param(db) {
             return false;
         };
+        // A trait family and a constraint term describe goals. They are not
+        // types an inherent implementation can extend.
+        if matches!(
+            self.base_ty(db).data(db),
+            TyData::TraitFamily(_) | TyData::ConstraintTerm(_)
+        ) {
+            return false;
+        }
 
         let ty_ingot = self.ingot(db);
         match ingot.kind(db) {
@@ -767,6 +786,62 @@ impl<'db> TyId<'db> {
         }
 
         inner(db, self, &mut FxHashSet::default())
+    }
+
+    /// Returns `true` if no runtime value of this type can exist.
+    ///
+    /// This uses literal/evaluated array lengths only, never triggering CTFE.
+    /// It normalizes associated field types in the ADT's own scope, which runs
+    /// the trait solver, and the solver asks it of a `Clearable` goal's type;
+    /// a query that reaches itself that way starts from "inhabited", the
+    /// answer a recursive type gets. Post-typecheck queries with concrete
+    /// layouts and scope assumptions should use [`Self::is_uninhabited_in`].
+    #[salsa::tracked(returns(copy), cycle_initial = is_uninhabited_cycle_initial)]
+    pub fn is_uninhabited(self, db: &'db dyn HirAnalysisDb) -> bool {
+        ty_is_uninhabited_impl(db, self, None, PredicateListId::empty_list(db), false)
+    }
+
+    /// Returns `true` if `variant_idx` of this enum type has at least one
+    /// uninhabited field (symbolic array lengths only).
+    pub fn is_enum_variant_uninhabited(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        variant_idx: usize,
+    ) -> bool {
+        ty_is_enum_variant_uninhabited_impl(
+            db,
+            self,
+            variant_idx,
+            None,
+            PredicateListId::empty_list(db),
+            false,
+        )
+    }
+
+    /// Returns `true` if no runtime value of this type can exist in `(scope, assumptions)`,
+    /// normalizing associated types and reducing concrete array lengths. Like
+    /// [`Self::is_uninhabited`], a query that reaches itself starts from
+    /// "inhabited".
+    #[salsa::tracked(returns(copy), cycle_initial = is_uninhabited_in_cycle_initial)]
+    pub fn is_uninhabited_in(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        ty_is_uninhabited_impl(db, self, scope, assumptions, true)
+    }
+
+    /// Returns `true` if `variant_idx` of this enum type has at least one
+    /// uninhabited field in `(scope, assumptions)`.
+    pub fn is_enum_variant_uninhabited_in(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        variant_idx: usize,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+    ) -> bool {
+        ty_is_enum_variant_uninhabited_impl(db, self, variant_idx, scope, assumptions, true)
     }
 
     pub fn is_string(self, db: &dyn HirAnalysisDb) -> bool {
@@ -1324,6 +1399,202 @@ fn ty_field_types<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Vec<TyId<'d
     }
 }
 
+fn is_uninhabited_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: TyId<'db>,
+) -> bool {
+    false
+}
+
+fn is_uninhabited_in_cycle_initial<'db>(
+    _: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: TyId<'db>,
+    _: Option<ScopeId<'db>>,
+    _: PredicateListId<'db>,
+) -> bool {
+    false
+}
+
+fn ty_is_uninhabited_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+    eval_const_len: bool,
+) -> bool {
+    UninhabitedCx::new(db, scope, assumptions, eval_const_len)
+        .ty(ty, 0)
+        .0
+}
+
+fn ty_is_enum_variant_uninhabited_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    variant_idx: usize,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+    eval_const_len: bool,
+) -> bool {
+    let mut cx = UninhabitedCx::new(db, scope, assumptions, eval_const_len);
+    let ty = cx.normalize(ty, scope);
+    if let Some(adt_def) = ty.adt_def(db)
+        && matches!(adt_def.adt_ref(db), AdtRef::Enum(_))
+        && ty.generic_args(db).len() == adt_def.params(db).len()
+        && variant_idx < adt_def.fields(db).len()
+    {
+        cx.variant(adt_def, ty.generic_args(db), variant_idx, 0).0
+    } else {
+        false
+    }
+}
+
+/// The search behind [`TyId::is_uninhabited_in`]. A type reached again
+/// while it is being searched, or below the depth cap, counts as inhabited,
+/// so a recursive type is inhabited and an uninhabited answer never depends
+/// on a cut-off; an inhabited answer that does is not memoized.
+struct UninhabitedCx<'db> {
+    db: &'db dyn HirAnalysisDb,
+    scope: Option<ScopeId<'db>>,
+    assumptions: PredicateListId<'db>,
+    eval_const_len: bool,
+    memo: FxHashMap<TyId<'db>, bool>,
+    visiting: FxHashSet<TyId<'db>>,
+}
+
+impl<'db> UninhabitedCx<'db> {
+    const MAX_DEPTH: usize = 128;
+
+    fn new(
+        db: &'db dyn HirAnalysisDb,
+        scope: Option<ScopeId<'db>>,
+        assumptions: PredicateListId<'db>,
+        eval_const_len: bool,
+    ) -> Self {
+        Self {
+            db,
+            scope,
+            assumptions,
+            eval_const_len,
+            memo: FxHashMap::default(),
+            visiting: FxHashSet::default(),
+        }
+    }
+
+    fn normalize(&self, ty: TyId<'db>, scope: Option<ScopeId<'db>>) -> TyId<'db> {
+        match scope {
+            Some(scope) if ty.has_projection(self.db) => {
+                normalize_ty(self.db, ty, scope, self.assumptions)
+            }
+            _ => ty,
+        }
+    }
+
+    /// Whether `ty` is uninhabited, and whether an inhabited answer depends
+    /// on a cycle or the depth cap.
+    fn ty(&mut self, ty: TyId<'db>, depth: usize) -> (bool, bool) {
+        let ty = self.normalize(ty, self.scope);
+        if let Some(&cached) = self.memo.get(&ty) {
+            return (cached, false);
+        }
+        if depth > Self::MAX_DEPTH || !self.visiting.insert(ty) {
+            return (false, true);
+        }
+        let db = self.db;
+        let depth = depth + 1;
+        let (uninhabited, cut) = 'parts: {
+            if ty.is_never(db) {
+                break 'parts (true, false);
+            }
+            if let Some((_, target)) = ty.as_capability(db) {
+                break 'parts self.ty(target, depth);
+            }
+            if ty.is_tuple(db) || ty.as_closure(db).is_some() {
+                break 'parts self.any(ty.field_types(db), depth);
+            }
+            if ty.is_array(db) {
+                let (_, args) = ty.decompose_ty_app(db);
+                let len = if self.eval_const_len {
+                    args.get(1).and_then(|&len_ty| {
+                        demand_concrete_array_length(db, len_ty, len_ty)
+                            .ok()
+                            .flatten()
+                            .and_then(|len| len.to_usize())
+                    })
+                } else {
+                    ty.array_len(db)
+                };
+                break 'parts match args.first() {
+                    Some(&elem) if len.is_some_and(|len| len > 0) => self.ty(elem, depth),
+                    _ => (false, false),
+                };
+            }
+            let Some(adt_def) = ty.adt_def(db) else {
+                break 'parts (false, false);
+            };
+            let args = ty.generic_args(db);
+            if args.len() != adt_def.params(db).len() {
+                break 'parts (false, false);
+            }
+            if matches!(adt_def.adt_ref(db), AdtRef::Struct(_)) {
+                break 'parts self.variant(adt_def, args, 0, depth);
+            }
+            let variants = adt_def.fields(db);
+            if variants.iter().any(|fields| fields.num_types() == 0) {
+                break 'parts (false, false);
+            }
+            let mut cut = false;
+            for (variant_idx, _) in variants.iter().enumerate() {
+                let (uninhabited, variant_cut) = self.variant(adt_def, args, variant_idx, depth);
+                cut |= variant_cut;
+                if !uninhabited {
+                    break 'parts (false, cut);
+                }
+            }
+            (true, false)
+        };
+        self.visiting.remove(&ty);
+        if uninhabited || !cut {
+            self.memo.insert(ty, uninhabited);
+        }
+        (uninhabited, cut)
+    }
+
+    /// Whether some field of `variant_idx` (the fields of a struct) is
+    /// uninhabited.
+    fn variant(
+        &mut self,
+        adt_def: AdtDef<'db>,
+        args: &[TyId<'db>],
+        variant_idx: usize,
+        depth: usize,
+    ) -> (bool, bool) {
+        let field_scope = Some(self.scope.unwrap_or_else(|| adt_def.scope(self.db)));
+        let fields: Vec<_> = (0..adt_def.fields(self.db)[variant_idx].num_types())
+            .map(|field_idx| {
+                self.normalize(
+                    instantiate_adt_field_shape(self.db, adt_def, variant_idx, field_idx, args),
+                    field_scope,
+                )
+            })
+            .collect();
+        self.any(fields, depth)
+    }
+
+    fn any(&mut self, tys: Vec<TyId<'db>>, depth: usize) -> (bool, bool) {
+        let mut cut = false;
+        for ty in tys {
+            let (uninhabited, ty_cut) = self.ty(ty, depth);
+            if uninhabited {
+                return (true, false);
+            }
+            cut |= ty_cut;
+        }
+        (false, cut)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ApplicableTyProp<'db> {
     /// A kind of the applicable type.
@@ -1382,6 +1653,40 @@ pub struct TraitFamilyId<'db> {
     pub mode: ModeMarker,
 }
 
+/// The arguments a family of `def` stores for the `written` ones: the written
+/// arguments followed by every trailing default that does not depend on the
+/// subject, stopping at the first default that does. `trait Fixed` and
+/// `trait Fixed<4>` for `trait Fixed<const N: usize = 4>` are the same family,
+/// while `trait Hash` for `trait Hash<Rhs = Self>` is not `trait Hash<u8>`: its
+/// last argument is the subject, which is known only when the family applies.
+fn canonical_family_arguments<'db>(
+    db: &'db dyn HirAnalysisDb,
+    def: Trait<'db>,
+    written: Vec<TyId<'db>>,
+) -> Vec<TyId<'db>> {
+    let owner = GenericParamOwner::Trait(def);
+    let count = def.params(db).len().saturating_sub(1);
+    let stop = (written.len()..count)
+        .find(|&idx| *default_mentions_self(db, owner, idx))
+        .unwrap_or(count);
+    if written.len() >= stop {
+        return written;
+    }
+    let lowering = LoweringContext::deferred();
+    match def.param_set(db).complete_args(
+        db,
+        &[def.self_param(db)],
+        &written,
+        DefaultApplication::StructuralMetadata(&lowering),
+    ) {
+        Ok(mut completed) if completed.len() >= written.len() => {
+            completed.truncate(stop.max(written.len()));
+            completed
+        }
+        _ => written,
+    }
+}
+
 impl<'db> TraitFamilyId<'db> {
     pub fn new(
         db: &'db dyn HirAnalysisDb,
@@ -1391,6 +1696,7 @@ impl<'db> TraitFamilyId<'db> {
         mode: ModeMarker,
     ) -> Self {
         associated.sort_by(|lhs, _, rhs, _| lhs.canonical_cmp(db, rhs));
+        let arguments = canonical_family_arguments(db, def, arguments);
         Self::intern(db, def, arguments, associated, mode)
     }
 
@@ -1452,18 +1758,23 @@ impl<'db> TraitFamilyId<'db> {
     fn pretty_print(self, db: &'db dyn HirAnalysisDb, mode: TypePrintMode) -> String {
         let name = self.def(db).name(db).to_opt().map(|name| name.data(db));
         let name = name.map_or("<missing>", |name| name.as_str());
-        let mut arguments: Vec<_> = self
-            .arguments(db)
-            .iter()
-            .map(|arg| arg.pretty_print_with_mode(db, mode))
-            .collect();
-        arguments.extend(self.associated(db).iter().map(|(name, ty)| {
-            format!(
-                "{} = {}",
-                name.pretty_print(db),
-                ty.pretty_print_with_mode(db, mode)
-            )
-        }));
+        self.render(db, name, |ty| ty.pretty_print_with_mode(db, mode))
+    }
+
+    /// The family as `trait name<arguments, bindings>`, with `name` for the
+    /// trait and `render` for each type written in it.
+    pub(crate) fn render(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        name: &str,
+        mut render: impl FnMut(TyId<'db>) -> String,
+    ) -> String {
+        let mut arguments: Vec<_> = self.arguments(db).iter().map(|&arg| render(arg)).collect();
+        arguments.extend(
+            self.associated(db)
+                .iter()
+                .map(|(binding, &ty)| format!("{} = {}", binding.pretty_print(db), render(ty))),
+        );
         if arguments.is_empty() {
             format!("trait {name}")
         } else {
@@ -1734,6 +2045,10 @@ pub enum InvalidCause<'db> {
     /// than the normalizer allows.
     TypeNormalizationLimit,
 
+    /// The type of a record's field spliced where no derive header requests
+    /// that record, so nothing says what the record's parameters stand for.
+    FieldSpliceOutsideHeader,
+
     // TraitConstraintNotSat(PredicateId),
     ParseError,
 
@@ -1897,6 +2212,7 @@ impl InvalidCause<'_> {
             | InvalidCause::ModeArgNotShape
             | InvalidCause::InferArgOutsideCall
             | InvalidCause::AssocBindingNotOnTrait
+            | InvalidCause::FieldSpliceOutsideHeader
             | InvalidCause::TooManyGenericArgs { .. }
             | InvalidCause::InvalidConstParamTy
             | InvalidCause::RecursiveConstParamTy
@@ -3016,7 +3332,9 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     let mut collector = Collector {
         db,
-        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+            || ty.is_shape_projection(db)
+        {
             TyFlags::HAS_PROJECTION
         } else {
             TyFlags::empty()
@@ -3057,5 +3375,30 @@ mod tests {
             Some(Vec::new())
         );
         assert_eq!(u256.as_params_shape(&db), None);
+    }
+
+    #[test]
+    fn shape_projections_carry_the_projection_flag() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("shape_projection_flags.fe".into(), "fn sample() {}");
+        let (top_mod, _) = db.top_mod(file);
+        let scope = ScopeId::from_item(ItemKind::TopMod(top_mod));
+        let name = IdentId::new(&db, "S".to_string());
+        let shape = TyParam::implicit_param(name, 0, Kind::Shape, scope).ty(&db);
+        for con in [ShapeCon::Value, ShapeCon::Carrier] {
+            let projection = TyId::shape_part(&db, con, shape);
+            assert!(
+                projection.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?} of an opaque shape is a projection that normalization rewrites"
+            );
+            assert!(projection.has_projection(&db));
+        }
+        for con in [ShapeCon::Owned, ShapeCon::Access(BorrowKind::Ref)] {
+            let part = TyId::shape_part(&db, con, TyId::u256(&db));
+            assert!(
+                !part.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?}"
+            );
+        }
     }
 }

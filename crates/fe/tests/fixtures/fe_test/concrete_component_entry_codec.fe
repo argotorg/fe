@@ -1,0 +1,92 @@
+// Rows 28 and 34, indexing codec and entry codec identity. The lane codec
+// `Codec: LaneCodec<u32>` is a concrete component of the dictionary of
+// `X: Pick<L = Codec>`; the storage map's lanes are `Codec`. In `read_both`,
+// `c[1]` reads through the codec the component holds (the caller chose
+// `Encoded`, which adds 1 on read); `with (Encoded) { c[1] }` names the goal
+// and uses `Encoded`. `X::via` reads the dictionary directly.
+// Expected under the caller's choice: a = 7, b = 7, via = 7: 70707.
+// Expected plainly: a = 6, b = 7, via = 6: 60706.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{Evm, Wei}
+
+pub struct Codec {}
+impl LaneCodec<u32> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+impl LaneCodec<u32> for Codec as Encoded {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        with (<Codec as LaneCodec<u32>>) { Codec::get(word, offset: offset) + 1 }
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        with (<Codec as LaneCodec<u32>>) { Codec::set(word, offset: offset, value: value) }
+    }
+}
+pub struct Counters<C> {}
+impl<C> Pinned for Counters<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Counters<C> {
+    type Key = u256
+    type Entry = u32
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+pub trait Pick {
+    type L: LaneCodec<u32>
+    fn via(_ word: u256) -> u32
+}
+pub struct P<T> {}
+impl<T: LaneCodec<u32>> Pick for P<T> {
+    type L = T
+    fn via(_ word: u256) -> u32 { T::get(word, offset: 32) }
+}
+
+fn read_both<X: Pick<L = Codec>>(c: Counters<Codec>) -> u256 {
+    let a = c[1]
+    let b = with (Encoded) { c[1] }
+    let v = X::via(6 << 32)
+    (a as u256) * 10000 + (b as u256) * 100 + (v as u256)
+}
+fn fill(c: mut Counters<Codec>) { c[1] = 6 }
+
+msg M {
+    #[selector = 1]
+    Chosen -> u256,
+    #[selector = 2]
+    Plain -> u256,
+}
+pub contract K {
+    mut c: Counters<Codec>
+    recv M {
+        Chosen -> u256 uses (mut c) {
+            fill(c: mut c)
+            with (Encoded) { read_both<P<Codec>>(c: c) }
+        }
+        Plain -> u256 uses (mut c) {
+            fill(c: mut c)
+            read_both<P<Codec>>(c: c)
+        }
+    }
+}
+
+#[test]
+fn chosen() uses (evm: mut Evm) {
+    let k = evm.create2<K>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u256 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Chosen {})
+    assert!(raw == 70707)
+}
+#[test]
+fn plain() uses (evm: mut Evm) {
+    let k = evm.create2<K>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u256 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Plain {})
+    assert!(raw == 60706)
+}

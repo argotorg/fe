@@ -5,11 +5,13 @@
 //! dependencies are; it does not read what generation produces in its own
 //! ingot, and generated items do not change what authored code resolves to.
 use common::InputDb;
+use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use fe_driver::{DriverDataBase, generation::prepare_ingots};
 use hir::analysis::{
     semantic::{EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const},
     ty::ty_check::BodyOwner,
 };
+use hir::hir_def::HirIngot;
 use url::Url;
 
 const ROOT: &str = "file:///tmp/fe-package-boundary/";
@@ -5052,4 +5054,42 @@ use dep::{Arg2, Elem2, write2}
         requests.push(found);
     }
     assert_eq!(requests[0], requests[1]);
+}
+
+/// A package is prepared whatever its name is: only the embedded libraries
+/// carry no requests. This one calls itself `std`.
+#[test]
+fn a_package_named_std_is_prepared() {
+    let layout = Layout::new().ingot(
+        "std",
+        &[],
+        "use core::derive::DeriveInherent\nuse core::meta::{Code, Item, Record, field_count}\n\
+         struct Count {}\n\
+         impl DeriveInherent for Count {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = field_count(record)\n        quote { pub const fn arity() -> usize { ${n} } }\n    }\n}\n\
+         struct S { a: u256, b: u256 }\nimpl S with (Count)\n\
+         pub const fn run() -> usize { S::arity() }\n",
+    );
+    let db = accepted(&layout, "std");
+    assert_eq!(value(&db, "std", "run"), "2");
+}
+
+/// The embedded libraries are skipped by preparation because they hold no
+/// derive header; this keeps that true.
+#[test]
+fn the_embedded_libraries_hold_no_derive_header() {
+    let db = DriverDataBase::default();
+    for ingot in [db.builtin_core(), db.builtin_std()] {
+        for implementation in ingot.all_impl_traits(&db) {
+            assert!(
+                implementation.derive_provider(&db).is_none(),
+                "an embedded library holds a derive header"
+            );
+        }
+        for implementation in ingot.all_impls(&db) {
+            assert!(
+                implementation.derive_provider(&db).is_none(),
+                "an embedded library holds a derive header"
+            );
+        }
+    }
 }

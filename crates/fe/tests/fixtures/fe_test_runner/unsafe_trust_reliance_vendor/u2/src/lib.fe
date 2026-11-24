@@ -1,0 +1,2 @@
+pub struct Evil2 {}
+unsafe impl t::Checked for Evil2 { fn a(self) {} }

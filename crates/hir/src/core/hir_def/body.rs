@@ -77,6 +77,9 @@ pub struct QuoteOrigins<'db> {
     /// The chain of each expression lowered inside a spliced fragment, by
     /// increasing expression.
     pub spliced: Vec<(ExprId, Vec<TopLevelMod<'db>>)>,
+    /// The chain of each pattern lowered inside a spliced fragment, by
+    /// increasing pattern.
+    pub spliced_pats: Vec<(PatId, Vec<TopLevelMod<'db>>)>,
 }
 
 impl<'db> QuoteOrigins<'db> {
@@ -85,6 +88,13 @@ impl<'db> QuoteOrigins<'db> {
         self.spliced
             .binary_search_by_key(&expr.index(), |(spliced, _)| spliced.index())
             .map_or(&self.frames, |index| &self.spliced[index].1)
+    }
+
+    /// The chain of `pat`: empty for hand-written code.
+    pub fn pat_chain(&self, pat: PatId) -> &[TopLevelMod<'db>] {
+        self.spliced_pats
+            .binary_search_by_key(&pat.index(), |(spliced, _)| spliced.index())
+            .map_or(&self.frames, |index| &self.spliced_pats[index].1)
     }
 }
 
@@ -112,6 +122,16 @@ impl<'db> Body<'db> {
     /// hand-written code.
     pub fn expr_quote_chain(self, db: &'db dyn HirDb, expr: ExprId) -> Vec<TopLevelMod<'db>> {
         match self.quote_origins(db).chain(expr) {
+            [] => vec![self.syntax_top_mod(db)],
+            chain => chain.to_vec(),
+        }
+    }
+
+    /// The modules of the quotations that wrote and placed `pat`, writer
+    /// first and outermost placer last; the module that holds the syntax of
+    /// hand-written code.
+    pub fn pat_quote_chain(self, db: &'db dyn HirDb, pat: PatId) -> Vec<TopLevelMod<'db>> {
+        match self.quote_origins(db).pat_chain(pat) {
             [] => vec![self.syntax_top_mod(db)],
             chain => chain.to_vec(),
         }

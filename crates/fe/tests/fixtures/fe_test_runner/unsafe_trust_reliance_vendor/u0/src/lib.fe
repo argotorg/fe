@@ -1,0 +1,2 @@
+pub struct Evil0 {}
+unsafe impl t::PodE for Evil0 {}

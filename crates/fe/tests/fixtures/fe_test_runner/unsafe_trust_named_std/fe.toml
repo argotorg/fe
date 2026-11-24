@@ -1,0 +1,6 @@
+[ingot]
+name = "unsafe_trust_named_std"
+version = "0.1.0"
+
+[dependencies]
+evil = { path = "../unsafe_trust_named_std_vendor/evil" }

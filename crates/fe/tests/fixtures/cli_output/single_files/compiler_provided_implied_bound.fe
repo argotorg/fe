@@ -1,0 +1,27 @@
+// A bound implied by a compiler-provided implementation is proved where the
+// contract is declared. `F<C>: Deploy` holds `(u256,): Encode<Sol>` through the
+// condition `C: Contract<InitArgs = (u256,)>`, whether the call is plain or
+// inside a block choice that names neither. The same holds for the root bound
+// `C: Contract` itself.
+use core::abi::Encode
+use std::abi::Sol
+use std::evm::Contract
+
+trait Deploy { type Args: Encode<Sol> }
+struct F<C> {}
+impl<C: Contract<InitArgs = (u256,)>> Deploy for F<C> { type Args = (u256,) }
+
+struct Other {}
+trait Mark { fn mark() -> u256 }
+impl Mark for Other { fn mark() -> u256 { 0 } }
+impl Mark for Other as Aside { fn mark() -> u256 { 1 } }
+
+pub contract Counter {
+    init(start: u256) {}
+}
+
+fn f<D: Deploy>() -> u256 { 1 }
+fn g<C: Contract>() -> u256 { 2 }
+fn plain() -> u256 { f<F<Counter>>() }
+fn aside() -> u256 { with (Aside) { f<F<Counter>>() } }
+fn root() -> u256 { with (Aside) { g<Counter>() } }

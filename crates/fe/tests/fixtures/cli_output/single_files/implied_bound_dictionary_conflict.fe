@@ -1,0 +1,19 @@
+// A proof written for an implied bound must be the implementation the
+// received dictionary holds. `relay` writes `Named<X>` for `X: Pick` while the
+// `Wrap<Item>` it received holds the ordinary one, so `target` is refused.
+struct Item {}
+trait Pick { fn val() -> u256 }
+impl Pick for Item { fn val() -> u256 { 100 } }
+impl<T> Pick for T as Named { fn val() -> u256 { 70 } }
+struct Wrap<T> {}
+trait Tr {
+    type A: Pick
+    fn via() -> u256
+}
+impl<T: Pick> Tr for Wrap<T> {
+    type A = T
+    fn via() -> u256 { T::val() }
+}
+fn target<B: Tr<A = X>, X: Pick>() -> u256 { X::val() * 1000 + B::via() }
+fn relay<B: Tr<A = X>, X: Pick>() -> u256 { with (Named<X>) { target<B, X>() } }
+fn top() -> u256 { relay<Wrap<Item>, Item>() }

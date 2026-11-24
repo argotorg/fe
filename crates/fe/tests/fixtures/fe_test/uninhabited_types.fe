@@ -1,0 +1,212 @@
+use core::intrinsic::{clear, storage_slots}
+use core::ops::Drop
+use core::option::Option
+use core::ptr::null
+use core::result::Result
+use core::{assert, size_of}
+
+enum Empty {}
+
+enum AllEmpty {
+    A(!),
+    B(Empty),
+    C(u256, Empty),
+}
+
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+struct MixedE {
+    a: u256,
+    b: Empty,
+}
+
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+
+struct Owned {
+    value: u256,
+}
+
+impl Drop for Owned {
+    fn drop(own self) {}
+}
+
+struct MixedDrop {
+    owned: Owned,
+    never: !,
+}
+
+enum EnumWithDrop {
+    Live(Owned),
+    Dead(MixedDrop),
+}
+
+fn eliminate(_ e: Empty) -> u8 {
+    match e {}
+}
+
+fn coerce_never(_ x: !) -> u256 {
+    x
+}
+
+fn coerce_never_let(_ x: !) -> u256 {
+    let y: u256 = x
+    y
+}
+
+fn dead_proj(_ m: Mixed) -> u256 {
+    m.a
+}
+
+fn dead_proj_empty(_ m: MixedE) -> u256 {
+    m.a
+}
+
+fn dead_ref_empty(_ r: ref Empty) -> u256 {
+    123
+}
+
+fn match_all_empty(_ a: AllEmpty) -> u256 {
+    match a {}
+}
+
+fn match_never(_ x: !) -> u256 {
+    let v: u256 = match x {}
+    v
+}
+
+fn match_array_empty(_ arr: [Empty; 3]) -> u256 {
+    match arr {}
+}
+
+fn unwrap_ok(_ r: own Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+    }
+}
+
+fn unwrap_ok_explicit(_ r: own Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(e) => match e {}
+    }
+}
+
+fn unwrap_ok_mixed(_ r: own Result<Mixed, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(m) => m.a
+    }
+}
+
+fn unwrap_flipped(_ f: own Flipped) -> u256 {
+    match f {
+        Flipped::Ok(v) => v
+    }
+}
+
+fn take_empty_array(_ a: own [Empty; 0]) -> u256 {
+    7
+}
+
+fn drop_enum(_ e: own EnumWithDrop) -> u256 {
+    match e {
+        EnumWithDrop::Live(o) => o.value
+        EnumWithDrop::Dead(d) => d.owned.value
+    }
+}
+
+fn read_never_field(_ p: *Mixed) -> u256 {
+    unsafe { (*p).b }
+}
+
+fn try_never_payload(_ r: own Result<u256, !>) -> Result<u256, u256> {
+    let v: u256 = r?
+    Result::Ok(v)
+}
+
+fn try_never_error(_ r: own Result<!, u256>) -> Result<u256, u256> {
+    let v = r?
+    Result::Ok(v + 1)
+}
+
+#[test]
+fn test_uninhabited_sizes_and_slots() {
+    assert(size_of<!>() == 0)
+    assert(size_of<Empty>() == 0)
+    assert(size_of<AllEmpty>() == 0)
+    assert(size_of<Mixed>() == 0)
+    assert(size_of<MixedE>() == 0)
+    assert(size_of<[Empty; 0]>() == 0)
+    assert(size_of<[Empty; 3]>() == 0)
+    assert(size_of<*Empty>() == size_of<*u8>())
+
+    assert(storage_slots<!>() == 0)
+    assert(storage_slots<Empty>() == 0)
+    assert(storage_slots<AllEmpty>() == 0)
+    assert(storage_slots<Mixed>() == 0)
+    assert(storage_slots<[Empty; 0]>() == 0)
+    assert(storage_slots<[Empty; 3]>() == 0)
+    assert(storage_slots<Option<Empty>>() == 1)
+    assert(storage_slots<Result<Empty, u256>>() == 2)
+}
+
+#[test]
+fn test_inhabited_containers_of_uninhabited_types() {
+    let ok1: Result<Empty, u256> = Result::Ok(42)
+    assert(unwrap_ok(ok1) == 42)
+    let ok2: Result<Empty, u256> = Result::Ok(43)
+    assert(unwrap_ok_explicit(ok2) == 43)
+
+    let ok_m: Result<Mixed, u256> = Result::Ok(55)
+    assert(unwrap_ok_mixed(ok_m) == 55)
+
+    let f: Flipped = Flipped::Ok(88)
+    assert(unwrap_flipped(f) == 88)
+
+    let opt: Option<Empty> = Option::None
+    let opt_val: u256 = match opt {
+        Option::None => 9
+        Option::Some(e) => match e {}
+    }
+    assert(opt_val == 9)
+
+    var arr: [Empty; 0] = []
+    unsafe { clear(mut arr) }
+    assert(take_empty_array(arr) == 7)
+
+    var cleared: Result<Empty, u256> = Result::Ok(99)
+    unsafe { clear(mut cleared) }
+    assert(unwrap_ok(cleared) == 0)
+
+    let dropped = drop_enum(EnumWithDrop::Live(Owned { value: 33 }))
+    assert(dropped == 33)
+}
+
+#[test]
+fn test_never_coercions() {
+    let payload: Result<u256, !> = Result::Err(7)
+    let failed = match try_never_payload(payload) {
+        Result::Ok(_) => 0
+        Result::Err(e) => e
+    }
+    assert(failed == 7)
+
+    let error: Result<!, u256> = Result::Ok(41)
+    let passed = match try_never_error(error) {
+        Result::Ok(v) => v
+        Result::Err(e) => e
+    }
+    assert(passed == 42)
+
+    // Only compiled: reading the `!` field traps.
+    if passed == 0 {
+        let p: *Mixed = null()
+        let _ = read_never_field(p)
+    }
+}

@@ -9,7 +9,7 @@ mod name_resolver;
 pub mod path_resolver;
 pub(crate) mod traits_in_scope;
 mod visibility_checker;
-pub use visibility_checker::is_scope_visible_from;
+pub use visibility_checker::{Viewer, is_scope_visible_from};
 
 use crate::core::hir_def::TopLevelMod;
 pub use changed_choices::{ChangedChoice, Decision, DecisionSite, GeneratedItem, changed_choices};

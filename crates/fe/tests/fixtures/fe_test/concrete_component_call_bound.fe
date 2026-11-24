@@ -1,0 +1,20 @@
+// A trait goal on a concrete type that the dictionary of a pinned bound holds
+// is answered by that dictionary: `one<B::A>()` and `B::via()` read the same
+// implementation of `Show` for `Foo`, the one chosen where `B` was proved.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct W<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+fn one<S: Show>() -> u256 { S::show() }
+fn caller<B: Tr<A = Foo>>() -> u256 { one<B::A>() * 1000 + B::via() }
+fn top() -> u256 { with (Loud) { caller<W<Foo>>() } }
+fn plain() -> u256 { caller<W<Foo>>() }
+#[test]
+fn chosen_component() { assert(top() == 70070) }
+#[test]
+fn ordinary_component() { assert(plain() == 100100) }

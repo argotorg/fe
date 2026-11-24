@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/trait_family_same_name_mismatch.fe
+---
+error[8-0000]: type mismatch
+   ┌─ trait_family_same_name_mismatch.fe:13:5
+   │
+13 │     x
+   │     ^ expected `trait_family_same_name_mismatch::Family<trait trait_family_same_name_mismatch::b::Tr>`, but `trait_family_same_name_mismatch::Family<trait trait_family_same_name_mismatch::a::Tr>` is given

@@ -1,0 +1,2 @@
+#[test]
+fn t() { assert!(evil::raw() == 7) }

@@ -1,5 +1,4 @@
 use common::compilation::Target;
-use hir::analysis::name_resolution::Tier;
 use hir::analysis::ty::AddressSpace;
 use std::mem::size_of;
 
@@ -16,24 +15,21 @@ use hir::analysis::{
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
             NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
         },
-        panic_payload_encodable, reify_runtime_const_for_ty, runtime_size_bytes, sem_const_ty,
+        panic_payload_encodable, panic_payload_revert_key, reify_runtime_const_for_ty,
+        runtime_size_bytes, sem_const_ty,
     },
     ty::{
         const_expr::ConstExpr,
         const_ty::ConstTyData,
         corelib::{
-            RuntimeBuiltinFuncKind, concrete_usize, presence_trait, resolve_lib_func_path,
-            resolve_lib_type_path, runtime_builtin_func_kind,
-        },
-        trait_def::TraitInstId,
-        trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+            RuntimeBuiltinFuncKind, concrete_usize, resolve_lib_func_path,
+            runtime_builtin_func_kind,
         },
         ty_check::{BodyOwner, LocalBinding},
         ty_def::{BorrowKind, TyId},
     },
 };
-use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp, scope_graph::ScopeId};
+use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp};
 use hir::projection::IndexSource;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -172,6 +168,10 @@ pub(super) fn check_runtime_body_supported<'db>(
                 && func.body(db).is_none()
                 && contract_metadata_builtin(db, SemanticInstance::new(db, callee.key)).is_none()
             {
+                // This error is not attributed to a callee whose outputs
+                // disagree with ordinary normalization (see
+                // `SemanticInstance::callee_output_disagreement`): only the
+                // admission of the semantic body asks for that.
                 return Err(LowerError::Unsupported(format!(
                     "runtime call requires a selected implementation before layout planning: caller={key:?} callee={:?}",
                     callee.key,
@@ -338,29 +338,6 @@ fn builtin_arg_ty<'db>(
         return None;
     };
     Some(body.normalized.value(value.value)?.ty)
-}
-
-fn panic_payload_is_error_variant<'db>(
-    db: &'db dyn MirDb,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-    value_ty: TyId<'db>,
-) -> bool {
-    let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
-        return false;
-    };
-    // A type has an error variant only by an implementation written in the
-    // package or a dependency: a generated one is refused where it is
-    // requested, since it would change what a revert of the value carries.
-    let Some(error_variant_trait) = presence_trait(db, scope, "core::error::ErrorVariant") else {
-        return false;
-    };
-    let error_variant = TraitInstId::new_simple(db, error_variant_trait, vec![value_ty, abi_ty]);
-    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
-    matches!(
-        is_goal_satisfiable(db, solve_cx, error_variant),
-        GoalSatisfiability::Satisfied(_)
-    )
 }
 
 fn expr_requires_runtime_eval_when_erased(expr: &NExpr<'_>) -> bool {
@@ -3263,20 +3240,9 @@ impl<'db> RmirEmitter<'db> {
     }
 
     fn resolve_panic_payload_revert(&self, value_ty: TyId<'db>) -> RuntimeInstance<'db> {
-        let key = self.current_semantic_key();
-        let impl_env = key.impl_env(self.db);
-        let scope = impl_env.normalization_scope(self.db);
-        let assumptions = impl_env.assumptions(self.db);
-        let func_path = if panic_payload_is_error_variant(self.db, scope, assumptions, value_ty) {
-            "std::evm::revert_error"
-        } else {
-            "std::evm::revert"
-        };
-        let func = resolve_lib_func_path(self.db, scope, func_path)
-            .unwrap_or_else(|| panic!("missing {func_path}"));
-        let semantic_key =
-            generated_callee_key(self.db, scope, assumptions, func, None, &[value_ty])
-                .unwrap_or_else(|error| panic!("{}", generated_call_error(self.db, func, error)));
+        let impl_env = self.current_semantic_key().impl_env(self.db);
+        let semantic_key = panic_payload_revert_key(self.db, impl_env, value_ty)
+            .expect("admission leaves only encodable panic payloads");
         runtime_instance_for_semantic(self.db, SemanticInstance::new(self.db, semantic_key))
     }
 
@@ -5500,28 +5466,40 @@ impl<'db> RmirEmitter<'db> {
             }
             RuntimeClass::AggregateValue { layout } => match layout.data(self.db) {
                 Layout::Struct(data) => {
-                    let field_tys = self.aggregate_field_tys(ty, data.fields.len());
-                    let fields = data
-                        .fields
-                        .iter()
-                        .zip(field_tys)
-                        .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
-                        .collect();
+                    let fields: Box<[RLocalId]> = if data.fields.is_empty() {
+                        Box::default()
+                    } else {
+                        let field_tys = self.aggregate_field_tys(ty, data.fields.len());
+                        data.fields
+                            .iter()
+                            .zip(field_tys)
+                            .map(|(field, field_ty)| self.alloc_zero_value(bb, field_ty, field))
+                            .collect()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
                         fields,
                     }
                 }
                 Layout::Array(data) => {
-                    let elem_ty = self.aggregate_field_tys(ty, 1)[0];
-                    let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                    let fields: Box<[RLocalId]> = if data.len == 0 {
+                        Box::default()
+                    } else {
+                        let elem_ty = self.aggregate_field_tys(ty, 1)[0];
+                        let elem = self.alloc_zero_value(bb, elem_ty, &data.elem);
+                        vec![elem; data.len as usize].into_boxed_slice()
+                    };
                     RExpr::AggregateMake {
                         layout: *layout,
-                        fields: vec![elem; data.len as usize].into_boxed_slice(),
+                        fields,
                     }
                 }
                 Layout::Enum(data) => {
-                    let classes = &data.variants[0].fields;
+                    let first = data
+                        .variants
+                        .first()
+                        .expect("zero value requires a non-empty enum layout");
+                    let classes = &first.fields;
                     let field_tys = self.enum_variant_field_tys(ty, VariantIndex(0), classes.len());
                     let fields = classes
                         .iter()

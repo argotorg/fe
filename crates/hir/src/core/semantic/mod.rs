@@ -53,7 +53,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -3070,7 +3070,7 @@ fn selector_signature_from_expr<'db>(
                 visited,
             )
         }
-        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
+        crate::analysis::ty::ty_check::ConstRef::InherentConst { use_, .. } => {
             // Follow the inherent const's value body so a selector that
             // delegates to `Selectors::TRANSFER` resolves the underlying
             // `sol("...")` signature, mirroring the top-level `Const` branch.
@@ -3575,6 +3575,25 @@ impl<'db> WherePredicateView<'db> {
         let owner_item = ItemKind::from(self.clause.owner);
         let assumptions = header_constraints_for(db, owner_item);
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
+    }
+
+    /// Errors the written subject type reports, as a type written anywhere
+    /// does: an invisible name, a duplicate or unknown associated binding.
+    pub fn subject_written_ty_errors(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+            return Vec::new();
+        };
+        let owner_item = ItemKind::from(self.clause.owner);
+        collect_ty_lower_errors(
+            db,
+            owner_item.scope(),
+            hir_ty,
+            self.span().ty(),
+            header_constraints_for(db, owner_item),
+        )
     }
 
     /// True if the lowered subject type is a const type.
@@ -4605,12 +4624,18 @@ impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
+        match self.type_ref(db).to_opt() {
+            Some(_) => self.normalize_self_ty(db, self.declared_ty(db), assumptions),
+            None => TyId::invalid(db, InvalidCause::ParseError),
+        }
+    }
+
+    /// The self type as the header writes it, before normalization.
+    pub(crate) fn declared_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let assumptions = constraints_for(db, self.into());
         self.type_ref(db).to_opt().map_or_else(
             || TyId::invalid(db, InvalidCause::ParseError),
-            |hir_ty| {
-                let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-                self.normalize_self_ty(db, ty, assumptions)
-            },
+            |hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions),
         )
     }
 
@@ -4680,7 +4705,7 @@ impl<'db> ImplTrait<'db> {
                 if cand_impl_trait == self {
                     continue;
                 }
-                if does_impl_trait_conflict(db, cand_view, implementor)
+                if does_impl_trait_conflict(db, self.scope(), cand_view, implementor)
                     && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
                         db,
                         cand_impl_trait,
@@ -5112,13 +5137,14 @@ impl<'db> ImplTrait<'db> {
         };
         use crate::analysis::ty::diagnostics::TraitLowerDiag;
 
-        // First check implementor type
+        // First check implementor type. The written type reports its own
+        // errors whether or not lowering produced an invalid type.
         let ty = self.ty(db);
+        let diags = self.ty_errors(db);
+        if !diags.is_empty() {
+            return (None, diags);
+        }
         if ty.has_invalid(db) {
-            let diags = self.ty_errors(db);
-            if !diags.is_empty() {
-                return (None, diags);
-            }
             if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
                 return (None, vec![diag]);
             }
@@ -5178,18 +5204,21 @@ impl<'db> ImplTrait<'db> {
                             }
                             NamedOutputMismatch::AssocType {
                                 ordinary: true,
+                                possible,
                                 name,
                                 expected,
                                 given,
                                 ..
                             } => TraitLowerDiag::NamedAssociatedTypeMismatch {
                                 primary: self,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
                             NamedOutputMismatch::AssocType {
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
@@ -5197,25 +5226,31 @@ impl<'db> ImplTrait<'db> {
                             } => TraitLowerDiag::NamedAssociatedTypeDisagreement {
                                 primary: self,
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
-                            NamedOutputMismatch::AssocConst { with, name } => {
-                                TraitLowerDiag::NamedAssociatedConstMismatch {
-                                    primary: self,
-                                    with,
-                                    name,
-                                }
-                            }
+                            NamedOutputMismatch::AssocConst {
+                                with,
+                                possible,
+                                name,
+                            } => TraitLowerDiag::NamedAssociatedConstMismatch {
+                                primary: self,
+                                with,
+                                possible,
+                                name,
+                            },
                             NamedOutputMismatch::Row {
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             } => TraitLowerDiag::NamedAssociatedRowMismatch {
                                 primary: self,
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             },
                         }
@@ -6418,11 +6453,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {

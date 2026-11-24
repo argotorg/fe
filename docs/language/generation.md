@@ -148,6 +148,8 @@ fn the_template_calls_the_helper_next_to_the_provider() {
 
 `score()` returns 42, from the `bonus` next to the provider, and not 902 from the `bonus` of the module that wrote the header.
 
+What a template can use is decided the same way. Generated code that a provider of another package wrote can use the public items of the package that asked for it, the fields and variants of the requested record, and what the same package generated; other private and `pub(ingot)` items of the asking package are not visible to it, whether the generated code names them by a method call, a field or a path such as `Self::hidden(self)`, or in a generic argument such as `Packed<Self::K>`. The `pub(ingot)` items of the provider's own package stay visible to the code it generates.
+
 A name that a template takes from the place where it is spliced is listed in parentheses, as in `quote(other) { .. }`. In `inherent_fold.fe` both the template of `step` and the template of `derive` list `other`. Without the list the name is not found in the template that uses it:
 
 ```
@@ -217,7 +219,7 @@ fn variants_and_payloads_are_compared() {
 - `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<trait Trait>`.
 - `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<trait Trait>`. The trait and the concrete target record must both be declared in the package that contains the block. Lookup matches the complete trait application, including its arguments and defaults. Two providers in the same opening list that match one goal cause an ambiguity before either provider runs. If all scoped openings are inapplicable, ordinary lookup proceeds. A selected provider whose prerequisites fail reports an error. Method lookup in the block does not consider a provider's trait for a receiver the provider cannot serve when another method applies; probing a candidate never runs a provider.
 
-A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
+A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field and every variant of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
 ```
 a derive header requires every field of its target to be visible where the header is written
@@ -355,7 +357,7 @@ A generated item that written code hides is refused at its request, because it c
 
 ### Deciding traits
 
-A trait that the compiler consults to choose behaviour declares `#[decides = "reason"]`: for example whether a value is copied or moved, what runs where a value goes out of use, or how a stored value is packed. A generated implementation of a deciding trait is refused at its request, because it would change what written code does without any change to that code. So is a generated implementation of a trait that a bound of a written implementation of a deciding trait names, directly or through further bounds. With the written implementation `impl<T: Marker + Copy> Copy for W<T> {}`, a generated implementation of `Marker` is refused: ``the generated implementation of `Marker` for `X` requested at .. is refused: it could change whether a value is copied or moved for `W<T>` ..``. The message ends with the ways out: write the implementation, request it with a header, or leave it out.
+A trait that the compiler consults to choose behaviour declares `#[decides = "reason"]`: for example whether a value is copied or moved, what runs where a value goes out of use, or how a stored value is packed. A generated implementation of a deciding trait is refused at its request, because it would change what written code does without any change to that code. So is a generated implementation of a trait that the header of a written implementation of a deciding trait names (its type, its trait's arguments or its bounds), directly or through further bounds. With the written implementation `impl<T: Marker + Copy> Copy for W<T> {}`, a generated implementation of `Marker` is refused: ``the generated implementation of `Marker` for `X` requested at .. is refused: it could change whether a value is copied or moved for `W<T>` ..``. The message ends with the ways out: write the implementation, request it with a header, or leave it out.
 
 The deciding traits of `core` and `std` are `Copy`, `Snapshot`, `Pinned`, `Drop`, `StateIndex`, `LaneCodec`, `Encode`, `ErrorVariant`, `Fn`, `FnMut`, `Driver`, `Producer`, `WrappingAdd`, `WrappingSub`, `WrappingMul`, `WrappingPow`, `WrappingNeg` and `SolPacked`. Only the traits of `core` and `std` count: `#[decides]` on a trait of any other package is accepted and has no effect.
 
@@ -405,7 +407,7 @@ A marker trait takes an empty output, `empty<Item>()`. A callable provider names
 
 ### Unsafe code in generated code
 
-Unsafe code that a provider generates is accepted only if every package that contributed to it is trusted: the package whose text contains the `unsafe` block, and each package whose quotation spliced that text into the code that runs. The package that asked for the code is not a contributor. A package is trusted when it is a package being checked, `core` or `std`, or a dependency that a trusted package lists with `allow_unsafe = true`. The package `dep` has this `src/lib.fe`:
+Unsafe code that a provider generates is accepted only if every package that contributed to it is trusted: the package whose text contains the `unsafe` block, the package whose text contains each operation in it that needs an `unsafe` block, such as a dereference `*p` that another quotation spliced into the block, and each package whose quotation spliced that text into the code that runs. The package that asked for the code is not a contributor. A package is trusted when it is a package being checked, the `core` or `std` that the toolchain embeds, or a dependency that a trusted package lists with `allow_unsafe = true`. The name in a manifest does not make a package `core` or `std`. The package `dep` has this `src/lib.fe`:
 
 ```fe
 use core::derive::Derive
@@ -423,7 +425,7 @@ impl Derive<trait Reading> for ReadsCell {
 
 The package `app` depends on `dep`, implements `Reading` for a type `Cell` with `impl Reading for Cell with (ReadsCell)` and calls `read()` in a test. `fe test` in `app` is refused with ``error[16-0015]: call reaches unsafe code in `dep`, which is not allowed to use it``. The error labels the call and the `unsafe` block that `dep` wrote, and names `allow_unsafe = true` as the way to trust `dep`. With `dep = { path = "../dep", allow_unsafe = true }` in the `fe.toml` of `app` the test passes.
 
-The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to.
+The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to. It also follows the initializer of each constant that a body reads, in an expression or a pattern, the condition of each `static_assert` of a package being checked, and the `Encode` implementation that a panic with a value, such as `Result::unwrap` on an error, runs to build the revert data. An `unsafe impl` that an untrusted package wrote is refused where code that runs relies on it: a bound that it proves, a method or constant of it, or a default method of its trait.
 
 ## What is refused
 
@@ -431,8 +433,8 @@ The check also follows code that runs without a written call. A `Drop` implement
 - A block for a trait of another package: ``a scoped derive supports traits of the same package; for a trait of another package, write a header `impl Trait for Type with (Provider)` ``.
 - A block whose goal is about a type parameter, such as `T::score()` inside `with (Provider) { .. }`, reports `scoped derive requires a concrete authored record`. A goal about a record applied to a type parameter, such as `Wrap<T>::score()`, reports `scoped derive requires a ground target`.
 - Scoped derive also requires trait arguments that it can carry into the generated implementation. Use a written implementation header when a trait argument is itself a trait family, such as `Read<trait Mark>`.
-- A written header whose provider has no matching trait family.
-- A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that a bound of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
+- A provider whose trait family does not match the requested trait and its arguments.
+- A generated item that written code hides; a generated implementation of a deciding trait, or of a trait that the header of a written implementation of a deciding trait names; unsafe code that a package that is not trusted contributed to.
 - A header inside a function body: `a derive header inside a function body is not supported; declare the header in a module`.
 - A glob import, such as `use m::*`, in a block of a quotation: ``a glob import is not supported inside a quotation; list the names to import, as in `use m::{A, B}` ``. An import that lists its names declares them in the quotation's block, as in a function body. Quotation content is checked when a request runs the provider. A quotation that no request reaches is never lowered.
 - A provider that reads what another provider generated, or that does not end.
@@ -441,6 +443,7 @@ The check also follows code that runs without a written call. A `Drop` implement
 ## Limits
 
 - Only `core` and `std` declare deciding traits.
+- A constant read only inside a type, such as the length in `[u8; u::N]`, is not followed. Such a constant has an integer, `bool` or unit-variant enum type (the only const parameter types, see the `invalid const parameter type` diagnostic), so the value it gives trusted code is valid whatever code computed it.
 - The bound rule follows bounds by trait identity and does not ask whether the program would otherwise work, so it can refuse more than needed. The message names the written implementation whose bound applies; a header is the way to ask for such an implementation.
-- An `unsafe impl` without functions is judged where it is declared, so an untrusted package cannot generate one even where nothing uses it.
 - A block accepts only a trait of its own package.
+- An associated type of an `unsafe impl` that a type written in trusted code projects, such as `<u::T as Tr>::A`, is not counted as reliance.

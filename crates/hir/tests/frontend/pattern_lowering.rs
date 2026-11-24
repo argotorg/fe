@@ -2,7 +2,9 @@ use cranelift_entity::EntityRef;
 use fe_hir::{
     analysis::{
         semantic::{
-            SExpr, SStmtKind, STerminatorKind, SemanticInstance, identity_semantic_instance_key,
+            SExpr, SStmtKind, STerminatorKind, SemanticInstance, access::check_semantic_accesses,
+            identity_semantic_instance_key, normalized::normalize_semantic_body,
+            semantic_may_return,
         },
         ty::ty_check::{BodyOwner, check_contract_recv_arm_body, check_func_body},
     },
@@ -149,4 +151,293 @@ fn eliminate(value: Empty) -> u8 {
             .iter()
             .any(|block| matches!(block.terminator.kind, STerminatorKind::Unreachable))
     );
+}
+
+#[test]
+fn uninhabited_coercion_and_dead_projections_normalize_cleanly() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "uninhabited_lowering.fe".into(),
+        r#"
+use core::result::Result
+
+enum Empty {}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+fn coerce_never(x: !) -> u256 {
+    x
+}
+
+fn coerce_never_let(x: !) -> u256 {
+    let y: u256 = x
+    y
+}
+
+fn dead_proj(m: Mixed) -> u256 {
+    m.a
+}
+
+fn dead_variant_proj(r: Result<Mixed, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(m) => m.a
+    }
+}
+
+fn take_pair(_ a: mut u256, _ b: mut u256) {}
+
+fn bad_borrow_in_dead_code(mut m: Mixed) {
+    let r1 = mut m.a
+    let r2 = mut m.a
+    take_pair(r1, r2)
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for (name, expected_may_return) in [
+        ("coerce_never", false),
+        ("coerce_never_let", false),
+        ("dead_proj", false),
+        ("dead_variant_proj", true),
+    ] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+
+        let instance = SemanticInstance::new(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
+        );
+        normalize_semantic_body(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed normalization: {err:?}"));
+        assert_eq!(
+            semantic_may_return(&db, instance),
+            expected_may_return,
+            "{name} may_return mismatch"
+        );
+    }
+
+    // Borrow checking must still catch aliasing bugs inside functions taking `Mixed`
+    // (`Mixed` is uninhabited, NOT zero-sized in HIR).
+    let bad = find_func(&db, top_mod, "bad_borrow_in_dead_code");
+    let bad_instance = SemanticInstance::new(
+        &db,
+        identity_semantic_instance_key(&db, BodyOwner::Func(bad, None)),
+    );
+    let access_result = check_semantic_accesses(&db, bad_instance);
+    assert!(
+        access_result.is_err(),
+        "expected borrow conflict in `bad_borrow_in_dead_code`, got Ok"
+    );
+}
+
+// A `!` expression in a context expecting another type is lowered as the `!`
+// it is, whatever its form.
+#[test]
+fn never_coercions_normalize_in_every_expression_form() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "never_coercions.fe".into(),
+        r#"
+use core::result::Result
+
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+fn never() -> ! {
+    loop {}
+}
+
+fn binding(x: !) -> u256 {
+    x
+}
+
+fn binding_ref(r: ref !) -> u256 {
+    r
+}
+
+fn call() -> u256 {
+    never()
+}
+
+fn field(m: Mixed) -> u256 {
+    m.b
+}
+
+fn pointer_field(p: *Mixed) -> u256 {
+    unsafe { (*p).b }
+}
+
+fn deref(p: *!) -> u256 {
+    unsafe { *p }
+}
+
+fn index(p: *[!; 2], i: usize) -> u256 {
+    unsafe { (*p)[i] }
+}
+
+fn located_by_call(p: *Mixed) -> u256 {
+    unsafe { (*id(p)).b }
+}
+
+fn id(p: *Mixed) -> *Mixed {
+    p
+}
+
+fn try_never(r: own Result<u256, !>) -> Result<u256, u256> {
+    let v: u256 = r?
+    Result::Ok(v)
+}
+
+fn try_never_error(r: own Result<!, u256>) -> Result<u256, u256> {
+    let v: u256 = r?
+    Result::Ok(v)
+}
+
+fn operand(p: *!) -> u256 {
+    1 + unsafe { *p }
+}
+
+fn closure_capture(x: own !) -> u256 {
+    let f = || -> u256 { x }
+    f()
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for (name, expected_may_return) in [
+        ("binding", false),
+        ("binding_ref", false),
+        ("call", false),
+        ("field", false),
+        ("pointer_field", false),
+        ("deref", false),
+        ("index", false),
+        ("located_by_call", false),
+        ("try_never", true),
+        ("try_never_error", true),
+        ("operand", false),
+        ("closure_capture", false),
+    ] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+
+        let instance = SemanticInstance::new(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
+        );
+        normalize_semantic_body(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed normalization: {err:?}"));
+        check_semantic_accesses(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed access checking: {err:?}"));
+        assert_eq!(
+            semantic_may_return(&db, instance),
+            expected_may_return,
+            "{name} may_return mismatch"
+        );
+    }
+}
+
+// A condition that ends its block leaves the branches after it dead; they
+// are not lowered, so nothing in them uses a value no path defines.
+#[test]
+fn conditions_that_end_their_block_normalize() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "dead_branches.fe".into(),
+        r#"
+struct D {
+    x: u256,
+}
+
+impl core::ops::Drop for D {
+    fn drop(own self) {}
+}
+
+struct HasNever {
+    a: u256,
+    n: !,
+}
+
+fn mk() -> D {
+    D { x: 1 }
+}
+
+fn never() -> ! {
+    loop {}
+}
+
+fn returning_condition(_ x: u256) -> u256 {
+    if { return 5 } {
+        1
+    } else {
+        2
+    }
+}
+
+fn never_condition(_ x: !) -> u256 {
+    if x {
+        1
+    } else {
+        2
+    }
+}
+
+fn never_place_condition(_ p: *HasNever) -> u256 {
+    if unsafe { (*p).n } {
+        1
+    } else {
+        2
+    }
+}
+
+fn chain_diverging_call() {
+    if let _c = mk() && never() {}
+}
+
+fn chain_returning() {
+    if let _c = mk() && { return } {}
+}
+
+fn chain_never_binding(_ x: own !) {
+    if let _c = mk() && x {}
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+
+    for (name, expected_may_return) in [
+        ("returning_condition", true),
+        ("never_condition", false),
+        ("never_place_condition", false),
+        ("chain_diverging_call", false),
+        ("chain_returning", true),
+        ("chain_never_binding", false),
+    ] {
+        let func = find_func(&db, top_mod, name);
+        let (diags, _) = check_func_body(&db, func).clone();
+        assert!(diags.is_empty(), "{name}: {diags:?}");
+
+        let instance = SemanticInstance::new(
+            &db,
+            identity_semantic_instance_key(&db, BodyOwner::Func(func, None)),
+        );
+        normalize_semantic_body(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed normalization: {err:?}"));
+        check_semantic_accesses(&db, instance)
+            .unwrap_or_else(|err| panic!("{name} failed access checking: {err:?}"));
+        assert_eq!(
+            semantic_may_return(&db, instance),
+            expected_may_return,
+            "{name} may_return mismatch"
+        );
+    }
 }

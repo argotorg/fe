@@ -1,0 +1,8 @@
+// The blanket `impl<T: PodM> Show2 for T` is selected for `u::X`; its
+// condition is answered by `u`'s unsafe impl, whose method nothing calls.
+// Expected: refused at both calls.
+use t::Show2
+#[test]
+fn blanket() { assert!(t::show2_it(u::X {}) == 7) }
+#[test]
+fn blanket_direct() { assert!(u::X {}.show2() == 7) }

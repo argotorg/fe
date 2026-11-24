@@ -1,0 +1,5 @@
+struct S {}
+impl S { fn hidden(self) -> u256 { 3 } }
+impl S with (prov::AliasSelfHidden)
+#[test]
+fn alias_hidden() { assert!(S {}.via_alias_hidden() == 3) }

@@ -17,7 +17,7 @@ use crate::{
         },
         trait_resolution::{
             ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId, Selection,
-            match_chosen_header, match_header_args,
+            match_chosen_header, match_header_args, match_header_args_possible,
         },
         ty_check::{BodyOwner, ConstRef},
     },
@@ -44,10 +44,10 @@ use super::{
         TraitSolveCx, constraint::collect_candidate_constraints, is_goal_satisfiable,
         normalize_trait_inst_preserving_validity,
     },
-    ty_def::{BorrowKind, ShapeMode, TyBase, TyData, TyId},
+    ty_def::{BorrowKind, ShapeMode, TyBase, TyData, TyFlags, TyId},
     ty_lower::{CompleteSubst, ParamBasis, ParamDomainId, ParamKey, PartialSubst, param_schema},
     unify::{PersistentUnificationTable, UnificationTable},
-    visitor::{TyVisitable, TyVisitor},
+    visitor::{TyVisitable, TyVisitor, collect_flags},
 };
 use crate::analysis::{HirAnalysisDb, name_resolution::Tier};
 
@@ -789,6 +789,10 @@ pub enum MethodArgMapError<'db> {
         first: u32,
         second: u32,
     },
+    /// Two proofs for one bound of the callee: the checker admitted a call
+    /// whose effect rows supply a dictionary the call's bounds already hold
+    /// differently.
+    ConflictingEffectEvidence(TraitInstId<'db>),
     SignatureArity {
         func: Func<'db>,
         expected_generics: usize,
@@ -1137,24 +1141,33 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
 
 /// What a named implementation's declaration gives differently from another
 /// implementation of its slot.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum NamedOutputMismatch<'db> {
+    /// No ordinary implementation defines the outputs. This covers an
+    /// ambiguous selection of the ordinary implementation as well as none, so
+    /// the message does not say which of the two it is.
     NoOrdinaryOutputs,
     /// An associated type; `with` is the implementation compared with.
+    /// `possible` is set when the headers only may overlap, as an unresolved
+    /// associated type or constant leaves open.
     AssocType {
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
     },
     AssocConst {
         with: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
     },
     /// An associated effect row.
     Row {
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
     },
 }
@@ -1232,10 +1245,7 @@ pub(crate) fn named_output_mismatch<'db>(
     if representative.selection_name(db).is_some() {
         return Some(NamedOutputMismatch::NoOrdinaryOutputs);
     }
-    let choice = ChosenImpl {
-        template,
-        applied: None,
-    };
+    let choice = ChosenImpl::unapplied(db, template);
     let Some(ordinary_at_goal) =
         instantiate_selected_choice(db, representative_context, choice, goal)
     else {
@@ -1259,82 +1269,179 @@ pub(crate) fn named_output_mismatch<'db>(
                 return None;
             }
             let other = complete_selected_impl(db, other)?;
-            let (own, other) = at_overlap(db, implementation.scope(), candidate, other)?;
-            Some((with, own, other))
+            let (own, other, possible) = at_overlap(db, implementation.scope(), candidate, other)?;
+            Some((with, own, other, possible))
         });
     // Agreement with every overlapping ordinary header implies agreement
     // between admitted named headers. Report the declaration that differs
     // from the ordinary result.
-    let at_representative = (representative, named_at_goal, ordinary_at_goal);
-    for (with, own, other) in std::iter::once(at_representative).chain(ordinary) {
-        let assumptions = context
-            .assumptions()
-            .merge(db, own.instantiated_constraints(db))
-            .merge(db, other.instantiated_constraints(db));
-        for assoc in goal.def(db).assoc_types(db) {
-            let Some(name) = assoc.name(db) else {
-                continue;
-            };
-            let (Some(expected), Some(given)) = (
-                other.instantiated_assoc_ty(db, name),
-                own.instantiated_assoc_ty(db, name),
-            ) else {
-                continue;
-            };
-            let expected = consts_evaluated(
-                db,
-                super::normalize::normalize_ty(db, expected, implementation.scope(), assumptions),
-            );
-            let given = consts_evaluated(
-                db,
-                super::normalize::normalize_ty(db, given, implementation.scope(), assumptions),
-            );
-            if expected.has_invalid(db) || given.has_invalid(db) {
-                continue;
-            }
-            // Equal at the overlap, for every value of what the overlap
-            // leaves open: the two are compared as they are, not unified.
-            if !same_overlap_ty(db, expected, given) {
-                return Some(NamedOutputMismatch::AssocType {
-                    with,
-                    ordinary: true,
-                    name,
-                    expected,
-                    given,
-                });
-            }
-        }
-        for constant in goal.def(db).assoc_consts(db) {
-            let Some(name) = constant.name(db) else {
-                continue;
-            };
-            if !same_overlap_const(db, implementation.scope(), assumptions, name, own, other) {
-                return Some(NamedOutputMismatch::AssocConst { with, name });
-            }
-        }
-        for row in goal.def(db).rows(db) {
-            let Some(name) = row.name.to_opt() else {
-                continue;
-            };
-            let components = |resolved| {
-                super::effects::rows::implementation_row_components(db, resolved, name).map(
-                    |components| {
-                        components
-                            .into_iter()
-                            .map(|component| (component.name, component.key, component.is_mut))
-                            .collect::<Vec<_>>()
-                    },
-                )
-            };
-            if components(other) != components(own) {
-                return Some(NamedOutputMismatch::Row {
-                    with,
-                    ordinary: true,
-                    name,
-                });
-            }
+    let at_representative = (representative, named_at_goal, ordinary_at_goal, false);
+    for (with, own, other, possible) in std::iter::once(at_representative).chain(ordinary) {
+        if let Some(mismatch) = outputs_mismatch(
+            db,
+            implementation.scope(),
+            context.assumptions(),
+            own,
+            other,
+            with,
+            possible,
+        ) {
+            return Some(mismatch);
         }
     }
+    None
+}
+
+/// The first output (associated type, constant or effect row) that `own`
+/// gives differently from `other`, an ordinary implementation `with` of the
+/// same slot, when both are instantiated at one goal. `base` holds the facts
+/// both are compared under, and `possible` says that the goal is only a
+/// possible overlap of the two headers.
+fn outputs_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    base: PredicateListId<'db>,
+    own: ResolvedImplInstance<'db>,
+    other: ResolvedImplInstance<'db>,
+    with: ImplTrait<'db>,
+    possible: bool,
+) -> Option<NamedOutputMismatch<'db>> {
+    let trait_def = own.trait_inst().def(db);
+    let assumptions = base
+        .merge(db, own.instantiated_constraints(db))
+        .merge(db, other.instantiated_constraints(db));
+    for assoc in trait_def.assoc_types(db) {
+        let Some(name) = assoc.name(db) else {
+            continue;
+        };
+        let (Some(expected), Some(given)) = (
+            other.instantiated_assoc_ty(db, name),
+            own.instantiated_assoc_ty(db, name),
+        ) else {
+            continue;
+        };
+        let expected = consts_evaluated(
+            db,
+            super::normalize::normalize_ty(db, expected, scope, assumptions),
+        );
+        let given = consts_evaluated(
+            db,
+            super::normalize::normalize_ty(db, given, scope, assumptions),
+        );
+        if expected.has_invalid(db) || given.has_invalid(db) {
+            continue;
+        }
+        // Equal at the overlap, for every value of what the overlap
+        // leaves open: the two are compared as they are, not unified.
+        if !same_overlap_ty(db, expected, given) {
+            return Some(NamedOutputMismatch::AssocType {
+                with,
+                ordinary: true,
+                possible,
+                name,
+                expected,
+                given,
+            });
+        }
+    }
+    for constant in trait_def.assoc_consts(db) {
+        let Some(name) = constant.name(db) else {
+            continue;
+        };
+        if !same_overlap_const(db, scope, assumptions, name, own, other) {
+            return Some(NamedOutputMismatch::AssocConst {
+                with,
+                possible,
+                name,
+            });
+        }
+    }
+    for row in trait_def.rows(db) {
+        let Some(name) = row.name.to_opt() else {
+            continue;
+        };
+        let components = |resolved| {
+            super::effects::rows::implementation_row_components(db, resolved, name).map(
+                |components| {
+                    components
+                        .into_iter()
+                        .map(|component| (component.name, component.key, component.is_mut))
+                        .collect::<Vec<_>>()
+                },
+            )
+        };
+        if components(other) != components(own) {
+            return Some(NamedOutputMismatch::Row {
+                with,
+                ordinary: true,
+                possible,
+                name,
+            });
+        }
+    }
+    None
+}
+
+/// Whether the outputs `own`, the implementation a proof applies at its
+/// concrete goal, gives are those ordinary normalization gives the goal: the
+/// outputs of the ordinary implementation that answers the goal with no
+/// choice in scope. A goal with outputs and no such implementation is
+/// refused. A proof of this goal that no choice touches has nothing to
+/// compare. A compiler-provided implementation is no output representative.
+#[salsa::tracked(returns(clone), cycle_initial = concrete_goal_output_mismatch_cycle_initial)]
+pub(crate) fn concrete_goal_output_mismatch<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    own: ResolvedImplInstance<'db>,
+) -> Option<NamedOutputMismatch<'db>> {
+    let open = TyFlags::HAS_PARAM | TyFlags::HAS_VAR | TyFlags::HAS_PROJECTION;
+    let goal = normalize_trait_inst_preserving_validity(
+        db,
+        own.trait_inst(),
+        scope,
+        PredicateListId::empty_list(db),
+    );
+    if collect_flags(db, goal).intersects(open) {
+        return None;
+    }
+    let trait_def = goal.def(db);
+    if !trait_def.has_assoc_outputs(db) && trait_def.assoc_consts(db).next().is_none() {
+        return None;
+    }
+    match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope, Tier::All), goal) {
+        Selection::Unique(ordinary) => {
+            if ordinary.selected() == own.selected()
+                && ordinary.instantiated() == own.instantiated()
+            {
+                return None;
+            }
+            let ImplementorOrigin::Hir(with) = ordinary.selected().origin(db) else {
+                return None;
+            };
+            outputs_mismatch(
+                db,
+                scope,
+                PredicateListId::empty_list(db),
+                own,
+                ordinary,
+                with,
+                false,
+            )
+        }
+        // An ambiguous selection is reported as "no ordinary implementation"
+        // too (see `NamedOutputMismatch::NoOrdinaryOutputs`).
+        Selection::Ambiguous(_) | Selection::NotFound => {
+            Some(NamedOutputMismatch::NoOrdinaryOutputs)
+        }
+    }
+}
+
+fn concrete_goal_output_mismatch_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _scope: ScopeId<'db>,
+    _own: ResolvedImplInstance<'db>,
+) -> Option<NamedOutputMismatch<'db>> {
     None
 }
 
@@ -1520,13 +1627,15 @@ fn canonical_overlap_const_instance<'db>(
 
 /// Two implementations instantiated at their overlap: each header with fresh
 /// variables, unified with the other. `None` when the headers cannot both
-/// match one goal.
+/// match one goal. The flag is set when the headers only may overlap, because
+/// an unresolved associated type or constant keeps them from being proved
+/// disjoint.
 fn at_overlap<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     own: ImplementorId<'db>,
     other: ImplementorId<'db>,
-) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>)> {
+) -> Option<(ResolvedImplInstance<'db>, ResolvedImplInstance<'db>, bool)> {
     let mut table = PersistentUnificationTable::new(db);
     let own_fresh = table.instantiate_with_fresh_vars(own);
     let other_fresh = table.instantiate_with_fresh_vars(other);
@@ -1536,7 +1645,7 @@ fn at_overlap<'db>(
         .constraints(db)
         .merge(db, other_fresh.constraints(db))
         .extend_all_bounds(db);
-    match_header_args(
+    let possible = match_header_args_possible(
         db,
         &mut table,
         own_fresh.trait_(db),
@@ -1581,7 +1690,7 @@ fn at_overlap<'db>(
     };
     let own = resolved(own, own_fresh);
     let other = resolved(other, other_fresh);
-    Some((own, other))
+    Some((own, other, possible))
 }
 
 /// The first associated type projection in `ty` that goes through an
@@ -1824,9 +1933,12 @@ impl<'db> ImplementorId<'db> {
                     super::clearable::clearable_prerequisites(db, self.trait_inst(db));
                 PredicateListId::new(db, prerequisites.unwrap_or_default())
             }
-            ImplementorOrigin::VirtualContract(_)
-            | ImplementorOrigin::Assumption
-            | ImplementorOrigin::Callable => PredicateListId::empty_list(db),
+            ImplementorOrigin::Callable => {
+                super::closure::func_item_conditions(db, self.trait_(db).self_ty(db))
+            }
+            ImplementorOrigin::VirtualContract(_) | ImplementorOrigin::Assumption => {
+                PredicateListId::empty_list(db)
+            }
         }
     }
 
@@ -1983,8 +2095,13 @@ impl<'db> ImplementorId<'db> {
 /// This mirrors the legacy `Implementor`-based semantics:
 /// - instantiate both implementors with fresh vars and look for a common header;
 /// - then check that the merged constraints are satisfiable.
+///
+/// The constraints are solved in `scope`, where the implementation that is
+/// being checked is declared: every implementation visible to its package
+/// counts, not only those visible where the trait is defined.
 pub(crate) fn does_impl_trait_conflict<'db>(
     db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
     a: ImplementorId<'db>,
     b: ImplementorId<'db>,
 ) -> bool {
@@ -2006,8 +2123,8 @@ pub(crate) fn does_impl_trait_conflict<'db>(
     // Check if all constraints from both implementations would be satisfiable
     // when the types are unified.
     let merged_constraints = a_constraints.merge(db, b_constraints);
-    let solve_cx = TraitSolveCx::new(db, a.trait_def(db).scope(), Tier::All)
-        .with_assumptions(PredicateListId::empty_list(db));
+    let solve_cx =
+        TraitSolveCx::new(db, scope, Tier::All).with_assumptions(PredicateListId::empty_list(db));
 
     for &constraint in merged_constraints.list(db) {
         let constraint = constraint.fold_with(db, &mut table);
@@ -2091,7 +2208,7 @@ impl<'db> AssocBinding<'db> {
 }
 
 /// A trait predicate, including associated equality evidence when present.
-#[salsa::interned]
+#[salsa::interned(constructor = intern)]
 #[derive(Debug, PartialOrd, Ord)]
 pub struct TraitInstId<'db> {
     #[returns(copy)]
@@ -2112,6 +2229,19 @@ pub struct TraitInstId<'db> {
 }
 
 impl<'db> TraitInstId<'db> {
+    /// The predicate with its associated equalities in canonical order, so
+    /// that bindings written in any order denote one predicate.
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        key: Trait<'db>,
+        args: Vec<TyId<'db>>,
+        mut assoc_type_bindings: IndexMap<AssocBinding<'db>, TyId<'db>>,
+        mode: ModeMarker,
+    ) -> Self {
+        assoc_type_bindings.sort_by(|lhs, _, rhs, _| lhs.canonical_cmp(db, rhs));
+        Self::intern(db, key, args, assoc_type_bindings, mode)
+    }
+
     pub fn def(self, db: &'db dyn HirAnalysisDb) -> Trait<'db> {
         self.key(db)
     }
@@ -2155,6 +2285,17 @@ impl<'db> TraitInstId<'db> {
             (ModeMarker::MaybeMut, _) => self.with_mode(db, ModeMarker::None),
             _ => self,
         }
+    }
+
+    /// The predicate without its associated equalities.
+    pub fn without_assoc_bindings(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self::new(
+            db,
+            self.def(db),
+            self.args(db).clone(),
+            IndexMap::new(),
+            self.mode(db),
+        )
     }
 
     /// The goal that the predicate's self type grants the trait's `mut?`
@@ -2452,5 +2593,63 @@ fn probe(value: own Wrapper<u16>) {}
         assert!(template.has_param(&db));
         assert_eq!(instantiated.pretty_print(&db).to_string(), "u16");
         assert_eq!(resolved.impl_args(&db), &[instantiated]);
+    }
+
+    #[test]
+    fn concrete_goal_output_agreement() {
+        use super::{NamedOutputMismatch, ResolvedImplInstance, concrete_goal_output_mismatch};
+        use crate::analysis::ty::trait_lower::lower_impl_trait;
+
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            Utf8PathBuf::from("concrete_goal_output_agreement.fe"),
+            r#"
+struct Item {}
+trait Size { const N: usize }
+impl Size for Item { const N: usize = 3 }
+impl Size for Item as Sized { const N: usize = 3 }
+impl Size for Item as Bigger { const N: usize = 4 }
+struct Other {}
+trait Plain {}
+impl Plain for Other as Named {}
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        let scope = top_mod.scope();
+        let own = |name: Option<&str>, trait_name: &str| {
+            let implementor = top_mod
+                .children_non_nested(&db)
+                .find_map(|item| match item {
+                    ItemKind::ImplTrait(implementation)
+                        if implementation
+                            .selection_name(&db)
+                            .map(|name| name.data(&db).to_string())
+                            .as_deref()
+                            == name =>
+                    {
+                        lower_impl_trait(&db, implementation).filter(|implementor| {
+                            implementor
+                                .trait_def(&db)
+                                .name(&db)
+                                .to_opt()
+                                .is_some_and(|ident| ident.data(&db).as_str() == trait_name)
+                        })
+                    }
+                    _ => None,
+                })
+                .expect("missing implementation");
+            ResolvedImplInstance::new(implementor, implementor, implementor.trait_inst(&db))
+        };
+        // The ordinary implementation answers its own goal, and the named one
+        // that agrees gives the same constant.
+        assert!(concrete_goal_output_mismatch(&db, scope, own(None, "Size")).is_none());
+        assert!(concrete_goal_output_mismatch(&db, scope, own(Some("Sized"), "Size")).is_none());
+        // A constant that differs, built without admission.
+        assert!(matches!(
+            concrete_goal_output_mismatch(&db, scope, own(Some("Bigger"), "Size")),
+            Some(NamedOutputMismatch::AssocConst { .. })
+        ));
+        // A trait without outputs has nothing to compare.
+        assert!(concrete_goal_output_mismatch(&db, scope, own(Some("Named"), "Plain")).is_none());
     }
 }

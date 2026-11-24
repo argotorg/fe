@@ -1,0 +1,52 @@
+// Row 27, loop plan. `Seq: Collection` is a concrete component of the
+// dictionary of `B: Three<C = Seq>`. A `for` loop over a `Seq` in the body
+// reads the iteration that dictionary holds (the caller chose `Cubes`), and
+// so does the call `total(xs)`, whose bound is the same goal.
+// Rule 3: both are answered by the component.
+// Expected under `with (Cubes)`: loop 0+1+8 = 9, call 9: 9009.
+// Plain: squares 0+1+4 = 5, 5005. Mixed (loop ordinary): 5009.
+use core::iter::Collection
+
+pub struct Seq { n: usize }
+impl Collection for Seq {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c
+        yield ref v }
+}
+impl Collection for Seq as Cubes {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c * c
+        yield ref v }
+}
+
+pub trait Three { type C: Collection<Item = usize> }
+pub struct W<T> {}
+impl<T: Collection<Item = usize>> Three for W<T> { type C = T }
+
+fn total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E {
+    var sum: usize = 0
+    for x in xs { sum += x }
+    sum
+}
+
+fn body<B: Three<C = Seq>>() -> usize {
+    var s: usize = 0
+    let xs = Seq { n: 3 }
+    for x in xs { s += x }
+    s * 1000 + total(Seq { n: 3 })
+}
+fn chosen() -> usize { with (Cubes) { body<W<Seq>>() } }
+fn plain() -> usize { body<W<Seq>>() }
+
+#[test]
+fn plain5005() { assert(plain() == 5005) }
+#[test]
+fn chosen9009() { assert(chosen() == 9009) }

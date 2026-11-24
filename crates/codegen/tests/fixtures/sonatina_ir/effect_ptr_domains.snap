@@ -141,10 +141,10 @@ func private %main() {
         v1.i256 = call %alloc;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump_fe9f v1;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump_b87b 0.i256;
+        v6.constref<@layout_0> = const.ref $const_region_0;
         v7.constref<@layout_0> = const.ref $const_region_0;
-        v8.constref<@layout_0> = const.ref $const_region_0;
-        v9.@layout_0 = const.load v8;
-        obj.store v0 v9;
+        v8.@layout_0 = const.load v7;
+        obj.store v0 v8;
         call %standalone_effect_ptr_domains__effect_ptr_domains__bump_2946 v0;
         return;
 }

@@ -1,6 +1,6 @@
 use fe_parser::{
     RecoveryMode, SyntaxNode,
-    ast::{ImplTrait, prelude::AstNode},
+    ast::{Func, ImplTrait, prelude::AstNode},
     parse_source_file,
 };
 
@@ -64,4 +64,64 @@ fn tree_sitter_preserves_the_same_selection_name() {
         .unwrap();
     let name = item.child_by_field_name("selection_name").unwrap();
     assert_eq!(name.utf8_text(source.as_bytes()).unwrap(), "Alt");
+}
+
+#[test]
+fn a_path_after_as_reports_once_and_keeps_the_impl_body() {
+    for alias in [
+        "Bar::Baz",
+        "Bar<u8>",
+        "Bar::Baz<u8, { 1 }>",
+        "Bar::Baz::Deep",
+    ] {
+        let source = format!("impl P for Foo as {alias} {{ fn run() {{}} }}\nfn after() {{}}");
+        let (green, errors) = parse_source_file(&source, RecoveryMode::Recover);
+        let messages: Vec<_> = errors.iter().map(|error| error.msg()).collect();
+        assert_eq!(
+            messages,
+            vec!["an impl name is a single identifier"],
+            "{alias}: {errors:?}"
+        );
+        let root = SyntaxNode::new_root(green);
+        assert_eq!(root.to_string(), source);
+        let item = root.descendants().find_map(ImplTrait::cast).unwrap();
+        assert_eq!(item.selection_name().unwrap().text(), "Bar", "{alias}");
+        assert!(item.item_list().is_some(), "{alias}: the body is parsed");
+        assert!(
+            root.descendants()
+                .any(|node| Func::cast(node).is_some_and(|func| {
+                    func.signature_opt()
+                        .and_then(|sig| sig.name())
+                        .is_some_and(|name| name.text() == "after")
+                })),
+            "{alias}: the next item is parsed"
+        );
+    }
+}
+
+#[test]
+fn the_selection_name_is_the_identifier_after_as() {
+    // Identifiers elsewhere in the header are nodes, never direct tokens of
+    // the impl, so a name is found only after `as`.
+    let source = "impl Produce for Subject {}";
+    let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+    assert!(errors.is_empty(), "{errors:?}");
+    let root = SyntaxNode::new_root(green);
+    let item = root.descendants().find_map(ImplTrait::cast).unwrap();
+    assert!(item.selection_name().is_none());
+}
+
+#[test]
+fn the_selection_name_follows_as_across_comments_and_lines() {
+    for source in [
+        "impl Produce for Subject as // kept\nAlt {}",
+        "impl Produce for Subject as\n    Alt {}",
+        "impl Produce for Subject // kept\nas Alt {}",
+    ] {
+        let (green, errors) = parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}: {errors:?}");
+        let root = SyntaxNode::new_root(green);
+        let item = root.descendants().find_map(ImplTrait::cast).unwrap();
+        assert_eq!(item.selection_name().unwrap().text(), "Alt", "{source}");
+    }
 }

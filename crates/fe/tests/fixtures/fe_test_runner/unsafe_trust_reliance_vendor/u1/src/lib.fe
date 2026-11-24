@@ -1,0 +1,2 @@
+pub struct Evil {}
+unsafe impl t::PodM for Evil { fn tag(self) -> u256 { 0 } }

@@ -203,8 +203,7 @@ func private %contract_init_root_ByRefTraitProviderStorageBug() {
         call %contract_init_abi_ByRefTraitProviderStorageBug;
         v2.i256 = sym_addr &ByRefTraitProviderStorageBug_runtime;
         v3.i256 = sym_size &ByRefTraitProviderStorageBug_runtime;
-        evm_code_copy 0.i256 v2 v3;
-        evm_return 0.i256 v3;
+        evm_return_code v2 v3;
 }
 
 func private %contract_recv_abi_ByRefTraitProviderStorageBug_1() {
@@ -341,15 +340,15 @@ func inline(always) private %encode_field(v0.i256, v1.@layout_4, v2.i256, v3.@la
         call %impl_AbiFrame__store_word v1 v2 v11;
         v15.@layout_4 = call %slice v3 0.i256 v6;
         call %encode v0 v15;
-        v17.@layout_4 = call %tail v3 v6;
-        return v17;
+        v16.@layout_4 = call %tail v3 v6;
+        return v16;
 
     block3:
         jump block4;
 
     block4:
-        v21.@layout_4 = call %slice v1 v2 32.i256;
-        call %encode v0 v21;
+        v20.@layout_4 = call %slice v1 v2 32.i256;
+        call %encode v0 v20;
         return v3;
 }
 
@@ -432,16 +431,6 @@ func private %input() -> @layout_1 {
         return v0;
 }
 
-func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i64 = call %size v0;
-        v3.i256 = zext v2 i256;
-        return v3;
-}
-
 func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
@@ -450,6 +439,16 @@ func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i25
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = call %size v0;
+        v3.i256 = zext v2 i256;
+        return v3;
 }
 
 func inline(always) private %impl_AbiFrame__len(v0.@layout_4) -> i256 {
@@ -599,14 +598,14 @@ func private %return_value(v0.i256) {
         v18.i256 = call %ptr__g03ed v17;
         v19.@layout_4 = call %from_raw_parts v18 32.i256;
         call %encode v0 v19;
-        v22.i256 = call %ptr__g03ed v17;
+        v21.i256 = call %ptr__g03ed v17;
         jump block15;
 
     block7:
-        v23.@layout_5 = call %impl_MemBuffer__new 32.i256;
-        v24.i256 = call %impl_MemBuffer__ptr v23;
-        v25.@layout_4 = call %from_raw_parts v24 32.i256;
-        call %encode v0 v25;
+        v22.@layout_5 = call %impl_MemBuffer__new 32.i256;
+        v23.i256 = call %impl_MemBuffer__ptr v22;
+        v24.@layout_4 = call %from_raw_parts v23 32.i256;
+        call %encode v0 v24;
         jump block17;
 
     block8:
@@ -614,16 +613,16 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block9:
-        v31.i256 = extract_value v9 0.i256;
-        v33.i256 = extract_value v9 1.i256;
+        v29.i256 = extract_value v9 0.i256;
+        v31.i256 = extract_value v9 1.i256;
         jump block11;
 
     block10:
         jump block8;
 
     block11:
-        v37.@layout_4 = agg.make @layout_4 v31 v33;
-        obj.store v1 v37;
+        v35.@layout_4 = agg.make @layout_4 v29 v31;
+        obj.store v1 v35;
         jump block10;
 
     block12:
@@ -631,8 +630,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block13:
-        v41.@layout_4 = agg.make @layout_4 v15 32.i256;
-        obj.store v2 v41;
+        v39.@layout_4 = agg.make @layout_4 v15 32.i256;
+        obj.store v2 v39;
         jump block12;
 
     block14:
@@ -640,8 +639,8 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block15:
-        v45.@layout_4 = agg.make @layout_4 v22 32.i256;
-        obj.store v3 v45;
+        v43.@layout_4 = agg.make @layout_4 v21 32.i256;
+        obj.store v3 v43;
         jump block14;
 
     block16:
@@ -649,16 +648,16 @@ func private %return_value(v0.i256) {
         unreachable;
 
     block17:
-        v48.i256 = extract_value v23 0.i256;
-        v49.i256 = extract_value v23 1.i256;
+        v46.i256 = extract_value v22 0.i256;
+        v47.i256 = extract_value v22 1.i256;
         jump block19;
 
     block18:
         jump block16;
 
     block19:
-        v53.@layout_4 = agg.make @layout_4 v48 v49;
-        obj.store v4 v53;
+        v51.@layout_4 = agg.make @layout_4 v46 v47;
+        obj.store v4 v51;
         jump block18;
 }
 

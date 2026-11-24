@@ -48,6 +48,29 @@ impl std::fmt::Display for GenerationError {
     }
 }
 
+impl GenerationError {
+    /// The error with its place as `file:line:column`, the start of its range
+    /// in the text of the file in `db`, as other diagnostics print it. Without
+    /// the text the place is the byte range of `Display`.
+    pub fn located(&self, db: &DriverDataBase) -> String {
+        let position = db.workspace().get(db, &self.file).and_then(|file| {
+            let text = file.text(db);
+            let before = text.get(..usize::from(self.range.start()))?;
+            let line = before.matches('\n').count() + 1;
+            let column = before
+                .rsplit('\n')
+                .next()
+                .map_or(0, |last| last.chars().count())
+                + 1;
+            Some(format!("{}:{line}:{column}", self.file))
+        });
+        match position {
+            Some(position) => format!("{position}: {}", self.cause),
+            None => self.to_string(),
+        }
+    }
+}
+
 /// The one view every provider runs in, whatever channel requested it.
 const PROVIDER_VIEW_RULE: &str = "a provider runs against authored text and the implementation headers an author wrote; what generation produces in its own package is not visible to it. Share an ordinary helper function between the two providers instead";
 
@@ -362,7 +385,7 @@ fn prepare_file_within(
             "generation requires the authored input view; output is checked once".into(),
         ));
     }
-    let Some(syntax) = scan_syntax(&url, file.text(db))? else {
+    let Some(syntax) = scan_syntax(file.text(db)) else {
         return Ok(None);
     };
     // A standalone file has no dependencies whose output could be read, so the
@@ -423,10 +446,11 @@ fn plan_ingots(db: &DriverDataBase, roots: &[url::Url]) -> Vec<IngotPlan> {
         in_progress: &mut std::collections::HashSet<url::Url>,
         plans: &mut Vec<IngotPlan>,
     ) -> Option<usize> {
-        if matches!(
-            ingot.kind(db),
-            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) {
+        // The embedded libraries carry no requests. A package is not one
+        // because its manifest says it is named `core` or `std`.
+        if ingot.kind(db) == IngotKind::StandAlone
+            || common::stdlib::is_embedded_builtin(ingot.base(db))
+        {
             return None;
         }
         let base = ingot.base(db).clone();
@@ -520,7 +544,7 @@ pub fn prepare_ingots(
                 .workspace()
                 .get(db, url)
                 .expect("a planned ingot file is in the database");
-            if let Some(syntax) = scan_syntax(url, file.text(db))? {
+            if let Some(syntax) = scan_syntax(file.text(db)) {
                 syntaxes.push((url.clone(), syntax));
             }
         }
@@ -756,12 +780,12 @@ struct FileScan {
 }
 
 /// Look for generation syntax in the text of one authored file, before any
-/// view is built. `None` means the file contains none outside quotations, so
-/// nothing needs preparing.
-fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<FileSyntax>, GenerationError> {
+/// view is built. `None` means the file contains none outside quotations, or
+/// has parse errors, so nothing is prepared for it.
+fn scan_syntax(text: &str) -> Option<FileSyntax> {
     // Every request form spells `with`; other files need no parse.
     if !text.contains("with") {
-        return Ok(None);
+        return None;
     }
     let (green, parse_errors) = parser::parse_source_file(text, parser::RecoveryMode::Recover);
     let root = ast::Root::cast(parser::SyntaxNode::new_root(green)).unwrap();
@@ -788,26 +812,23 @@ fn scan_syntax(url: &url::Url, text: &str) -> Result<Option<FileSyntax>, Generat
             });
     if !has_requests {
         // A file with parse errors is not searched for provider openings.
-        return Ok(
-            (has_scoped_syntax && parse_errors.is_empty()).then_some(FileSyntax {
-                root,
-                has_requests,
-                may_open_provider: true,
-            }),
-        );
-    }
-    if !parse_errors.is_empty() {
-        return Err(GenerationError {
-            file: url.clone(),
-            range: parser::TextRange::empty(0.into()),
-            cause: format!("authored parse errors: {parse_errors:?}"),
+        return (has_scoped_syntax && parse_errors.is_empty()).then_some(FileSyntax {
+            root,
+            has_requests,
+            may_open_provider: true,
         });
     }
-    Ok(Some(FileSyntax {
+    // A file with parse errors is not prepared: its requests are not known, and
+    // the ordinary pipeline reports the parse errors with the file's other
+    // diagnostics, as it does for a file without requests.
+    if !parse_errors.is_empty() {
+        return None;
+    }
+    Some(FileSyntax {
         root,
         has_requests,
         may_open_provider: has_scoped_syntax,
-    }))
+    })
 }
 
 /// Starts the analysis of `module` in `db` with the growing-cycle search of
@@ -2020,21 +2041,13 @@ fn prepared_view(
     requests: &[common::generation::FrozenGenerationRequest],
 ) -> DriverDataBase {
     let mut output = match basis {
+        // The file over the builtin sources of the database it is prepared in,
+        // which may differ from the embedded ones (`fe doc --stdlib-path`).
         ViewBasis::Standalone(file) => {
             let url = file.url(db).expect("indexed generation input");
-            let mut output = DriverDataBase::default();
-            output
-                .workspace()
-                .touch(&mut output, url.clone(), Some(file.text(db).clone()));
-            output
-                .compiler_options()
-                .set_recovery_mode(&mut output)
-                .to(db.compiler_options().recovery_mode(db));
-            output
-                .compilation_settings()
-                .set_profile(&mut output)
-                .to(db.compilation_settings().profile(db).clone());
-            output
+            db.fork_inputs_selecting(|candidate| {
+                *candidate == url || common::stdlib::is_embedded_builtin(candidate)
+            })
         }
         ViewBasis::Package => db.fork_inputs(),
         ViewBasis::DependencyOwner(sources) => db.fork_inputs_selecting(|url| {

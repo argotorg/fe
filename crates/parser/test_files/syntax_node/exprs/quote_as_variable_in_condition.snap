@@ -1,0 +1,283 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/exprs/quote_as_variable_in_condition.fe
+---
+Root@0..258
+  IfExpr@0..25
+    IfKw@0..2 "if"
+    WhiteSpace@2..3 " "
+    PathExpr@3..8
+      Path@3..8
+        PathSegment@3..8
+          Ident@3..8 "quote"
+    WhiteSpace@8..9 " "
+    BlockExpr@9..14
+      LBrace@9..10 "{"
+      WhiteSpace@10..11 " "
+      ExprStmt@11..12
+        LitExpr@11..12
+          Lit@11..12
+            Int@11..12 "1"
+      WhiteSpace@12..13 " "
+      RBrace@13..14 "}"
+    WhiteSpace@14..15 " "
+    ElseKw@15..19 "else"
+    WhiteSpace@19..20 " "
+    BlockExpr@20..25
+      LBrace@20..21 "{"
+      WhiteSpace@21..22 " "
+      ExprStmt@22..23
+        LitExpr@22..23
+          Lit@22..23
+            Int@22..23 "2"
+      WhiteSpace@23..24 " "
+      RBrace@24..25 "}"
+  Newline@25..27 "\n\n"
+  IfExpr@27..61
+    IfKw@27..29 "if"
+    WhiteSpace@29..30 " "
+    BinExpr@30..44
+      PathExpr@30..35
+        Path@30..35
+          PathSegment@30..35
+            Ident@30..35 "quote"
+      WhiteSpace@35..36 " "
+      Amp2@36..38 "&&"
+      WhiteSpace@38..39 " "
+      PathExpr@39..44
+        Path@39..44
+          PathSegment@39..44
+            Ident@39..44 "ready"
+    WhiteSpace@44..45 " "
+    BlockExpr@45..50
+      LBrace@45..46 "{"
+      WhiteSpace@46..47 " "
+      ExprStmt@47..48
+        LitExpr@47..48
+          Lit@47..48
+            Int@47..48 "1"
+      WhiteSpace@48..49 " "
+      RBrace@49..50 "}"
+    WhiteSpace@50..51 " "
+    ElseKw@51..55 "else"
+    WhiteSpace@55..56 " "
+    BlockExpr@56..61
+      LBrace@56..57 "{"
+      WhiteSpace@57..58 " "
+      ExprStmt@58..59
+        LitExpr@58..59
+          Lit@58..59
+            Int@58..59 "2"
+      WhiteSpace@59..60 " "
+      RBrace@60..61 "}"
+  Newline@61..63 "\n\n"
+  IfExpr@63..89
+    IfKw@63..65 "if"
+    WhiteSpace@65..66 " "
+    UnExpr@66..72
+      Not@66..67 "!"
+      PathExpr@67..72
+        Path@67..72
+          PathSegment@67..72
+            Ident@67..72 "quote"
+    WhiteSpace@72..73 " "
+    BlockExpr@73..78
+      LBrace@73..74 "{"
+      WhiteSpace@74..75 " "
+      ExprStmt@75..76
+        LitExpr@75..76
+          Lit@75..76
+            Int@75..76 "1"
+      WhiteSpace@76..77 " "
+      RBrace@77..78 "}"
+    WhiteSpace@78..79 " "
+    ElseKw@79..83 "else"
+    WhiteSpace@83..84 " "
+    BlockExpr@84..89
+      LBrace@84..85 "{"
+      WhiteSpace@85..86 " "
+      ExprStmt@86..87
+        LitExpr@86..87
+          Lit@86..87
+            Int@86..87 "2"
+      WhiteSpace@87..88 " "
+      RBrace@88..89 "}"
+  Newline@89..91 "\n\n"
+  IfExpr@91..122
+    IfKw@91..93 "if"
+    WhiteSpace@93..94 " "
+    FieldExpr@94..105
+      PathExpr@94..99
+        Path@94..99
+          PathSegment@94..99
+            Ident@94..99 "quote"
+      Dot@99..100 "."
+      Ident@100..105 "field"
+    WhiteSpace@105..106 " "
+    BlockExpr@106..111
+      LBrace@106..107 "{"
+      WhiteSpace@107..108 " "
+      ExprStmt@108..109
+        LitExpr@108..109
+          Lit@108..109
+            Int@108..109 "1"
+      WhiteSpace@109..110 " "
+      RBrace@110..111 "}"
+    WhiteSpace@111..112 " "
+    ElseKw@112..116 "else"
+    WhiteSpace@116..117 " "
+    BlockExpr@117..122
+      LBrace@117..118 "{"
+      WhiteSpace@118..119 " "
+      ExprStmt@119..120
+        LitExpr@119..120
+          Lit@119..120
+            Int@119..120 "2"
+      WhiteSpace@120..121 " "
+      RBrace@121..122 "}"
+  Newline@122..124 "\n\n"
+  IfExpr@124..158
+    IfKw@124..126 "if"
+    WhiteSpace@126..127 " "
+    MethodCallExpr@127..141
+      PathExpr@127..132
+        Path@127..132
+          PathSegment@127..132
+            Ident@127..132 "quote"
+      Dot@132..133 "."
+      Ident@133..139 "method"
+      CallArgList@139..141
+        LParen@139..140 "("
+        RParen@140..141 ")"
+    WhiteSpace@141..142 " "
+    BlockExpr@142..147
+      LBrace@142..143 "{"
+      WhiteSpace@143..144 " "
+      ExprStmt@144..145
+        LitExpr@144..145
+          Lit@144..145
+            Int@144..145 "1"
+      WhiteSpace@145..146 " "
+      RBrace@146..147 "}"
+    WhiteSpace@147..148 " "
+    ElseKw@148..152 "else"
+    WhiteSpace@152..153 " "
+    BlockExpr@153..158
+      LBrace@153..154 "{"
+      WhiteSpace@154..155 " "
+      ExprStmt@155..156
+        LitExpr@155..156
+          Lit@155..156
+            Int@155..156 "2"
+      WhiteSpace@156..157 " "
+      RBrace@157..158 "}"
+  Newline@158..160 "\n\n"
+  IfExpr@160..188
+    IfKw@160..162 "if"
+    WhiteSpace@162..163 " "
+    IndexExpr@163..171
+      PathExpr@163..168
+        Path@163..168
+          PathSegment@163..168
+            Ident@163..168 "quote"
+      LBracket@168..169 "["
+      LitExpr@169..170
+        Lit@169..170
+          Int@169..170 "0"
+      RBracket@170..171 "]"
+    WhiteSpace@171..172 " "
+    BlockExpr@172..177
+      LBrace@172..173 "{"
+      WhiteSpace@173..174 " "
+      ExprStmt@174..175
+        LitExpr@174..175
+          Lit@174..175
+            Int@174..175 "1"
+      WhiteSpace@175..176 " "
+      RBrace@176..177 "}"
+    WhiteSpace@177..178 " "
+    ElseKw@178..182 "else"
+    WhiteSpace@182..183 " "
+    BlockExpr@183..188
+      LBrace@183..184 "{"
+      WhiteSpace@184..185 " "
+      ExprStmt@185..186
+        LitExpr@185..186
+          Lit@185..186
+            Int@185..186 "2"
+      WhiteSpace@186..187 " "
+      RBrace@187..188 "}"
+  Newline@188..190 "\n\n"
+  IfExpr@190..229
+    IfKw@190..192 "if"
+    WhiteSpace@192..193 " "
+    LetExpr@193..212
+      LetKw@193..196 "let"
+      WhiteSpace@196..197 " "
+      PathTuplePat@197..204
+        Path@197..201
+          PathSegment@197..201
+            Ident@197..201 "Some"
+        TuplePatElemList@201..204
+          LParen@201..202 "("
+          PathPat@202..203
+            Path@202..203
+              PathSegment@202..203
+                Ident@202..203 "x"
+          RParen@203..204 ")"
+      WhiteSpace@204..205 " "
+      Eq@205..206 "="
+      WhiteSpace@206..207 " "
+      PathExpr@207..212
+        Path@207..212
+          PathSegment@207..212
+            Ident@207..212 "quote"
+    WhiteSpace@212..213 " "
+    BlockExpr@213..218
+      LBrace@213..214 "{"
+      WhiteSpace@214..215 " "
+      ExprStmt@215..216
+        PathExpr@215..216
+          Path@215..216
+            PathSegment@215..216
+              Ident@215..216 "x"
+      WhiteSpace@216..217 " "
+      RBrace@217..218 "}"
+    WhiteSpace@218..219 " "
+    ElseKw@219..223 "else"
+    WhiteSpace@223..224 " "
+    BlockExpr@224..229
+      LBrace@224..225 "{"
+      WhiteSpace@225..226 " "
+      ExprStmt@226..227
+        LitExpr@226..227
+          Lit@226..227
+            Int@226..227 "2"
+      WhiteSpace@227..228 " "
+      RBrace@228..229 "}"
+  Newline@229..231 "\n\n"
+  MatchExpr@231..257
+    MatchKw@231..236 "match"
+    WhiteSpace@236..237 " "
+    PathExpr@237..242
+      Path@237..242
+        PathSegment@237..242
+          Ident@237..242 "quote"
+    WhiteSpace@242..243 " "
+    MatchArmList@243..257
+      LBrace@243..244 "{"
+      Newline@244..245 "\n"
+      WhiteSpace@245..249 "    "
+      MatchArm@249..255
+        WildCardPat@249..250
+          Underscore@249..250 "_"
+        WhiteSpace@250..251 " "
+        FatArrow@251..253 "=>"
+        WhiteSpace@253..254 " "
+        LitExpr@254..255
+          Lit@254..255
+            Int@254..255 "1"
+      Newline@255..256 "\n"
+      RBrace@256..257 "}"
+  Newline@257..258 "\n"

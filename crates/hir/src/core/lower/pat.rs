@@ -232,6 +232,16 @@ impl<'db> Pat<'db> {
                             AuthoredFields::Named(names) => record_pat(ctxt, variant_path, names),
                         }
                     }
+                    // A tuple struct binds by position, as a tuple variant does.
+                    (Some(AuthoredFields::Named(names)), None) if authored.is_tuple_struct() => {
+                        let elems = (0..names.len())
+                            .map(|field_idx| binder(ctxt, field_idx))
+                            .collect();
+                        ctxt.push_pat(
+                            Pat::PathTuple(Partial::Present(record_path), elems),
+                            HirOrigin::raw(origin_ast),
+                        )
+                    }
                     (Some(AuthoredFields::Named(names)), None) => {
                         record_pat(ctxt, Partial::Present(record_path), names)
                     }

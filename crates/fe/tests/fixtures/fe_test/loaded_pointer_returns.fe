@@ -1,0 +1,77 @@
+// A value a function reads through a pointer parameter and returns is not a
+// part of that parameter, however many pointers it reads through.
+struct Pair {
+    a: u256,
+    b: u256,
+}
+
+struct Holder {
+    pair: *Pair,
+}
+
+unsafe fn load(_ slot: **u256) -> *u256 {
+    *slot
+}
+
+unsafe fn load_twice(_ slot: ***u256, _ unused: *u8) -> *u256 {
+    let inner = *slot
+    return *inner
+}
+
+unsafe fn load_twice_tail(_ slot: ***u256) -> *u256 {
+    *(*slot)
+}
+
+unsafe fn load_pair_pointer(_ slot: ***Pair) -> *Pair {
+    let inner = *slot
+    *inner
+}
+
+unsafe fn load_pair(_ slot: **Pair) -> Pair {
+    *(*slot)
+}
+
+unsafe fn load_pair_field(_ slot: **Pair) -> u256 {
+    let inner = *slot
+    inner.b
+}
+
+unsafe fn load_holder_pair(_ slot: **Holder) -> *Pair {
+    let holder = *slot
+    holder.pair
+}
+
+#[test]
+fn test_loaded_pointer_returns() {
+    let cell = core::ptr::alloc<u256>()
+    unsafe { *cell = 7 }
+    let mid = core::ptr::alloc<*u256>()
+    unsafe { *mid = cell }
+    let slot = core::ptr::alloc<**u256>()
+    unsafe { *slot = mid }
+    let byte = core::ptr::alloc<u8>()
+    unsafe {
+        assert(load(mid) == cell)
+        assert(load_twice(slot, byte) == cell)
+        assert(*load_twice(slot, byte) == 7)
+        assert(load_twice_tail(slot) == cell)
+    }
+
+    let pair = core::ptr::alloc<Pair>()
+    unsafe { *pair = Pair { a: 1, b: 2 } }
+    let pair_slot = core::ptr::alloc<*Pair>()
+    unsafe { *pair_slot = pair }
+    let pair_slot_slot = core::ptr::alloc<**Pair>()
+    unsafe { *pair_slot_slot = pair_slot }
+    let holder = core::ptr::alloc<Holder>()
+    unsafe { *holder = Holder { pair } }
+    let holder_slot = core::ptr::alloc<*Holder>()
+    unsafe { *holder_slot = holder }
+    unsafe {
+        assert(load_pair_pointer(pair_slot_slot) == pair)
+        assert(load_pair_pointer(pair_slot_slot).b == 2)
+        assert(load_pair(pair_slot).a == 1)
+        assert(load_pair_field(pair_slot) == 2)
+        assert(load_holder_pair(holder_slot) == pair)
+    }
+}

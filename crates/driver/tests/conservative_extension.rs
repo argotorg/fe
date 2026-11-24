@@ -115,3 +115,91 @@ fn a_fresh_generated_name_is_lawful() {
     .expect("a new name changes no authored meaning");
     assert_eq!(value_of(&output, "read"), "3");
 }
+
+/// The cause of a refusal that is not the hiding rule of `refused`.
+fn refused_for(source: &str, rule: &str) -> String {
+    match prepare(source) {
+        Ok(_) => panic!("expected the program to be refused"),
+        Err(cause) => {
+            assert!(cause.contains(rule), "{cause}");
+            cause
+        }
+    }
+}
+
+/// A quotation that lowers the block of a generated constant lowers generated
+/// code, including the items in the block. A deciding implementation there is
+/// refused as it is in a generated function.
+#[test]
+fn a_deciding_implementation_inside_a_generated_constant_is_refused() {
+    let cause = refused_for(
+        &format!(
+            "{HEAD}use core::marker::Copy\nstruct MyType {{ a: u256 }}\n\
+             struct Smuggle {{}}\n\
+             impl DeriveInherent for Smuggle {{ const fn derive(_ record: Record) -> Code<Item> {{ quote {{ pub const SMUGGLE: u256 = {{ impl Copy for MyType {{}}\n 0 }} }} }} }}\n\
+             impl MyType with (Smuggle)\n"
+        ),
+        "is refused",
+    );
+    assert!(
+        cause.contains("the generated implementation of `Copy` for `MyType`"),
+        "{cause}"
+    );
+}
+
+/// An inherent method in the block of a generated constant is generated code
+/// too: it would hide the authored trait method of the same name.
+#[test]
+fn an_inherent_method_inside_a_generated_constant_does_not_hide_a_written_one() {
+    let cause = refused(&format!(
+        "{HEAD}mod a {{ pub trait Tr1 {{ fn m(self) -> u256 }} }}\n\
+         struct X {{ a: u256 }}\nimpl a::Tr1 for X {{ fn m(self) -> u256 {{ 1 }} }}\n\
+         struct Gen {{}}\n\
+         impl DeriveInherent for Gen {{ const fn derive(_ record: Record) -> Code<Item> {{ quote {{ pub const CARRIER: u256 = {{ impl X {{ pub fn m(self) -> u256 {{ 2 }} }}\n 0 }} }} }} }}\n\
+         struct G {{ a: u256 }}\nimpl G with (Gen)\n"
+    ));
+    assert!(cause.contains("would be hidden"), "{cause}");
+}
+
+/// A generated constant with no items in its block is lawful.
+#[test]
+fn a_generated_constant_without_items_is_lawful() {
+    let output = prepare(&format!(
+        "{HEAD}struct Make {{}}\n\
+         impl DeriveInherent for Make {{ const fn derive(_ record: Record) -> Code<Item> {{ quote {{ pub const K: u256 = 7 }} }} }}\n\
+         struct G {{}}\nimpl G with (Make)\npub const fn run() -> u256 {{ G::K }}\n"
+    ))
+    .expect("a constant with no items changes no authored meaning");
+    assert_eq!(value_of(&output, "run"), "7");
+}
+
+/// A written implementation of a deciding trait is decided by its whole
+/// header: a const expression in its type names `Size` as a bound would, so a
+/// generated `impl Size for Key` could change which types the written
+/// `impl Copy` covers, and is refused.
+#[test]
+fn a_trait_named_in_the_type_of_a_deciding_implementation_is_decided() {
+    let cause = refused_for(
+        &header_naming_size("impl Copy for Boxed<{ <Key as Size>::N }> {}"),
+        "could change whether a value is copied or moved for `Boxed",
+    );
+    assert!(cause.contains("names `Size`"), "{cause}");
+}
+
+/// The same program whose written `Copy` implementation names no trait in its
+/// header is lawful.
+#[test]
+fn a_generated_implementation_named_by_no_deciding_header_is_lawful() {
+    prepare(&header_naming_size("impl Copy for Boxed<1> {}"))
+        .unwrap_or_else(|cause| panic!("{cause}"));
+}
+
+fn header_naming_size(copy_impl: &str) -> String {
+    format!(
+        "{HEAD}use core::marker::Copy\n\
+         trait Size {{ const N: usize }}\nstruct Key {{}}\nstruct Boxed<const N: usize> {{}}\n{copy_impl}\n\
+         struct Gen {{}}\n\
+         impl DeriveInherent for Gen {{ const fn derive(_ record: Record) -> Code<Item> {{ quote {{ pub fn carrier() -> u256 {{ impl Size for Key {{ const N: usize = 1 }}\n 0 }} }} }} }}\n\
+         struct G {{}}\nimpl G with (Gen)\n"
+    )
+}

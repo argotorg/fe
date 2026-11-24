@@ -1,0 +1,13 @@
+mod outer {
+    mod hidden {
+        pub trait T {}
+    }
+}
+
+struct Family<P: * -> Constraint> {}
+
+// The private module on the path is the name that is not visible, as in a
+// bound.
+type Written = Family<trait outer::hidden::T>
+
+fn plain<X: outer::hidden::T>() {}

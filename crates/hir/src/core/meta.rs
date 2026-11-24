@@ -214,6 +214,7 @@ pub enum RecordInputError {
     WholeEnumHasNoFields,
     InvalidField,
     InvisibleField,
+    InvisibleVariant,
     FieldOutsideRecord,
     VariantOutsideEnum,
     SelectedPayloadIsNotWholeEnum,
@@ -323,6 +324,19 @@ impl<'db> RecordInput<'db> {
                 is_scope_visible_from(db, ScopeId::Field(parent, index as u16), requesting_scope)
             })
         };
+        // A variant is as visible as hand-written code finds it: naming it
+        // where the header is written must be lawful.
+        if let RecordOwner::Enum(declaration) = owner
+            && !(0..declaration.variants_list(db).data(db).len()).all(|index| {
+                is_scope_visible_from(
+                    db,
+                    ScopeId::Variant(EnumVariant::new(declaration, index)),
+                    requesting_scope,
+                )
+            })
+        {
+            return Err(RecordInputError::InvisibleVariant);
+        }
         let visible = match owner {
             RecordOwner::Struct(declaration) => fields_visible(
                 FieldParent::Struct(declaration),
@@ -887,6 +901,287 @@ fn is_all_code_hole_block<'db>(
         })
 }
 
+/// What a hole of a quotation stands for, from its place in the quotation's
+/// syntax and the kind of the code. The check of a quotation's value when it
+/// is evaluated (`validate_with_budget`) and the type check of the quotation
+/// both ask this one table, so what is refused late was refused early.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HoleSlot {
+    /// A type: a record, a field type or a type reference.
+    Type,
+    /// A pattern.
+    Pat,
+    /// Match arms.
+    Arm,
+    /// Where predicates.
+    Where,
+    /// Items of an item list, an impl body or a trait body.
+    Items,
+    /// A field or member name.
+    Member,
+    /// A statement that is the whole code of an item, arm or where quotation.
+    Whole(common::generation::FrozenCodeKind),
+    /// An expression position of a pattern quotation.
+    PatExpr,
+    /// An expression position. A block of several entries also takes items.
+    Expr { multi_entry_block: bool },
+}
+
+/// The slot of the hole `syntax_hole` of `quote`, a quotation of kind `kind`.
+pub(crate) fn hole_slot(
+    quote: &ast::QuoteExpr,
+    syntax_hole: &QuoteHoleNode,
+    kind: common::generation::FrozenCodeKind,
+) -> Result<HoleSlot, &'static str> {
+    use common::generation::FrozenCodeKind;
+    Ok(match syntax_hole.syntax().kind() {
+        parser::SyntaxKind::QuoteHoleType => HoleSlot::Type,
+        parser::SyntaxKind::QuoteHolePat => HoleSlot::Pat,
+        parser::SyntaxKind::QuoteHoleArm => HoleSlot::Arm,
+        parser::SyntaxKind::QuoteHole => match syntax_hole.syntax().parent().map(|p| p.kind()) {
+            Some(parser::SyntaxKind::WhereClause) => HoleSlot::Where,
+            Some(
+                parser::SyntaxKind::QuoteItemList
+                | parser::SyntaxKind::ImplItemList
+                | parser::SyntaxKind::TraitItemList,
+            ) => HoleSlot::Items,
+            _ => HoleSlot::Member,
+        },
+        parser::SyntaxKind::QuoteHoleExpr => {
+            let is_quote_body_stmt = syntax_hole
+                .syntax()
+                .parent()
+                .and_then(|p| p.parent())
+                .is_some_and(|gp| {
+                    gp.kind() == parser::SyntaxKind::BlockExpr
+                        && gp.parent().as_ref() == Some(quote.syntax())
+                });
+            let multi_entry_block = syntax_hole
+                .syntax()
+                .parent()
+                .and_then(|p| p.parent())
+                .and_then(ast::BlockExpr::cast)
+                .is_some_and(|b| b.stmts().nth(1).is_some() || b.items().next().is_some());
+            if is_quote_body_stmt
+                && matches!(
+                    kind,
+                    FrozenCodeKind::Item | FrozenCodeKind::Arm | FrozenCodeKind::Where
+                )
+            {
+                HoleSlot::Whole(kind)
+            } else if kind == FrozenCodeKind::Pat {
+                HoleSlot::PatExpr
+            } else {
+                HoleSlot::Expr { multi_entry_block }
+            }
+        }
+        _ => return Err("unsupported quotation hole syntax"),
+    })
+}
+
+/// What a hole's value or type is, as far as the slots tell it apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HoleClass {
+    Scalar,
+    Code(common::generation::FrozenCodeKind),
+    Field,
+    Record,
+    FieldTypeOrRef,
+}
+
+/// The answer of `HoleSlot::admits_ty`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Admit {
+    Yes,
+    No(&'static str),
+    /// The type does not decide; evaluation checks the value.
+    Unknown,
+}
+
+impl HoleSlot {
+    fn refusal(self) -> &'static str {
+        use common::generation::FrozenCodeKind;
+        match self {
+            HoleSlot::Type => {
+                "type quotation hole requires a record, field type, or checked type reference"
+            }
+            HoleSlot::Pat | HoleSlot::PatExpr => {
+                "pattern quotation hole requires Code<Pat> or scalar splice"
+            }
+            HoleSlot::Arm | HoleSlot::Whole(FrozenCodeKind::Arm) => {
+                "match-arm quotation hole requires Code<Arm> splice"
+            }
+            HoleSlot::Where | HoleSlot::Whole(FrozenCodeKind::Where) => {
+                "where-clause quotation hole requires Code<Where> splice"
+            }
+            HoleSlot::Items | HoleSlot::Whole(_) => {
+                "item quotation hole requires Code<Item> splice"
+            }
+            HoleSlot::Member => "field or member quotation hole requires Field<T, F> splice",
+            HoleSlot::Expr { .. } => {
+                "expression quotation hole requires Code<Expr>, Field<T, F>, or scalar splice"
+            }
+        }
+    }
+
+    fn admits(self, class: HoleClass) -> bool {
+        use common::generation::FrozenCodeKind;
+        match self {
+            HoleSlot::Type => matches!(class, HoleClass::Record | HoleClass::FieldTypeOrRef),
+            HoleSlot::Pat | HoleSlot::PatExpr => {
+                matches!(
+                    class,
+                    HoleClass::Scalar | HoleClass::Code(FrozenCodeKind::Pat)
+                )
+            }
+            HoleSlot::Arm => class == HoleClass::Code(FrozenCodeKind::Arm),
+            HoleSlot::Where => class == HoleClass::Code(FrozenCodeKind::Where),
+            HoleSlot::Items => class == HoleClass::Code(FrozenCodeKind::Item),
+            HoleSlot::Member => class == HoleClass::Field,
+            HoleSlot::Whole(kind) => class == HoleClass::Code(kind),
+            HoleSlot::Expr { multi_entry_block } => {
+                matches!(
+                    class,
+                    HoleClass::Scalar | HoleClass::Field | HoleClass::Code(FrozenCodeKind::Expr)
+                ) || multi_entry_block && class == HoleClass::Code(FrozenCodeKind::Item)
+            }
+        }
+    }
+
+    /// Whether the value of a hole fills this slot.
+    pub(crate) fn admits_value<'db>(
+        self,
+        value: &crate::analysis::semantic::SemConstValue<'db>,
+    ) -> Result<(), &'static str> {
+        use crate::analysis::semantic::SemConstValue;
+        let class = match value {
+            SemConstValue::Scalar { .. } => Some(HoleClass::Scalar),
+            SemConstValue::ItemCode { code, .. } => Some(HoleClass::Code(code.kind())),
+            SemConstValue::Meta {
+                value: MetaValue::Field(_),
+                ..
+            } => Some(HoleClass::Field),
+            // A selected enum payload is not a type.
+            SemConstValue::Meta {
+                value: MetaValue::Record(record),
+                ..
+            } if record.variant_index().is_none() => Some(HoleClass::Record),
+            SemConstValue::Meta {
+                value: MetaValue::FieldType(_) | MetaValue::TypeRef { .. },
+                ..
+            } => Some(HoleClass::FieldTypeOrRef),
+            _ => None,
+        };
+        if class.is_some_and(|class| self.admits(class)) {
+            Ok(())
+        } else {
+            Err(self.refusal())
+        }
+    }
+
+    /// Whether a hole of type `ty` can fill this slot. Only a type that is
+    /// known to be a scalar, code or reflected value of the wrong kind is
+    /// refused.
+    pub(crate) fn admits_ty<'db>(self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Admit {
+        match hole_class_of_ty(db, ty) {
+            Some(class) if !self.admits(class) => Admit::No(self.refusal()),
+            Some(_) => Admit::Yes,
+            None => Admit::Unknown,
+        }
+    }
+}
+
+fn hole_class_of_ty<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> Option<HoleClass> {
+    if let Some(kind) = code_kind_from_ty(db, ty) {
+        return Some(HoleClass::Code(kind));
+    }
+    if ty.is_integral(db) || ty.is_bool(db) {
+        return Some(HoleClass::Scalar);
+    }
+    let ty = ty.as_view(db).unwrap_or(ty);
+    let (base, _) = ty.decompose_ty_app(db);
+    let crate::analysis::ty::ty_def::TyData::TyBase(crate::analysis::ty::ty_def::TyBase::Adt(adt)) =
+        base.data(db)
+    else {
+        return None;
+    };
+    let scope = adt.scope(db);
+    let is =
+        |path| crate::analysis::ty::corelib::resolve_lib_type_path(db, scope, path) == Some(base);
+    if is("core::meta::Field") {
+        Some(HoleClass::Field)
+    } else if is("core::meta::Record") {
+        Some(HoleClass::Record)
+    } else if is("core::meta::FieldType") || is("core::meta::TypeRef") {
+        Some(HoleClass::FieldTypeOrRef)
+    } else {
+        None
+    }
+}
+
+/// Whether every entry of the quotation's block is a bare hole, so that the
+/// holes are the whole code: the kind of such a quotation is its holes'.
+pub(crate) fn quote_is_all_hole_stmts(quote: &ast::QuoteExpr) -> bool {
+    let Some(block) = quote.body() else {
+        return false;
+    };
+    let mut stmts = block.stmts().peekable();
+    stmts.peek().is_some()
+        && block.items().next().is_none()
+        && stmts.all(|stmt| {
+            matches!(
+                stmt.kind(),
+                ast::StmtKind::Expr(expr)
+                    if expr
+                        .expr()
+                        .is_some_and(|e| matches!(e.kind(), ast::ExprKind::QuoteHole(_)))
+            )
+        })
+}
+
+/// The kinds of code that the syntax of `quote` can be, by the rules of
+/// `validate_with_budget` for each kind. A quotation made only of holes takes
+/// the kind of its holes, so any kind is possible.
+pub(crate) fn quote_syntax_kinds(
+    quote: &ast::QuoteExpr,
+) -> Vec<common::generation::FrozenCodeKind> {
+    use common::generation::FrozenCodeKind;
+    if quote.pattern().is_some() {
+        return vec![FrozenCodeKind::Pat];
+    }
+    if quote.item_list().is_some() {
+        return vec![FrozenCodeKind::Item];
+    }
+    if quote.where_clause().is_some() {
+        return vec![FrozenCodeKind::Where];
+    }
+    if quote.arm_list().is_some() {
+        return vec![FrozenCodeKind::Arm];
+    }
+    let Some(block) = quote.body() else {
+        return vec![];
+    };
+    if quote_is_all_hole_stmts(quote) {
+        return vec![
+            FrozenCodeKind::Item,
+            FrozenCodeKind::Expr,
+            FrozenCodeKind::Pat,
+            FrozenCodeKind::Arm,
+            FrozenCodeKind::Where,
+        ];
+    }
+    let stmts = block.stmts().count();
+    let items = block.items().next().is_some();
+    match (stmts, items) {
+        // No declarations at all: a provider's output for a marker trait.
+        (0, false) => vec![FrozenCodeKind::Expr, FrozenCodeKind::Item],
+        // A block of declarations is an expression block as well.
+        (0, true) => vec![FrozenCodeKind::Item, FrozenCodeKind::Expr],
+        (1, false) => vec![FrozenCodeKind::Expr, FrozenCodeKind::Pat],
+        _ => vec![FrozenCodeKind::Expr],
+    }
+}
+
 /// One bounded source walk shared by producer lowering, construction and
 /// output copying. Unsupported nested constructors never lower missing holes.
 pub(crate) fn quote_holes(quote: &ast::QuoteExpr) -> Result<Vec<QuoteHoleNode>, &'static str> {
@@ -1421,149 +1716,7 @@ impl<'db> ItemCode<'db> {
         for (syntax_hole, value) in syntax_holes.iter().zip(holes.iter()) {
             crate::analysis::semantic::consts::verify_sem_const_shape(db, *value)?;
             if !all_code_hole_block {
-                match syntax_hole.syntax().kind() {
-                    parser::SyntaxKind::QuoteHoleType => match value.value(db) {
-                        SemConstValue::Meta {
-                            value: MetaValue::Record(record),
-                            ..
-                        } if record.variant_index().is_none() => {}
-                        SemConstValue::Meta {
-                            value: MetaValue::FieldType(_) | MetaValue::TypeRef { .. },
-                            ..
-                        } => {}
-                        _ => {
-                            return Err(
-                                "type quotation hole requires a record, field type, or checked type reference",
-                            );
-                        }
-                    },
-                    parser::SyntaxKind::QuoteHolePat => match value.value(db) {
-                        SemConstValue::Scalar { .. } => {}
-                        SemConstValue::ItemCode { code, .. }
-                            if code.kind() == FrozenCodeKind::Pat => {}
-                        _ => {
-                            return Err(
-                                "pattern quotation hole requires Code<Pat> or scalar splice",
-                            );
-                        }
-                    },
-                    parser::SyntaxKind::QuoteHoleArm => match value.value(db) {
-                        SemConstValue::ItemCode { code, .. }
-                            if code.kind() == FrozenCodeKind::Arm => {}
-                        _ => return Err("match-arm quotation hole requires Code<Arm> splice"),
-                    },
-                    parser::SyntaxKind::QuoteHole => {
-                        let parent_kind = syntax_hole.syntax().parent().map(|p| p.kind());
-                        match parent_kind {
-                            Some(parser::SyntaxKind::WhereClause) => match value.value(db) {
-                                SemConstValue::ItemCode { code, .. }
-                                    if code.kind() == FrozenCodeKind::Where => {}
-                                _ => {
-                                    return Err(
-                                        "where-clause quotation hole requires Code<Where> splice",
-                                    );
-                                }
-                            },
-                            Some(
-                                parser::SyntaxKind::QuoteItemList
-                                | parser::SyntaxKind::ImplItemList
-                                | parser::SyntaxKind::TraitItemList,
-                            ) => match value.value(db) {
-                                SemConstValue::ItemCode { code, .. }
-                                    if code.kind() == FrozenCodeKind::Item => {}
-                                _ => {
-                                    return Err("item quotation hole requires Code<Item> splice");
-                                }
-                            },
-                            _ => match value.value(db) {
-                                SemConstValue::Meta {
-                                    value: MetaValue::Field(_),
-                                    ..
-                                } => {}
-                                _ => {
-                                    return Err(
-                                        "field or member quotation hole requires Field<T, F> splice",
-                                    );
-                                }
-                            },
-                        }
-                    }
-                    parser::SyntaxKind::QuoteHoleExpr => {
-                        let is_quote_body_stmt = syntax_hole
-                            .syntax()
-                            .parent()
-                            .and_then(|p| p.parent())
-                            .is_some_and(|gp| {
-                                gp.kind() == parser::SyntaxKind::BlockExpr
-                                    && gp.parent().as_ref() == Some(quote.syntax())
-                            });
-                        let is_multi_entry_block_stmt = syntax_hole
-                            .syntax()
-                            .parent()
-                            .and_then(|p| p.parent())
-                            .and_then(ast::BlockExpr::cast)
-                            .is_some_and(|b| {
-                                b.stmts().nth(1).is_some() || b.items().next().is_some()
-                            });
-                        if is_quote_body_stmt
-                            && matches!(
-                                *kind,
-                                FrozenCodeKind::Item | FrozenCodeKind::Arm | FrozenCodeKind::Where
-                            )
-                        {
-                            match (*kind, value.value(db)) {
-                                (FrozenCodeKind::Item, SemConstValue::ItemCode { code, .. })
-                                    if code.kind() == FrozenCodeKind::Item => {}
-                                (FrozenCodeKind::Item, _) => {
-                                    return Err("item quotation hole requires Code<Item> splice");
-                                }
-                                (FrozenCodeKind::Arm, SemConstValue::ItemCode { code, .. })
-                                    if code.kind() == FrozenCodeKind::Arm => {}
-                                (FrozenCodeKind::Arm, _) => {
-                                    return Err(
-                                        "match-arm quotation hole requires Code<Arm> splice",
-                                    );
-                                }
-                                (FrozenCodeKind::Where, SemConstValue::ItemCode { code, .. })
-                                    if code.kind() == FrozenCodeKind::Where => {}
-                                _ => {
-                                    return Err(
-                                        "where-clause quotation hole requires Code<Where> splice",
-                                    );
-                                }
-                            }
-                        } else if *kind == FrozenCodeKind::Pat {
-                            match value.value(db) {
-                                SemConstValue::Scalar { .. } => {}
-                                SemConstValue::ItemCode { code, .. }
-                                    if code.kind() == FrozenCodeKind::Pat => {}
-                                _ => {
-                                    return Err(
-                                        "pattern quotation hole requires Code<Pat> or scalar splice",
-                                    );
-                                }
-                            }
-                        } else {
-                            match value.value(db) {
-                                SemConstValue::Scalar { .. }
-                                | SemConstValue::Meta {
-                                    value: MetaValue::Field(_),
-                                    ..
-                                } => {}
-                                SemConstValue::ItemCode { code, .. }
-                                    if code.kind() == FrozenCodeKind::Expr
-                                        || (is_multi_entry_block_stmt
-                                            && code.kind() == FrozenCodeKind::Item) => {}
-                                _ => {
-                                    return Err(
-                                        "expression quotation hole requires Code<Expr>, Field<T, F>, or scalar splice",
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    _ => return Err("unsupported quotation hole syntax"),
-                }
+                hole_slot(&quote, syntax_hole, *kind)?.admits_value(value.value(db))?;
             }
 
             match value.value(db) {
@@ -1767,6 +1920,10 @@ fn finalized_derive_provider<'db>(
     .map_err(|cause| match cause {
         RecordInputError::InvisibleField => {
             "a derive header requires every field of its target to be visible where the header is written"
+                .to_string()
+        }
+        RecordInputError::InvisibleVariant => {
+            "a derive header requires every variant of its target to be visible where the header is written"
                 .to_string()
         }
         RecordInputError::NotAuthored => format!(
@@ -2419,10 +2576,11 @@ pub(crate) fn is_unfulfilled_derive_request(
     // has no authored identity to prepare against and stays unfulfilled.
     ast.derive_provider().is_some()
         && !(module == request.top_mod(db)
-            && db.generation_inputs().requests(db).iter().any(|plan| {
-                plan.request_impl == Some(ast.syntax().text_range())
-                    && Some(plan.target_file.clone()) == module.file(db).url(db)
-            }))
+            && common::generation::file_generation(db, module.file(db))
+                .as_ref()
+                .is_some_and(|generation| {
+                    generation.members.contains_key(&ast.syntax().text_range())
+                }))
 }
 
 /// Whether `request` is a header that lookup must not treat as an implementor:
@@ -2490,8 +2648,7 @@ pub(crate) fn is_unfulfilled_inherent_derive_request(
     let range = ptr.syntax_node_ptr().text_range();
     request.derive_provider(db).is_some()
         && !(module == request.top_mod(db)
-            && db.generation_inputs().requests(db).iter().any(|plan| {
-                plan.request_impl == Some(range)
-                    && Some(plan.target_file.clone()) == module.file(db).url(db)
-            }))
+            && common::generation::file_generation(db, module.file(db))
+                .as_ref()
+                .is_some_and(|generation| generation.members.contains_key(&range)))
 }

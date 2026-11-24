@@ -414,6 +414,8 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
         doc: Doc<'a>,
         blank_line_before: bool,
         is_element: bool,
+        /// A `//` comment that follows the element on its own line, kept there.
+        trailing_comment: Option<&'a str>,
     }
 
     let mut entries: Vec<Entry<'a>> = Vec::new();
@@ -429,6 +431,7 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
                     doc: elem.to_doc(ctx),
                     blank_line_before: pending_newlines >= 2,
                     is_element: true,
+                    trailing_comment: None,
                 });
                 pending_newlines = 0;
             }
@@ -438,10 +441,21 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
                 }
                 SyntaxKind::WhiteSpace => {}
                 SyntaxKind::Comment | SyntaxKind::DocComment => {
+                    let text = ctx.snippet(token.text_range()).trim_end();
+                    if pending_newlines == 0
+                        && token.kind() == SyntaxKind::Comment
+                        && let Some(prev) = entries.last_mut()
+                        && prev.is_element
+                        && prev.trailing_comment.is_none()
+                    {
+                        prev.trailing_comment = Some(text);
+                        continue;
+                    }
                     entries.push(Entry {
-                        doc: alloc.text(ctx.snippet(token.text_range()).trim_end()),
+                        doc: alloc.text(text),
                         blank_line_before: pending_newlines >= 2,
                         is_element: false,
+                        trailing_comment: None,
                     });
                     pending_newlines = 0;
                 }
@@ -466,6 +480,10 @@ pub fn block_list_with_comments<'a, T: ToDoc>(
             entry.doc.append(alloc.text(","))
         } else {
             entry.doc
+        };
+        let doc = match entry.trailing_comment {
+            Some(comment) => doc.append(alloc.text(" ")).append(alloc.text(comment)),
+            None => doc,
         };
         inner = inner.append(doc);
     }
@@ -914,15 +932,41 @@ impl ToDoc for ast::Type {
             TypeKind::Mode(mode) => mode.to_doc(ctx),
             TypeKind::Ptr(ptr) => ptr.to_doc(ctx),
             TypeKind::Path(path) => path.to_doc(ctx),
-            TypeKind::TraitFamily(family) => ctx.alloc.text("trait ").append(
-                family
-                    .trait_ref()
-                    .map_or_else(|| ctx.alloc.nil(), |reference| reference.to_doc(ctx)),
-            ),
+            TypeKind::TraitFamily(family) => family.to_doc(ctx),
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),
             TypeKind::Array(array) => array.to_doc(ctx),
             TypeKind::Never(never) => never.to_doc(ctx),
             TypeKind::QuoteHole(hole) => quote_hole_doc(ctx, hole.syntax()),
+        }
+    }
+}
+
+impl ToDoc for ast::TraitFamilyType {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if has_comment_tokens(self.syntax()) {
+            let indent = ctx.config.indent_width as isize;
+            return token_doc(
+                ctx,
+                self.syntax(),
+                indent,
+                |node| {
+                    ast::TraitRef::cast(node)
+                        .map(|reference| TokenPiece::new(reference.to_doc(ctx)))
+                },
+                |token| match token.kind() {
+                    SyntaxKind::TraitKw => {
+                        Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
+                    }
+                    _ => None,
+                },
+            );
+        }
+
+        match self.trait_ref() {
+            Some(reference) => alloc.text("trait ").append(reference.to_doc(ctx)),
+            None => alloc.text("trait"),
         }
     }
 }

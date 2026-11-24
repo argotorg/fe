@@ -382,3 +382,33 @@ trait Foo<T: Constraint, G: (Constraint), P: * -> Constraint> {}
     assert!(!family.lhs().unwrap().mono().unwrap().is_constraint());
     assert!(family.rhs().unwrap().mono().unwrap().is_constraint());
 }
+
+#[test]
+fn where_clause_of_a_written_derive_header_keeps_the_next_trait_item_out() {
+    // The header has no body, so the next line starts a new item. The trait
+    // must not be read as another predicate of the clause.
+    for source in [
+        "impl Eq for Foo with (Derive) where T: Eq\ntrait Next {}",
+        "impl Eq for Foo with (Derive) where T: Eq,\ntrait Next: Parent {}",
+    ] {
+        let (green, errors) = fe_parser::parse_source_file(source, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{source}\n{errors:?}");
+        let root = ast::Root::cast(SyntaxNode::new_root(green)).unwrap();
+        let header = root
+            .syntax()
+            .descendants()
+            .find_map(ast::ImplTrait::cast)
+            .unwrap();
+        assert!(header.derive_provider().is_some(), "{source}");
+        let predicates = header.where_clause().unwrap().into_iter().count();
+        assert_eq!(predicates, 1, "{source}");
+        assert_eq!(
+            root.syntax()
+                .descendants()
+                .filter(|node| node.kind() == fe_parser::SyntaxKind::Trait)
+                .count(),
+            1,
+            "{source}"
+        );
+    }
+}
