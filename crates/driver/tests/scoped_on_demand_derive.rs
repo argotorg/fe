@@ -3956,3 +3956,137 @@ fn chained_provider_refusal_precedes_earlier_sibling_provider() {
         assert!(!cause.contains("step limit"), "{body}: {cause}");
     }
 }
+
+#[test]
+fn generated_method_chosen_by_its_arguments_keeps_its_pending_request() {
+    // `Foo::m` is written and does not take the `u16` argument. `Bar::m` comes
+    // from a header and applies to `W<Rec>` only when `Rec: Need`, which the
+    // provider of the block supplies. The call runs `Bar::m`, so the request
+    // for `Need` is a demand of the body.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Need { const fn need() -> u256 }
+struct Rec {}
+struct Gate {}
+impl Derive<trait Need> for Gate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn need() -> u256 { 0 } }
+    }
+}
+
+trait Foo { const fn m(self, _ a: u8) -> u256 }
+trait Bar { const fn m(self, _ a: u16) -> u256 }
+struct W<T> { t: T }
+impl<T> Foo for W<T> { const fn m(self, _ a: u8) -> u256 { 1 } }
+struct BarP {}
+impl Derive<trait Bar> for BarP {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn m(self, _ a: u16) -> u256 { 2 } }
+    }
+}
+impl<T: Need> Bar for W<T> with (BarP)
+
+const fn run() -> u256 {
+    let w = W<Rec> { t: Rec {} }
+    let a: u16 = 1
+    with (Gate) { w.m(a) }
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+    assert_eq!(eval_const_fn_u256(&output, "run"), "2");
+}
+
+#[test]
+fn deferred_codec_goal_in_a_root_function_is_served_by_its_scoped_provider() {
+    // The element type of the array is generic in `write`, so the codec proof
+    // is deferred until the call `write<u8>`. The goal needs `Elem<u8, Arg>:
+    // SolPacked`, which needs `Arg: Gate`, answered by the provider of the
+    // block inside `write`.
+    let source = r#"
+use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::{SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+
+pub struct Arg { value: u8 }
+impl Gate for Arg {
+    fn code(_ value: u8) -> u8 { value }
+}
+
+struct ProvideGate {}
+impl Derive<trait Gate> for ProvideGate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn code(_ value: u8) -> u8 { value ^ 1 } }
+    }
+}
+
+pub struct Elem<K, T> { pub value: u8 }
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+pub fn write<K>(array: mut SolArray<Elem<K, Arg>>) {
+    with (ProvideGate) { array[0] = Elem { value: 7 } }
+}
+
+pub fn root(array: mut SolArray<Elem<u8, Arg>>) {
+    write<u8>(array: mut array)
+}
+"#;
+    let output = prepare(source).unwrap_or_else(|cause| panic!("{cause}"));
+    assert_eq!(output_diagnostics(&output), "");
+}
+
+#[test]
+fn forwarded_provider_condition_is_refused_before_any_provider_runs() {
+    // The condition of `Gated` opens another provider, which a condition may
+    // not do. `Via<Gated>` forwards to it, so the program is refused as well,
+    // and `derive` does not run in either case.
+    let template = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+trait Score { const fn score() -> u256 }
+trait Seed { const fn seed() -> u256 }
+struct Pair {}
+struct B {}
+impl Derive<trait Seed> for B {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn seed() -> u256 { 42 } }
+    }
+}
+struct Gated {}
+impl Derive<trait Score> for Gated where { with (B) { Pair::seed() == 42 } } {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: u256 = 0
+        let fault = 1 / zero
+        quote { const fn score() -> u256 { ${fault} } }
+    }
+}
+struct Via<P> {}
+impl<G: * -> Constraint, P: Derive<G>> Derive<G> for Via<P> {
+    const fn derive(_ record: Record) -> Code<Item> {
+        <P as Derive<G>>::derive(record)
+    }
+}
+const fn run() -> u256 { with (OPENING) { Pair::score() } }
+"#;
+    for opening in ["Gated", "Via<Gated>"] {
+        let cause = prepare_err(&template.replace("OPENING", opening));
+        assert!(
+            cause.contains("prepared generated implementation")
+                || (cause.contains("decides whether the provider applies") && cause.contains(RULE)),
+            "{opening}: {cause}"
+        );
+        assert!(!cause.contains("division by zero"), "{opening}: {cause}");
+    }
+}
