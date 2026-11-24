@@ -4064,7 +4064,6 @@ const fn relay<C: Tr2<A = Foo>>() -> u256 {{ with (Loud) {{ f<W<Foo>, C>() }} }}
 }
 
 #[test]
-#[ignore = "fixed by the instance agreement cut"]
 fn concrete_component_two_roots_disagree() {
     refused(
         &two_roots("const fn disagree() -> u256 { relay<V<Foo>>() }"),
@@ -4324,7 +4323,6 @@ const fn read<B: Two>() -> u256 {{
 }
 
 #[test]
-#[ignore = "fixed by the instance agreement cut"]
 fn concrete_component_diamond_mixed() {
     refused(
         &diamond("const fn mixed() -> u256 { with (Named) { read<Pair<Wrap<Item>, Fixed>>() } }"),

@@ -550,6 +550,17 @@ pub fn instantiated_typed_body<'db>(
     if let Some(goal) = evidence.refused {
         body = body.with_refused_bound(goal);
     }
+    // A component reference the instance's dictionaries did not resolve
+    // names no dictionary: the instance is refused, not given a value.
+    if body.refused_bound().is_none() {
+        let mut unresolved = None;
+        body.for_each_use_evidence(|_, evidence| {
+            unresolved = unresolved.or_else(|| evidence.unresolved_component(db));
+        });
+        if let Some(goal) = unresolved {
+            body = body.with_refused_bound(goal);
+        }
+    }
     if let Some(defining_body) = body.body() {
         body = body.fold_with(
             db,

@@ -1412,6 +1412,11 @@ impl<'db> ComponentTable<'db> {
         }
     }
 
+    /// The concrete members of each trait, as positions in `members`.
+    pub(crate) fn buckets(&self) -> impl Iterator<Item = &[u32]> {
+        self.by_trait.iter().map(|(_, members)| members.as_slice())
+    }
+
     /// The concrete members of `trait_`, in walk order.
     pub(crate) fn of_trait(
         &self,
