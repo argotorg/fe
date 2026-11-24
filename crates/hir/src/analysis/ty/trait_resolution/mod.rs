@@ -1557,7 +1557,15 @@ pub(crate) fn concrete_components<'db>(
                 path.push(step);
                 (from.root, path)
             }
-            _ => (0, Vec::new()),
+            // The walk records a member's first derivation when it inserts
+            // the member, from a bound already in the list.
+            _ => {
+                debug_assert!(
+                    false,
+                    "the walk's member at position {position} has no derivation from an earlier bound"
+                );
+                (0, Vec::new())
+            }
         };
         members.push(Component {
             goal,

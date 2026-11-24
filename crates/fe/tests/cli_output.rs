@@ -6200,12 +6200,15 @@ fn concrete_component_runtime() {
     // reads that dictionary: in a function, an implementation's method, a
     // closure and a function item. A named implementation with a generic
     // condition opens in a function whose bound pins the condition's
-    // associated type.
+    // associated type. A `for` loop and the call it sits beside read one
+    // iteration, and an indexing read and a call read one lane codec.
     for fixture in [
         "concrete_component_call_bound.fe",
         "concrete_component_impl_method.fe",
         "concrete_component_pinned_named_condition.fe",
         "concrete_component_closure_item.fe",
+        "concrete_component_loop_plan.fe",
+        "concrete_component_entry_codec.fe",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")

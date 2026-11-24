@@ -4078,6 +4078,49 @@ fn concrete_component_two_roots_agree() {
     );
 }
 
+// The order of the bounds of `f` does not decide whether two dictionaries
+// agree: the swapped form is refused and accepted as the written one is.
+#[test]
+fn concrete_component_two_roots_swapped() {
+    let program = |body: &str| {
+        format!(
+            r#"{SHOWS}
+const fn f<C: Tr2<A = Foo>, B: Tr<A = Foo>>() -> u256 {{
+    Foo::show() * 1000000 + B::via() * 1000 + C::via2()
+}}
+const fn relay<C: Tr2<A = Foo>>() -> u256 {{ with (Loud) {{ f<C, W<Foo>>() }} }}
+{body}
+"#
+        )
+    };
+    refused(
+        &program("const fn disagree() -> u256 { relay<V<Foo>>() }"),
+        "disagree",
+        "Foo: Show",
+    );
+    values(
+        &program("const fn agree() -> u256 { with (Loud) { f<V<Foo>, W<Foo>>() } }"),
+        &[("agree", 70070070)],
+    );
+}
+
+// A choice in scope that names the goal wins over the component, whether the
+// goal is written on the projection or on the type it settles to.
+#[test]
+fn concrete_component_choice_names_projected_goal() {
+    values(
+        &format!(
+            r#"{SHOWS}
+const fn caller<B: Tr<A = Foo>>() -> u256 {{
+    with (Loud) {{ <B::A as Show>::show() * 1000 + Foo::show() }}
+}}
+const fn top() -> u256 {{ caller<W<Foo>>() }}
+"#
+        ),
+        &[("top", 70070)],
+    );
+}
+
 #[test]
 fn concrete_component_closure() {
     let source = format!(
