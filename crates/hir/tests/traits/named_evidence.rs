@@ -2735,3 +2735,30 @@ fn chosen() {{ with (Discount) {{ let x: Array<{{ Item::value() }}> = Array {{}}
     let ordinary = program("Wrapper<Item>::X").replace("with (Discount) ", "");
     assert!(diagnostics(&ordinary).is_empty());
 }
+
+#[test]
+fn with_naming_fewer_arguments_than_the_implementation_takes_reports_once() {
+    let source = |argument: &str| {
+        format!(
+            r#"
+struct Pair<T, U> {{ a: T, b: U }}
+trait Pick {{ fn pick(self) -> u256 }}
+impl<T, U> Pick for Pair<T, U> as Named {{ fn pick(self) -> u256 {{ 7 }} }}
+fn run() -> u256 {{
+    let p = Pair<u8, u16> {{ a: 1, b: 2 }}
+    with (Named{argument}) {{ p.pick() }}
+}}
+"#
+        )
+    };
+    // Naming every parameter, or none, is accepted.
+    assert_eq!(diagnostics(&source("<u8, u16>")), Vec::<String>::new());
+    assert_eq!(diagnostics(&source("")), Vec::<String>::new());
+    // One of two is a count error alone: no "too many" report, and no
+    // follow-on report that the method is missing.
+    let codes = diagnostics(&source("<u8>"));
+    assert_eq!(codes.len(), 1, "{codes:?}");
+    assert!(!codes.contains(&"8-0022".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"2-0010".to_string()), "{codes:?}");
+    assert_eq!(codes, vec!["8-0163"]);
+}

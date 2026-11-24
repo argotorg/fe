@@ -2167,6 +2167,7 @@ impl<'db> TyChecker<'db> {
                                 .to_vec()
                         })
                         .unwrap_or_default();
+                    let written = args.len();
                     let args =
                         match super::super::ty_lower::collect_generic_params(self.db, owner.into())
                             .complete_args(
@@ -2196,10 +2197,14 @@ impl<'db> TyChecker<'db> {
                         };
                     let expected = implementation.params(self.db).len() - inherited.len();
                     if args.len() != expected {
-                        self.push_diag(BodyDiag::TooManyCallGenericArgs {
+                        // Completion refuses too many arguments, so these are
+                        // too few, and no choice can stand for the operand:
+                        // the block's meaning is left open.
+                        ambiguous_opening = true;
+                        self.push_diag(BodyDiag::TooFewWithGenericArgs {
                             primary: binding.value.span(self.body()).into(),
-                            def_span: owner.span().into(),
-                            given: args.len(),
+                            def_span: owner.span().selection_name().into(),
+                            given: written,
                             expected,
                         });
                         self.env.named_impl_operands.insert(binding.value);
@@ -2435,9 +2440,10 @@ impl<'db> TyChecker<'db> {
         }
 
         if ambiguous_opening {
-            // An operand with two meanings leaves the block's meaning open:
-            // its body is not checked, so that it reports nothing the operand
-            // would have provided.
+            // An operand with two meanings, or with arguments that name no
+            // implementation, leaves the block's meaning open: its body is
+            // not checked, so that it reports nothing the operand would have
+            // provided.
             self.env.effect_env_mut().pop_frame();
             self.env.choices = outer_choices;
             return ExprProp::invalid(self.db);
