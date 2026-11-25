@@ -1,0 +1,6 @@
+[ingot]
+name = "app_safe"
+version = "0.1.0"
+
+[dependencies]
+u_safe = { path = "../u_safe" }

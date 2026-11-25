@@ -402,6 +402,28 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
     collect_semantic_access_with_blocked(db, top_mod, &mut Vec::new())
 }
 
+/// The trust diagnostic for `instance`, a body that evaluating a provider runs
+/// for the trust root whose module is `top_mod`: the same judgment that the walk
+/// makes of a body that a call reaches (`UnsafeTrust::untrusted_site`), for
+/// unsafe code that a package the root does not trust contributed to. `None`
+/// where the module is not a trust root or the body needs no trust.
+pub fn untrusted_unsafe_use_in_evaluated_body<'db>(
+    db: &'db dyn HirAnalysisDb,
+    top_mod: TopLevelMod<'db>,
+    instance: SemanticInstance<'db>,
+) -> Option<Box<dyn DiagnosticVoucher + 'db>> {
+    let (site, author) = UnsafeTrust::for_root(db, top_mod)?.untrusted_site(db, instance)?;
+    let user = instance.key(db).owner(db);
+    Some(Box::new(UntrustedUnsafeUse {
+        root: top_mod.ingot(db),
+        call: SemanticDiagnosticSpan::ItemName { owner: user },
+        entry: None,
+        user,
+        site,
+        author,
+    }))
+}
+
 /// Returns blocked bodies reached by the module's semantic access analysis.
 /// Drivers use their owning modules to recover otherwise suppressed HIR errors.
 pub fn collect_blocked_semantic_bodies<'db>(

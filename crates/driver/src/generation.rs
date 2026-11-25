@@ -1623,6 +1623,8 @@ fn evaluate_provider_instance<'db>(
     let mut helper_diagnostics = Vec::new();
     let mut validation_diagnostics = Vec::new();
     let mut unresolved = Vec::new();
+    let mut untrusted_use = None;
+    let requester = db.top_mod(file);
     {
         use hir::analysis::semantic::access::SemanticAccessCheckResult;
         let mut pending = std::collections::VecDeque::from([instance]);
@@ -1633,6 +1635,12 @@ fn evaluate_provider_instance<'db>(
             }
             match hir::analysis::semantic::access::semantic_access_check_query(db, current) {
                 SemanticAccessCheckResult::Ok { .. } => {
+                    if untrusted_use.is_none() {
+                        untrusted_use = hir::analysis::semantic::access::untrusted_unsafe_use_in_evaluated_body(
+                            db, requester, current,
+                        )
+                        .map(|voucher| voucher.to_complete(db));
+                    }
                     for callee in current.callees(db) {
                         pending.push_back(hir::analysis::semantic::SemanticInstance::new(
                             db, callee.key,
@@ -1683,6 +1691,20 @@ fn evaluate_provider_instance<'db>(
                 "authored provider ownership/capability validation failed".into(),
             ),
         ));
+    }
+    // A provider is code that runs for the requesting package, so unsafe code
+    // that it runs must come from a package that package trusts, as for any
+    // body the package runs. It is reported at the header that runs it.
+    if let Some(diagnostic) = untrusted_use {
+        let header = error(
+            range,
+            "the provider runs unsafe code of a package that is not trusted".into(),
+        );
+        let (header_file, header_range) = (header.file.clone(), header.range);
+        let mut failure = diagnostic_error(db, &[diagnostic], header);
+        failure.file = header_file;
+        failure.range = header_range;
+        return Err(failure);
     }
     if !unresolved.is_empty() {
         // Pending and Blocked are not a ready provider and are never

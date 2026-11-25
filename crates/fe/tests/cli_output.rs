@@ -8175,3 +8175,23 @@ fn a_record_literal_of_a_struct_named_quote_is_read_as_a_quotation() {
         "expected the literal to be read as a quotation:\n{output}"
     );
 }
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_the_unsafe_code_that_a_provider_runs() {
+    // The provider `u::Evil` runs `unsafe { 42 }` in `derive`. Evaluating it
+    // for `app` is unsafe code that `app` runs, so `u` must be trusted, and the
+    // header that runs the provider is where the refusal is reported.
+    let fixture = "unsafe_trust_provider_evaluation";
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("error[16-0015]")
+            && output.contains("`u`, which is not allowed to use")
+            && output.contains("src/lib.fe:4:1"),
+        "expected a trust error naming `u` at the header:\n{output}"
+    );
+    for app in ["app_trusted", "app_safe"] {
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, app)]);
+        assert_eq!(exit_code, 0, "{app}: expected acceptance:\n{output}");
+    }
+}

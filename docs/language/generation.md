@@ -413,6 +413,8 @@ The package `app` depends on `dep`, implements `Reading` for a type `Cell` with 
 
 The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to. It also follows the initializer of each constant that a body reads, in an expression or a pattern, the condition of each `static_assert` of a package being checked, and the `Encode` implementation that a panic with a value, such as `Result::unwrap` on an error, runs to build the revert data. An `unsafe impl` that an untrusted package wrote is refused where code that runs relies on it: a bound that it proves, a method or constant of it, or a default method of its trait.
 
+A provider that runs `unsafe` code while it is evaluated, in `derive` or in a compile-time function that `derive` calls, is judged in the same way. A provider of a package that is not trusted is refused with the same error, reported at the header that runs the provider.
+
 ## What is refused
 
 - A provider whose trait family does not match the requested trait and its arguments.
