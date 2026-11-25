@@ -843,6 +843,13 @@ impl<'db> TyCheckEnv<'db> {
         site: DynLazySpan<'db>,
         applications: impl IntoIterator<Item = TyId<'db>>,
     ) {
+        // An application a path passes through is a type the checker takes from
+        // its scope, so in a default checked for an implementation it is the
+        // implementation's (`instantiate_scope_ty`).
+        let applications: Vec<_> = applications
+            .into_iter()
+            .map(|application| self.instantiate_scope_ty(application))
+            .collect();
         self.path_applications.extend(
             applications
                 .into_iter()
@@ -2026,6 +2033,10 @@ impl<'db> TyCheckEnv<'db> {
             let leaks = |ty: TyId<'db>| mentions_param_of(db, ty, inherited.trait_scope);
             if self.expr_ty.values().flatten().any(|prop| leaks(prop.ty))
                 || self.pat_ty.values().flatten().any(|ty| leaks(*ty))
+                || self
+                    .path_applications
+                    .iter()
+                    .any(|(_, application)| leaks(*application))
             {
                 diags.push(
                     super::super::diagnostics::BodyDiag::CompileTimePhase {

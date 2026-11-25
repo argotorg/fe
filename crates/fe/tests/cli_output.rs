@@ -7936,3 +7936,31 @@ fn opened_implementation_is_a_constant_candidate_only_where_its_conditions_hold(
         "expected the method to be ambiguous:\n{output}"
     );
 }
+
+#[test]
+fn path_applications_of_an_inherited_default_are_checked_for_the_implementation() {
+    // `Bounded<{ Self::N }>` in an inherited default is refused for an
+    // implementation whose `N` is 0, as it is where the implementation writes
+    // the same text. The default is refused at the implementation, with the
+    // unmet requirement as the reason.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_written.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0093]") && output.contains("condition evaluated to `false`"),
+        "expected 8-0093:\n{output}"
+    );
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_inherited.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0167]")
+            && output.contains("the default value of `K` does not type-check")
+            && output.contains("const requirement is not satisfied"),
+        "expected the default refused at the implementation:\n{output}"
+    );
+}
