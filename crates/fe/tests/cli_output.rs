@@ -6233,6 +6233,7 @@ fn concrete_component_runtime() {
     // iteration, and an indexing read and a call read one lane codec.
     for fixture in [
         "concrete_component_call_bound.fe",
+        "concrete_component_through_implementation.fe",
         "concrete_component_impl_method.fe",
         "concrete_component_pinned_named_condition.fe",
         "concrete_component_closure_item.fe",

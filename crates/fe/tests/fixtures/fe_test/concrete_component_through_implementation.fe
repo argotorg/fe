@@ -1,0 +1,37 @@
+// A bound that an associated type declares is fixed, below a concrete bound,
+// by the implementation that defines the associated type: `Foo: Show` lies two
+// levels below `C: Tr2<A = U<Foo>>`, so the body's own `Foo::show()` and the
+// dictionary of `C` read one implementation. `relay` builds the dictionaries of
+// `B` and `C`, which both hold `Foo: Show`, under the same choice, so they
+// agree. With only one of them built under the choice the program is refused.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub struct U<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+impl<T: Show> Tr for U<T> { type A = T
+    fn via() -> u256 { T::show() + 1 } }
+pub trait Tr2 { type A: Tr
+    fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    fn via2() -> u256 { T::via() } }
+fn f<C: Tr2<A = U<Foo>>>() -> u256 { Foo::show() * 1000 + C::via2() }
+fn g<C: Tr2<A = U<Foo>>>() -> u256 { <<C::A as Tr>::A as Show>::show() * 1000 + C::via2() }
+fn both<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 {
+    Foo::show() * 1000000 + B::via() * 1000 + C::via2()
+}
+fn relay<C: Tr2<A = U<Foo>>>() -> u256 { with (Loud) { both<W<Foo>, C>() } }
+#[test]
+fn chosen_written_goal() { assert(with (Loud) { f<V<U<Foo>>>() } == 70071) }
+#[test]
+fn chosen_projected_goal() { assert(with (Loud) { g<V<U<Foo>>>() } == 70071) }
+#[test]
+fn ordinary() { assert(f<V<U<Foo>>>() == 100101) }
+#[test]
+fn two_routes_agree() { assert(with (Loud) { relay<V<U<Foo>>>() } == 70070071) }

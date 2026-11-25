@@ -7,7 +7,7 @@ use super::{
     normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{BorrowKind, TyData, TyFlags, TyId},
-    visitor::{TyVisitable, TyVisitor, walk_ty},
+    visitor::{TyVisitable, TyVisitor, collect_flags, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -1466,11 +1466,6 @@ impl<'db> ComponentTable<'db> {
             .filter(|member| member.concrete && !member.path.is_empty())
     }
 
-    /// The concrete members of each trait, as positions in `members`.
-    pub(crate) fn buckets(&self) -> impl Iterator<Item = &[u32]> {
-        self.by_trait.iter().map(|(_, members)| members.as_slice())
-    }
-
     /// The concrete members of `trait_`, in walk order.
     pub(crate) fn of_trait(
         &self,
@@ -1705,11 +1700,15 @@ pub(crate) fn step_bound<'db>(
                 .super_traits(db)
                 .get_index(index as usize)
                 .copied()?;
-            Some(normalize_from_assumptions(
+            Some(normalize_below_concrete(
                 db,
-                super_trait.instantiate(db, pred.args(db)),
-                hir_trait.scope(),
-                evidence,
+                pred,
+                normalize_from_assumptions(
+                    db,
+                    super_trait.instantiate(db, pred.args(db)),
+                    hir_trait.scope(),
+                    evidence,
+                ),
             ))
         }
         BoundStep::AssocBound { assoc, index } => {
@@ -1724,14 +1723,40 @@ pub(crate) fn step_bound<'db>(
             let bound = assoc_ty
                 .assoc_type_bounds(db, trait_type)
                 .nth(index as usize)?;
-            Some(normalize_from_assumptions(
+            Some(normalize_below_concrete(
                 db,
-                Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
-                hir_trait.scope(),
-                evidence,
+                pred,
+                normalize_from_assumptions(
+                    db,
+                    Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
+                    hir_trait.scope(),
+                    evidence,
+                ),
             ))
         }
     }
+}
+
+/// A bound derived from a concrete bound `pred` has no equality of its own to
+/// fix a projection in it: `<U<Foo> as Tr>::A: Show` below `U<Foo>: Tr`. The
+/// implementation that defines the associated type fixes it, as ordinary
+/// normalization reads it, so the bound is `Foo: Show`. A choice never changes
+/// this normalization. The walk of declared bounds has no concrete parent and
+/// never takes this path.
+fn normalize_below_concrete<'db>(
+    db: &'db dyn HirAnalysisDb,
+    pred: TraitInstId<'db>,
+    bound: TraitInstId<'db>,
+) -> TraitInstId<'db> {
+    if !is_concrete_bound(db, pred) || !collect_flags(db, bound).contains(TyFlags::HAS_PROJECTION) {
+        return bound;
+    }
+    let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+        db,
+        pred.def(db).scope().top_mod(db).ingot(db),
+        bound,
+    );
+    normalize_trait_inst_preserving_validity(db, bound, scope, PredicateListId::empty_list(db))
 }
 
 // Normalizing implied bounds can resolve traits under assumptions that lead

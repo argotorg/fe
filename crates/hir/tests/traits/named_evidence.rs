@@ -5358,3 +5358,213 @@ const fn direct_with_literal_type() -> usize {
         ],
     );
 }
+
+// A concrete bound that a declared bound implies two associated types down:
+// the implementation that defines each associated type fixes the next
+// (`U<Foo>::A` is `Foo`), so `Foo: Show` is a component of the dictionary of
+// `C: Tr2<A = U<Foo>>`, and the body's own `Foo::show()` reads that component.
+#[test]
+fn agreement_component_through_implementation_type() {
+    values(
+        &format!(
+            r#"{AGREE}
+const fn f<C: Tr2<A = U<Foo>>>() -> u256 {{ Foo::show() * 1000 + C::via2() }}
+const fn g<C: Tr2<A = U<Foo>>>() -> u256 {{ <<C::A as Tr>::A as Show>::show() * 1000 + C::via2() }}
+const fn f_chosen() -> u256 {{ with (Loud) {{ f<V<U<Foo>>>() }} }}
+const fn g_chosen() -> u256 {{ with (Loud) {{ g<V<U<Foo>>>() }} }}
+const fn f_plain() -> u256 {{ f<V<U<Foo>>>() }}
+"#
+        ),
+        &[
+            ("f_chosen", 70071),
+            ("g_chosen", 70071),
+            ("f_plain", 100101),
+        ],
+    );
+}
+
+// The same shape in the conditions of an implementation.
+#[test]
+fn agreement_component_through_implementation_type_in_conditions() {
+    values(
+        &format!(
+            r#"{AGREE}
+struct Hold<C> {{}}
+trait Get {{ const fn get() -> u256 }}
+impl<C: Tr2<A = U<Foo>>> Get for Hold<C> {{ const fn get() -> u256 {{ Foo::show() * 1000 + C::via2() }} }}
+const fn chosen() -> u256 {{ with (Loud) {{ <Hold<V<U<Foo>>> as Get>::get() }} }}
+const fn plain() -> u256 {{ <Hold<V<U<Foo>>> as Get>::get() }}
+"#
+        ),
+        &[("chosen", 70071), ("plain", 100101)],
+    );
+}
+
+// Two bounds whose dictionaries hold `Foo: Show`, one directly (`B: Tr<A =
+// Foo>`) and one two levels down (`C: Tr2<A = U<Foo>>`), are refused when one
+// is built under a choice and the other is not, whichever comes first, and
+// whether or not the body reads the goal.
+#[test]
+fn agreement_two_routes_through_implementation_type_refused() {
+    let program = |signature: &str, relay: &str, body: &str| {
+        format!(
+            r#"{AGREE}
+{signature}
+{relay}
+{body}
+"#
+        )
+    };
+    let read = "const fn f<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 { Foo::show() * 1000000 + B::via() * 1000 + C::via2() }";
+    let relay = "const fn relay<C: Tr2<A = U<Foo>>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }";
+    let body = "const fn disagree() -> u256 { relay<V<U<Foo>>>() }";
+    refused(&program(read, relay, body), "disagree", "Foo: Show");
+    // The bounds of `f` swapped.
+    refused(
+        &program(
+            "const fn f<C: Tr2<A = U<Foo>>, B: Tr<A = Foo>>() -> u256 { Foo::show() * 1000000 + B::via() * 1000 + C::via2() }",
+            "const fn relay<C: Tr2<A = U<Foo>>>() -> u256 { with (Loud) { f<C, W<Foo>>() } }",
+            body,
+        ),
+        "disagree",
+        "Foo: Show",
+    );
+    // The body reads nothing.
+    refused(
+        &program(
+            "const fn f<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 { 5 }",
+            relay,
+            body,
+        ),
+        "disagree",
+        "Foo: Show",
+    );
+    // Both dictionaries agree when both are built under the choice.
+    values(
+        &program(
+            read,
+            relay,
+            "const fn agree() -> u256 { with (Loud) { relay<V<U<Foo>>>() } }",
+        ),
+        &[("agree", 70070071)],
+    );
+}
+
+// Both dictionaries are named and differ.
+#[test]
+fn agreement_two_named_routes_refused() {
+    refused(
+        &format!(
+            r#"{AGREE}
+const fn f<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 {{ Foo::show() * 1000000 + B::via() * 1000 + C::via2() }}
+const fn relay<C: Tr2<A = U<Foo>>>() -> u256 {{ with (Loud) {{ f<W<Foo>, C>() }} }}
+const fn disagree() -> u256 {{ with (Quiet) {{ relay<V<U<Foo>>>() }} }}
+"#
+        ),
+        "disagree",
+        "Foo: Show",
+    );
+}
+
+// The goal written through the projection of `C` is the component, so the
+// two dictionaries of `Foo: Show` are one goal of the body.
+#[test]
+fn agreement_written_projection_two_routes_refused() {
+    refused(
+        &format!(
+            r#"{AGREE}
+const fn f<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 {{ <<C::A as Tr>::A as Show>::show() * 1000000 + B::via() * 1000 + C::via2() }}
+const fn relay<C: Tr2<A = U<Foo>>>() -> u256 {{ with (Loud) {{ f<W<Foo>, C>() }} }}
+const fn disagree() -> u256 {{ relay<V<U<Foo>>>() }}
+"#
+        ),
+        "disagree",
+        "Foo: Show",
+    );
+}
+
+// An opening of the ordinary implementation lets the choice name the goal of
+// `B`, while the component of `C` stays ordinary.
+#[test]
+fn agreement_opening_against_component_refused() {
+    refused(
+        &format!(
+            r#"{AGREE}
+const fn f<B: Tr<A = Foo>, C: Tr2<A = W<Foo>>>() -> u256 {{ Foo::show() * 1000000 + B::via() * 1000 + C::via2() }}
+const fn relay<C: Tr2<A = W<Foo>>>() -> u256 {{ with (Loud, <W<Foo> as Tr>) {{ f<W<Foo>, C>() }} }}
+const fn disagree() -> u256 {{ relay<V<W<Foo>>>() }}
+"#
+        ),
+        "disagree",
+        "Foo: Show",
+    );
+}
+
+const MUTUAL: &str = r#"
+trait Left { type Out: Right
+    const fn l() -> u256 }
+trait Right { type Back: Left
+    const fn r() -> u256 }
+struct A {}
+struct B {}
+impl Left for A { type Out = B
+    const fn l() -> u256 { 1 } }
+impl Left for A as BigA { type Out = B
+    const fn l() -> u256 { 3 } }
+impl Right for B { type Back = A
+    const fn r() -> u256 { 2 } }
+"#;
+
+// `T: Left<Out = U>` and the `T: Left` that `U: Right<Back = T>` implies are
+// one goal of the body, reached by two routes. A choice that names it for one
+// route and not the other is refused, in either order of the bounds and
+// behind a generic relay.
+#[test]
+fn agreement_slots_of_one_bound_refused() {
+    refused(
+        &format!(
+            r#"{MUTUAL}
+const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + <U::Back as Left>::l() }}
+const fn go() -> u256 {{ with (BigA) {{ call<A, B>() }} }}
+"#
+        ),
+        "go",
+        "A: Left",
+    );
+    refused(
+        &format!(
+            r#"{MUTUAL}
+const fn swapped<U: Right<Back = T>, T: Left<Out = U>>() -> u256 {{ T::l() * 10 + <U::Back as Left>::l() }}
+const fn go() -> u256 {{ with (BigA) {{ swapped<B, A>() }} }}
+"#
+        ),
+        "go",
+        "A: Left",
+    );
+    refused(
+        &format!(
+            r#"{MUTUAL}
+const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + U::r() }}
+const fn relay<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ call<T, U>() }}
+const fn go() -> u256 {{ with (BigA) {{ relay<A, B>() }} }}
+"#
+        ),
+        "go",
+        "A: Left",
+    );
+}
+
+#[test]
+fn agreement_slots_of_one_bound_plain() {
+    values(
+        &format!(
+            r#"{MUTUAL}
+const fn d04<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + U::r() + A::l() * 100 }}
+const fn q01<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + <U::Back as Left>::l() }}
+const fn plain_d04() -> u256 {{ d04<A, B>() }}
+const fn plain_q01() -> u256 {{ q01<A, B>() }}
+"#
+        ),
+        &[("plain_d04", 112), ("plain_q01", 11)],
+    );
+}
