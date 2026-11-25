@@ -2976,8 +2976,8 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
 
             Self::FieldSpliceOutsideHeader(span) => primary_diag(
                 Severity::Error,
-                "a field type is spliced outside the header of its record",
-                "the type of a record's field is spliced in code generated for the record's own header, which gives the record's parameters their arguments",
+                "a field type that depends on its record's parameters is spliced outside an implementation for the record",
+                "the type of a record's field is spliced inside an implementation for the record (a derive header or a generated `impl ${record}`), whose self type gives the record's parameters their arguments",
                 span.resolve(db),
                 error_code,
             ),

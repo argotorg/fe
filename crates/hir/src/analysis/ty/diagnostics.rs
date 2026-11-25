@@ -322,8 +322,8 @@ pub enum TyLowerDiag<'db> {
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
     TypeNormalizationLimit(DynLazySpan<'db>),
-    /// The type of a record's field spliced where no derive header requests
-    /// the record.
+    /// The type of a record's field that depends on the record's parameters,
+    /// spliced outside an implementation for the record.
     FieldSpliceOutsideHeader(DynLazySpan<'db>),
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),

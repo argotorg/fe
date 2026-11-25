@@ -8,7 +8,7 @@ use salsa::SalsaValue;
 use smallvec::smallvec;
 
 use super::{
-    adt_def::{AdtRef, instantiate_adt_field_shape_in_mode},
+    adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape_in_mode},
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
         ConstBodyLowering, ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext,
@@ -331,12 +331,45 @@ pub(crate) fn derive_header_self_ty<'db>(
     None
 }
 
-/// The type of a field of the record that a derive header requests, as
-/// generated code splices it (`${field_type(field(record, i))}`): the record's
-/// own lowered field type, with the record's parameters replaced by position
-/// with the arguments of the header's self type (`impl<X> S<X>` gives `T := X`
-/// for `struct S<T>`). The field type means what the record's declaration
-/// says, whatever the names around the splice are.
+/// The self type, as written, of the implementation that holds `scope` and is
+/// for `adt`: the nearest enclosing implementation or derive header whose self
+/// type is that record. Generated code reads the record's parameters through
+/// it: `impl<X> S<X> with (P)` gives `T := X` for `struct S<T>`, and a
+/// generated `impl ${record}` declares the record's parameters itself, so its
+/// self type is the record at its own parameters.
+fn record_self_ty_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    adt: AdtDef<'db>,
+) -> Option<TyId<'db>> {
+    let mut current = Some(scope);
+    while let Some(scope) = current {
+        let self_ty = match scope {
+            ScopeId::Item(ItemKind::Impl(impl_)) => Some(impl_.ty(db)),
+            ScopeId::Item(ItemKind::ImplTrait(impl_)) => Some(impl_.declared_ty(db)),
+            _ => None,
+        };
+        if let Some(self_ty) = self_ty
+            && self_ty.adt_ref(db) == Some(adt.adt_ref(db))
+        {
+            return Some(self_ty);
+        }
+        current = scope.parent(db);
+    }
+    None
+}
+
+/// The type of a field of a record, as generated code splices it
+/// (`${field_type(field(record, i))}`): the record's own lowered field type,
+/// with the record's parameters replaced by position with the arguments of the
+/// self type of the implementation around the splice (`record_self_ty_at`).
+/// The field type means what the record's declaration says, whatever the names
+/// around the splice are.
+///
+/// Where no such implementation exists, nothing says what the record's
+/// parameters stand for. A field type that mentions none of them (`u256`,
+/// `Id<T>` for `type Id<T> = u256`, `[u8; 3 + 1]`) means the same everywhere
+/// and is accepted; one that mentions a parameter is refused.
 fn lower_authored_field<'db>(
     db: &'db dyn HirAnalysisDb,
     field: AuthoredFieldType<'db>,
@@ -352,21 +385,29 @@ fn lower_authored_field<'db>(
     else {
         return TyId::invalid(db, InvalidCause::Other);
     };
-    let header = derive_header_self_ty(db, scope);
-    let args = match header {
-        Some(header) if header.adt_ref(db) == Some(adt.adt_ref(db)) => header.generic_args(db),
-        // A record without parameters has one field type wherever it is read.
-        _ if adt.params(db).is_empty() => &[],
-        _ => return TyId::invalid(db, InvalidCause::FieldSpliceOutsideHeader),
+    let variant = field.variant(db).unwrap_or(0);
+    let splice = |args: &[TyId<'db>]| {
+        instantiate_adt_field_shape_in_mode(
+            db,
+            adt,
+            variant,
+            field.index(db),
+            args,
+            lowering_cx.const_bodies(),
+        )
     };
-    instantiate_adt_field_shape_in_mode(
-        db,
-        adt,
-        field.variant(db).unwrap_or(0),
-        field.index(db),
-        args,
-        lowering_cx.const_bodies(),
-    )
+    match record_self_ty_at(db, scope, adt) {
+        Some(self_ty) => splice(self_ty.generic_args(db)),
+        None => {
+            // Omitted arguments keep the record's own formals.
+            let declared = splice(&[]);
+            if declared.has_param(db) {
+                TyId::invalid(db, InvalidCause::FieldSpliceOutsideHeader)
+            } else {
+                declared
+            }
+        }
+    }
 }
 
 /// Whether lowering reads an anonymous constant as the constant, trait
