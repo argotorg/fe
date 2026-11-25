@@ -2552,6 +2552,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         }
                         .into());
                     };
+                    // Defensive: no source program reaches this. `Code<Expr>` comes from
+                    // `quote`, `construct` and `for_each_field`, and `empty` takes only `Seed` kinds.
                     if code.kind() != common::generation::FrozenCodeKind::Expr
                         || matches!(code.data(), crate::core::meta::CodeData::Empty { .. })
                     {

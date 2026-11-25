@@ -4616,11 +4616,17 @@ fn construct_refusals_name_their_cause() {
         "quote { ${value} }",
         "let _ = value\n        empty<Expr>()",
     );
+    // No program reaches "construct requires an expression for every field":
+    // `empty` takes only the `Seed` kinds, and `Expr` is not one. The type
+    // checker names the bound; generation stops at the call with its own cause.
     let cause = refusal(&empty_initializer);
     assert!(
-        cause.contains("construct requires an expression for every field"),
+        cause.contains("invalid body in const evaluation context"),
         "{cause}"
     );
+    let (db, file) = input(&empty_initializer);
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(diagnostics.contains("Seed"), "{diagnostics}");
 
     let unbound_name = replaced(
         CONSTRUCT_SOURCE,
