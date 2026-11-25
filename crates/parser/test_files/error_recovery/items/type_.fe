@@ -2,3 +2,4 @@ type Result<T, = Result<T, E>
 
 type Foo<T: i32, U: i32> = Result<T, U>
 
+type Bounded<const N: usize: Copy> = Result<N>

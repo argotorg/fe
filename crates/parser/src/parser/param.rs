@@ -252,7 +252,7 @@ impl super::Parse for FnParamScope {
 }
 
 define_scope! {
-    pub(crate) GenericParamListScope {disallow_trait_bound: bool},
+    pub(crate) GenericParamListScope,
     GenericParamList,
     (Comma, Gt)
 }
@@ -280,9 +280,7 @@ impl super::Parse for GenericParamListScope {
                     {
                         parser.parse(ShapeGenericParamScope::default())
                     }
-                    Some(SyntaxKind::Ident) => {
-                        parser.parse(TypeGenericParamScope::new(self.disallow_trait_bound))
-                    }
+                    Some(SyntaxKind::Ident) => parser.parse(TypeGenericParamScope::default()),
                     Some(SyntaxKind::Gt) => Ok(()),
                     // Recovery may land on a list separator or unexpected token;
                     // treat as empty parameter and let parse_list handle it.
@@ -340,10 +338,7 @@ impl super::Parse for ShapeGenericParamScope {
     }
 }
 
-define_scope! {
-    TypeGenericParamScope {disallow_trait_bound: bool},
-    TypeGenericParam
-}
+define_scope! { TypeGenericParamScope, TypeGenericParam }
 impl super::Parse for TypeGenericParamScope {
     type Error = Recovery<ErrProof>;
 
@@ -352,7 +347,7 @@ impl super::Parse for TypeGenericParamScope {
         parser.bump_expected(SyntaxKind::Ident);
 
         if parser.current_kind() == Some(SyntaxKind::Colon) {
-            parser.parse(TypeBoundListScope::new(self.disallow_trait_bound))?;
+            parser.parse(TypeBoundListScope::new(false))?;
         }
         if parser.bump_if(SyntaxKind::Eq) {
             parse_type(parser, None)?;
@@ -858,10 +853,9 @@ pub(crate) fn parse_where_clause_opt<S: TokenStream>(
 
 pub(crate) fn parse_generic_params_opt<S: TokenStream>(
     parser: &mut Parser<S>,
-    disallow_trait_bound: bool,
 ) -> Result<(), Recovery<ErrProof>> {
     if parser.current_kind() == Some(SyntaxKind::Lt) {
-        parser.parse(GenericParamListScope::new(disallow_trait_bound))
+        parser.parse(GenericParamListScope::default())
     } else {
         Ok(())
     }

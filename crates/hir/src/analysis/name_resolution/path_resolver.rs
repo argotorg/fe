@@ -162,7 +162,7 @@ impl<'db> PathResError<'db> {
     pub(crate) fn is_independent_of_args(&self, db: &'db dyn HirAnalysisDb) -> bool {
         match &self.kind {
             PathResErrorKind::NotFound {
-                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)),
+                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)),
                 ..
             } => !ty.has_invalid(db),
             PathResErrorKind::NotFound { .. }
@@ -330,7 +330,7 @@ impl<'db> PathResError<'db> {
             // `G<W>::mk`: the written arguments made the parent type invalid, so
             // the error is theirs, not the missing name's.
             PathResErrorKind::NotFound {
-                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)),
+                parent: Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)),
                 ..
             } if let Some(parent) = self.failed_at.parent(db)
                 && parent.generic_args(db).is_given(db)
@@ -563,7 +563,7 @@ fn func_not_found_err<'db>(
     parent: Option<PathRes<'db>>,
 ) -> PathResDiag<'db> {
     match parent {
-        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if !ty.has_invalid(db) => {
+        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) if !ty.has_invalid(db) => {
             PathResDiag::MethodNotFound {
                 primary: span,
                 method_name: ident,
@@ -643,7 +643,11 @@ fn make_query<'db>(
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum PathRes<'db> {
     Ty(TyId<'db>),
-    TyAlias(TyAlias<'db>, TyId<'db>),
+    /// A type alias, with its expansion and the arguments of all its
+    /// parameters (`TyAlias::instantiate`), unless it is unbound. Its
+    /// parameters' bounds are an obligation of the arguments, which the
+    /// expansion does not hold (`PathRequirements`).
+    TyAlias(TyAlias<'db>, TyId<'db>, Option<Vec<TyId<'db>>>),
     Func(TyId<'db>),
     FuncParam(ItemKind<'db>, u16),
     Trait(TraitInstId<'db>),
@@ -671,7 +675,7 @@ impl<'db> PathRes<'db> {
     {
         match self {
             PathRes::Ty(ty) => PathRes::Ty(f(ty)),
-            PathRes::TyAlias(alias, ty) => PathRes::TyAlias(alias, f(ty)),
+            PathRes::TyAlias(alias, ty, args) => PathRes::TyAlias(alias, f(ty), args),
             PathRes::Func(ty) => PathRes::Func(f(ty)),
             PathRes::Const(const_, ty) => PathRes::Const(const_, f(ty)),
             PathRes::EnumVariant(v) => PathRes::EnumVariant(ResolvedVariant { ty: f(v.ty), ..v }),
@@ -699,7 +703,7 @@ impl<'db> PathRes<'db> {
                 let idx = impl_.const_index(db, *name)? as u16;
                 Some(ScopeId::ImplConst(*impl_, idx))
             }
-            PathRes::TyAlias(alias, _) => Some(alias.alias.scope()),
+            PathRes::TyAlias(alias, ..) => Some(alias.alias.scope()),
             PathRes::Trait(trait_) => Some(trait_.def(db).scope()),
             PathRes::TraitMethod(_inst, method) => Some(method.scope()),
             PathRes::EnumVariant(variant) => Some(ScopeId::Variant(variant.variant)),
@@ -1388,7 +1392,7 @@ fn resolve_segment<'db>(
         .unwrap_or(scope);
 
     match parent_res {
-        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+        Some(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) => {
             // Fast paths for qualified types `<A as Trait>::...`.
             //
             // NOTE: This must run before generic associated-const probing, otherwise
@@ -2560,10 +2564,8 @@ pub(crate) fn resolve_name_res_with_minter<'db>(
                             path,
                         ));
                     }
-                    PathRes::TyAlias(
-                        alias.clone(),
-                        alias.instantiate(db, &args(), lowering_cx, |_| None),
-                    )
+                    let (ty, args) = alias.instantiate(db, &args(), lowering_cx, |_| None);
+                    PathRes::TyAlias(alias.clone(), ty, args)
                 }
 
                 ItemKind::Impl(impl_) => {

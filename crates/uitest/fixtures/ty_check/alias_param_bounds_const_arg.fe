@@ -1,0 +1,90 @@
+trait Gate {}
+
+trait HasItem {
+    type Item
+}
+
+trait Other {}
+
+trait TakesConst<const K: usize> {}
+
+// `N` names a constant and an alias. A type argument `N` is the constant, so
+// the alias's bounds are not required there.
+type N<T: Gate = bool> = u8
+
+const N: usize = 4
+
+// `L` names a constant and an alias whose type fails its condition.
+struct Positive<const K: usize> where { K > 0 } {}
+
+type L = Positive<0>
+
+const L: usize = 1
+
+struct Holder<const K: usize> {
+    len: usize,
+}
+
+impl<const K: usize> Holder<K> {
+    fn new() -> Self {
+        Holder { len: K }
+    }
+}
+
+struct Pair<T, U> {
+    first: T,
+    second: U,
+}
+
+type Held<const K: usize> = Holder<K>
+
+fn takes_const<const K: usize>() -> usize {
+    K
+}
+
+fn param(_ h: Holder<N>, _ pair: Pair<Holder<N>, u8>, _ held: Held<N>, _ l: Holder<L>) {}
+
+struct Field {
+    h: Holder<N>,
+}
+
+impl Other for Holder<N> {}
+
+impl TakesConst<N> for u8 {}
+
+fn bound<T: TakesConst<N>>() {}
+
+fn where_clause<T>()
+where
+    T: TakesConst<N>,
+    Pair<T, Holder<N>>: Other,
+{}
+
+fn effect() uses (h: Holder<N>) {}
+
+fn body() -> usize {
+    let h: Holder<N> = Holder<N>::new()
+    let Holder<N> { len } = h
+    let made = Holder<N> { len }
+    with (Holder<N> = made) {
+        takes_const<N>() + Pair<Holder<N>, u8>::first_len()
+    }
+}
+
+impl<T, U> Pair<T, U> {
+    fn first_len() -> usize {
+        0
+    }
+}
+
+// Where a type is expected, `N` is the alias, whose bounds are required.
+fn type_positions(_ n: N, _ pair: Pair<(N, u8), u8>) {}
+
+fn assoc_binding<T: HasItem<Item = N>>() {}
+
+// A type argument that names a function and an alias is the alias.
+fn M() {}
+
+type M<T: Gate = bool> = u8
+
+fn function_and_alias(_ pair: Pair<M, u8>) {}

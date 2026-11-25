@@ -3964,7 +3964,7 @@ impl<'db> TyChecker<'db> {
             ResolvedPathInBody::Invalid => ExprProp::invalid(self.db),
 
             ResolvedPathInBody::Reso(reso) => match reso {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => {
                     if let Some(const_ty_ty) = ty.const_ty_ty(self.db) {
                         self.env
                             .register_value_path_ref(expr, ValuePathRef::TypeConst(ty));
@@ -4357,7 +4357,7 @@ impl<'db> TyChecker<'db> {
         };
 
         match reso {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => {
                 // Use the expected type to constrain the record's generic args
                 // before checking fields.
                 let snapshot = self.snapshot_state();

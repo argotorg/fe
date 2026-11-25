@@ -563,7 +563,7 @@ impl<'db> TyChecker<'db> {
         );
 
         let (actual, analysis) = match res {
-            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty) | PathRes::Func(ty)) => {
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) | PathRes::Func(ty)) => {
                 let record_like = RecordLike::from_ty(ty);
                 // Tuple structs must be destructured with `Name(..)`.
                 if record_like.is_record(self.db) || ty.as_tuple_struct(self.db).is_some() {
@@ -901,7 +901,7 @@ impl<'db> TyChecker<'db> {
                     TupleVariantResolution::TupleStruct(ty)
                 }
                 PathRes::Ty(ty)
-                | PathRes::TyAlias(_, ty)
+                | PathRes::TyAlias(_, ty, _)
                 | PathRes::Func(ty)
                 | PathRes::Const(_, ty)
                 | PathRes::TraitConst(ty, ..)
@@ -1056,7 +1056,7 @@ impl<'db> TyChecker<'db> {
             span.clone().into(),
             &lowering_cx,
         ) {
-            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
+            Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _))
                 if RecordLike::from_ty(ty).is_record(self.db) =>
             {
                 let (semantic_ty, record_ty) = self.equate_nominal_pat_ty(ty, expected, pat_span);
@@ -1087,7 +1087,7 @@ impl<'db> TyChecker<'db> {
                         Some(RecordLike::from_variant(variant)),
                     ),
                     PathRes::Ty(ty)
-                    | PathRes::TyAlias(_, ty)
+                    | PathRes::TyAlias(_, ty, _)
                     | PathRes::Func(ty)
                     | PathRes::Const(_, ty)
                     | PathRes::TraitConst(ty, ..)

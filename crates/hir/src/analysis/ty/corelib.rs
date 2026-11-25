@@ -668,7 +668,7 @@ fn resolve_lib_path<'db>(
 
     let assumptions = PredicateListId::empty_list(db);
     match resolve_path(db, path, scope, assumptions, true).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => Some(ty),
         _ => None,
     }
 }

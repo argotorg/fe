@@ -37,7 +37,7 @@ use crate::{
             },
             ty_check::{
                 check_anon_const_body, check_body, const_body_ctfe_diags,
-                const_requirements::constrained_applications,
+                const_requirements::PathRequirements,
             },
             ty_def::{PrimTy, TyBase, TyData, TyId},
             ty_error::{emit_invalid_ty_error, path_generic_arg_diags},
@@ -88,7 +88,7 @@ fn resolve_sol_abi_ty<'db>(
         .push_ident(db, IdentId::new(db, "Sol".to_string()));
 
     match resolve_path(db, sol_path, scope, assumptions, false).ok()? {
-        PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => Some(ty),
+        PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => Some(ty),
         _ => None,
     }
 }
@@ -228,7 +228,7 @@ pub fn recv_msg<'db>(
     let msg = match res {
         // Accept any module as a recv root (both msg-desugared and manually defined).
         Ok(PathRes::Mod(ScopeId::Item(ItemKind::Mod(msg_mod)))) => RecvMsg::Module(msg_mod),
-        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) => {
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) => {
             diags.push(
                 BodyDiag::RecvExpectedMsgType {
                     primary: span.into(),
@@ -301,9 +301,9 @@ pub struct RecvArmResolution<'db> {
     pub lookup: Option<RecvArmLookup<'db>>,
     /// The msg variant the arm handles, if its path names one.
     pub variant: Option<RecvArmVariant<'db>>,
-    /// The applications with const conditions that the path passes through,
-    /// whose requirements are checked with the arm's body.
-    pub applications: Vec<TyId<'db>>,
+    /// What the segments of the path require, which is checked with the
+    /// arm's body.
+    pub(crate) requirements: PathRequirements<'db>,
     /// What resolving the path reports.
     pub diags: Vec<FuncBodyDiag<'db>>,
 }
@@ -359,9 +359,9 @@ pub fn recv_arm_resolution<'db>(
         .arm(arm_idx as usize);
     let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
     let path_span = recv_arm_path_span(db, arm, arm_span.pat());
-    let (res, applications, invisible) =
+    let (res, requirements, invisible) =
         resolve_recv_path(db, contract, lookup.path, lookup.offset, path_span.clone());
-    resolution.applications = applications;
+    resolution.requirements = requirements;
     let diags = &mut resolution.diags;
     diags.extend(invisible);
 
@@ -456,9 +456,8 @@ pub fn recv_arm_resolution<'db>(
 
 /// Resolves `path`, a path of `contract`'s recv blocks whose segments from
 /// `offset` on are written at `path_span`, from the contract's scope. Returns
-/// the resolution, the applications with const conditions that it passes
-/// through, and the report of the first written segment that isn't visible
-/// from the contract.
+/// the resolution, what its segments require, and the report of the first
+/// written segment that isn't visible from the contract.
 fn resolve_recv_path<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
@@ -467,14 +466,14 @@ fn resolve_recv_path<'db>(
     path_span: LazyPathSpan<'db>,
 ) -> (
     Result<PathRes<'db>, PathResError<'db>>,
-    Vec<TyId<'db>>,
+    PathRequirements<'db>,
     Option<FuncBodyDiag<'db>>,
 ) {
     let scope = contract.scope();
     let mut invisible = None;
-    let mut applications = Vec::new();
+    let mut requirements = PathRequirements::default();
     let mut observe_segment = |segment: PathId<'db>, reso: &mut PathRes<'db>| {
-        applications.extend(constrained_applications(db, reso));
+        requirements.add(db, reso);
         if invisible.is_none()
             && segment.segment_index(db) >= offset
             && !reso.is_visible_from(db, scope)
@@ -498,7 +497,7 @@ fn resolve_recv_path<'db>(
             .ident();
         Some(PathResDiag::Invisible(span.into(), ident, defined_at).into())
     });
-    (res, applications, invisible)
+    (res, requirements, invisible)
 }
 
 /// The span of the variant path of `arm`, whose pattern is at `pat_span`.

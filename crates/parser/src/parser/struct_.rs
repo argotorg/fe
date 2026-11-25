@@ -32,7 +32,7 @@ impl super::Parse for StructScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_generic_params_opt(parser, false)?;
+        parse_generic_params_opt(parser)?;
 
         parser.expect_and_pop_recovery_stack()?;
         // Tuple struct: `struct Month(pub u8)`, optionally followed by a where

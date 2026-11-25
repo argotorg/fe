@@ -1954,7 +1954,7 @@ pub(crate) fn evaluate_const_ty<'db>(
         let use_scope = use_item.map_or(body.scope(), ScopeId::Item);
         if let Ok(resolved_path) = resolve_path(db, path, body.scope(), assumptions, true) {
             match resolved_path {
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => {
                     if let TyData::ConstTy(const_ty) = ty.data(db) {
                         if let ConstTyData::TyParam(..) = const_ty.data(db)
                             && let Some(arg) = capture_subst().and_then(|subst| {

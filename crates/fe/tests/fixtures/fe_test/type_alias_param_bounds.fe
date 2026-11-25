@@ -1,0 +1,83 @@
+// A bound on a type alias's parameter is in scope in the alias's type, so
+// the type can use the trait's associated consts and types.
+
+trait Preset {
+    const N: usize
+    type Word
+}
+
+struct Small {}
+
+impl Preset for Small {
+    const N: usize = 4
+    type Word = u16
+}
+
+struct Bits<const N: usize> {
+    bytes: [u8; N],
+}
+
+type Doubled<P: Preset> = Bits<{ P::N * 2 }>
+
+struct Words<W, const N: usize> {
+    words: [W; N],
+}
+
+type PresetWords<P: Preset> = Words<P::Word, { P::N }>
+
+trait Widen<T> {
+    fn widen(self) -> T
+}
+
+impl Widen<u64> for u16 {
+    fn widen(self) -> u64 {
+        self as u64
+    }
+}
+
+struct Pair<T, U> {
+    wide: T,
+    narrow: U,
+}
+
+impl<T, U> Pair<T, U> {
+    fn new(_ wide: own T, _ narrow: own U) -> Self {
+        Pair { wide, narrow }
+    }
+}
+
+type Widening<T, U: Widen<T>> = Pair<T, U>
+
+fn len<P: Preset>(_ bits: Doubled<P>) -> usize {
+    bits.bytes.len()
+}
+
+fn widened<T, U: Widen<T> + Copy>(_ pair: Widening<T, U>) -> T {
+    pair.narrow.widen()
+}
+
+#[test]
+fn alias_uses_assoc_const() {
+    let bits: Doubled<Small> = Bits { bytes: [0; 8] }
+    assert!(len<Small>(bits) == 8)
+}
+
+#[test]
+fn alias_uses_assoc_type_and_const() {
+    let words: PresetWords<Small> = Words { words: [7, 0, 0, 0] }
+    let first: u16 = words.words[0]
+    assert!(first == 7 && words.words.len() == 4)
+}
+
+#[test]
+fn bound_refers_to_another_parameter() {
+    let pair: Widening<u64, u16> = Pair { wide: 0, narrow: 3 }
+    assert!(widened(pair) == 3)
+}
+
+#[test]
+fn bounded_args_inferred() {
+    let pair: Pair<u64, u16> = Widening::new(5, 3)
+    let built: Pair<u64, u16> = Widening { wide: 1, narrow: 2 }
+    assert!(widened(pair) == 3 && widened(built) == 2)
+}

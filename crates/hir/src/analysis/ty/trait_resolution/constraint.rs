@@ -500,7 +500,7 @@ pub(crate) fn resolve_assoc_item_path<'db>(
     let self_ty = match path.parent(db) {
         None => own?.self_ty(db),
         Some(parent) => match resolve_path(db, parent, scope, assumptions, false).ok()? {
-            PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => ty,
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => ty,
             _ => return None,
         },
     };
