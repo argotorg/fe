@@ -7964,3 +7964,29 @@ fn path_applications_of_an_inherited_default_are_checked_for_the_implementation(
         "expected the default refused at the implementation:\n{output}"
     );
 }
+
+fn header_generation_fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/header_generation")
+        .join(name)
+        .to_str()
+        .expect("utf-8 path")
+        .to_string()
+}
+
+#[test]
+fn a_field_type_over_a_projection_or_a_compound_constant_is_spliced_under_a_generic_header() {
+    // The field type of `S<T: Has>` is `T::Out` and of `S<const N>` is
+    // `[u8; N + 1]`. A generic header gives the parameters its own names, and
+    // the spliced type is the declared field type at the header's arguments,
+    // as the handwritten implementation writes it.
+    for name in [
+        "field_type_projection_handwritten.fe",
+        "field_type_projection.fe",
+        "field_type_compound_const_handwritten.fe",
+        "field_type_compound_const.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+}
