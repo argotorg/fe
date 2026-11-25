@@ -7929,3 +7929,106 @@ pub struct Target { a: u256 }
         }
     }
 }
+
+fn inherited_default_choices_fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inherited_default_choices")
+        .join(name)
+        .to_str()
+        .expect("utf-8 path")
+        .to_string()
+}
+
+#[test]
+fn inherited_default_under_a_named_implementation_is_the_implementations_own() {
+    // The default of `K` inherited by a named implementation is checked as if
+    // the implementation had written the same text: `Self::m()` is the named
+    // implementation's, so `K` is 7 there and the ordinary implementation's `K`
+    // is 1, which is refused as it is where the named implementation writes the
+    // constant itself.
+    for name in ["named_inherits_default.fe", "named_writes_default.fe"] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("error[5-0005]")
+                && output.contains("`K` must agree across implementations of this slot"),
+            "{name}: expected 5-0005 on `K`:\n{output}"
+        );
+        assert!(
+            !output.contains("16-0004"),
+            "{name}: expected no internal error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn inherited_default_proofs_come_from_the_implementations_bounds() {
+    // Defaults checked for an implementation that have no named implementation
+    // to open keep their values, read directly, under `with` and through a
+    // generic reader.
+    for name in [
+        "supertrait_method.fe",
+        "supertrait_chosen_by_with.fe",
+        "generic_impl_assoc_bound.fe",
+        "self_other.fe",
+        "generic_impl_supertrait_condition.fe",
+        "trait_param_bound.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+}
+
+#[test]
+fn opened_implementation_is_a_constant_candidate_only_where_its_conditions_hold() {
+    // An implementation opened by `with` whose condition does not hold for the
+    // receiver is not a candidate for a constant, as it is not for a method.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &inherited_default_choices_fixture("opened_condition_unmet.fe"),
+    ]);
+    assert_eq!(exit, 0, "expected both reads to select `T1`:\n{output}");
+
+    // Where it holds, the constant and the method are ambiguous alike.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("opened_condition_met.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[2-0018]") && output.contains("`K` is ambiguous"),
+        "expected the constant to be ambiguous:\n{output}"
+    );
+    assert!(
+        output.contains("error[2-0016]"),
+        "expected the method to be ambiguous:\n{output}"
+    );
+}
+
+#[test]
+fn path_applications_of_an_inherited_default_are_checked_for_the_implementation() {
+    // `Bounded<{ Self::N }>` in an inherited default is refused for an
+    // implementation whose `N` is 0, as it is where the implementation writes
+    // the same text. The default is refused at the implementation, with the
+    // unmet requirement as the reason.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_written.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0093]") && output.contains("condition evaluated to `false`"),
+        "expected 8-0093:\n{output}"
+    );
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_inherited.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0167]")
+            && output.contains("the default value of `K` does not type-check")
+            && output.contains("const requirement is not satisfied"),
+        "expected the default refused at the implementation:\n{output}"
+    );
+}

@@ -27,7 +27,7 @@ use crate::{
     hir_def::{Body, IdentId, ImplTrait, Trait, scope_graph::ScopeId},
 };
 
-use super::{BodyOwner, check_anon_const_body, diag_depends_on_param_instantiation, infer_body};
+use super::{BodyOwner, check_anon_const_body, check_body, diag_depends_on_param_instantiation};
 
 /// Whether a trait constant's default is checked per inheriting
 /// implementation: its declared type mentions a parameter of the trait.
@@ -202,7 +202,8 @@ pub(super) fn mentions_param_of<'db>(
 /// reported at the implementation. A default that the trait's own check already
 /// refuses is refused there and reports nothing more: the trait's check defers
 /// only the diagnostics that depend on the instantiation
-/// (`diag_depends_on_param_instantiation`).
+/// (`diag_depends_on_param_instantiation`). The body is checked as every body is, requirement
+/// checks included (`check_body`).
 pub(super) fn check_inherited_defaults<'db>(
     db: &'db dyn HirAnalysisDb,
     implementation: ImplTrait<'db>,
@@ -221,7 +222,7 @@ pub(super) fn check_inherited_defaults<'db>(
         };
         let assoc_types = assoc_types_of_self(db, &setup);
         let owner = inherited.owner(implementation);
-        for diag in &infer_body(db, owner).0 {
+        for diag in &check_body(db, owner).0 {
             diags.push(
                 BodyDiag::InheritedConstDefault {
                     primary: implementation.span().trait_ref().into(),

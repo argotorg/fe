@@ -1,0 +1,14 @@
+// An inherited default whose declared type mentions `Self::X` calls a method
+// of the trait's supertrait on `Self`. A default of a closed type (`K2`) with
+// the same body is the control.
+trait Base { const fn base() -> u256 }
+trait Narrow: Base {
+    type X
+    const K: Self::X = Self::base()
+    const K2: u256 = Self::base()
+}
+struct A {}
+impl Base for A { const fn base() -> u256 { 5 } }
+impl Narrow for A { type X = u256 }
+#[test]
+fn t() { assert(A::K == 5 && A::K2 == 5) }

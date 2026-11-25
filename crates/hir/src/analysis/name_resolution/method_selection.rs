@@ -759,6 +759,90 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
     }
 }
 
+/// Whether an implementation is a candidate for a receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImplementorCheck {
+    /// The receiver does not unify with the implementation's self type.
+    Rejected,
+    /// A condition of the implementation is proved not to hold.
+    Unsatisfied,
+    /// Every condition is proved or still open: the implementation is a
+    /// candidate that a later goal confirms.
+    NeedsConfirmation,
+    /// Every condition holds.
+    Confirmed,
+}
+
+/// Checks `receiver_ty` against `implementor`, an implementation instantiated
+/// in `table`, and confirms its conditions in `solve_cx`. A solution that the
+/// conditions determine is unified into `table`, so an instance built from
+/// `implementor` afterwards reflects it. This is how method selection and
+/// constant selection decide whether an implementation is a candidate.
+///
+/// A condition that stops on a generation request is recorded in `requests`.
+/// A request that can never be served is no proof, so the implementation is
+/// unsatisfied; a pending one leaves it unconfirmed.
+pub(crate) fn confirm_implementor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    table: &mut UnificationTable<'db>,
+    receiver_ty: TyId<'db>,
+    implementor: ImplementorId<'db>,
+    requests: &mut Vec<GenerationRequest<'db>>,
+) -> ImplementorCheck {
+    let impl_ty = table.instantiate_to_term(implementor.self_ty(db));
+    let receiver_ty = table.instantiate_to_term(receiver_ty);
+    if table.unify(impl_ty, receiver_ty).is_err() {
+        return ImplementorCheck::Rejected;
+    }
+
+    let mut needs_confirmation = false;
+    for &constraint in implementor.constraints(db).list(db) {
+        let constraint = constraint.fold_with(db, &mut *table);
+        let query = solve_cx.query(db, constraint);
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
+            GoalSatisfiability::Satisfied(solution) => {
+                // A unique solution can bind impl parameters that the self
+                // type doesn't determine (e.g. a trait argument fixed only
+                // by this bound). Unify it back into the table so the trait
+                // instance built from the implementation reflects those
+                // bindings instead of leaving them as unconstrained inference
+                // variables (which would drop the bound from the inferred
+                // method signature).
+                let solved = query.extract_solution(&mut *table, solution).inst;
+                let _ = table.unify(constraint, solved);
+            }
+            GoalSatisfiability::NeedsGeneration(request) => {
+                requests.push(request);
+                if generation_request_is_refused(db, request) {
+                    return ImplementorCheck::Unsatisfied;
+                }
+                needs_confirmation = true;
+            }
+            GoalSatisfiability::NeedsConfirmation { .. } | GoalSatisfiability::ContainsInvalid => {
+                needs_confirmation = true;
+            }
+            GoalSatisfiability::UnSat(_) => return ImplementorCheck::Unsatisfied,
+        }
+    }
+    if needs_confirmation {
+        ImplementorCheck::NeedsConfirmation
+    } else {
+        ImplementorCheck::Confirmed
+    }
+}
+
+/// Whether `request` can never be served: it was refused when it was made or
+/// its demand cannot be frozen. A candidate whose proof stops on such a
+/// request does not apply.
+fn generation_request_is_refused<'db>(
+    db: &'db dyn HirAnalysisDb,
+    request: GenerationRequest<'db>,
+) -> bool {
+    request.refusal(db).is_some()
+        || crate::core::meta::freeze_generation_request(db, request).is_err()
+}
+
 struct MethodSelector<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     receiver: &'a Canonicalized<'db, TyId<'db>>,
@@ -1229,12 +1313,10 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         }
     }
 
-    /// Whether `request` can never be served: it was refused when it was made
-    /// or its demand cannot be frozen. A candidate whose proof stops on such
-    /// a request does not apply.
+    /// Whether `request` can never be served; see
+    /// `generation_request_is_refused`.
     fn request_is_refused(&self, request: GenerationRequest<'db>) -> bool {
-        request.refusal(self.db).is_some()
-            || crate::core::meta::freeze_generation_request(self.db, request).is_err()
+        generation_request_is_refused(self.db, request)
     }
 
     /// Checks one candidate and returns the generation requests that its
@@ -1282,48 +1364,18 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         implementor: ImplementorId<'db>,
         method: Func<'db>,
     ) -> TraitCandidateCheck<'db> {
-        let impl_ty = table.instantiate_to_term(implementor.self_ty(self.db));
-        let receiver_ty = table.instantiate_to_term(receiver_ty);
-        if table.unify(impl_ty, receiver_ty).is_err() {
+        let mut requests = Vec::new();
+        let check = confirm_implementor(
+            self.db,
+            self.solve_cx(),
+            &mut table,
+            receiver_ty,
+            implementor,
+            &mut requests,
+        );
+        self.probed.borrow_mut().extend(requests);
+        if check == ImplementorCheck::Rejected {
             return TraitCandidateCheck::Rejected;
-        }
-
-        let solve_cx = self.solve_cx();
-        let mut needs_confirmation = false;
-        let mut unsatisfied = false;
-        for &constraint in implementor.constraints(self.db).list(self.db) {
-            let constraint = constraint.fold_with(self.db, &mut table);
-            let query = solve_cx.query(self.db, constraint);
-            match is_goal_query_satisfiable(self.db, solve_cx, &query) {
-                GoalSatisfiability::Satisfied(solution) => {
-                    // A unique solution can bind impl parameters that the self
-                    // type doesn't determine (e.g. a trait argument fixed only
-                    // by this bound). Unify it back into the table so the trait
-                    // instance built below reflects those bindings instead of
-                    // leaving them as unconstrained inference variables (which
-                    // would drop the bound from the inferred method signature).
-                    let solved = query.extract_solution(&mut table, solution).inst;
-                    let _ = table.unify(constraint, solved);
-                }
-                GoalSatisfiability::NeedsGeneration(request) => {
-                    self.probed.borrow_mut().push(request);
-                    // A refused request is no proof: the candidate does not
-                    // apply. A pending one leaves it unconfirmed.
-                    if self.request_is_refused(request) {
-                        unsatisfied = true;
-                        break;
-                    }
-                    needs_confirmation = true;
-                }
-                GoalSatisfiability::NeedsConfirmation { .. }
-                | GoalSatisfiability::ContainsInvalid => {
-                    needs_confirmation = true;
-                }
-                GoalSatisfiability::UnSat(_) => {
-                    unsatisfied = true;
-                    break;
-                }
-            }
         }
 
         let inst = implementor
@@ -1334,12 +1386,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .canonicalize_solution(self.db, &mut table, inst),
             method,
         );
-        if unsatisfied {
-            TraitCandidateCheck::Unsatisfied(cand)
-        } else if needs_confirmation {
-            TraitCandidateCheck::NeedsConfirmation(cand)
-        } else {
-            TraitCandidateCheck::Confirmed(cand)
+        match check {
+            ImplementorCheck::Rejected => unreachable!("returned above"),
+            ImplementorCheck::Unsatisfied => TraitCandidateCheck::Unsatisfied(cand),
+            ImplementorCheck::NeedsConfirmation => TraitCandidateCheck::NeedsConfirmation(cand),
+            ImplementorCheck::Confirmed => TraitCandidateCheck::Confirmed(cand),
         }
     }
 

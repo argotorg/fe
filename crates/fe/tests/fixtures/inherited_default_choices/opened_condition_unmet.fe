@@ -1,0 +1,14 @@
+// An opened implementation whose condition fails for the receiver
+// (`A: Missing` does not hold) is not a candidate, for a method or for a
+// constant. Only `T1` applies to `A`, so both reads select it.
+trait Missing {}
+trait T1 { const K: u256  const fn m() -> u256 }
+trait T2 { const K: u256  const fn m() -> u256 }
+struct A {}
+impl T1 for A { const K: u256 = 1  const fn m() -> u256 { 1 } }
+impl<T: Missing> T2 for T { const K: u256 = 2  const fn m() -> u256 { 2 } }
+impl<T: Missing> T2 for T as Broken { const K: u256 = 2  const fn m() -> u256 { 3 } }
+fn k() -> u256 { with (Broken) { A::K } }
+fn m() -> u256 { with (Broken) { A::m() } }
+#[test]
+fn t() { assert(k() == 1 && m() == 1) }

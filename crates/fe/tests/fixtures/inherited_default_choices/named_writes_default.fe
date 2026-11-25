@@ -1,0 +1,21 @@
+// `NN` writes the text of the default itself. The constant is 7 under `NN` and
+// 1 in the ordinary implementation, so `NN` is refused.
+trait Narrow {
+    type X
+    const fn m() -> u256
+    const K: Self::X = Self::m()
+}
+struct A {}
+impl Narrow for A {
+    type X = u256
+    const fn m() -> u256 { 1 }
+}
+impl Narrow for A as NN {
+    type X = u256
+    const fn m() -> u256 { 7 }
+    const K: u256 = Self::m()
+}
+#[test]
+fn k_is_named() { with (NN) { assert(<A as Narrow>::K == 7) } }
+#[test]
+fn k_is_ordinary() { with (NN) { assert(<A as Narrow>::K == 1) } }
