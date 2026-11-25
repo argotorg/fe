@@ -3,13 +3,13 @@ use crate::analysis::place::resolve_place_field;
 use crate::analysis::semantic::effect_param_site;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::closure::{closure_effect_requirements, closure_regions};
-use crate::analysis::ty::corelib::effect_key_state_access;
+use crate::analysis::ty::corelib::{effect_key_state_access, resolve_core_trait};
 use crate::analysis::ty::diagnostics::{BodyDiag, FuncBodyDiag};
 use crate::analysis::ty::effects::rows::expand_rows;
 use crate::analysis::ty::provider::AddressSpace;
 use crate::analysis::ty::shape::Shape;
 use crate::analysis::ty::ty_check::{BodyOwner, EffectArg, TypedBody};
-use crate::analysis::ty::ty_check::{RecordInitLowering, transparent_newtype_field_ty};
+use crate::analysis::ty::ty_check::{RecordInitLowering, newtype_chain, single_field_newtype_ty};
 use crate::analysis::ty::ty_def::TyId;
 use crate::analysis::ty::ty_def::{BorrowKind, ClosureDef};
 use crate::core::semantic::EffectEnvView;
@@ -20,7 +20,6 @@ use crate::hir_def::{
 };
 use common::ingot::IngotKind;
 use rustc_hash::FxHashSet;
-use std::iter;
 
 /// Reports the unsafe operations of a body that are outside an unsafe
 /// context: an `unsafe { .. }` block, or the body of an `unsafe fn`. These are
@@ -33,13 +32,18 @@ use std::iter;
 ///
 /// Nested items and anonymous const bodies are checked as their own owners,
 /// and never inherit an enclosing unsafe context.
+///
+/// Returns the diagnostics and, for the operations that an unsafe context
+/// allowed, the sites of those operations. Whoever wrote an operation relies
+/// on the context that discharges it, so build policy judges the operation's
+/// own text too (see `access::trust`).
 pub(crate) fn check_unsafe_ops<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
     typed_body: &TypedBody<'db>,
-) -> Vec<FuncBodyDiag<'db>> {
+) -> (Vec<FuncBodyDiag<'db>>, Vec<UnsafeOpSite>) {
     let Some(body) = owner.body(db) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
 
     let mut checker = UnsafeChecker {
@@ -51,9 +55,30 @@ pub(crate) fn check_unsafe_ops<'db>(
         written_fields: FxHashSet::default(),
         state_accesses: FxHashSet::default(),
         diags: Vec::new(),
+        discharged: Vec::new(),
     };
     checker.check_expr(body.expr(db));
-    checker.diags
+    (checker.diags, checker.discharged)
+}
+
+/// The expression or binding pattern of an unsafe operation that an `unsafe`
+/// block or `unsafe fn` allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UnsafeOpSite {
+    Expr(ExprId),
+    Pat(PatId),
+}
+
+/// Whether `ingot` is the toolchain's `core` or `std`, whose `extern`
+/// functions need no `unsafe` to call: the embedded library, or a package of
+/// that name that the dependency graph trusts (a member of the checked
+/// workspace, or one that a trusted package allows). Its own name does not
+/// make a package one.
+fn is_toolchain_library<'db>(db: &'db dyn HirAnalysisDb, ingot: common::ingot::Ingot<'db>) -> bool {
+    let url = ingot.base(db);
+    common::stdlib::is_embedded_builtin(url)
+        || matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std)
+            && db.dependency_graph().trusted_ingots(db).contains(url)
 }
 
 struct UnsafeChecker<'db, 'a> {
@@ -71,13 +96,18 @@ struct UnsafeChecker<'db, 'a> {
     /// is checked before the read of the same place.
     state_accesses: FxHashSet<ExprId>,
     diags: Vec<FuncBodyDiag<'db>>,
+    /// The unsafe operations an unsafe context allowed, in the order found.
+    discharged: Vec<UnsafeOpSite>,
 }
 
 impl<'db> UnsafeChecker<'db, '_> {
-    /// Reports an unsafe operation, unless an unsafe context allows it.
-    fn push_unsafe(&mut self, diag: BodyDiag<'db>) {
+    /// Reports an unsafe operation, unless an unsafe context allows it, in
+    /// which case the operation's `site` is recorded as discharged.
+    fn push_unsafe(&mut self, diag: BodyDiag<'db>, site: UnsafeOpSite) {
         if !self.in_unsafe {
             self.diags.push(diag.into());
+        } else if !self.discharged.contains(&site) {
+            self.discharged.push(site);
         }
     }
 
@@ -101,7 +131,8 @@ impl<'db> UnsafeChecker<'db, '_> {
                 .then_some(expr),
             Partial::Present(Expr::Field(base, Partial::Present(field))) => {
                 let base_ty = self.typed_body.expr_ty(self.db, *base);
-                if self.is_state_pointer(base_ty)
+                if self.typed_body.semantic_expr_lowering(expr).is_none()
+                    && self.is_state_pointer(base_ty)
                     && resolve_place_field(self.db, base_ty, *field)
                         .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
                 {
@@ -178,12 +209,43 @@ impl<'db> UnsafeChecker<'db, '_> {
             .is_some_and(|field| field.is_unsafe(self.db))
     }
 
+    /// The field a selection `expr` names, when the checker lowered it to a
+    /// call of `ProjectField::project`: the field of the projected target
+    /// that the call's descriptor `Field<Target, F, Before>` stands for.
+    fn projected_field(&self, expr: ExprId) -> Option<(FieldParent<'db>, IdentId<'db>)> {
+        let Partial::Present(Expr::Field(_, Partial::Present(FieldIndex::Ident(name)))) =
+            expr.data(self.db, self.body)
+        else {
+            return None;
+        };
+        let inst = self.typed_body.callable_expr(expr)?.trait_inst()?;
+        let projector = resolve_core_trait(self.db, self.body.scope(), &["ops", "ProjectField"])?;
+        if inst.def(self.db) != projector {
+            return None;
+        }
+        let descriptor = *inst.args(self.db).get(1)?;
+        let (_, parts) = descriptor.decompose_ty_app(self.db);
+        let target = *parts.first()?;
+        match target.adt_ref(self.db)? {
+            AdtRef::Struct(struct_) => Some((FieldParent::Struct(struct_), *name)),
+            AdtRef::Enum(_) => None,
+        }
+    }
+
     /// The outermost `unsafe` field selection the place `expr` goes through:
-    /// `self.len` in `self.len`, and `self.buf` in `self.buf[i].x`.
+    /// `self.len` in `self.len`, and `self.buf` in `self.buf[i].x`. A
+    /// selection the checker lowered to a projection names a field of the
+    /// projected target, never one of the handle it is selected on.
     fn unsafe_field_of_place(&self, expr: ExprId) -> Option<(ExprId, IdentId<'db>)> {
         match expr.data(self.db, self.body) {
             Partial::Present(Expr::Field(base, Partial::Present(field))) => {
-                if let FieldIndex::Ident(name) = field
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    if let Some((parent, name)) = self.projected_field(expr)
+                        && self.is_unsafe_field(parent, name)
+                    {
+                        return Some((expr, name));
+                    }
+                } else if let FieldIndex::Ident(name) = field
                     && let Some(resolved) = resolve_place_field(
                         self.db,
                         self.typed_body.expr_ty(self.db, *base),
@@ -210,11 +272,14 @@ impl<'db> UnsafeChecker<'db, '_> {
         if let Some((field, name)) = self.unsafe_field_of_place(expr)
             && self.written_fields.insert(field)
         {
-            self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                primary: field.span(self.body).into(),
-                name,
-                write: true,
-            });
+            self.push_unsafe(
+                BodyDiag::UnsafeFieldRequiresUnsafe {
+                    primary: field.span(self.body).into(),
+                    name,
+                    write: true,
+                },
+                UnsafeOpSite::Expr(field),
+            );
         }
     }
 
@@ -235,11 +300,14 @@ impl<'db> UnsafeChecker<'db, '_> {
             if let Some(name) = field.label_eagerly(self.db, self.body)
                 && self.is_unsafe_field(parent, name)
             {
-                self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                    primary: span.clone().field(idx).into(),
-                    name,
-                    write: false,
-                });
+                self.push_unsafe(
+                    BodyDiag::UnsafeFieldRequiresUnsafe {
+                        primary: span.clone().field(idx).into(),
+                        name,
+                        write: false,
+                    },
+                    UnsafeOpSite::Expr(expr),
+                );
             }
         }
     }
@@ -248,27 +316,33 @@ impl<'db> UnsafeChecker<'db, '_> {
     /// initializes: the only field of a layer the cast builds, one of the
     /// target's newtype layers above the first type `inner`'s type peels to.
     fn check_cast_init(&mut self, expr: ExprId, inner: ExprId) {
-        let scope = self.owner.scope();
-        let peel = |ty| transparent_newtype_field_ty(self.db, scope, ty);
+        // The layers are the type checker's decision for the writer of the cast.
+        let layers = self.typed_body.cast_layers(expr);
         let from = self.typed_body.expr_ty(self.db, inner);
-        let from_layers: Vec<_> = iter::successors(Some(from), |ty| peel(*ty)).collect();
+        let from_layers: Vec<_> = newtype_chain(self.db, from, layers.from).collect();
         let mut ty = self.typed_body.expr_ty(self.db, expr);
-        while !from_layers.contains(&ty)
-            && let Some(field_ty) = peel(ty)
+        let mut built = 0;
+        while built < layers.to
+            && !from_layers.contains(&ty)
+            && let Some(field_ty) = single_field_newtype_ty(self.db, ty)
         {
             if let Some(AdtRef::Struct(struct_)) = ty.adt_ref(self.db)
                 && let Some(field) = FieldParent::Struct(struct_).fields(self.db).next()
                 && field.is_unsafe(self.db)
                 && let Some(name) = field.name(self.db)
             {
-                self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                    primary: expr.span(self.body).into(),
-                    name,
-                    write: false,
-                });
+                self.push_unsafe(
+                    BodyDiag::UnsafeFieldRequiresUnsafe {
+                        primary: expr.span(self.body).into(),
+                        name,
+                        write: false,
+                    },
+                    UnsafeOpSite::Expr(expr),
+                );
                 return;
             }
             ty = field_ty;
+            built += 1;
         }
     }
 
@@ -302,11 +376,14 @@ impl<'db> UnsafeChecker<'db, '_> {
                         && self.is_unsafe_field(parent, name)
                         && let Some(binding) = self.mut_binding(field.pat)
                     {
-                        self.push_unsafe(BodyDiag::UnsafeFieldRequiresUnsafe {
-                            primary: binding.span(self.body).into(),
-                            name,
-                            write: true,
-                        });
+                        self.push_unsafe(
+                            BodyDiag::UnsafeFieldRequiresUnsafe {
+                                primary: binding.span(self.body).into(),
+                                name,
+                                write: true,
+                            },
+                            UnsafeOpSite::Pat(binding),
+                        );
                     }
                     self.check_pat(field.pat);
                 }
@@ -356,9 +433,12 @@ impl<'db> UnsafeChecker<'db, '_> {
             .then_some(receiver)
     }
     fn report_deref(&mut self, expr: ExprId) {
-        self.push_unsafe(BodyDiag::UnsafeDerefRequiresUnsafe {
-            primary: expr.span(self.body).into(),
-        });
+        self.push_unsafe(
+            BodyDiag::UnsafeDerefRequiresUnsafe {
+                primary: expr.span(self.body).into(),
+            },
+            UnsafeOpSite::Expr(expr),
+        );
     }
 
     /// Reports a call, method call or operator whose callee is an
@@ -373,15 +453,15 @@ impl<'db> UnsafeChecker<'db, '_> {
             && (func.is_unsafe(self.db)
                 || func.is_extern(self.db)
                     && !func.is_const(self.db)
-                    && !matches!(
-                        func.top_mod(self.db).ingot(self.db).kind(self.db),
-                        IngotKind::Core | IngotKind::Std
-                    ))
+                    && !is_toolchain_library(self.db, func.top_mod(self.db).ingot(self.db)))
         {
-            self.push_unsafe(BodyDiag::UnsafeCallRequiresUnsafe {
-                primary: expr.span(self.body).into(),
-                callee,
-            });
+            self.push_unsafe(
+                BodyDiag::UnsafeCallRequiresUnsafe {
+                    primary: expr.span(self.body).into(),
+                    callee,
+                },
+                UnsafeOpSite::Expr(expr),
+            );
         }
         let typed_body = self.typed_body;
         for arg in typed_body.call_effect_args(expr).into_iter().flatten() {
@@ -473,14 +553,19 @@ impl<'db> UnsafeChecker<'db, '_> {
 
             Expr::Field(inner, field) => {
                 self.check_expr(*inner);
-                let inner_ty = self.typed_body.expr_ty(self.db, *inner);
-                if let Some(field) = field.to_opt()
-                    && resolve_place_field(self.db, inner_ty, field)
-                        .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
-                {
-                    self.report_deref(expr);
-                    if self.is_state_pointer(inner_ty) {
-                        self.check_state_access(expr, false);
+                if self.typed_body.semantic_expr_lowering(expr).is_some() {
+                    // A projected selection is a call of `project`.
+                    self.check_call(expr);
+                } else {
+                    let inner_ty = self.typed_body.expr_ty(self.db, *inner);
+                    if let Some(field) = field.to_opt()
+                        && resolve_place_field(self.db, inner_ty, field)
+                            .is_some_and(|resolved| resolved.implicit_deref_ty.is_some())
+                    {
+                        self.report_deref(expr);
+                        if self.is_state_pointer(inner_ty) {
+                            self.check_state_access(expr, false);
+                        }
                     }
                 }
             }

@@ -1,0 +1,14 @@
+use projected_binding_dep::{Show, Tr, Top, L, R}
+struct X {}
+struct Y {}
+impl Show for Y { type K = u8
+    fn s() -> u256 { 5 } }
+impl Tr for X { type K = u8
+    type A = Y
+    fn t() -> u256 { 1 } }
+struct S {}
+impl Top for S { fn top() -> u256 { 4 } }
+impl L for S {}
+impl R for S {}
+fn pinned() -> u256 { projected_binding_dep::f<X>() }
+fn diamond() -> u256 { projected_binding_dep::g<S>() }

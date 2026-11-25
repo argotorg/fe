@@ -1,0 +1,6 @@
+// An `#[abi]` struct that contains an invalid `#[abi]` struct is reported at the fields.
+#[abi]
+pub struct BadInner { pub p: *u8 }
+
+#[abi]
+pub struct Outer { pub inner: BadInner, pub a: u256 }

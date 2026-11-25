@@ -348,14 +348,30 @@ impl<'db> TopLevelMod<'db> {
         None
     }
 
+    /// The items of this module whose text is in its own file. A published
+    /// item's span is in the quotation that wrote it, which can be a quotation
+    /// of another file, so an offset of this file says nothing about it.
+    pub fn items_in_file(
+        self,
+        db: &'db dyn SpannedHirDb,
+    ) -> impl Iterator<Item = ItemKind<'db>> + 'db {
+        let file = self.file(db);
+        self.all_items(db).iter().copied().filter(move |item| {
+            DynLazySpan::from(item.span())
+                .resolve(db)
+                .is_none_or(|span| span.file == file)
+        })
+    }
+
     /// Find items with the smallest span enclosing the cursor. A static
     /// assertion's comparison side isn't one: its source is the condition's.
+    /// Only items written in this module's file are candidates.
     pub fn find_enclosing_items(
         self,
         db: &'db dyn SpannedHirDb,
         cursor: TextSize,
     ) -> Vec<ItemKind<'db>> {
-        let items = self.all_items(db).iter().copied();
+        let items = self.items_in_file(db);
 
         let mut smallest_items = Vec::new();
         let mut smallest_range_size = None;

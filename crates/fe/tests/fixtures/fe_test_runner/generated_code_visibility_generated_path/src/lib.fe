@@ -1,0 +1,6 @@
+struct S {}
+impl S with (prov::GenPath)
+#[test]
+fn by_call() { assert!(S {}.by_call() == 3) }
+#[test]
+fn by_path() { assert!(S {}.by_path() == 3) }

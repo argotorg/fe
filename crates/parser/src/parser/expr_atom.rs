@@ -642,6 +642,8 @@ struct PatternShape {
     /// Generic argument lists open after a path: an `_` inside one is an
     /// inferred argument, not a wildcard.
     generic_depth: usize,
+    /// Qualified paths `<T as Trait>` that are open: their `as` is not a cast.
+    qualified_depth: usize,
 }
 
 impl PatternShape {
@@ -678,8 +680,20 @@ impl PatternShape {
             }
             Ident | SelfTypeKw | SelfKw | SuperKw | IngotKw => (true, true),
             Gt => {
-                self.generic_depth = self.generic_depth.saturating_sub(1);
+                if self.generic_depth > 0 {
+                    self.generic_depth -= 1;
+                } else {
+                    self.qualified_depth = self.qualified_depth.saturating_sub(1);
+                }
                 (true, true)
+            }
+            // The `as` of a qualified path `<T as Trait>` names a trait; elsewhere
+            // it is a cast.
+            AsKw => {
+                if self.qualified_depth == 0 {
+                    self.expression_only = true;
+                }
+                (false, false)
             }
             Int | String | Byte | TrueKw | FalseKw | RParen | RBrace => (true, false),
             Underscore => {
@@ -725,6 +739,9 @@ impl PatternShape {
             Lt => {
                 if self.after_path {
                     self.generic_depth += 1;
+                } else if !self.after_operand {
+                    // A `<` where an operand starts opens a qualified path.
+                    self.qualified_depth += 1;
                 }
                 (false, false)
             }
@@ -750,6 +767,9 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
                     shape.newline(0);
                     p.bump();
                 }
+                // A doc comment belongs to the item or statement after it, which
+                // decides the kind of the body, as an attribute does.
+                Some(SyntaxKind::DocComment) => p.bump(),
                 Some(SyntaxKind::Dollar) => {
                     if !skip_splice(p) {
                         return QuoteBodyKind::Expr;
@@ -765,6 +785,7 @@ fn quote_body_kind<S: TokenStream>(parser: &mut Parser<S>) -> QuoteBodyKind {
                         return QuoteBodyKind::Items;
                     }
                 }
+                Some(SyntaxKind::UseKw) if use_opens_a_block(p) => return QuoteBodyKind::Expr,
                 Some(kind)
                     if kind.is_item_head()
                         && !(kind == SyntaxKind::UnsafeKw
@@ -895,6 +916,31 @@ fn attributes_precede_item<S: TokenStream>(parser: &mut Parser<S>) -> bool {
 
 /// Whether the next tokens start an associated shape member, `shape Step ..`.
 /// `shape` is an ordinary identifier outside this position.
+fn shape_follows_attributes<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| super::attr::parse_attr_list(p).is_ok() && at_quoted_shape(p))
+}
+
+/// Whether the body starts with imports and a statement or expression follows
+/// them, so that the body is a block that the imports open. Imports followed
+/// by items, a splice or nothing stay the start of an item list.
+fn use_opens_a_block<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.dry_run(|p| {
+        while p.current_kind() == Some(SyntaxKind::UseKw) {
+            if p.parse(super::item::UseScope::default()).is_err() {
+                return false;
+            }
+            while p.current_kind() == Some(SyntaxKind::Newline) {
+                p.bump();
+            }
+        }
+        match p.current_kind() {
+            None | Some(SyntaxKind::RBrace | SyntaxKind::Dollar | SyntaxKind::Pound) => false,
+            Some(kind) if kind.is_item_head() => false,
+            _ => !at_quoted_shape(p),
+        }
+    })
+}
+
 fn at_quoted_shape<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser.is_ident("shape")
         && parser.peek_n_non_trivia(2).as_slice() == [SyntaxKind::Ident, SyntaxKind::Ident]
@@ -947,10 +993,12 @@ impl super::Parse for QuoteItemListScope {
             }
             if parser.current_kind() == Some(SyntaxKind::Dollar) {
                 parser.parse(QuoteHoleScope::default())?;
-            } else if at_quoted_shape(parser) {
+            } else if shape_follows_attributes(parser) {
                 // An associated shape member, `shape Step = (own u256, ref T)`: it
                 // has no module item form, so only a member splice can lower it.
-                parser.parse(super::item::TraitShapeItemScope::default())?;
+                // Attributes and doc comments belong to it as to any member.
+                let checkpoint = super::attr::parse_attr_list(parser)?;
+                parser.parse_cp(super::item::TraitShapeItemScope::default(), checkpoint)?;
             } else {
                 parser.parse(ItemScope::default())?;
             }

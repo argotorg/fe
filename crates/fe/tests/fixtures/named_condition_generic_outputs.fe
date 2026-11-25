@@ -1,0 +1,23 @@
+trait Source { type Out }
+trait Extra {}
+struct Wrap<T> {}
+trait Output<A, B> {
+    type Result
+    fn make() -> Self::Result
+}
+impl<T> Output<u8, T> for Wrap<T> {
+    type Result = (u256, u256)
+    fn make() -> (u256, u256) { (1, 2) }
+}
+impl<T: Source + Extra> Output<T::Out, T> for Wrap<T> {
+    type Result = bool
+    fn make() -> bool { true }
+}
+struct Item {}
+impl Source for Item { type Out = u8 }
+impl Extra for Item as FakeExtra {}
+
+fn g<X: Source + Extra>() -> <Wrap<X> as Output<X::Out, X>>::Result {
+    <Wrap<X> as Output<X::Out, X>>::make()
+}
+fn top() -> (u256, u256) { with (FakeExtra) { g<Item>() } }

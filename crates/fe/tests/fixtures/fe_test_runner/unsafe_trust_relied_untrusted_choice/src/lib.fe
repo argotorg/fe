@@ -1,0 +1,5 @@
+// `u`'s named unsafe impl `Bad`, chosen by `with`, answers `Self: Checked`
+// for the default method `b`. Expected: refused at the call of `b`.
+use t::Checked
+#[test]
+fn chosen_default() { assert!(with (u::Bad) { u::Y {}.b() } == 1) }

@@ -1,0 +1,12 @@
+// The implementation writes the text of `path_application_inherited.fe`.
+struct Bounded<const N: u256> where N > 0 {}
+impl<const N: u256> Bounded<N> { const fn one() -> u256 { 1 } }
+trait Tr {
+    type X
+    const N: u256
+    const K: Self::X
+}
+struct A {}
+impl Tr for A { type X = u256  const N: u256 = 0  const K: u256 = Bounded<{ Self::N }>::one() }
+#[test]
+fn t() { assert(A::K == 1) }

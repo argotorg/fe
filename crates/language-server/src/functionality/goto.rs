@@ -612,6 +612,29 @@ mod tests {
         }
     }
 
+    /// A header in one file publishes a function that the provider writes in
+    /// another. Its span lies in the provider's file, so a cursor of the
+    /// requesting file at the same offset is not in it: the item at the cursor
+    /// is one that the requesting file holds.
+    #[test]
+    fn find_enclosing_items_ignores_a_published_item_written_in_another_file() {
+        let package = crate::test_utils::prepared_package("pub fn generated() { 42 }");
+        let file = package
+            .db
+            .workspace()
+            .get(&package.db, &package.alpha_url)
+            .expect("alpha is in the prepared view");
+        let top_mod = map_file_to_mod(&package.db, file);
+        let items = top_mod.find_enclosing_items(&package.db, package.cursor);
+        assert!(!items.is_empty(), "the module encloses its own comment");
+        assert!(
+            items
+                .iter()
+                .all(|item| !ScopeId::from_item(*item).is_in_published_item(&package.db)),
+            "a published item won the cursor lookup: {items:?}"
+        );
+    }
+
     /// Diagnostic test: traces the full semantic API chain for `C::static_method()`
     /// where C is a type param bound to a trait.
     #[test]

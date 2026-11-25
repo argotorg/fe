@@ -291,7 +291,9 @@ fn semantic_leaf_component<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) 
             .name(db)
             .to_opt()
             .map_or_else(|| "__const".to_string(), |name| name.data(db).to_string()),
-        BodyOwner::AnonConstBody { .. } => "__anon_const".to_string(),
+        BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => {
+            "__anon_const".to_string()
+        }
         BodyOwner::ContractInit { contract } => format!(
             "__{}_init",
             contract

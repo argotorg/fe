@@ -1,0 +1,3 @@
+pub struct Sup {}
+unsafe impl t::PodM for Sup { fn tag(self) -> u256 { 0 } }
+impl t::Wide for Sup {}

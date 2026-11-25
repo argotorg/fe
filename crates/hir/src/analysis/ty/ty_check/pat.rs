@@ -10,7 +10,8 @@ use either::Either;
 use num_bigint::BigUint;
 
 use super::{
-    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, path::RecordInitChecker,
+    BodyOwner, ConstRef, RecordLike, TyChecker, env::LocalBinding, expr::MemberSite,
+    path::RecordInitChecker,
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -80,9 +81,14 @@ impl<'db> TyChecker<'db> {
 
         match pat_data {
             Pat::WildCard => {
-                let ty_var = self.table.new_var(TyVarSort::General, &Kind::Star);
+                let expected_resolved = expected.fold_with(self.db, &mut self.table);
+                let ty = if expected_resolved.is_never(self.db) {
+                    expected_resolved
+                } else {
+                    self.table.new_var(TyVarSort::General, &Kind::Star)
+                };
                 let analysis = self.ready_wildcard(expected, None);
-                self.finish_pat_check(pat, expected, ty_var, analysis)
+                self.finish_pat_check(pat, expected, ty, analysis)
             }
 
             Pat::Rest => {
@@ -265,9 +271,9 @@ impl<'db> TyChecker<'db> {
                 failed_goals.push(use_.inst());
             }
         }
-        let (missing, requests) = cref.record_bound_evidence(self.db, choices);
+        let (refused, requests) = cref.record_bound_evidence(self.db, choices);
         self.env.generation_demands.requests(self.db, requests);
-        failed_goals.extend(missing);
+        failed_goals.extend(refused.into_iter().map(|refused| refused.goal));
         cref.qualify_evidence(self.db, self.env.owner());
         // The reference stays with the body, as for a constant read in an
         // expression, so that what the pattern names can be followed later.
@@ -351,7 +357,7 @@ impl<'db> TyChecker<'db> {
                     ConstRef::TraitConst { use_, .. } => {
                         collect_flags(self.db, use_.inst()).contains(TyFlags::HAS_PARAM)
                     }
-                    ConstRef::InherentConst(use_) => use_.receiver_ty().has_param(self.db),
+                    ConstRef::InherentConst { use_, .. } => use_.receiver_ty().has_param(self.db),
                 };
                 self.push_diag(if generic {
                     BodyDiag::GenericConstPattern { primary }
@@ -493,7 +499,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             self.env.scope(),
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             true,
             &LoweringContext::new(),
         );
@@ -655,6 +661,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         );
 
         let (actual, analysis) = match res {
@@ -744,7 +751,7 @@ impl<'db> TyChecker<'db> {
                     recv_ty,
                     name,
                 ) {
-                    let cref = ConstRef::InherentConst(InherentConstUse::new(
+                    let cref = ConstRef::inherent(InherentConstUse::new(
                         self.env.scope(),
                         self.env.assumptions(),
                         impl_,
@@ -887,8 +894,11 @@ impl<'db> TyChecker<'db> {
                 )
             }
             TupleVariantResolution::TupleStruct(struct_ty) => {
-                let fields_visible =
-                    self.check_tuple_struct_fields_visible(struct_ty, pat_span.clone());
+                let fields_visible = self.check_tuple_struct_fields_visible(
+                    struct_ty,
+                    pat_span.clone(),
+                    MemberSite::Pat(pat),
+                );
                 let (semantic_ty, struct_ty) =
                     self.equate_nominal_pat_ty(struct_ty, expected, pat_span);
                 let ctor = self.type_constructor_kind(struct_ty, semantic_ty);
@@ -985,6 +995,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         ) {
             Ok(res) => match res {
                 PathRes::Ty(ty) if ty.as_tuple_struct(self.db).is_some() => {
@@ -1145,6 +1156,7 @@ impl<'db> TyChecker<'db> {
             span.clone().path(),
             span.clone().into(),
             &lowering_cx,
+            MemberSite::Pat(pat),
         ) {
             Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty))
                 if RecordLike::from_ty(ty).is_record(self.db) =>
@@ -1285,7 +1297,7 @@ impl<'db> TyChecker<'db> {
         let mut field_status_by_idx = rustc_hash::FxHashMap::default();
 
         let pat_span = pat.span(self.body()).into_record_pat();
-        let mut rec_checker = RecordInitChecker::new(self, &record_like);
+        let mut rec_checker = RecordInitChecker::new(self, &record_like, MemberSite::Pat(pat));
 
         for (i, field_pat) in fields.iter().enumerate() {
             if field_pat.pat.is_rest(hir_db, rec_checker.tc.body()) {

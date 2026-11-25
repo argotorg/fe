@@ -1,0 +1,10 @@
+use core::ptr
+struct S {}
+impl S with (t::Gen)
+
+#[test]
+fn spliced_deref() {
+    let p = ptr::alloc<u256>()
+    unsafe { *p = 5 }
+    assert!(S {}.run(p) == 5)
+}

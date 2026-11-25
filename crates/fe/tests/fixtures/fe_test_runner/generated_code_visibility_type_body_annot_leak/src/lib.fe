@@ -1,0 +1,5 @@
+struct S {}
+impl S { const K: u256 = 5 }
+impl S with (prov::ConstArgBodyAnnot)
+#[test]
+fn body() { assert!(S::leak_body_annot() == 5) }

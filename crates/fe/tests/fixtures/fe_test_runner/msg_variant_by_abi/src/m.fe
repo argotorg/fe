@@ -4,7 +4,7 @@ use std::evm::{Evm, Call}
 use core::ptr
 use core::abi::store_word
 
-msg M {
+pub msg M {
     #[selector = 0x11111111]
     Ping { x: u256 } -> u256,
     #[selector = 0x33333333]

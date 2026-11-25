@@ -1,0 +1,2 @@
+#[test]
+fn reads_a_safe_constant() { assert!(u::get_safe() == 3 && u::SAFE == 3) }

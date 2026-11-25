@@ -1,0 +1,14 @@
+// A bound on the trait's own parameter (`U: Show`) used by a default checked
+// per implementation. The implementation is generic and repeats the bound.
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+trait Tr<U: Show> {
+    type X
+    const K: Self::X = U::show()
+}
+struct A {}
+impl<T: Show> Tr<T> for A { type X = u256 }
+fn get<V: Show, B: Tr<V, X = u256>>() -> u256 { B::K }
+#[test]
+fn t() { assert(<A as Tr<Foo>>::K == 100 && get<Foo, A>() == 100) }

@@ -1,0 +1,47 @@
+// Exhaustiveness skips variants no value can take; an arm after another that
+// covers its values is still unreachable.
+use core::result::Result
+
+enum Empty {}
+
+enum Mostly {
+    A(u256),
+    B(Empty),
+    C(!),
+    D(u256, Empty),
+    E,
+}
+
+fn missing_inhabited(_ m: Mostly) -> u256 {
+    match m {
+        Mostly::A(v) => v
+    }
+}
+
+fn covered(_ m: Mostly) -> u256 {
+    match m {
+        Mostly::A(v) => v
+        Mostly::E => 0
+    }
+}
+
+fn omits_uninhabited_ok(_ r: Result<u256, Empty>) -> u256 {
+    match r {
+        Result::Err(e) => e
+    }
+}
+
+fn shadowed(_ r: Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(_) => 0
+        Result::Err(_) => 1
+    }
+}
+
+fn after_wildcard(_ m: Mostly) -> u256 {
+    match m {
+        _ => 0
+        Mostly::B(_) => 1
+    }
+}

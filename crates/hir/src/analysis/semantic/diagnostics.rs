@@ -20,7 +20,7 @@ use crate::{
         },
         ty::ty_check::{BodyOwner, SmirLoweringIssue},
     },
-    hir_def::{Body, ExprId, Partial},
+    hir_def::{Body, ExprId, ImplTrait, Partial},
     span::LazySpan,
 };
 
@@ -216,9 +216,11 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::InstanceLimit => 16,
             SemanticDiagnosticKind::ConstDestructor => 17,
             SemanticDiagnosticKind::UnencodablePanic => 18,
-            SemanticDiagnosticKind::CompileTimePhase => 19,
-            SemanticDiagnosticKind::DeclaredOnlyImplementation => 20,
+            SemanticDiagnosticKind::ConflictingDictionaries => 19,
+            SemanticDiagnosticKind::ChoiceOutputDisagreement => 20,
             SemanticDiagnosticKind::UnprovedDrop => 21,
+            SemanticDiagnosticKind::CompileTimePhase => 22,
+            SemanticDiagnosticKind::DeclaredOnlyImplementation => 23,
         };
         let severity = match self.kind {
             SemanticDiagnosticKind::DiscardedWrites => Severity::Warning,
@@ -262,7 +264,7 @@ impl SemanticDiagnosticKind {
         let name = checker_name(db, instance);
         let item = match instance.key(db).owner(db) {
             BodyOwner::Const(_) => format!("const {name}"),
-            BodyOwner::AnonConstBody { .. } => name,
+            BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => name,
             _ => format!("fn {name}"),
         };
         match self {
@@ -289,6 +291,12 @@ impl SemanticDiagnosticKind {
             Self::InstanceLimit => format!("instantiation limit exceeded in `{item}`"),
             Self::ConstDestructor => format!("compile-time destructor in `{item}`"),
             Self::UnencodablePanic => format!("panic value without revert data in `{item}`"),
+            Self::ChoiceOutputDisagreement => {
+                format!("implementation outputs disagree in `{item}`")
+            }
+            Self::ConflictingDictionaries => {
+                format!("conflicting implementations of a bound in `{item}`")
+            }
             Self::UnprovedDrop => format!("`Drop` without an ordinary proof in `{item}`"),
         }
     }
@@ -311,6 +319,11 @@ impl<'db> SemanticDiagnosticSpan<'db> {
                 resolve_local_source_span(db, instance, local)
             }
             Self::HirExpr { body, expr } => expr.span(body).resolve(db),
+            Self::ImplTrait(implementation) => implementation.span().resolve(db),
+            Self::ItemName { owner } => match owner {
+                BodyOwner::Func(func, _) => func.span().name().resolve(db),
+                _ => owner.body(db).and_then(|body| body.span().resolve(db)),
+            },
         }
     }
 }
@@ -362,7 +375,9 @@ pub(crate) fn checker_name<'db>(
             Partial::Present(name) => name.data(db).to_string(),
             Partial::Absent => "<const>".to_string(),
         },
-        BodyOwner::AnonConstBody { .. } => "<anon const>".to_string(),
+        BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => {
+            "<anon const>".to_string()
+        }
         BodyOwner::Closure { .. } => "<closure>".to_string(),
         BodyOwner::ContractInit { contract } => format!(
             "{}::__init__",
@@ -414,10 +429,16 @@ pub enum SemanticDiagnosticSpan<'db> {
         instance: SemanticInstance<'db>,
         local: SLocalId,
     },
+    /// The name of the item that owns the body, or its body when it has none.
+    ItemName {
+        owner: BodyOwner<'db>,
+    },
     HirExpr {
         body: Body<'db>,
         expr: ExprId,
     },
+    /// The declaration of an implementation.
+    ImplTrait(ImplTrait<'db>),
 }
 
 #[salsa::interned]
@@ -482,6 +503,13 @@ pub enum SemanticDiagnosticKind {
     /// A call reaching `panic_with_value` with a type that has no Sol encoding,
     /// on a target where that encoding is the panic's revert data.
     UnencodablePanic,
+    /// A proof that answers a concrete goal through a chosen implementation,
+    /// or through one whose conditions a choice answers, whose associated
+    /// outputs are not those ordinary normalization gives the goal.
+    ChoiceOutputDisagreement,
+    /// An instance whose dictionaries, or a proof written for one of its bounds,
+    /// name different implementations of an implied bound, or cannot supply it.
+    ConflictingDictionaries,
     /// A value is destroyed whose type has a `Drop` implementation that is
     /// not proved outside the `with` that made its bounds hold: a drop is a
     /// fact of the type and reads no lexical choice.

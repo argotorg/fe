@@ -1,0 +1,53 @@
+// A record handle is made only for a record. A sequence handle comes from
+// the sequence constructors, which read and check the length.
+use core::abi::{ByteSource, store_word}
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{DynArray, RecordView, Sol, decode_part_at, decode_record_view_from}
+
+#[abi]
+struct Pair { a: u256, b: u256 }
+
+struct MemInput { ptr: *u8, len: u256 }
+impl Copy for MemInput {}
+impl MemInput {
+    fn span(self) -> ref MemSpan {
+        unsafe { MemSpan::from_raw_parts(ptr: self.ptr, len: self.len.downcast_unchecked()) }
+    }
+}
+impl ByteSource for MemInput {
+    fn size(self) -> u64 { self.len.downcast_truncate() }
+    fn word_at(self, _ offset: u256) -> u256 { self.span().word_at(offset) }
+    fn byte_at(self, _ offset: u256) -> u8 { self.span().byte_at(offset.downcast_unchecked()) }
+    unsafe fn copy_to_memory(self, dest: *u8, src_offset: u256, len: u256) {
+        self.span().copy_to_memory(dest, src_offset, len)
+    }
+}
+
+// Word 0 is the offset 32, word 1 the length 3 of a `DynArray<u256>`.
+fn array_input() -> MemInput {
+    let data = MemBuffer::new(160)
+    unsafe {
+        store_word(ptr: data.ptr(), value: 32)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 3)
+    }
+    MemInput { ptr: data.ptr(), len: 160 }
+}
+
+#[test]
+fn control_part_length_is_three() {
+    let input = array_input()
+    let part = decode_part_at<Sol, DynArray<u256>, MemInput>(input, base: 0, head_pos: 0)
+    assert!(part.len() == 3)
+}
+
+#[test]
+fn control_record_view_reads_a_record() {
+    let data = MemBuffer::new(64)
+    unsafe {
+        store_word(ptr: data.ptr(), value: 7)
+        store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 9)
+    }
+    let input = MemInput { ptr: data.ptr(), len: 64 }
+    let v: RecordView<MemInput, Pair> = decode_record_view_from(input, 0)
+    assert!(v.a == 7 && v.b == 9)
+}

@@ -1,0 +1,21 @@
+// As named_const_cycle.fe, but calc() is 2 + 2 and differs from the ordinary
+// N = 3. Expected: 5-0005 at the `impl .. as Big` header (outputs disagree),
+// without a panic or a hang.
+struct Item {}
+trait Size {
+    const N: u256
+    const fn id() -> u256
+}
+impl Size for Item {
+    const N: u256 = 3
+    const fn id() -> u256 { 1 }
+}
+impl Size for Item as Big {
+    const N: u256 = calc()
+    const fn id() -> u256 { 2 }
+}
+const fn calc() -> u256 { with (Big) { <Item as Size>::id() } + 2 }
+
+fn read() -> u256 { with (Big) { <Item as Size>::N * 10 + <Item as Size>::id() } }
+#[test]
+fn t() { assert(read() == 32) }

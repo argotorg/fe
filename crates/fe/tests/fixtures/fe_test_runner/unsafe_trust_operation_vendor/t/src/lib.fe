@@ -1,0 +1,16 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Item, Record}
+pub struct Gen {}
+impl DeriveInherent for Gen {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e: Code<Expr> = u::frag()
+        quote { pub fn run(self, p: *u256) -> u256 { unsafe { ${e} } } }
+    }
+}
+pub struct GenSafe {}
+impl DeriveInherent for GenSafe {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let e: Code<Expr> = u::frag_safe()
+        quote { pub fn run_safe(self, p: *u256) -> u256 { unsafe { ${e} } } }
+    }
+}

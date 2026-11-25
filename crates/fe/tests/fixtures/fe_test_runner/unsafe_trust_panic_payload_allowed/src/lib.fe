@@ -1,0 +1,6 @@
+use u::WR
+fn mk() -> Result<WR, u256> { Result::Err(WR { v: 1 }) }
+#[test(should_revert)]
+fn unwrap_err() {
+    let _ = mk().unwrap()
+}

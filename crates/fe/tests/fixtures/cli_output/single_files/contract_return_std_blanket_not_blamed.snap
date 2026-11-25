@@ -6,7 +6,7 @@ input_file: tests/fixtures/cli_output/single_files/contract_return_std_blanket_n
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_return_std_blanket_not_blamed.fe
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_return_std_blanket_not_blamed.fe:14:12
    │
 14 │     Get -> S,

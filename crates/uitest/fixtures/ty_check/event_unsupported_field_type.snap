@@ -3,43 +3,10 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/event_unsupported_field_type.fe
 ---
-3484..3501: generated output admission failed: trait bound is not satisfied; `Opaque` doesn't implement `Encode<Sol>`; required by this bound on `push_record_field`; trait bound is not satisfied; `Opaque` doesn't implement `AbiSize`; required by this bound on `push_record_field`; trait bound is not satisfied; `Opaque` doesn't implement `AbiSize`; required by this bound on `abi_field_head_size`; trait bound is not satisfied; `Opaque` doesn't implement `AbiSize`; required by this bound on `dynamic_payload_size`
-error[6-0003]: trait bound is not satisfied
-    ┌─ src/derive/abi.fe:107:21
-    │
- 92 │ fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
-    │                                 --------- required by this bound on `push_record_field`
-    ·
-107 │     quote(writer) { push_record_field(mut writer, self.${field}) }
-    │                     ^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `Encode<Sol>`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ src/derive/abi.fe:107:21
-    │
- 92 │ fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
-    │                                             ------- required by this bound on `push_record_field`
-    ·
-107 │     quote(writer) { push_record_field(mut writer, self.${field}) }
-    │                     ^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ src/derive/event.fe:38:42
-    │
- 38 │                 head = quote { ${head} + abi_field_head_size<${ty}>() }
-    │                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
-    │
-    ┌─ src/abi.fe:378:37
-    │
-378 │ pub const fn abi_field_head_size<T: AbiSize>() -> u256 {
-    │                                     ------- required by this bound on `abi_field_head_size`
-
-error[6-0003]: trait bound is not satisfied
-    ┌─ src/derive/event.fe:39:48
-    │
- 39 │                 payload = quote { ${payload} + dynamic_payload_size<${ty}>(self.${f}) }
-    │                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Opaque` doesn't implement `AbiSize`
-    │
-    ┌─ src/abi.fe:438:32
-    │
-438 │ pub fn dynamic_payload_size<T: AbiSize>(_ value: T) -> u256 {
-    │                                ------- required by this bound on `dynamic_payload_size`
+error[10-0012]: unsupported ABI field type
+  ┌─ event_unsupported_field_type.fe:6:12
+  │
+6 │     value: Opaque,
+  │            ^^^^^^ `Opaque` does not implement `AbiSize`, `Encode<Sol>`
+  │
+  = the fields of an event must implement `AbiSize` and `Encode<Sol>`, as ABI types and `#[abi]` structs do

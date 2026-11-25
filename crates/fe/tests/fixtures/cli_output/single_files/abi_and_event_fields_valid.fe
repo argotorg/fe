@@ -1,0 +1,11 @@
+#[abi]
+pub struct GoodInner { pub p: u256 }
+
+#[abi]
+pub struct Outer { pub inner: GoodInner, pub a: u256 }
+
+#[event]
+pub struct Fine {
+    pub a: u256,
+    pub inner: GoodInner,
+}

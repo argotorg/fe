@@ -1,0 +1,11 @@
+// `prov` writes `self.vault as u256`. `Vault` is a newtype of this package
+// whose only field is private to it, so code that `prov` wrote cannot see
+// through it. Expected: the cast is refused.
+struct Vault { balance: u256 }
+struct S { vault: Vault }
+impl S with (prov::CastLeak)
+#[test]
+fn c() {
+    let s = S { vault: Vault { balance: 4 } }
+    assert!(s.cast_leak() == 4)
+}

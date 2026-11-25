@@ -1,0 +1,9 @@
+struct Vault { balance: u256 }
+struct S { vault: Vault }
+impl S { fn hidden(self) -> u256 { 3 } }
+impl S with (prov::Leak)
+#[test]
+fn c() {
+    let s = S { vault: Vault { balance: 4 } }
+    assert!(s.leak() + s.leak_field() == 7)
+}

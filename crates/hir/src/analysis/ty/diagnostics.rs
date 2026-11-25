@@ -17,6 +17,7 @@ use crate::{
         CallableDef, CompBinOp, Enum, FieldIndex, FieldParent, Func, GenericParamOwner, IdentId,
         ImplTrait, IntegerId, ModeMarker, TypeId as HirTypeId, TypeMode,
     },
+    core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
 use either::Either;
@@ -138,6 +139,14 @@ pub enum TyLowerDiag<'db> {
         first: DynLazySpan<'db>,
         name: IdentId<'db>,
         mode: Option<TypeMode>,
+    },
+    /// A bound naming an associated item its trait does not declare.
+    /// `declared_by` is a super trait that declares it, if there is one.
+    UnknownAssocBinding {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        trait_: Trait<'db>,
+        declared_by: Option<Trait<'db>>,
     },
     /// A `mut?` function whose result has no `mut?` part, so no call uses it
     /// at `mut`.
@@ -313,6 +322,9 @@ pub enum TyLowerDiag<'db> {
     ConstEvalRecursiveConst(DynLazySpan<'db>),
     TypeLoweringCycle(DynLazySpan<'db>),
     TypeNormalizationLimit(DynLazySpan<'db>),
+    /// The type of a record's field spliced where no derive header requests
+    /// the record.
+    FieldSpliceOutsideHeader(DynLazySpan<'db>),
 
     NonTrailingDefaultGenericParam(LazyGenericParamSpan<'db>),
 
@@ -343,6 +355,7 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         ty: TyId<'db>,
         invalid: TyId<'db>,
+        reason: ZeroInvalidReason,
     },
 
     /// A collection entry type in contract state with no storage layout.
@@ -443,6 +456,7 @@ impl TyLowerDiag<'_> {
             Self::MaybeMutBound(_) => 71,
             Self::MaybeMutInShape(_) => 85,
             Self::DuplicateAssocBinding { .. } => 86,
+            Self::UnknownAssocBinding { .. } => 96,
             Self::ViewTypeMode { .. } => 59,
             Self::StateOnlyValue { .. } => 61,
             Self::InvalidTypeArgKind { .. } => 1,
@@ -482,6 +496,7 @@ impl TyLowerDiag<'_> {
             Self::ConstEvalRecursiveConst(_) => 37,
             Self::TypeLoweringCycle(_) => 38,
             Self::TypeNormalizationLimit(_) => 58,
+            Self::FieldSpliceOutsideHeader(_) => 97,
             Self::MixedRefSelfPrefixWithExplicitType { .. } => 28,
             Self::MixedOwnSelfPrefixWithExplicitType { .. } => 29,
             Self::InvalidVarSelfWithExplicitType { .. } => 30,
@@ -596,6 +611,30 @@ pub enum BodyDiag<'db> {
     QuotedOpenNameUnbound {
         primary: DynLazySpan<'db>,
         name: String,
+    },
+    /// A quotation whose syntax cannot be the kind of code that its context
+    /// expects.
+    QuoteKindMismatch {
+        primary: DynLazySpan<'db>,
+        found: String,
+        expected: String,
+    },
+    /// A splice whose type cannot fill the position of its hole.
+    QuoteSpliceMismatch {
+        primary: DynLazySpan<'db>,
+        reason: &'static str,
+    },
+    /// The default value of a trait's constant, inherited by an
+    /// implementation, does not check as if the implementation had written it.
+    InheritedConstDefault {
+        /// The trait reference of the implementation.
+        primary: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+        /// Each associated type of `Self` that the constant's declared type
+        /// mentions, with its value in the implementation.
+        assoc_types: Vec<(IdentId<'db>, TyId<'db>)>,
+        /// The diagnostic of the check for the implementation.
+        inner: Box<FuncBodyDiag<'db>>,
     },
     TypeMismatch {
         span: DynLazySpan<'db>,
@@ -1112,6 +1151,14 @@ pub enum BodyDiag<'db> {
         abi_ty: TyId<'db>,
     },
 
+    /// A recv arm reads its message where it lies, but a trait that the read
+    /// relies on is not implemented: the size of the message or of a field,
+    /// or the copy of the input.
+    RecvArmReadBoundNotMet {
+        primary: DynLazySpan<'db>,
+        bound: TraitInstId<'db>,
+    },
+
     /// A pattern naming a constant of type `ty`, which is not an integer or
     /// `bool`.
     ConstPatternType {
@@ -1253,6 +1300,16 @@ pub enum BodyDiag<'db> {
 
     /// More generic arguments at a call than the callee has parameters.
     TooManyCallGenericArgs {
+        primary: DynLazySpan<'db>,
+        def_span: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
+    /// Fewer generic arguments naming an implementation in `with` than it
+    /// has parameters without a default. Unlike a call, the operand has no
+    /// arguments left to infer.
+    TooFewWithGenericArgs {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
         given: usize,
@@ -1722,8 +1779,9 @@ impl<'db> BodyDiag<'db> {
             Self::RefutableParamPattern { .. } => 133,
             Self::RefutableLoopPattern { .. } => 148,
             Self::RefutableRecvArmPattern { .. } => 153,
-            Self::RecvArmMessageNotFieldwise { .. } => 160,
-            Self::RecvArmRefFieldNotReadable { .. } => 161,
+            Self::RecvArmMessageNotFieldwise { .. } => 168,
+            Self::RecvArmRefFieldNotReadable { .. } => 169,
+            Self::RecvArmReadBoundNotMet { .. } => 170,
             Self::ConstPatternType { .. } => 154,
             Self::GenericConstPattern { .. } => 155,
             Self::InvalidConstPattern { .. } => 156,
@@ -1735,7 +1793,7 @@ impl<'db> BodyDiag<'db> {
             Self::OpaqueShapeBound { .. } => 147,
             Self::ParamBindsTwice { .. } => 134,
             Self::DropCalledDirectly { .. } => 152,
-            Self::GenerationChangesChoice { .. } => 162,
+            Self::GenerationChangesChoice { .. } => 166,
             Self::InitializerMarker { .. } => 124,
             Self::VarOfNoValue { .. } => 125,
             Self::UnsafeFieldRequiresUnsafe { .. } => 126,
@@ -1766,6 +1824,7 @@ impl<'db> BodyDiag<'db> {
             Self::VariadicArgLabel(_) => 160,
             Self::InvalidVariadicArg { .. } => 161,
             Self::ImmutableContractEffectMutBinding { .. } => 162,
+            Self::TooFewWithGenericArgs { .. } => 163,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,
@@ -1793,6 +1852,9 @@ impl<'db> BodyDiag<'db> {
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
             Self::ChosenTypeRead { .. } => 138,
             Self::QuotedOpenNameUnbound { .. } => 140,
+            Self::QuoteKindMismatch { .. } => 164,
+            Self::QuoteSpliceMismatch { .. } => 165,
+            Self::InheritedConstDefault { .. } => 167,
         }
     }
 }
@@ -1812,10 +1874,14 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedConstMismatch {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        /// The headers only may overlap (an unresolved associated type or
+        /// constant keeps them from being proved disjoint).
+        possible: bool,
         name: IdentId<'db>,
     },
     NamedAssociatedTypeMismatch {
         primary: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1825,6 +1891,7 @@ pub enum TraitLowerDiag<'db> {
     NamedAssociatedTypeDisagreement {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
+        possible: bool,
         name: IdentId<'db>,
         expected: TyId<'db>,
         given: TyId<'db>,
@@ -1836,6 +1903,7 @@ pub enum TraitLowerDiag<'db> {
         primary: ImplTrait<'db>,
         with: ImplTrait<'db>,
         ordinary: bool,
+        possible: bool,
         name: IdentId<'db>,
     },
     ConflictTraitImpl {
@@ -1899,6 +1967,23 @@ pub enum TraitConstraintDiag<'db> {
         actual: TyId<'db>,
     },
 
+    /// The goal is implemented, but the implementation chosen at this use is not
+    /// the one the dictionary of `root` holds for it.
+    ImplementationDiffers {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        root: TraitInstId<'db>,
+    },
+
+    /// The goal is implemented, but two conditions of the implementation chosen
+    /// for the bound hold it from different dictionaries.
+    ConditionsDiffer {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        a: TraitInstId<'db>,
+        b: TraitInstId<'db>,
+    },
+
     TraitBoundNotSat {
         span: DynLazySpan<'db>,
         primary_goal: TraitInstId<'db>,
@@ -1919,7 +2004,9 @@ impl TraitConstraintDiag<'_> {
             Self::KindMismatch { .. } => 0,
             Self::TraitArgNumMismatch { .. } => 1,
             Self::TraitArgKindMismatch { .. } => 2,
-            Self::TraitBoundNotSat { .. } => 3,
+            Self::TraitBoundNotSat { .. }
+            | Self::ImplementationDiffers { .. }
+            | Self::ConditionsDiffer { .. } => 3,
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,

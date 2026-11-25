@@ -124,6 +124,13 @@ macro_rules! impl_db_default {
             }
 
             fn with_storage(storage: salsa::Storage<Self>) -> Self {
+                let mut db = Self::with_empty_workspace(storage);
+                $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
+                $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
+                db
+            }
+
+            fn with_empty_workspace(storage: salsa::Storage<Self>) -> Self {
                 let mut db = Self {
                     storage,
                     index: None,
@@ -146,8 +153,6 @@ macro_rules! impl_db_default {
                     vec![],
                     false,
                 ));
-                $crate::stdlib::HasBuiltinCore::initialize_builtin_core(&mut db);
-                $crate::stdlib::HasBuiltinStd::initialize_builtin_std(&mut db);
                 db
             }
         }

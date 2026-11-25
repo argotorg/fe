@@ -12,7 +12,7 @@ error[8-0043]: recv arm return type annotation required
 38 │         M {} { Out<u8> { v: 1 } }
    │         ^^^^ return type must be annotated as `Out<u8>` to match the msg variant
 
-error[16-0022]: the entry code of contract `R` cannot be generated
+error[16-0024]: the entry code of contract `R` cannot be generated
    ┌─ contract_return_unencodable_unannotated.fe:25:19
    │
 25 │     type Return = Out<u8>

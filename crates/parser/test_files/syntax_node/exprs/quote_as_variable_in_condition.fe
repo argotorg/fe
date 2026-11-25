@@ -1,0 +1,17 @@
+if quote { 1 } else { 2 }
+
+if quote && ready { 1 } else { 2 }
+
+if !quote { 1 } else { 2 }
+
+if quote.field { 1 } else { 2 }
+
+if quote.method() { 1 } else { 2 }
+
+if quote[0] { 1 } else { 2 }
+
+if let Some(x) = quote { x } else { 2 }
+
+match quote {
+    _ => 1
+}

@@ -1,0 +1,16 @@
+// The default of `Narrow::K` calls `dep::peek`, which runs unsafe code of
+// `dep`, and nothing trusts `dep`. The declared type of `K` is `Self::X`.
+// Expected: refused at the call in the default, which this package wrote,
+// whether or not `K` is read.
+trait Narrow {
+    type X
+    const K: Self::X = dep::peek()
+}
+struct A {}
+impl Narrow for A {
+    type X = i8
+}
+#[test]
+fn unrelated() {
+    assert!(true)
+}

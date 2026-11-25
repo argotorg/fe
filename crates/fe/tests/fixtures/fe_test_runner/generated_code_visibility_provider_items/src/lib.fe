@@ -1,0 +1,8 @@
+struct S {}
+impl S with (prov::P)
+struct T {}
+impl T with (prov::Q)
+#[test]
+fn provider_pub_ingot_helper() { assert!(S::viai() == 5) }
+#[test]
+fn provider_private_helper() { assert!(T::viap() == 6) }

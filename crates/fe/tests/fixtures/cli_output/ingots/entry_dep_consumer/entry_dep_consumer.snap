@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-error[16-0022]: the entry code of contract `R` cannot be generated
+error[16-0024]: the entry code of contract `R` cannot be generated
    ┌─ src/lib.fe:4:16
    │
  4 │         Get -> Out<u8> { Out<u8> { v: 1 } }

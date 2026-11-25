@@ -1,0 +1,6 @@
+struct S {}
+impl S with (prov::OwnMembers)
+#[test]
+fn own_method() { assert!(S::via_method() == 5) }
+#[test]
+fn own_field() { assert!(S::via_field() == 5) }

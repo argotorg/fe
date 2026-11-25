@@ -2917,7 +2917,9 @@ fn symbol_base_for_semantic_instance<'db>(
             arm_idx
         ),
         BodyOwner::Closure { ty, receiver, .. } => closure_symbol_component(db, ty, receiver),
-        BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } => "__const".to_string(),
+        BodyOwner::Const(_)
+        | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::InheritedConst { .. } => "__const".to_string(),
     }
 }
 
@@ -2986,6 +2988,7 @@ fn inline_hint_for_semantic<'db>(
         },
         BodyOwner::Const(_)
         | BodyOwner::AnonConstBody { .. }
+        | BodyOwner::InheritedConst { .. }
         | BodyOwner::ContractInit { .. }
         | BodyOwner::ContractRecvArm { .. }
         | BodyOwner::Closure { .. } => RuntimeInlineHint::Auto,

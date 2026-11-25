@@ -1,0 +1,29 @@
+// One function item with a trait-keyed effect, passed several times in one
+// function under different providers and choices. The providers that
+// `settle_function_item_providers` leaves open must not be fixed by the
+// callable dictionary: each pass runs with the provider and the store
+// choice in scope there.
+// Expected: a = 1 + 10 = 11, b = 2 + 60 = 62 (Alt and AltStore, v = 30),
+// c = 1 + 30 = 31; result 11 * 10000 + 62 * 100 + 31 = 116231.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+
+trait Store { fn get(self) -> u256 }
+struct S { v: u256 }
+impl Store for S { fn get(self) -> u256 { self.v } }
+impl Store for S as AltStore { fn get(self) -> u256 { self.v * 2 } }
+
+fn target<T: Pick>() -> u256 uses (s: Store) { T::pick() + s.get() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+
+fn three() -> u256 {
+    let x = S { v: 10 }
+    let y = S { v: 30 }
+    let a = with (Store = x) { run(target<u256>) }
+    let b = with (Alt, AltStore, Store = y) { run(target<u256>) }
+    let c = with (Store = y) { run(target<u256>) }
+    a * 10000 + b * 100 + c
+}
+#[test]
+fn t() { assert(three() == 116231) }

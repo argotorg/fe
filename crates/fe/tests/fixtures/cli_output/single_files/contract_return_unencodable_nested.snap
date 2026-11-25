@@ -6,7 +6,7 @@ input_file: tests/fixtures/cli_output/single_files/contract_return_unencodable_n
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_return_unencodable_nested.fe
 
-error[16-0022]: the entry code of contract `R` cannot be generated
+error[16-0024]: the entry code of contract `R` cannot be generated
    ┌─ contract_return_unencodable_nested.fe:26:19
    │
 26 │     type Return = Out<u8>

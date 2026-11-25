@@ -115,3 +115,25 @@ fn zero_field_event_emits_log1_with_empty_data() {
     assert_eq!(log.data.topics()[0].as_slice(), keccak("Paused()"));
     assert!(log.data.data.is_empty());
 }
+
+#[test]
+fn wide_event_emits_one_word_for_each_field() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/event_wide_fields.fe");
+    let source = std::fs::read_to_string(fixture).expect("read wide event fixture");
+    let bytecode = compile_fe_sonatina_bytecode(&source, "event_wide_fields", "Probe")
+        .expect("compile wide event fixture");
+    let mut instance =
+        RuntimeInstance::deploy(&hex::encode(bytecode.deploy)).expect("deploy Probe");
+
+    let outcome = instance
+        .call_raw_with_logs(&selector("emitWide()"), ExecutionOptions::default())
+        .expect("call emitWide()");
+    assert_eq!(outcome.raw_logs.len(), 1);
+    let log = &outcome.raw_logs[0];
+    assert_eq!(log.data.topics().len(), 1);
+    let signature = format!("Wide({})", vec!["uint256"; 100].join(","));
+    assert_eq!(log.data.topics()[0].as_slice(), keccak(&signature));
+    let expected_data: String = (0..100).map(word).collect();
+    assert_eq!(log.data.data.as_ref(), hex::decode(expected_data).unwrap());
+}

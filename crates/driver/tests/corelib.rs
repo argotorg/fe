@@ -1105,8 +1105,11 @@ fn compiler_code_resolves_a_deciding_trait_only_through_the_helper() {
         // ABI checks of written fields and messages, where an absent `Encode`
         // is an error.
         ("hir/src/analysis/analysis_pass.rs", "Encode", 1),
-        ("hir/src/analysis/ty/mod.rs", "Encode", 1),
+        ("hir/src/analysis/ty/mod.rs", "Encode", 2),
         ("hir/src/analysis/ty/msg_selector.rs", "Encode", 1),
+        // The bounds of a `ref` field read in place by a recv arm, where an
+        // absent `Copy` is an error.
+        ("hir/src/core/semantic/mod.rs", "Copy", 1),
         // The `impl Encode<Sol>` that `#[error]`, `msg` and `#[abi]` write.
         // The last two lower both the provider header and its legacy counterpart.
         ("hir/src/core/lower/error.rs", "Encode", 1),
@@ -1212,6 +1215,7 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/semantic/ctfe/machine.rs", "resolve_core_trait", "&[\"meta\", \"FieldInit\"]", 1, Unique, "the initializer of each field is selected or an error"),
         ("hir/src/analysis/semantic/instance/const_ref.rs", "resolve_core_trait", "trait_path", 1, HandedOn, "the core method lookup; its callers pass the path written out"),
         ("hir/src/analysis/semantic/instance/semantic.rs", "presence_trait", "\"core::abi::Encode\"", 1, Deciding, "whether a panic off the EVM reverts with its value or traps"),
+        ("hir/src/analysis/semantic/instance/semantic.rs", "presence_trait", "\"core::error::ErrorVariant\"", 1, Deciding, "whether an error type prefixes its revert data"),
         ("hir/src/analysis/semantic/instance/semantic.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 1, Identity, "the supertrait of `Encode`, asked with it"),
         ("hir/src/analysis/semantic/lower/body.rs", "resolve_core_trait", "&[\"ops\", \"ProjectField\"]", 1, Identity, "recognises the selected projector of an explicit call"),
         ("hir/src/analysis/ty/abi_ty.rs", "resolve_lib_trait_path", "\"std::abi::SolCompat\"", 1, Unique, "an enum's ABI type name: absent is an error, two are ambiguous"),
@@ -1228,9 +1232,9 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/drop_glue.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "which function of `Drop` is `drop`, after its presence was decided"),
         ("hir/src/analysis/ty/drop_glue.rs", "presence_trait", "\"core::ops::Drop\"", 1, Deciding, "whether a type has drop glue"),
         ("hir/src/analysis/ty/evidence.rs", "resolve_core_trait", "&[\"marker\", \"Clearable\"]", 1, Structural, "the deferred proof regression checks the compiler's structural `Clearable` proof"),
-        ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
+        ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 2, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields and of the data fields of `#[event]`"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSpan\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
-        ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"Encode\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
+        ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"Encode\"]", 2, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields and of the data fields of `#[event]`"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, ErrorOnly, "ABI checks of `msg` and `#[abi]` fields"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"contracts\", \"Target\"]", 1, Structural, "the default root effect of std's own types"),
         ("hir/src/analysis/ty/mod.rs", "resolve_core_trait", "&[\"marker\", \"Copy\"]", 2, Test, "tests of `ty_is_copy`"),
@@ -1254,6 +1258,7 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/analysis/ty/trait_def.rs", "resolve_core_trait", "&[\"marker\", \"Copy\"]", 1, Identity, "checks of written named implementations"),
         ("hir/src/analysis/ty/trait_def.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "checks of written named implementations"),
         ("hir/src/analysis/ty/trait_resolution/generation.rs", "resolve_core_trait", "&[\"derive\", \"Derive\"]", 1, Identity, "the request machinery"),
+        ("hir/src/analysis/ty/unsafe_check.rs", "resolve_core_trait", "&[\"ops\", \"ProjectField\"]", 1, Identity, "recognises the selected projector of a field selection, to find the field of the projected target"),
         ("hir/src/analysis/ty/ty_check/contract.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, ErrorOnly, "a recv message must decode"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 1, Identity, "a direct call of `drop`, after its presence was decided"),
         ("hir/src/analysis/ty/ty_check/expr.rs", "resolve_core_trait", "&[\"ops\", \"ProjectField\"]", 1, AuthoredFirst, "the trait call for the checked field descriptor"),
@@ -1269,7 +1274,10 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/core/semantic/mod.rs", "presence_trait", "\"core::abi::Encode\"", 1, Deciding, "the entry plan asks whether the value an arm returns can be encoded"),
         ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"abi\", \"Decode\"]", 1, Unique, "the entry plan: the decode of the `init` arguments is selected or an error"),
         ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"contracts\", \"ContractHost\"]", 2, Unique, "the input type that a recv arm reads in place, and the return encode of the entry plan"),
+        ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"abi\", \"AbiSize\"]", 1, ErrorOnly, "a `ref` field of a recv arm needs the message size and the heads before it"),
+        ("hir/src/core/semantic/mod.rs", "resolve_core_trait", "&[\"marker\", \"Copy\"]", 1, ErrorOnly, "a `ref` field of a recv arm needs a copyable input"),
         ("hir/src/core/semantic/mod.rs", "resolve_lib_trait_path", "\"std::abi::AbiFields\"", 1, ErrorOnly, "a `ref` field of a recv arm needs the message read field by field"),
+        ("hir/src/core/semantic/mod.rs", "resolve_lib_trait_path", "\"std::abi::HeadsBefore\"", 1, ErrorOnly, "a `ref` field of a recv arm needs the sizes of the heads before it"),
         ("hir/src/core/semantic/mod.rs", "resolve_lib_trait_path", "\"core::message::MsgVariant\"", 2, Unique, "the implementation for the ABI of a recv block is selected, or an arm that names none is an error"),
         ("hir/src/core/semantic/mod.rs", "resolve_lib_trait_path", "\"std::abi::Part\"", 1, ErrorOnly, "a `ref` field of a recv arm must be readable where it lies"),
         ("hir/src/core/semantic/storage_layout.rs", "presence_trait", "\"std::evm::SolPacked\"", 1, Deciding, "how many bits a stored value packs into"),
@@ -1278,7 +1286,6 @@ const LIBRARY_TRAIT_RESOLUTIONS: &[(&str, &str, &str, usize, Reason, &str)] = {
         ("hir/src/diagnosable.rs", "resolve_core_trait", "&[\"ops\", \"Drop\"]", 2, Identity, "checks of written implementations"),
         ("hir/src/diagnosable.rs", "resolve_core_trait", "&[\"marker\", \"Pinned\"]", 1, Identity, "checks of written implementations"),
         ("hir/src/diagnosable.rs", "resolve_core_trait", "&[\"marker\", \"Clearable\"]", 1, ErrorOnly, "an implementation of `Clearable` is an error"),
-        ("mir/src/runtime/lower/body.rs", "presence_trait", "\"core::error::ErrorVariant\"", 1, Deciding, "whether an error type prefixes its revert data"),
         ("mir/src/runtime/synthetic.rs", "resolve_core_trait", "&[\"abi\", \"Abi\"]", 1, Unique, "resolved as a unique runtime instance, else an error"),
     ]
 };

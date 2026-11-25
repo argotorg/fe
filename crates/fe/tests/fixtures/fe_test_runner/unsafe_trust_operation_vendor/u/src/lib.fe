@@ -1,0 +1,10 @@
+use core::meta::{Code, Expr}
+pub const fn frag() -> Code<Expr> {
+    quote(p) { *p }
+}
+pub const fn frag_unsafe() -> Code<Expr> {
+    quote(p) { unsafe { *p } }
+}
+pub const fn frag_safe() -> Code<Expr> {
+    quote(p) { 5 }
+}

@@ -1,0 +1,4 @@
+pub struct Y {}
+pub unsafe impl t::Checked for Y as Bad { fn a(self) {} }
+pub struct Z {}
+pub unsafe impl t::PodM for Z as BadM { fn tag(self) -> u256 { 0 } }

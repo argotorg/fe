@@ -147,11 +147,19 @@ impl<'db> ScopeId<'db> {
     }
 
     /// Whether this scope is, or lies inside, a published item: generated code
-    /// of whichever package asked for it.
+    /// of whichever package asked for it. A body that a quotation lowered, and
+    /// each block in it, is generated code too, whatever item it belongs to: a
+    /// generated constant's value is not published as an item of its own, but
+    /// what it holds is as much generated as the body of a generated function.
     pub fn is_in_published_item(self, db: &'db dyn HirDb) -> bool {
         let mut scope = Some(self);
         while let Some(current) = scope {
             if current.is_published(db) {
+                return true;
+            }
+            if let ScopeId::Item(ItemKind::Body(body)) | ScopeId::Block(body, _) = current
+                && !body.quote_origins(db).frames.is_empty()
+            {
                 return true;
             }
             scope = current.parent(db);
@@ -460,6 +468,12 @@ impl<'db> ScopeId<'db> {
 
     pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
         match self {
+            // A trait implementation is named, if at all, by its selection
+            // name.
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait
+                .selection_name(db)
+                .map(|_| impl_trait.span().selection_name().into()),
+
             ScopeId::Item(item) => item.name_span(),
 
             ScopeId::Variant(v) => Some(v.span().name().into()),

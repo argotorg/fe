@@ -3,7 +3,7 @@ use crate::hir_def::{Expr, ExprId, ItemKind, Partial, params::FuncParamMode};
 use crate::span::{DynLazySpan, types::LazyTySpan};
 use crate::{
     analysis::HirAnalysisDb,
-    hir_def::{Body, Const, Contract, EffectParamListId, Func, scope_graph::ScopeId},
+    hir_def::{Body, Const, Contract, EffectParamListId, Func, ImplTrait, scope_graph::ScopeId},
     span::item::LazyRecvArmSpan,
 };
 use salsa::SalsaValue;
@@ -18,6 +18,13 @@ pub enum BodyOwner<'db> {
     AnonConstBody {
         body: Body<'db>,
         expected: TyId<'db>,
+    },
+    /// A trait's default value of a constant, checked for an implementation
+    /// that inherits it, as if the implementation had written it. Only for a
+    /// constant whose declared type mentions a parameter of the trait.
+    InheritedConst {
+        implementation: ImplTrait<'db>,
+        body: Body<'db>,
     },
     ContractInit {
         contract: Contract<'db>,
@@ -246,9 +253,10 @@ impl<'db> BodyOwner<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Option<crate::hir_def::ContractRecvArm<'db>> {
         match self {
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
-                None
-            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => None,
             BodyOwner::ContractInit { .. } => None,
             BodyOwner::ContractRecvArm {
                 contract,
@@ -263,7 +271,9 @@ impl<'db> BodyOwner<'db> {
         match self {
             BodyOwner::Func(func, _) => func.body(db),
             BodyOwner::Const(const_) => const_.body(db).to_opt(),
-            BodyOwner::AnonConstBody { body, .. } => Some(body),
+            BodyOwner::AnonConstBody { body, .. } | BodyOwner::InheritedConst { body, .. } => {
+                Some(body)
+            }
             BodyOwner::ContractInit { contract } => Some(contract.init(db)?.body(db)),
             BodyOwner::ContractRecvArm {
                 contract,
@@ -283,7 +293,9 @@ impl<'db> BodyOwner<'db> {
         match self {
             BodyOwner::Func(func, _) => func.scope(),
             BodyOwner::Const(const_) => const_.scope(),
-            BodyOwner::AnonConstBody { body, .. } => body.scope(),
+            BodyOwner::AnonConstBody { body, .. } | BodyOwner::InheritedConst { body, .. } => {
+                body.scope()
+            }
             BodyOwner::ContractInit { contract } => contract.scope(),
             BodyOwner::ContractRecvArm { contract, .. } => contract.scope(),
             BodyOwner::Closure { def, .. } => def.body.scope(),
@@ -293,9 +305,10 @@ impl<'db> BodyOwner<'db> {
     pub fn effects(self, db: &'db dyn HirAnalysisDb) -> EffectParamListId<'db> {
         match self {
             BodyOwner::Func(func, _) => func.effects(db),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
-                EffectParamListId::new(db, Vec::new())
-            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => EffectParamListId::new(db, Vec::new()),
             BodyOwner::ContractInit { contract } => contract.init(db).map_or_else(
                 || EffectParamListId::new(db, Vec::new()),
                 |init| init.effects(db),
@@ -319,9 +332,10 @@ impl<'db> BodyOwner<'db> {
                 .param_idx(func.effect_origin(db, idx))
                 .ty()
                 .into(),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
-                DynLazySpan::invalid()
-            }
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => DynLazySpan::invalid(),
             BodyOwner::ContractInit { contract } => contract
                 .span()
                 .init_block()

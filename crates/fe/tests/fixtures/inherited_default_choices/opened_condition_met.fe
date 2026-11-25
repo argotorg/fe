@@ -1,0 +1,12 @@
+// An opened implementation whose condition holds is a candidate beside the
+// ordinary implementation of another trait with the same member names: the
+// constant and the method are ambiguous alike.
+trait T1 { const K: u256  const fn m() -> u256 }
+trait T2 { const K: u256  const fn m() -> u256 }
+struct A {}
+impl T1 for A { const K: u256 = 1  const fn m() -> u256 { 1 } }
+impl T2 for A as NN { const K: u256 = 2  const fn m() -> u256 { 2 } }
+fn k() -> u256 { with (NN) { A::K } }
+fn m() -> u256 { with (NN) { A::m() } }
+#[test]
+fn t() { assert(k() == m()) }

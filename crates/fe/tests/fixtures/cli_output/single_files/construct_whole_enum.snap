@@ -4,6 +4,6 @@ expression: output
 input_file: tests/fixtures/cli_output/single_files/construct_whole_enum.fe
 ---
 === STDERR ===
-file://<project>/crates/fe/tests/fixtures/cli_output/single_files/construct_whole_enum.fe:507..534: construct requires a struct or a selected variant; a whole enum has no fields
+file://<project>/crates/fe/tests/fixtures/cli_output/single_files/construct_whole_enum.fe:16:21: construct requires a struct or a selected variant; a whole enum has no fields
 
 === EXIT CODE: 1 ===

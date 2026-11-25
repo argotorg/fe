@@ -1,0 +1,12 @@
+use t::NonZero
+pub const FAKE: NonZero = unsafe { t::forge(0) }
+pub fn get() -> NonZero { FAKE }
+pub fn get_direct() -> NonZero { unsafe { t::forge(0) } }
+pub struct H {}
+impl H { pub const C: NonZero = unsafe { t::forge(0) } }
+pub fn get_assoc() -> NonZero { H::C }
+pub const PC: u256 = unsafe { t::forge(0).val() }
+pub fn pat(_ x: u256) -> bool { match x { PC => true, _ => false } }
+pub const SA: u256 = unsafe { t::forge(0).val() }
+pub const SAFE: u256 = 3
+pub fn get_safe() -> u256 { SAFE }

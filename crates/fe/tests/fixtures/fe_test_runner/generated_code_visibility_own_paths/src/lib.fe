@@ -1,0 +1,4 @@
+struct S {}
+impl S with (prov::OwnPaths)
+#[test]
+fn own_paths() { assert!(S::own_const() + S::own_fn_path() + S::own_field() == 17) }

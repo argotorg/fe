@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: "diagnostics(db, fixture.path(), fixture.content())"
+input_file: fixtures/semantic_access/implied_bound_dictionary_conflict.fe
+---
+error[16-0019]: conflicting implementations of a bound in `fn target`
+   ┌─ implied_bound_dictionary_conflict.fe:17:4
+   │
+17 │ fn target<B: Tr<A = X>, X: Pick>() -> u256 { X::val() * 1000 + B::via() }
+   │    ^^^^^^ `Item: Pick`: `Wrap<Item>: Tr<A = Item>` and `Item: Pick` supply different implementations

@@ -285,12 +285,22 @@ fn prepare_generation(
     match driver::generation::prepare_ingots_in_place(db, roots) {
         Ok(()) => false,
         Err(error) => {
-            eprintln!("{error}");
-            if let Some(report) = report {
-                write_report_file(report, "errors/generation.txt", &format!("{error}\n"));
-            }
+            report_generation_error(db, &error, report);
             true
         }
+    }
+}
+
+/// Print a generation error where it is placed, and record it in the report.
+fn report_generation_error(
+    db: &DriverDataBase,
+    error: &driver::generation::GenerationError,
+    report: Option<&ReportContext>,
+) {
+    let text = error.located(db);
+    eprintln!("{text}");
+    if let Some(report) = report {
+        write_report_file(report, "errors/generation.txt", &format!("{text}\n"));
     }
 }
 
@@ -357,6 +367,20 @@ fn check_workspace(
         .filter(|member| selected_member_paths.contains(&dir_path.join(member.path.as_str())))
         .collect::<Vec<_>>();
 
+    // A dependency of another target is reported before any provider runs, as
+    // for a single ingot; the member is not prepared or checked.
+    let mut has_errors = false;
+    let mut members_to_check = Vec::new();
+    for member in members {
+        if let Some(mismatch) = dependency_target_mismatch(db, &member.url) {
+            eprintln!("Error: {mismatch}");
+            has_errors = true;
+        } else {
+            members_to_check.push(member);
+        }
+    }
+    let members = members_to_check;
+
     // One prepared view serves every selected member; a prepared view refuses
     // a second preparation.
     let roots = members
@@ -368,14 +392,8 @@ fn check_workspace(
     }
 
     let mut seen = HashSet::new();
-    let mut has_errors = false;
     for member in members {
         let member_url = member.url;
-        if let Some(mismatch) = dependency_target_mismatch(db, &member_url) {
-            eprintln!("Error: {mismatch}");
-            has_errors = true;
-            continue;
-        }
         let member_has_errors =
             check_ingot_and_dependencies(db, &member_url, dump_mir, report, &mut seen);
         has_errors |= member_has_errors;
@@ -483,7 +501,7 @@ fn check_single_file(
         let file = match driver::generation::prepare_file_in_place(db, file) {
             Ok(file) => file,
             Err(error) => {
-                eprintln!("{error}");
+                report_generation_error(db, &error, report);
                 return true;
             }
         };

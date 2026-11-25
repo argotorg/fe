@@ -1,0 +1,21 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/abi_record_ctor_requires_record_array.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/abi_record_ctor_requires_record_array.fe
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ abi_record_ctor_requires_record_array.fe:8:54
+   │
+ 8 │     let v: RecordView<CallData, DynArray<u256>> = cd.record_view<DynArray<u256>>(0)
+   │                                                      ^^^^^^^^^^^ `DynArray<u256>` doesn't implement `AbiFields`
+   │
+   ┌─ src/evm/calldata.fe:53:87
+   │
+53 │     pub fn record_view<T>(self, _ head_pos: u256) -> RecordView<CallData, T> where T: AbiFields + AbiSize {
+   │                                                                                       --------- required by this bound on `record_view`
+
+
+=== EXIT CODE: 1 ===

@@ -387,6 +387,9 @@ pub fn forwarded_trait_key_is_well_formed<'db>(
             .all(|(_, ty)| forwarded_value_is_well_formed(db, *ty))
 }
 
+/// Whether a stored key holds no inference variable and no invalid type. An
+/// associated type that normalization left, such as `T::Item` for a parameter
+/// `T`, is as rigid as `T`: it is rigid when the types it names are.
 pub fn stored_value_is_storage_rigid<'db>(
     db: &'db dyn HirAnalysisDb,
     value: impl TyVisitable<'db>,
@@ -421,12 +424,6 @@ fn value_is_well_formed_with<'db>(
 
         fn visit_var(&mut self, _: &crate::analysis::ty::ty_def::TyVar<'db>) {
             self.invalid = !self.allow_ty_vars;
-        }
-
-        fn visit_assoc_ty(&mut self, _: &crate::analysis::ty::ty_def::AssocTy<'db>) {
-            if !self.allow_ty_vars {
-                self.invalid = true;
-            }
         }
 
         fn visit_ty(&mut self, ty: TyId<'db>) {

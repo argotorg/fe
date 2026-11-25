@@ -14,7 +14,7 @@ error[18-0004]: unsupported `#[abi]` struct field type
   │
   = `#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
   ┌─ contract_init_abi_struct_unsupported_field.fe:7:10
   │
 7 │     init(i: Inner) {}

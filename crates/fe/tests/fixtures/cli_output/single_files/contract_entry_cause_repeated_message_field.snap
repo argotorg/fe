@@ -20,7 +20,7 @@ error[6-0003]: trait bound is not satisfied
 25 │         Put { w } -> u256 { w.v }
    │         ^^^^^^^^^ `W<u8>` doesn't implement `Decode<Sol>`
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_cause_repeated_message_field.fe:25:9
    │
 25 │         Put { w } -> u256 { w.v }

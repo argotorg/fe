@@ -26,14 +26,14 @@ use super::{
     },
     trait_resolution::{Selection, TraitSolveCx, constraint::collect_constraints},
     ty_check::{BodyOwner, infer_body},
-    ty_def::{InvalidCause, TyId, TyParam, TyVar, int_literal_fits_prim},
+    ty_def::{InvalidCause, TyFlags, TyId, TyParam, TyVar, int_literal_fits_prim},
     ty_error::first_invalid_ty_cause,
     ty_lower::{
         CompleteSubst, ParamBasis, ParamDomainId, SourceParamIndex, SubstError,
         collect_generic_params, param_schema,
     },
     unify::UnificationTable,
-    visitor::{TyVisitable, TyVisitor},
+    visitor::{TyVisitable, TyVisitor, collect_flags},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -138,9 +138,6 @@ pub(crate) struct LoweringContext<'db> {
     /// Set while lowering resolves a path that an anonymous constant's body
     /// writes (`without_recording`).
     recording_paused: std::cell::Cell<bool>,
-    /// The record whose field type is being lowered where generated code
-    /// spliced it (`with_spliced_record`).
-    spliced_record: std::cell::Cell<Option<GenericParamOwner<'db>>>,
     /// The generation requests that method discovery under `method_choices`
     /// stopped on. The caller that supplied the choices owes them to
     /// preparation (`take_generation_requests`).
@@ -172,7 +169,6 @@ impl<'db> LoweringContext<'db> {
             choices: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
-            spliced_record: std::cell::Cell::new(None),
             generation_requests: Default::default(),
             authored_names_only: false,
         }
@@ -264,24 +260,6 @@ impl<'db> LoweringContext<'db> {
         let result = resolve();
         self.recording_paused.set(paused);
         result
-    }
-
-    /// Runs `lower` with `record` as the record whose spliced field type is
-    /// being lowered, or with none. The anonymous constants of a spliced field
-    /// type are written in its record and are read there.
-    pub(crate) fn with_spliced_record<R>(
-        &self,
-        record: Option<GenericParamOwner<'db>>,
-        lower: impl FnOnce() -> R,
-    ) -> R {
-        let enclosing = self.spliced_record.replace(record);
-        let result = lower();
-        self.spliced_record.set(enclosing);
-        result
-    }
-
-    pub(crate) fn spliced_record(&self) -> Option<GenericParamOwner<'db>> {
-        self.spliced_record.get()
     }
 
     pub(crate) fn into_resolutions(self) -> Vec<(PathId<'db>, PathRes<'db>)> {
@@ -1206,6 +1184,7 @@ pub fn canonicalize_const_ty_for_mode<'db>(
             ty,
             template_ty,
             const_def,
+            inherited_by,
             capture,
             policy,
         } => ConstTyId::new(
@@ -1215,6 +1194,7 @@ pub fn canonicalize_const_ty_for_mode<'db>(
                 ty: ty.map(|ty| canonicalize_ty_for_mode(db, ty, env, mode)),
                 template_ty: *template_ty,
                 const_def: *const_def,
+                inherited_by: *inherited_by,
                 capture: match capture {
                     ConstCaptureEnv::Bound(subst) => ConstCaptureEnv::from_subst(
                         db,
@@ -1564,17 +1544,23 @@ pub(crate) enum ConstBodyFailure<'db> {
 
 pub(crate) fn const_body_failure<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
+    owner: BodyOwner<'db>,
     diags: &[FuncBodyDiag<'db>],
     typed_body: &super::ty_check::TypedBody<'db>,
 ) -> ConstBodyFailure<'db> {
+    let body = owner.body(db).expect("a constant owner has a body");
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
         FuncBodyDiag::Body(BodyDiag::TypeMismatch {
             expected, given, ..
         }) => Some((*expected, *given)),
         _ => None,
     }) {
-        if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
+        // An implementation's conformance check reports its mismatched
+        // constants, and so does the check of a default for the
+        // implementation that inherits it.
+        if matches!(owner, BodyOwner::InheritedConst { .. })
+            || matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_)))
+        {
             return ConstBodyFailure::Elsewhere;
         }
         return ConstBodyFailure::AtType(InvalidCause::ConstTyMismatch { expected, given });
@@ -1637,13 +1623,13 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     // (`check_declared_type_requirements`, `check_body_requirements`).
     let owner = match const_def {
         Some(const_def) => BodyOwner::Const(*const_def),
-        None => BodyOwner::AnonConstBody {
-            body: *body,
-            expected: check_ty,
-        },
+        None => const_ty
+            .data(db)
+            .unevaluated_owner(check_ty)
+            .ok_or(InvalidCause::Other)?,
     };
     let (diags, typed_body) = infer_body(db, owner);
-    match const_body_failure(db, *body, diags, typed_body) {
+    match const_body_failure(db, owner, diags, typed_body) {
         ConstBodyFailure::None => {}
         ConstBodyFailure::AtType(cause) | ConstBodyFailure::AtPosition(cause) => {
             return Err(cause);
@@ -1659,10 +1645,10 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
     }
 
     if const_def.is_some() {
-        let owner = BodyOwner::AnonConstBody {
-            body: *body,
-            expected: check_ty,
-        };
+        let owner = const_ty
+            .data(db)
+            .unevaluated_owner(check_ty)
+            .ok_or(InvalidCause::Other)?;
         if let EvalOutcome::Failed(failure) =
             eval_body_owner_const(db, owner, capture.generic_subst(db))
         {
@@ -2022,26 +2008,40 @@ pub(crate) fn evaluate_const_ty<'db>(
         return const_ty;
     }
 
-    let (body, const_ty_ty, template_ty, capture, const_def) = if let ConstTyData::UnEvaluated {
-        body,
-        ty,
-        template_ty,
-        capture,
-        const_def,
-        ..
-    } = const_ty.data(db)
-    {
-        (*body, *ty, *template_ty, capture.clone(), *const_def)
-    } else {
-        let const_ty_ty = const_ty.ty(db);
-        return match check_const_ty(db, const_ty_ty, expected_ty, &mut UnificationTable::new(db)) {
-            Ok(_) => const_ty,
-            Err(cause) => {
-                let ty = TyId::invalid(db, cause);
-                return const_ty.swap_ty(db, ty);
-            }
+    let (body, const_ty_ty, template_ty, capture, const_def, inherited_by) =
+        if let ConstTyData::UnEvaluated {
+            body,
+            ty,
+            template_ty,
+            capture,
+            const_def,
+            inherited_by,
+            ..
+        } = const_ty.data(db)
+        {
+            (
+                *body,
+                *ty,
+                *template_ty,
+                capture.clone(),
+                *const_def,
+                *inherited_by,
+            )
+        } else {
+            let const_ty_ty = const_ty.ty(db);
+            return match check_const_ty(
+                db,
+                const_ty_ty,
+                expected_ty,
+                &mut UnificationTable::new(db),
+            ) {
+                Ok(_) => const_ty,
+                Err(cause) => {
+                    let ty = TyId::invalid(db, cause);
+                    return const_ty.swap_ty(db, ty);
+                }
+            };
         };
-    };
 
     let expected_ty = expected_ty.or(const_ty_ty);
     let check_ty = template_ty.or(expected_ty);
@@ -2058,7 +2058,11 @@ pub(crate) fn evaluate_const_ty<'db>(
 
     let expr = expr.clone();
 
-    if let Expr::Path(path) = &expr {
+    // The body of a default checked for an implementation is read through that
+    // implementation (below), not as the path the trait wrote.
+    if let Expr::Path(path) = &expr
+        && inherited_by.is_none()
+    {
         let Some(path) = path.to_opt() else {
             return ConstTyId::invalid(db, InvalidCause::ParseError);
         };
@@ -2244,10 +2248,13 @@ pub(crate) fn evaluate_const_ty<'db>(
         Err(cause) => return ConstTyId::invalid(db, cause),
     };
 
-    let owner = super::ty_check::BodyOwner::AnonConstBody {
-        body,
-        expected: validated.body_expected_ty,
-    };
+    let owner = const_ty
+        .data(db)
+        .unevaluated_owner(validated.body_expected_ty)
+        .unwrap_or(super::ty_check::BodyOwner::AnonConstBody {
+            body,
+            expected: validated.body_expected_ty,
+        });
     let key = SemanticInstanceKey::of(
         db,
         owner,
@@ -2584,15 +2591,28 @@ pub(crate) fn const_body_resolution_reenters<'db>(
 
     let mut visited = FxHashSet::default();
     visited.insert(start_body);
-    let mut frontier = vec![(start_body, start_expected, start_capture.clone())];
-    while let Some((body, expected, capture)) = frontier.pop() {
-        let typed_body = &infer_body(db, BodyOwner::AnonConstBody { body, expected }).1;
+    let mut frontier = vec![(
+        BodyOwner::AnonConstBody {
+            body: start_body,
+            expected: start_expected,
+        },
+        start_capture.clone(),
+    )];
+    while let Some((owner, capture)) = frontier.pop() {
+        let typed_body = &infer_body(db, owner).1;
         for cref in typed_body.const_refs() {
             let next = match cref {
-                ConstRef::Const(const_) => const_
-                    .body(db)
-                    .to_opt()
-                    .map(|next_body| (next_body, const_.ty(db), ConstCaptureEnv::Empty)),
+                ConstRef::Const(const_) => const_.body(db).to_opt().map(|next_body| {
+                    let ty = const_.ty(db);
+                    (
+                        BodyOwner::AnonConstBody {
+                            body: next_body,
+                            expected: ty,
+                        },
+                        ty,
+                        ConstCaptureEnv::Empty,
+                    )
+                }),
                 ConstRef::TraitConst { use_: assoc, .. } => {
                     // The recorded use is in the owning body's binder terms:
                     // `Self::B` in a trait default keeps `Self` as a param.
@@ -2603,16 +2623,19 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                     const_ty_from_assoc_const_use(db, assoc).and_then(|const_ty| {
                         match const_ty.data(db) {
                             ConstTyData::UnEvaluated {
-                                body,
                                 ty: Some(ty),
                                 capture,
                                 ..
-                            } => Some((*body, *ty, capture.clone())),
+                            } => Some((
+                                const_ty.data(db).unevaluated_owner(*ty)?,
+                                *ty,
+                                capture.clone(),
+                            )),
                             _ => None,
                         }
                     })
                 }
-                ConstRef::InherentConst(use_) => {
+                ConstRef::InherentConst { use_, .. } => {
                     let use_ = if let Some(subst) = capture.complete(db) {
                         InherentConstUse::new(
                             use_.origin_scope(),
@@ -2628,17 +2651,23 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                     const_ty_from_inherent_const_use(db, use_).and_then(|const_ty| {
                         match const_ty.data(db) {
                             ConstTyData::UnEvaluated {
-                                body,
                                 ty: Some(ty),
                                 capture,
                                 ..
-                            } => Some((*body, *ty, capture.clone())),
+                            } => Some((
+                                const_ty.data(db).unevaluated_owner(*ty)?,
+                                *ty,
+                                capture.clone(),
+                            )),
                             _ => None,
                         }
                     })
                 }
             };
-            let Some((next_body, next_expected, next_capture)) = next else {
+            let Some((next_owner, next_expected, next_capture)) = next else {
+                continue;
+            };
+            let Some(next_body) = next_owner.body(db) else {
                 continue;
             };
             if next_body == start_body {
@@ -2647,7 +2676,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
             if next_expected.has_invalid(db) || !visited.insert(next_body) {
                 continue;
             }
-            frontier.push((next_body, next_expected, next_capture));
+            frontier.push((next_owner, next_capture));
         }
     }
     false
@@ -2740,6 +2769,12 @@ pub(super) fn const_ty_from_trait_const<'db>(
     inst: TraitInstId<'db>,
     name: IdentId<'db>,
 ) -> Option<ConstTyId<'db>> {
+    // A goal that still has inference variables has no selected implementation
+    // yet, so its constant is not known: the use stays abstract. Selection
+    // takes only settled goals.
+    if collect_flags(db, inst).intersects(TyFlags::HAS_VAR) {
+        return None;
+    }
     let Selection::Unique(resolved) = resolve_trait_impl_instance(db, solve_cx, inst) else {
         return None;
     };
@@ -2758,9 +2793,14 @@ pub(crate) fn const_ty_from_resolved_trait_const<'db>(
     }
     let inst = resolved.trait_inst();
     let trait_ = inst.def(db);
-    let (body, template_ty, subst) = selected_assoc_const_body_template(db, resolved, name)?;
-    let template_ty = Some(template_ty);
-    let capture = ConstCaptureEnv::from_subst(db, subst);
+    let selected = selected_assoc_const_body_template(db, resolved, name)?;
+    let body = selected.owner.body(db)?;
+    let inherited_by = match selected.owner {
+        BodyOwner::InheritedConst { implementation, .. } => Some(implementation),
+        _ => None,
+    };
+    let template_ty = Some(selected.template);
+    let capture = ConstCaptureEnv::from_subst(db, selected.subst);
 
     let declared_ty = trait_
         .const_(db, name)
@@ -2772,6 +2812,7 @@ pub(crate) fn const_ty_from_resolved_trait_const<'db>(
         Partial::Present(body),
         template_ty,
         declared_ty,
+        inherited_by,
         capture,
         UnevaluatedConstPolicy::Evaluate,
     ))
@@ -2871,6 +2912,7 @@ pub(crate) fn const_ty_from_inherent_const<'db>(
         Partial::Present(body),
         template_ty,
         declared_ty,
+        None,
         ConstCaptureEnv::bound(db, impl_.into(), None, impl_args),
         UnevaluatedConstPolicy::Evaluate,
     ))
@@ -3054,6 +3096,7 @@ impl<'db> ConstTyId<'db> {
             ty,
             template_ty: ty,
             const_def,
+            inherited_by: None,
             capture: ConstCaptureEnv::identity_for_body(db, body),
             policy: UnevaluatedConstPolicy::Evaluate,
         };
@@ -3073,6 +3116,7 @@ impl<'db> ConstTyId<'db> {
         body: Partial<Body<'db>>,
         template_ty: Option<TyId<'db>>,
         ty: Option<TyId<'db>>,
+        inherited_by: Option<ImplTrait<'db>>,
         capture: ConstCaptureEnv<'db>,
         policy: UnevaluatedConstPolicy,
     ) -> Self {
@@ -3084,6 +3128,7 @@ impl<'db> ConstTyId<'db> {
             ty,
             template_ty,
             const_def: None,
+            inherited_by,
             capture,
             policy,
         };
@@ -3168,6 +3213,7 @@ impl<'db> ConstTyId<'db> {
                 body,
                 template_ty,
                 const_def,
+                inherited_by,
                 capture,
                 policy,
                 ..
@@ -3176,6 +3222,7 @@ impl<'db> ConstTyId<'db> {
                 ty: Some(ty),
                 template_ty: template_ty.or(Some(ty)),
                 const_def: *const_def,
+                inherited_by: *inherited_by,
                 capture: capture.clone(),
                 policy: *policy,
             },
@@ -3458,9 +3505,40 @@ pub enum ConstTyData<'db> {
         ty: Option<TyId<'db>>,
         template_ty: Option<TyId<'db>>,
         const_def: Option<Const<'db>>,
+        /// For the default of a trait's constant read through an
+        /// implementation that inherits it, whose declared type mentions a
+        /// parameter of the trait: the implementation. The body is then the
+        /// implementation's, checked for it (`BodyOwner::InheritedConst`), and
+        /// `capture` is over the implementation's parameters.
+        inherited_by: Option<ImplTrait<'db>>,
         capture: ConstCaptureEnv<'db>,
         policy: UnevaluatedConstPolicy,
     },
+}
+
+impl<'db> ConstTyData<'db> {
+    /// The owner whose body evaluates an unevaluated constant: the default of a
+    /// trait's constant checked for the implementation that inherits it, or the
+    /// anonymous body checked against `check_ty`. The one place that decides
+    /// which, so no reader rebuilds the owner from the fields.
+    pub(crate) fn unevaluated_owner(&self, check_ty: TyId<'db>) -> Option<BodyOwner<'db>> {
+        let ConstTyData::UnEvaluated {
+            body, inherited_by, ..
+        } = self
+        else {
+            return None;
+        };
+        Some(match inherited_by {
+            Some(implementation) => BodyOwner::InheritedConst {
+                implementation: *implementation,
+                body: *body,
+            },
+            None => BodyOwner::AnonConstBody {
+                body: *body,
+                expected: check_ty,
+            },
+        })
+    }
 }
 
 #[cfg(test)]
@@ -3691,6 +3769,7 @@ mod tests {
                     ty: Some(expected),
                     template_ty: Some(expected),
                     const_def: None,
+                    inherited_by: None,
                     capture: ConstCaptureEnv::Empty,
                     policy: UnevaluatedConstPolicy::Evaluate,
                 },

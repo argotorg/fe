@@ -1,0 +1,26 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/abi_transitive_field_error.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/abi_transitive_field_error.fe
+
+error[18-0004]: unsupported `#[abi]` struct field type
+  ┌─ abi_transitive_field_error.fe:3:30
+  │
+3 │ pub struct BadInner { pub p: *u8 }
+  │                              ^^^ `*u8` does not implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>`, `Decode<Sol>`
+  │
+  = `#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do
+
+error[18-0004]: unsupported `#[abi]` struct field type
+  ┌─ abi_transitive_field_error.fe:6:31
+  │
+6 │ pub struct Outer { pub inner: BadInner, pub a: u256 }
+  │                               ^^^^^^^^ `BadInner` does not implement `AbiSpan<Sol>`, `Encode<Sol>`, `Decode<Sol>`
+  │
+  = `#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do
+
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,6 @@
+use dep::{Foo, Gate}
+struct L<T> {}
+struct X {}
+impl Gate for X {}
+impl<T: Gate> Foo for L<T> {}
+impl Foo for L<u8> {}
