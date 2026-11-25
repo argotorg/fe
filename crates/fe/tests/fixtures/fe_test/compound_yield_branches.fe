@@ -437,6 +437,70 @@ fn unit_some(_ trace: *u256, _ c: bool) -> Option<ref ()> {
     log(trace, 9)
 }
 
+// A `var` declared before the compound and assigned in an element lowered
+// on each path keeps one local, held by the block declaring it.
+fn assigned_late(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
+    var late: Guard
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        late = Guard { trace, event: 4 }
+        mut q.c
+    })
+    log(trace, 9)
+}
+
+// A closure in an element lowered on each path captures the outer `let`,
+// the outer `var` and the element's own `let`.
+fn captured(_ q: mut Quad, _ c: bool) -> (mut u256, mut u256) {
+    let outer: u256 = 3
+    var given: u256
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        given = 4
+        let inner: u256 = 5
+        let f = || outer + given + inner
+        q.d = f()
+        mut q.c
+    })
+    q.d += 0
+}
+
+// A compound inside element 0's branch uses a binding of that branch.
+fn branch_binding(_ q: mut Quad, _ c: bool, _ d: bool) -> Option<(mut u256, u256)> {
+    yield Option::Some(if c {
+        let x: u256 = 42
+        (if d { mut q.a } else { mut q.b }, x)
+    } else {
+        (mut q.c, 7)
+    })
+    q.d += 0
+}
+
+fn diverging_then(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        return ((), mut q.b)
+    }, mut q.a)
+    log(trace, 9)
+}
+
+fn nested_if(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> ((), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        if d {
+            let _h = Guard { trace, event: 4 }
+            log(trace, 2)
+        }
+    }, mut q.a)
+    log(trace, 9)
+}
+
 #[test]
 fn branches_ending_in_accesses() {
     var q = quad()
@@ -852,5 +916,42 @@ fn unit_accesses_grant_a_frame_temporary() {
     if let Option::Some(ref w) = unit_some(trace, true) {
         look_unit(ref w, trace)
     }
+    assert(read(trace) == 539)
+}
+
+#[test]
+fn bindings_around_an_element_lowered_on_each_path() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, _) = assigned_late(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 594)
+    let (_, mut y) = captured(mut q, false)
+    y += 1
+    assert(q.d == 12)
+    if let Option::Some((mut z, n)) = branch_binding(mut q, true, false) {
+        z += n
+    }
+    assert(q.a == 1 && q.b == 42 && q.c == 1 && q.d == 12)
+}
+
+#[test]
+fn else_less_ifs_in_a_compound() {
+    var q = quad()
+    let trace = new_trace()
+    let (_, mut x) = diverging_then(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 53)
+    let trace = new_trace()
+    let (_, mut y) = diverging_then(mut q, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    let (_, mut z) = nested_if(mut q, trace, true, true)
+    bump(mut z, trace)
+    assert(read(trace) == 25439)
+    let trace = new_trace()
+    let (_, mut w) = nested_if(mut q, trace, true, false)
+    bump(mut w, trace)
     assert(read(trace) == 539)
 }
