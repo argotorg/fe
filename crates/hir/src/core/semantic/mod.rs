@@ -2140,7 +2140,9 @@ impl<'db> RecvArmView<'db> {
         let contract = self.contract(db);
         let scope = contract.scope();
         let assumptions = PredicateListId::empty_list(db);
-        let Some(abi) = resolve_sol_abi_ty(db, scope, assumptions) else {
+        // The library is found as the rest of the plan finds it, whatever a
+        // module of the contract's ingot is named.
+        let Some(abi) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
             return Err(EntryPlanError::Failed("missing std::abi::Sol".to_string()));
         };
         let info = self.abi_info(db, abi);

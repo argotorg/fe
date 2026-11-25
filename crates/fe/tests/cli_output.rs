@@ -474,6 +474,36 @@ fn test_cli_entry_plan_with_the_named_bound_met_checks_and_builds() {
     check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
 }
 
+// The entry check reads the plan that the lowering builds, which finds the
+// library by its own resolver. A local module named `std` hides the library
+// from a lexical lookup and changes neither the plan nor the check.
+#[test]
+fn test_cli_entry_check_is_not_hidden_by_a_module_named_std() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let bad = dir.join("entry_shadowed_std_undecodable.fe");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("16-0024"), "{output}");
+    assert!(output.contains("NoCodec: Decode<Sol>"), "{output}");
+    // The contract whose entry code is valid checks and its bytecode builds.
+    // The default build also writes the ABI, which looks `std` up lexically and
+    // fails under the local module (the same at the base, not part of the
+    // entry code).
+    let good = dir.join("entry_shadowed_std_valid.fe");
+    let (output, exit) = run_fe_check(good.to_str().unwrap());
+    assert_eq!(exit, 0, "{output}");
+    let temp = tempdir().expect("tempdir");
+    let (output, exit) = run_fe_main(&[
+        "build",
+        "--emit",
+        "bytecode",
+        "--out-dir",
+        temp.path().join("out").to_str().unwrap(),
+        good.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 0, "{output}");
+}
+
 #[test]
 fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");

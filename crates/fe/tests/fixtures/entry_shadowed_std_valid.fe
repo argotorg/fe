@@ -1,0 +1,6 @@
+// A local module named `std` does not change what the entry code needs: the
+// `init` argument decodes, so the contract checks and its bytecode builds.
+mod std {}
+pub contract C {
+    init(_ value: u256) {}
+}
