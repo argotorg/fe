@@ -278,6 +278,19 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
     }
 
+    /// Keeps what the scopes outside `depth` hold open at `position` of
+    /// `block`, on a path that never leaves them.
+    pub(super) fn hold_scopes(&mut self, depth: usize, block: SBlockId, position: usize) {
+        let held = self.drop_scopes[..depth]
+            .iter()
+            .filter_map(|scope| scope.held);
+        self.holds.extend(held.map(|local| Hold {
+            block,
+            position,
+            local,
+        }));
+    }
+
     /// Destroys the owners and keeps the held accesses open to here, in the
     /// order `exits` gives, on a path that is still live.
     fn leave(&mut self, exits: Vec<Exit>) {

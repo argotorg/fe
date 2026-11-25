@@ -60,10 +60,13 @@ yields from its grant is in use, and its slide runs then; the block's
 bindings are destroyed first, and of several such providers the later
 slides first, each before what the providers' expressions before it bound
 and allocated is destroyed. An exit from a later provider's expression
-leaves the earlier ones. The places the session reserves stay reserved for
-the whole block, so naming one in the block, such as `frame` above or the
-function's own `Frame` effect, is an error rather than a use of the place
-outside the scope:
+leaves the earlier ones. A path that never leaves the block, one that
+panics, fails an `assert!`, calls a function that never returns or loops
+forever, holds the provider throughout and runs no slide. The places the
+session reserves stay reserved for the whole block, so naming one in the
+block, such as `frame` above or the function's
+own `Frame` effect, is an error rather than a use of the place outside the
+scope:
 
 ```fe
 fn label() uses (frame: mut Frame) { .. }

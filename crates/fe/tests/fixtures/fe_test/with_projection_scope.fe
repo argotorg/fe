@@ -5,7 +5,8 @@ use core::ops::Drop
 // the block begins, and its slide runs when control leaves the block: at its
 // end, by `return`, `break`, `continue` or a failing `?`, or for a `yield`
 // statement's operand when the projection's session resumes, whether or not
-// a call in the block takes the provider. Each event appends a digit to a
+// a call in the block takes the provider; a path that panics never leaves
+// the block, and runs no slide. Each event appends a digit to a
 // trace a raw pointer reaches, so slides and destructors log too:
 //
 // 0-4 the indent a callee sees, or  3 a binding in the block is destroyed
@@ -120,6 +121,13 @@ impl Holder {
         yield mut self.v
         log(self.trace, 7)
     }
+}
+
+// Its slide panics with code 0x22, so a test that reverts with another code
+// ran no slide.
+fn strict() -> mut Frame uses (frame: mut Frame) {
+    yield mut frame
+    core::panic_code(0x22)
 }
 
 fn fresh(_ t: *u256) -> Frame {
@@ -421,6 +429,54 @@ fn shifted(_ t: *u256) -> mut Frame uses (frame: mut Frame) {
         mark()
         log(t, 2)
     }
+}
+
+fn panics(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = strict()) {
+        mark()
+        if c {
+            core::panic_code(0x11)
+        }
+        mark()
+    }
+}
+
+fn fails_assert(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = strict()) {
+        mark()
+        assert!(c)
+        mark()
+    }
+}
+
+fn loops_until_panic() uses (frame: mut Frame) {
+    with (Frame = strict()) {
+        var i: u256 = 0
+        loop {
+            i += 1
+            if i == 3 {
+                core::panic_code(0x11)
+            }
+        }
+    }
+}
+
+#[test(should_revert, panic = 0x11)]
+fn panic_runs_no_slide() {
+    var frame = fresh(new_trace())
+    with (frame) { panics(true) }
+}
+
+#[test(should_revert, panic = 0x01)]
+fn failing_assert_runs_no_slide() {
+    var frame = fresh(new_trace())
+    with (frame) { fails_assert(false) }
+}
+
+#[test(should_revert, panic = 0x11)]
+fn endless_loop_runs_no_slide() {
+    var frame = fresh(new_trace())
+    with (frame) { loops_until_panic() }
 }
 
 #[test]

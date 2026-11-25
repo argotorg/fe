@@ -661,6 +661,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             for successor in kind.successors() {
                 self.mark_reached(successor);
             }
+            // A path that ends execution leaves no scope, so what the
+            // scopes hold stays open through its end.
+            if matches!(
+                kind,
+                STerminatorKind::Unreachable | STerminatorKind::Fail(_)
+            ) && self.blocks[block.index()].reach != BlockReach::Dead
+            {
+                let position = self.blocks[block.index()].stmts.len();
+                self.hold_scopes(self.drop_scopes.len(), block, position);
+            }
             self.blocks[block.index()].terminator = Some(STerminator { origin, kind });
         }
     }
@@ -3009,9 +3019,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let scope = self.loop_stack.pop().expect("loop scope");
 
         self.switch_to(exit_bb);
+        // Nothing reaches the exit of a loop no `break` leaves, which
+        // `switch_to` closed as dead. The loop never leaves the scopes around
+        // it, which hold what they hold through it.
         if cond.is_none() && !scope.has_reachable_break {
-            // Nothing reaches the exit. Close it like a dead `if`/`match` join.
-            self.set_synthetic_terminator(exit_bb, STerminatorKind::Goto(exit_bb));
+            self.hold_scopes(drop_depth, cond_bb, 0);
         }
     }
 

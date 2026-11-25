@@ -9,7 +9,8 @@
 //! the successor, on an edge block of its own when the successor has other
 //! predecessors. An access whose carrier is never used ends right after it
 //! opens. A [`Hold`] is a use of a carrier and nothing else: a `with` block
-//! holds each provider it opens to every exit. The accesses ending at one
+//! holds each provider it opens to every exit, and through a path that ends
+//! execution, which ends nothing it holds. The accesses ending at one
 //! point end in reverse creation order, which ends an access before any
 //! access it depends on: a session finishes before the borrow passed to its
 //! call closes, so its slide can still write through the borrow.
@@ -112,7 +113,15 @@ pub(super) fn elaborate_ends<'db>(
             .flat_map(|successor| live_in[successor.index()].iter().copied())
             .chain(data.terminator.kind.used_locals())
             .collect();
-        hold(data.stmts.len(), &mut locals);
+        // A path that ends execution ends nothing it holds: no slide runs.
+        if matches!(
+            data.terminator.kind,
+            STerminatorKind::Unreachable | STerminatorKind::Fail(_)
+        ) {
+            locals.extend(held_at(&held, block, data.stmts.len()));
+        } else {
+            hold(data.stmts.len(), &mut locals);
+        }
         for (position, stmt) in data.stmts.iter().enumerate().rev() {
             after.push(locals.clone());
             transfer(stmt, &mut locals);

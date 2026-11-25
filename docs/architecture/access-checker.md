@@ -70,7 +70,10 @@ flowchart TD
   it, so the session lasts at least until the block, or a later provider's
   expression, is left. A yield site inside the block yields with the scope
   open, so it ends where that path's session resumes, as a `yield`
-  statement's operand does. The accesses ending at one point end newest first,
+  statement's operand does. A path that ends execution (`Unreachable`, `Fail`)
+  holds every such carrier at its terminator, and elaboration ends nothing
+  held there, so no slide runs; a loop no `break` leaves holds them at its
+  header. The accesses ending at one point end newest first,
   so an access ends before any access it depends on: a session finishes
   before the borrow passed to its call closes, and its slide can still write
   through the borrow.

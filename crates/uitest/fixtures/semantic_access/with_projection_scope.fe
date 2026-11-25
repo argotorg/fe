@@ -79,13 +79,70 @@ pub fn on_return(_ c: bool) uses (frame: mut Frame) {
     }
 }
 
-// Rejected: the provider is held on the path a failing `?` leaves by. The
-// block's other path diverges.
+// Rejected: the provider is held on the path a failing `?` leaves by, and
+// through the panic on the other path.
 pub fn on_try(_ x: Option<u256>) -> Option<u256> uses (frame: mut Frame) {
     with (Frame = indented(4)) {
         frame.log = 0
         let _ = x?
         core::panic()
+    }
+}
+
+// Rejected: a path that panics never leaves the block, so the provider is
+// held through it.
+pub fn on_panic() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        frame.log = frame.indent
+        core::panic()
+    }
+}
+
+// Rejected: the same on a diverging branch, the other one using the
+// provider.
+pub fn on_diverging_branch(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        if c {
+            frame.log = 0
+            core::panic()
+        }
+        mark()
+    }
+}
+
+// Rejected: the same in a `let .. else`.
+pub fn on_diverging_else(_ x: Option<u256>) -> u256 uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        let Option::Some(v) = x else {
+            frame.log = 0
+            core::panic()
+        }
+        mark()
+        v
+    }
+}
+
+// Rejected: a loop that never ends never leaves the block.
+pub fn in_endless_loop() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        loop {
+            frame.log = frame.indent
+        }
+    }
+}
+
+// Rejected: a loop that never ends holds the provider though an outer one
+// is left by `break`.
+pub fn in_nested_endless_loop(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        loop {
+            if c {
+                break
+            }
+            loop {
+                frame.log = 0
+            }
+        }
     }
 }
 
