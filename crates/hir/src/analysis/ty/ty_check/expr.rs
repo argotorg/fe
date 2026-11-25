@@ -31,8 +31,8 @@ use super::{
     stmt::ForLoopCall,
     ty_may_be_code_region_token,
     with_operand::{
-        BareName, OperandMeaning, OperandSite, OperandValues, classify_with_operand,
-        earlier_answer, opening_contexts,
+        BareName, OperandClass, OperandMeaning, OperandSite, OperandValues, SiteKind,
+        classify_with_operand, earlier_answer, opening_contexts,
     },
 };
 use crate::analysis::place::{Place, PlaceBase};
@@ -2383,6 +2383,7 @@ impl<'db> TyChecker<'db> {
                 && let Some(path) = path.to_opt()
             {
                 let site = OperandSite {
+                    kind: SiteKind::Block,
                     scope: self.env.scope(),
                     assumptions: self.env.assumptions(),
                     written_assumptions: self.env.written_assumptions(),
@@ -2481,14 +2482,18 @@ impl<'db> TyChecker<'db> {
                         .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
                     continue;
                 }
-                Some(OperandMeaning::NotAnImplementation {
-                    provider: Some((provider_ty, alias_scope)),
-                }) => {
+                Some(OperandMeaning::NotAnImplementation(OperandClass::ProviderType(
+                    provider_ty,
+                    alias_scope,
+                ))) => {
                     if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
                         continue;
                     }
                 }
-                Some(OperandMeaning::NotAnImplementation { provider: None }) | None => {}
+                Some(OperandMeaning::NotAnImplementation(
+                    OperandClass::Value | OperandClass::Other,
+                ))
+                | None => {}
             }
             let value_prop = self.check_expr_unknown(binding.value);
             // A record literal is also a spelling of a compile-time provider.

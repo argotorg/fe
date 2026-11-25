@@ -35,9 +35,21 @@ use crate::hir_def::{GenericParamOwner, PathKind};
 use crate::span::DynLazySpan;
 use crate::{hir_def::IdentId, hir_def::PathId, hir_def::scope_graph::ScopeId};
 
+/// The kind of place an operand is written in. The classifier answers the same
+/// question at every site; the kind says which classes the site can use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SiteKind {
+    /// An operand of a `with` block: providers and values are meaningful, and
+    /// local bindings are in scope.
+    Block,
+    /// An operand of a module's `with` declaration: implementations only.
+    Module,
+}
+
 /// Where an operand is written: what its names resolve in and what is already
 /// chosen around it.
 pub(super) struct OperandSite<'db> {
+    pub(super) kind: SiteKind,
     pub(super) scope: ScopeId<'db>,
     /// The bounds the operand's names are judged under.
     pub(super) assumptions: PredicateListId<'db>,
@@ -90,6 +102,19 @@ pub(super) trait OperandValues<'db> {
     fn instantiate_ty(&self, ty: TyId<'db>) -> TyId<'db>;
 }
 
+/// What an operand that names no implementation is.
+pub(super) enum OperandClass<'db> {
+    /// A type that a derive provider may serve, with the alias through which
+    /// it was named, if any. Only a site that opens providers has this class.
+    ProviderType(TyId<'db>, Option<ScopeId<'db>>),
+    /// A value: a local binding, a function or a constant, which a block
+    /// provides as an effect.
+    Value,
+    /// A name that is neither: a trait, a module, a type no provider serves,
+    /// or a name that resolves to nothing.
+    Other,
+}
+
 /// The meaning of an operand.
 pub(super) enum OperandMeaning<'db> {
     /// A named implementation, pushed on the choices in force.
@@ -101,11 +126,8 @@ pub(super) enum OperandMeaning<'db> {
         choice: ChosenImpls<'db>,
         conditions: Vec<TraitInstId<'db>>,
     },
-    /// Neither. A name that is a type which a derive provider may serve says
-    /// so, with the alias through which it was named, if any.
-    NotAnImplementation {
-        provider: Option<(TyId<'db>, Option<ScopeId<'db>>)>,
-    },
+    /// Not an implementation: what the name is instead.
+    NotAnImplementation(OperandClass<'db>),
     /// An operand that cannot stand: it contributes nothing. With
     /// `changed_choice`, `diags` is the one diagnostic of a generated
     /// implementation that written code did not choose, reported only for
@@ -498,7 +520,7 @@ fn provider_or_value<'db>(
     path: PathId<'db>,
     values: &dyn OperandValues<'db>,
 ) -> OperandMeaning<'db> {
-    let none = OperandMeaning::NotAnImplementation { provider: None };
+    let none = OperandMeaning::NotAnImplementation(OperandClass::Other);
     let Ok(resolved) = resolve_path(db, path, site.scope, site.assumptions, false) else {
         return none;
     };
@@ -526,11 +548,12 @@ fn provider_or_value<'db>(
                     true,
                 );
             }
-            none
+            OperandMeaning::NotAnImplementation(OperandClass::Value)
         }
-        None => OperandMeaning::NotAnImplementation {
-            provider: Some((provider_ty, alias_scope)),
-        },
+        None if site.kind == SiteKind::Block => OperandMeaning::NotAnImplementation(
+            OperandClass::ProviderType(provider_ty, alias_scope),
+        ),
+        None => none,
     }
 }
 

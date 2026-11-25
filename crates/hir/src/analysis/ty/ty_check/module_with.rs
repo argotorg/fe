@@ -31,8 +31,8 @@ use crate::{
 
 use super::BodyOwner;
 use super::with_operand::{
-    BareName, OperandMeaning, OperandSite, OperandValues, classify_with_operand, earlier_answer,
-    opening_contexts,
+    BareName, OperandMeaning, OperandSite, OperandValues, SiteKind, classify_with_operand,
+    earlier_answer, opening_contexts,
 };
 
 /// The frame of a module and the diagnostics of its own declaration.
@@ -144,6 +144,7 @@ fn module_choices_query<'db>(
         let operand_span = declaration.span().operands().operand(idx);
         let span: DynLazySpan<'db> = operand_span.clone().into();
         let site = OperandSite {
+            kind: SiteKind::Module,
             scope,
             assumptions: PredicateListId::empty_list(db),
             written_assumptions: PredicateListId::empty_list(db),
@@ -179,7 +180,7 @@ fn module_choices_query<'db>(
                 }
                 continue;
             }
-            OperandMeaning::NotAnImplementation { .. } => {
+            OperandMeaning::NotAnImplementation(_) => {
                 let empty = PredicateListId::empty_list(db);
                 match resolve_path(db, path, scope, empty, true)
                     .or_else(|_| resolve_path(db, path, scope, empty, false))
