@@ -1231,17 +1231,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
 
     /// Yields the `()` that `expr`, a yield site with no yield site inside,
     /// leaves at its end: a block ending in a statement, or the path past an
-    /// `if` without `else`. An access shape grants a frame temporary holding
-    /// it, as it does for any value.
+    /// `if` without `else`. Its shape is an access to `()`, an owned `()`
+    /// being no yield site, so it grants a frame temporary holding `()`, as
+    /// a value leaf does.
     fn yield_unit(&mut self, expr: ExprId) {
         let shape = self
             .typed_body
             .yield_shape(expr)
             .expect("a yield site has a shape");
-        let value = match *shape {
-            Shape::Access(kind, _) => self.grant_yield(expr, shape, kind, None, Self::unit_value),
-            _ => self.unit_value(),
+        let Shape::Access(kind, _) = *shape else {
+            unreachable!("a yield site of `()` is an access to it")
         };
+        let value = self.grant_yield(expr, shape, kind, None, Self::unit_value);
         self.yield_value(expr, value);
     }
 

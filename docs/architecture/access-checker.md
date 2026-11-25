@@ -54,10 +54,10 @@ flowchart TD
   branch, with the branch's scopes open, so the elements after it are
   lowered once per path, each lowering with locals of its own for the
   bindings declared in it. An owned element is no yield site and is
-  lowered as a value in place. A block that ends in a statement, and an
-  `if` without `else`, yield `()` within their scopes, a frame temporary's
-  grant for an access to `()`. A `return` or `yield` statement inside one
-  yields on its own.
+  lowered as a value in place. A block ending in a statement or an `if`
+  without `else` that is a yield site, an access to `()`, grants a frame
+  temporary holding `()` within its scope. A `return` or `yield` statement
+  inside one yields on its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its

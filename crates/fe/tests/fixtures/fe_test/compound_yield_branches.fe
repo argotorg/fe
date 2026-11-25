@@ -566,6 +566,51 @@ fn owned_branches(_ q: mut Quad, _ x: bool, _ y: bool, _ z: bool) -> (u256, u256
     (if x { 1 } else { 2 }, if y { 3 } else { 4 }, if z { 5 } else { 6 }, mut q.a)
 }
 
+// An owned element between two branching access elements keeps an access
+// open across a loop, with locals of its own on each path.
+fn owned_loop(_ q: mut Quad, _ c: bool, _ d: bool) -> (mut u256, u256, mut u256) {
+    yield (if c { mut q.a } else { mut q.b }, {
+        let r = ref q.c
+        var i: u256 = 0
+        while i < 2 {
+            i += 1
+        }
+        r + i
+    }, if d { mut q.d } else { mut q.c })
+    q.d += 0
+}
+
+// An owned `Drop` value is destroyed once when a later element breaks out
+// of an enclosing loop.
+fn broken_tuple(_ q: mut Quad, _ trace: *u256, _ quit: bool) -> (Guard, mut u256) {
+    loop {
+        yield (Guard { trace, event: 2 }, if quit {
+            break
+        } else {
+            mut q.a
+        })
+        log(trace, 9)
+        return
+    }
+    yield (Guard { trace, event: 4 }, mut q.b)
+    log(trace, 8)
+}
+
+// A `yield` statement inside an owned element yields on its own; the
+// element's binding ends with it on the other path.
+fn owned_nested_yield(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield ({
+        let _g = Guard { trace, event: 3 }
+        if c {
+            yield (7, mut q.b)
+            log(trace, 8)
+            return
+        }
+        8
+    }, mut q.a)
+    log(trace, 9)
+}
+
 #[test]
 fn branches_ending_in_accesses() {
     var q = quad()
@@ -1085,4 +1130,48 @@ fn a_nested_mixed_tuple() {
     let (a, b, c, mut z) = owned_branches(mut q, true, false, true)
     z += a + b + c
     assert(sum(q) == 11120)
+}
+
+#[test]
+fn an_owned_element_with_an_access_across_a_loop() {
+    var q = quad()
+    let (mut x, n, mut y) = owned_loop(mut q, true, true)
+    x += n
+    y += n
+    let (mut x, m, mut y) = owned_loop(mut q, false, false)
+    x += m
+    y += m
+    assert(sum(q) == 2222)
+}
+
+#[test]
+fn an_owned_drop_value_then_a_break() {
+    var q = quad()
+    let trace = new_trace()
+    {
+        let (g, mut x) = broken_tuple(mut q, trace, true)
+        bump(mut x, trace)
+        assert(g.event == 4)
+    }
+    assert(read(trace) == 2584)
+    let trace = new_trace()
+    {
+        let (g, mut x) = broken_tuple(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 592)
+}
+
+#[test]
+fn a_nested_yield_in_an_owned_element() {
+    var q = quad()
+    let trace = new_trace()
+    let (n, mut x) = owned_nested_yield(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 583)
+    let trace = new_trace()
+    let (m, mut y) = owned_nested_yield(mut q, trace, false)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 359)
 }
