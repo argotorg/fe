@@ -167,12 +167,14 @@ warning.
 
 A shape groups owned values and accesses, `-> (usize, ref T)`, and the
 caller destructures it with `let (i, x) = ..`. Two `mut` components must be
-structurally disjoint, as in `(mut self.a, mut self.b)`. An element may
-branch, as in `Option::Some(if c { mut self.a } else { mut self.b })`: each
-branch yields its own value on its own path, which evaluates the elements
-after it, so the components must be disjoint on each path. Each path is its
-own code, so a tuple of `n` elements that each branch `k` ways compiles to
-`k^n` paths. An optional shape,
+structurally disjoint, as in `(mut self.a, mut self.b)`. An element that
+holds an access may branch, as in
+`Option::Some(if c { mut self.a } else { mut self.b })`: each branch yields
+its own value on its own path, which evaluates the elements after it, so the
+components must be disjoint on each path. Each path is its own code, so a
+tuple of `n` such elements that each branch `k` ways compiles to `k^n`
+paths. An owned element is an ordinary value, evaluated in place: its
+branches join, and it multiplies no paths. An optional shape,
 `-> Option<mut T>` or `-> Result<E, mut T>`, is consumed with `if let`,
 `match`, `let .. else` or `?`, or by a call of `is_some`, `is_none`,
 `is_ok`, `is_err` or `unwrap`: a test ends the access, and `unwrap` grants

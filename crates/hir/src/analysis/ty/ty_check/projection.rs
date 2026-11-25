@@ -123,9 +123,13 @@ impl<'db> TyChecker<'db> {
                 }
             }
             Shape::Tuple(elems) => match data {
+                // An owned element is an ordinary value: no access comes out
+                // of it, so it holds nothing open across the yield.
                 Expr::Tuple(values) if values.len() == elems.len() => {
                     for (value, elem) in values.iter().zip(elems) {
-                        self.check_yield_site(*value, elem);
+                        if elem.has_access() {
+                            self.check_yield_site(*value, elem);
+                        }
                     }
                 }
                 _ => self.invalid_yield(expr, shape),

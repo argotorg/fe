@@ -1248,7 +1248,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// Lowers `expr`. A projection's yield site yields on its own path, so
     /// each path's grant has its own resume point. A tuple or variant
     /// constructor yielded takes its elements in order on each path: an
-    /// element that branches continues the constructor in each branch.
+    /// element an access comes out of is a yield site, and one that branches
+    /// continues the constructor in each branch.
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
         let yield_leaf = self
             .typed_body
@@ -1271,16 +1272,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 _ => None,
             }
-            && let Some(&first) = elems.first()
         {
-            self.compounds.push(Compound {
+            self.continue_compound(Compound {
                 expr,
                 elems,
                 variant,
                 values: Vec::new(),
             });
-            self.lower_expr(first);
-            self.compounds.pop();
             debug_assert!(
                 self.is_terminated(self.current),
                 "a compound yield ends each of its paths"
@@ -1352,31 +1350,47 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let mut next = compound.clone();
         let value = self.take_operand(expr, value);
         next.values.push(SOperand::expr(value, expr));
-        if let Some(&elem) = next.elems.get(next.values.len()) {
-            // The element is lowered again on each path, as new code: what
-            // the lowering defines, the locals of the bindings declared in
-            // it among them, is its own, while what the path defined before
-            // the element is shared, as after a branch.
-            let bindings = self.binding_locals.clone();
-            self.compounds.push(next);
-            self.lower_expr(elem);
-            self.compounds.pop();
-            self.binding_locals = bindings;
-        } else {
-            let ty = self.expr_ty(next.expr);
-            let fields = next.values.into_boxed_slice();
-            let built = match next.variant {
-                Some(variant) => SExpr::EnumMake {
-                    enum_ty: ty,
-                    variant: VariantIndex(variant),
-                    fields,
-                },
-                None => SExpr::AggregateMake { ty, fields },
-            };
-            let built = self.emit_expr_with_origin(SemOrigin::Expr(next.expr), ty, built);
-            self.yield_value(next.expr, built);
-        }
+        // The elements after it are lowered again on each path, as new code:
+        // what a lowering defines, the locals of the bindings declared in it
+        // among them, is its own, while what the path defined before is
+        // shared, as after a branch.
+        let bindings = self.binding_locals.clone();
+        self.continue_compound(next);
+        self.binding_locals = bindings;
         self.compounds.push(compound);
+    }
+
+    /// Lowers the elements of `compound` its path has not taken, in order:
+    /// an owned one as an ordinary value, on this path; the next yield site
+    /// ends the path, passing its value to `compound`. With every element,
+    /// builds the compound's value and yields it.
+    fn continue_compound(&mut self, mut compound: Compound) {
+        while let Some(&elem) = compound.elems.get(compound.values.len()) {
+            if self.typed_body.yield_shape(elem).is_some() {
+                self.compounds.push(compound);
+                self.lower_expr(elem);
+                self.compounds.pop();
+                return;
+            }
+            let value = self.lower_expr(elem);
+            if self.is_terminated(self.current) {
+                return;
+            }
+            let value = self.take_operand(elem, value);
+            compound.values.push(SOperand::expr(value, elem));
+        }
+        let ty = self.expr_ty(compound.expr);
+        let fields = compound.values.into_boxed_slice();
+        let built = match compound.variant {
+            Some(variant) => SExpr::EnumMake {
+                enum_ty: ty,
+                variant: VariantIndex(variant),
+                fields,
+            },
+            None => SExpr::AggregateMake { ty, fields },
+        };
+        let built = self.emit_expr_with_origin(SemOrigin::Expr(compound.expr), ty, built);
+        self.yield_value(compound.expr, built);
     }
 
     fn lower_expr_inner(&mut self, expr: ExprId) -> SValueId {

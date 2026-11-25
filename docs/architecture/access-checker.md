@@ -49,12 +49,15 @@ flowchart TD
   whose own scope holds its temporaries and the bindings of an access block
   in it, which has no scope of its own; or every scope. A tuple or variant
   constructor yielded takes its elements in order on each path and yields
-  its value at the end of each: an element that branches continues the
-  constructor in each branch, with the branch's scopes open, so the
-  elements after it are lowered once per path, each lowering with locals
-  of its own for the bindings declared in it. A block that ends in a
-  statement, and an `if` without `else`, yield `()` within their scopes. A
-  `return` or `yield` statement inside one yields on its own.
+  its value at the end of each. An element whose shape holds an access is
+  a yield site: one that branches continues the constructor in each
+  branch, with the branch's scopes open, so the elements after it are
+  lowered once per path, each lowering with locals of its own for the
+  bindings declared in it. An owned element is no yield site and is
+  lowered as a value in place. A block that ends in a statement, and an
+  `if` without `else`, yield `()` within their scopes, a frame temporary's
+  grant for an access to `()`. A `return` or `yield` statement inside one
+  yields on its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its

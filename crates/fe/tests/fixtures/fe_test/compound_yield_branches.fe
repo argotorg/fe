@@ -84,7 +84,8 @@ fn pick_tail(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
     })
 }
 
-// Branches ending in owned values.
+// An owned element is an ordinary value: no access comes out of it, so
+// what its branches bind ends with them, before the next element.
 fn counted(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
     yield (if c {
         let _g = Guard { trace, event: 3 }
@@ -259,8 +260,8 @@ fn rebound_ref(_ q: ref Quad, _ c: bool, _ d: bool) -> (ref u256, ref u256) {
     })
 }
 
-// Elements of `()`: a block ending in a statement, and an `if` without
-// `else`, yield `()` within their scopes.
+// Elements of `()` are owned: a block ending in a statement and an `if`
+// without `else` end where they end, before the next element.
 fn units(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((), (), (), mut u256) {
     yield ({}, {
         let _g = Guard { trace, event: 3 }
@@ -275,8 +276,8 @@ fn units_tail(_ q: mut Quad) -> ((), mut u256) {
     ({}, mut q.a)
 }
 
-// Pins the documented rule: an owned tuple inside an element is an ordinary
-// value, built before the yield, so what its branches bind ends with them.
+// An owned tuple inside an element is an ordinary value as an owned element
+// is: what its branches bind ends with them, before the yield.
 fn owned_inner(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((u256, u256), mut u256) {
     yield ((if c {
         let _g = Guard { trace, event: 3 }
@@ -501,6 +502,70 @@ fn nested_if(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> ((), mut u2
     log(trace, 9)
 }
 
+// An owned element between two access elements is evaluated in place, once
+// on each path of the branching element before it, and ends there.
+fn between(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (mut u256, u256, mut u256) {
+    yield (if c {
+        let _a = Guard { trace, event: 2 }
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        log(trace, 1)
+        let _g = Guard { trace, event: 3 }
+        7
+    }, mut q.c)
+    log(trace, 9)
+}
+
+// An owned `Drop` value built in a block lives on in the tuple, or is
+// destroyed when a later element returns instead.
+fn built_then_returned(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Guard, mut u256) {
+    yield ({
+        let _x = Guard { trace, event: 3 }
+        Guard { trace, event: 2 }
+    }, if c {
+        mut q.a
+    } else {
+        return (Guard { trace, event: 4 }, mut q.b)
+    })
+    log(trace, 9)
+}
+
+// A `return` inside an owned element yields on its own.
+fn owned_return(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        return (7, mut q.b)
+    } else {
+        let _h = Guard { trace, event: 4 }
+        8
+    }, mut q.a)
+    log(trace, 9)
+}
+
+// In a nested mixed tuple the owned element ends in place, the access
+// element's branch at resume.
+fn mixed(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> ((u256, mut u256), mut u256) {
+    yield ((if c {
+        let _g = Guard { trace, event: 3 }
+        7
+    } else {
+        8
+    }, if d {
+        let _h = Guard { trace, event: 4 }
+        mut q.a
+    } else {
+        mut q.b
+    }), mut q.c)
+    log(trace, 9)
+}
+
+// Owned elements that branch do not multiply the paths: one yield.
+fn owned_branches(_ q: mut Quad, _ x: bool, _ y: bool, _ z: bool) -> (u256, u256, u256, mut u256) {
+    (if x { 1 } else { 2 }, if y { 3 } else { 4 }, if z { 5 } else { 6 }, mut q.a)
+}
+
 #[test]
 fn branches_ending_in_accesses() {
     var q = quad()
@@ -528,11 +593,11 @@ fn branches_ending_in_owned_values() {
     let trace = new_trace()
     let (n, mut x) = counted(mut q, trace, true)
     bump(mut x, trace)
-    assert(n == 7 && read(trace) == 539)
+    assert(n == 7 && read(trace) == 359)
     let trace = new_trace()
     let (m, mut y) = counted(mut q, trace, false)
     bump(mut y, trace)
-    assert(m == 8 && read(trace) == 549)
+    assert(m == 8 && read(trace) == 459)
 }
 
 #[test]
@@ -724,11 +789,11 @@ fn unit_elements() {
     let trace = new_trace()
     let (_, _, _, mut x) = units(mut q, trace, true)
     bump(mut x, trace)
-    assert(read(trace) == 25439)
+    assert(read(trace) == 32459)
     let trace = new_trace()
     let (_, _, _, mut y) = units(mut q, trace, false)
     bump(mut y, trace)
-    assert(read(trace) == 539)
+    assert(read(trace) == 359)
     let (_, mut z) = units_tail(mut q)
     z += 1
     assert(sum(q) == 3000)
@@ -949,9 +1014,75 @@ fn else_less_ifs_in_a_compound() {
     let trace = new_trace()
     let (_, mut z) = nested_if(mut q, trace, true, true)
     bump(mut z, trace)
-    assert(read(trace) == 25439)
+    assert(read(trace) == 24359)
     let trace = new_trace()
     let (_, mut w) = nested_if(mut q, trace, true, false)
     bump(mut w, trace)
-    assert(read(trace) == 539)
+    assert(read(trace) == 359)
+}
+
+#[test]
+fn an_owned_element_between_access_elements() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, n, mut y) = between(mut q, trace, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(n == 7 && read(trace) == 135529)
+    let trace = new_trace()
+    let (mut x, m, mut y) = between(mut q, trace, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(m == 7 && read(trace) == 13559)
+    assert(sum(q) == 1120)
+}
+
+#[test]
+fn an_owned_drop_value_then_a_return() {
+    var q = quad()
+    let trace = new_trace()
+    {
+        let (g, mut x) = built_then_returned(mut q, trace, true)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 3592)
+    let trace = new_trace()
+    {
+        let (g, mut x) = built_then_returned(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 4)
+    }
+    assert(read(trace) == 3524)
+}
+
+#[test]
+fn a_return_in_an_owned_element() {
+    var q = quad()
+    let trace = new_trace()
+    let (n, mut x) = owned_return(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 53)
+    let trace = new_trace()
+    let (m, mut y) = owned_return(mut q, trace, false)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 459)
+}
+
+#[test]
+fn a_nested_mixed_tuple() {
+    var q = quad()
+    let trace = new_trace()
+    let ((n, mut x), mut y) = mixed(mut q, trace, true, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(n == 7 && read(trace) == 35549)
+    let trace = new_trace()
+    let ((m, mut x), mut y) = mixed(mut q, trace, false, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 559)
+    let (a, b, c, mut z) = owned_branches(mut q, true, false, true)
+    z += a + b + c
+    assert(sum(q) == 11120)
 }
