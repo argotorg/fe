@@ -201,6 +201,10 @@ impl DiagnosticVoucher for SemanticDiagnosticId<'_> {
 
 impl DiagnosticVoucher for SemanticDiagnostic<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        // The numbers of pass 16 have three homes: this table, the unsafe trust
+        // error (15, `access/trust.rs`) and the entry code error of a contract
+        // (24, `ty_check/contract.rs`, `ContractEntryFailure`). A new number is
+        // checked against all three.
         let local_code = match self.kind {
             SemanticDiagnosticKind::AccessConflict => 1,
             SemanticDiagnosticKind::MoveConflict => 2,
