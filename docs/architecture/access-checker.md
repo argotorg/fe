@@ -38,12 +38,21 @@ flowchart TD
   access by a *carrier* value (`View`, `BorrowRef`, `BorrowMut` types that
   exist only in the IR).
 - A projection's every yield site is a `Yield` terminator whose resume block
-  runs the slide and returns. A tail or `return` yield has an empty slide; a
-  `yield` statement's slide is the code after it, except on a sum shape's
-  empty variant, which grants nothing and so returns at once, as `?`'s exit
-  does: a variant constructor is decided statically, and any other yield,
-  such as a forwarded `yield self.entry(k)`, tests its value. Each yield site
-  yields on its own path.
+  runs the slide and returns. A tail or `return` yield, even a `return` in a
+  `yield` statement's operand, has an empty slide; a `yield` statement's
+  slide is the code after it, except on a sum shape's empty variant, which
+  grants nothing and so returns at once, as `?`'s exit does: a variant
+  constructor is decided statically, and any other yield, such as a
+  forwarded `yield self.entry(k)`, tests its value. Each yield site yields
+  on its own path. The resume block destroys what the scopes the yield
+  leaves hold: before the slide, those of a `yield` statement's operand,
+  whose own scope holds its temporaries and the bindings of an access block
+  in it, which has no scope of its own; or every scope. A
+  compound yield site, a tuple or variant constructor, yields once after
+  its elements: a block among them passes what it holds to the enclosing
+  scope, a branch of an `if` or `match` among them destroys what it holds
+  where it ends, and a `return` or `yield` statement inside one yields on
+  its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
