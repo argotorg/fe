@@ -676,6 +676,36 @@ pub trait Call: EvmCapabilitySeal {
         finish_raw_call(success, mut ret)
     }
 
+    /// Low-level `STATICCALL` opcode that writes into a fixed-size buffer.
+    ///
+    /// Unlike `raw_staticcall`, the output stays in a `FixedMemBuffer<N>`, so
+    /// the call needs no heap allocation. The EVM copies at most `N`
+    /// returndata bytes into `ret` and leaves the rest of `ret` unchanged.
+    /// Check `returndata_len()` on the outcome before reading `ret`: shorter
+    /// returndata leaves the old bytes in its tail.
+    fn raw_staticcall_fixed<const N: usize>(
+        self,
+        addr: Address,
+        gas: u256,
+        args: MemSpan,
+        ret: mut ptr::FixedMemBuffer<N>,
+    ) -> RawCallOutcome {
+        let success = unsafe {
+            ops::staticcall(
+                gas: gas,
+                addr: addr.inner,
+                args_offset: args.ptr(),
+                args_len: args.len() as u256,
+                ret_offset: ret.ptr(),
+                ret_len: N as u256,
+            ) != 0
+        }
+        RawCallOutcome {
+            success,
+            returndata_len: ops::returndatasize(),
+        }
+    }
+
     /// Low-level `DELEGATECALL` opcode with explicit input and output buffers.
     ///
     /// The output buffer receives at most its capacity; the outcome retains
