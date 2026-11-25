@@ -7910,3 +7910,29 @@ fn inherited_default_proofs_come_from_the_implementations_bounds() {
         assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
     }
 }
+
+#[test]
+fn opened_implementation_is_a_constant_candidate_only_where_its_conditions_hold() {
+    // An implementation opened by `with` whose condition does not hold for the
+    // receiver is not a candidate for a constant, as it is not for a method.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &inherited_default_choices_fixture("opened_condition_unmet.fe"),
+    ]);
+    assert_eq!(exit, 0, "expected both reads to select `T1`:\n{output}");
+
+    // Where it holds, the constant and the method are ambiguous alike.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("opened_condition_met.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[2-0018]") && output.contains("`K` is ambiguous"),
+        "expected the constant to be ambiguous:\n{output}"
+    );
+    assert!(
+        output.contains("error[2-0016]"),
+        "expected the method to be ambiguous:\n{output}"
+    );
+}

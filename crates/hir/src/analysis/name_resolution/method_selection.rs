@@ -664,6 +664,67 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
     }
 }
 
+/// Whether an implementation is a candidate for a receiver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImplementorCheck {
+    /// The receiver does not unify with the implementation's self type.
+    Rejected,
+    /// A condition of the implementation is proved not to hold.
+    Unsatisfied,
+    /// Every condition is proved or still open: the implementation is a
+    /// candidate that a later goal confirms.
+    NeedsConfirmation,
+    /// Every condition holds.
+    Confirmed,
+}
+
+/// Checks `receiver_ty` against `implementor`, an implementation instantiated
+/// in `table`, and confirms its conditions in `solve_cx`. A solution that the
+/// conditions determine is unified into `table`, so an instance built from
+/// `implementor` afterwards reflects it. This is how method selection and
+/// constant selection decide whether an implementation is a candidate.
+pub(crate) fn confirm_implementor<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    table: &mut UnificationTable<'db>,
+    receiver_ty: TyId<'db>,
+    implementor: ImplementorId<'db>,
+) -> ImplementorCheck {
+    let impl_ty = table.instantiate_to_term(implementor.self_ty(db));
+    let receiver_ty = table.instantiate_to_term(receiver_ty);
+    if table.unify(impl_ty, receiver_ty).is_err() {
+        return ImplementorCheck::Rejected;
+    }
+
+    let mut needs_confirmation = false;
+    for &constraint in implementor.constraints(db).list(db) {
+        let constraint = constraint.fold_with(db, &mut *table);
+        let query = solve_cx.query(db, constraint);
+        match is_goal_query_satisfiable(db, solve_cx, &query) {
+            GoalSatisfiability::Satisfied(solution) => {
+                // A unique solution can bind impl parameters that the self
+                // type doesn't determine (e.g. a trait argument fixed only
+                // by this bound). Unify it back into the table so the trait
+                // instance built from the implementation reflects those
+                // bindings instead of leaving them as unconstrained inference
+                // variables (which would drop the bound from the inferred
+                // method signature).
+                let solved = query.extract_solution(&mut *table, solution).inst;
+                let _ = table.unify(constraint, solved);
+            }
+            GoalSatisfiability::NeedsConfirmation { .. } | GoalSatisfiability::ContainsInvalid => {
+                needs_confirmation = true;
+            }
+            GoalSatisfiability::UnSat(_) => return ImplementorCheck::Unsatisfied,
+        }
+    }
+    if needs_confirmation {
+        ImplementorCheck::NeedsConfirmation
+    } else {
+        ImplementorCheck::Confirmed
+    }
+}
+
 struct MethodSelector<'db, 'a> {
     db: &'db dyn HirAnalysisDb,
     receiver: &'a Canonicalized<'db, TyId<'db>>,
@@ -1122,38 +1183,15 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
         implementor: ImplementorId<'db>,
         method: Func<'db>,
     ) -> TraitCandidateCheck<'db> {
-        let impl_ty = table.instantiate_to_term(implementor.self_ty(self.db));
-        let receiver_ty = table.instantiate_to_term(receiver_ty);
-        if table.unify(impl_ty, receiver_ty).is_err() {
+        let check = confirm_implementor(
+            self.db,
+            self.solve_cx(),
+            &mut table,
+            receiver_ty,
+            implementor,
+        );
+        if check == ImplementorCheck::Rejected {
             return TraitCandidateCheck::Rejected;
-        }
-
-        let solve_cx = self.solve_cx();
-        let mut needs_confirmation = false;
-        let mut unsatisfied = false;
-        for &constraint in implementor.constraints(self.db).list(self.db) {
-            let constraint = constraint.fold_with(self.db, &mut table);
-            let query = solve_cx.query(self.db, constraint);
-            match is_goal_query_satisfiable(self.db, solve_cx, &query) {
-                GoalSatisfiability::Satisfied(solution) => {
-                    // A unique solution can bind impl parameters that the self
-                    // type doesn't determine (e.g. a trait argument fixed only
-                    // by this bound). Unify it back into the table so the trait
-                    // instance built below reflects those bindings instead of
-                    // leaving them as unconstrained inference variables (which
-                    // would drop the bound from the inferred method signature).
-                    let solved = query.extract_solution(&mut table, solution).inst;
-                    let _ = table.unify(constraint, solved);
-                }
-                GoalSatisfiability::NeedsConfirmation { .. }
-                | GoalSatisfiability::ContainsInvalid => {
-                    needs_confirmation = true;
-                }
-                GoalSatisfiability::UnSat(_) => {
-                    unsatisfied = true;
-                    break;
-                }
-            }
         }
 
         let inst = implementor
@@ -1164,12 +1202,11 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                 .canonicalize_solution(self.db, &mut table, inst),
             method,
         );
-        if unsatisfied {
-            TraitCandidateCheck::Unsatisfied(cand)
-        } else if needs_confirmation {
-            TraitCandidateCheck::NeedsConfirmation(cand)
-        } else {
-            TraitCandidateCheck::Confirmed(cand)
+        match check {
+            ImplementorCheck::Rejected => unreachable!("returned above"),
+            ImplementorCheck::Unsatisfied => TraitCandidateCheck::Unsatisfied(cand),
+            ImplementorCheck::NeedsConfirmation => TraitCandidateCheck::NeedsConfirmation(cand),
+            ImplementorCheck::Confirmed => TraitCandidateCheck::Confirmed(cand),
         }
     }
 
