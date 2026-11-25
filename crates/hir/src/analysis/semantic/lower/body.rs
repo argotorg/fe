@@ -229,8 +229,9 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     /// Receivers of projection calls in an assignment target or a receiver,
     /// prepared before the value or the arguments (`prepare_place_root`).
     prepared_receivers: FxHashMap<ExprId, Receiver<'db>>,
-    /// How many yield sites enclose the expression being lowered.
-    pub(super) yield_depth: u32,
+    /// The tuples and variant constructors a projection yields whose
+    /// elements are being lowered, innermost last.
+    compounds: Vec<Compound>,
     /// The slide of the `yield` statement being lowered, and how many scopes
     /// enclose the statement.
     slide: Option<(SBlockId, usize)>,
@@ -286,6 +287,17 @@ pub(super) enum Receiver<'db> {
     /// `e?` on a sum shape in the receiver chain, by `e` prepared: `e` opens
     /// after the arguments, and its payload is taken, or the body exits, then.
     Try(Box<Receiver<'db>>),
+}
+
+/// A tuple or variant constructor a projection yields, with the values of
+/// the elements its path has taken so far.
+#[derive(Clone)]
+struct Compound {
+    expr: ExprId,
+    elems: Vec<ExprId>,
+    /// The variant a constructor builds.
+    variant: Option<u16>,
+    values: Vec<SOperand>,
 }
 
 #[derive(Clone, Copy)]
@@ -350,7 +362,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             loop_stack: Vec::new(),
             loop_bases: FxHashMap::default(),
             prepared_receivers: FxHashMap::default(),
-            yield_depth: 0,
+            compounds: Vec::new(),
             slide: None,
             unsafe_splits: Vec::new(),
             drop_scopes: Vec::new(),
@@ -1207,12 +1219,43 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// Lowers `expr`. A projection's yield site yields on its own path, so
-    /// each path's grant has its own resume point.
+    /// each path's grant has its own resume point. A tuple or variant
+    /// constructor yielded takes its elements in order on each path: an
+    /// element that branches continues the constructor in each branch.
     pub(super) fn lower_expr(&mut self, expr: ExprId) -> SValueId {
         let yield_leaf = self
             .typed_body
             .yield_shape(expr)
             .filter(|_| self.is_yield_leaf(expr));
+        if let Some(shape) = yield_leaf
+            && self.typed_body.expr_prop(self.db, expr).shape.is_none()
+            && let Some((elems, variant)) = match (shape, expr.data(self.db, self.body)) {
+                (Shape::Tuple(_), Partial::Present(Expr::Tuple(elems))) => {
+                    Some((elems.clone(), None))
+                }
+                (Shape::Sum { variant, .. }, Partial::Present(Expr::Call(_, args)))
+                    if args.len() == 1
+                        && constructed_variant(
+                            self.typed_body.value_path_ref(expr),
+                            self.typed_body.callable_expr(expr),
+                        ) == Some(*variant) =>
+                {
+                    Some((args.iter().map(|arg| arg.expr).collect(), Some(*variant)))
+                }
+                _ => None,
+            }
+            && let Some(&first) = elems.first()
+        {
+            self.compounds.push(Compound {
+                expr,
+                elems,
+                variant,
+                values: Vec::new(),
+            });
+            self.lower_expr(first);
+            self.compounds.pop();
+            return self.alloc_temp(self.expr_ty(expr));
+        }
         // A `!` expression typed as its context's type ends its block where it
         // would produce its value, which no path defines. A place of type `!`
         // is not read: lowering it evaluates what locates it.
@@ -1224,12 +1267,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             return self.alloc_temp(self.typed_body.expr_ty(self.db, expr));
         }
         let value = match yield_leaf {
-            Some(shape) => {
-                self.yield_depth += 1;
-                let value = self.lower_yield_leaf(expr, shape.clone());
-                self.yield_depth -= 1;
-                value
-            }
+            Some(shape) => self.lower_yield_leaf(expr, shape.clone()),
             None => self.lower_expr_inner(expr),
         };
         let expr_ty = normalize_ty(
@@ -1241,13 +1279,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         if expr_ty.is_never(self.db) && !self.is_terminated(self.current) {
             self.set_synthetic_terminator(self.current, STerminatorKind::Unreachable);
         }
-        if let Some(shape) = yield_leaf
-            && self.yield_depth == 0
-            && !self.is_terminated(self.current)
-        {
+        if yield_leaf.is_some() && !self.is_terminated(self.current) {
+            self.yield_value(expr, value);
+        }
+        value
+    }
+
+    /// Ends the path at `expr`, a yield site of value `value`. An element of
+    /// a compound being lowered passes it to the compound, which takes its
+    /// next element on the path or, with all of them, ends the path with its
+    /// own value; any other site exits with it.
+    fn yield_value(&mut self, expr: ExprId, value: SValueId) {
+        let Some(compound) = self.compounds.pop() else {
             let origin = SemOrigin::Expr(expr);
             let operand = SOperand::expr(value, expr);
-            match shape {
+            match self
+                .typed_body
+                .yield_shape(expr)
+                .expect("a yield site has a shape")
+            {
                 // A sum shape's empty variant skips the `yield` statement's
                 // slide: a variant constructor builds it or not, and any other
                 // site is tested, as `?` tests its operand.
@@ -1266,8 +1316,30 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 _ => self.exit(origin, Some(operand)),
             }
+            return;
+        };
+        let mut next = compound.clone();
+        let value = self.take_operand(expr, value);
+        next.values.push(SOperand::expr(value, expr));
+        if let Some(&elem) = next.elems.get(next.values.len()) {
+            self.compounds.push(next);
+            self.lower_expr(elem);
+            self.compounds.pop();
+        } else {
+            let ty = self.expr_ty(next.expr);
+            let fields = next.values.into_boxed_slice();
+            let built = match next.variant {
+                Some(variant) => SExpr::EnumMake {
+                    enum_ty: ty,
+                    variant: VariantIndex(variant),
+                    fields,
+                },
+                None => SExpr::AggregateMake { ty, fields },
+            };
+            let built = self.emit_expr_with_origin(SemOrigin::Expr(next.expr), ty, built);
+            self.yield_value(next.expr, built);
         }
-        value
+        self.compounds.push(compound);
     }
 
     fn lower_expr_inner(&mut self, expr: ExprId) -> SValueId {
@@ -1532,7 +1604,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.unit_value()
             }
-            Expr::Block(stmts, _) => self.lower_block_expr(expr, stmts),
+            Expr::Block(stmts, _) => self.lower_block_expr(stmts),
             Expr::If(cond, then_expr, else_expr) => {
                 self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
@@ -2709,18 +2781,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// A block's scope holds its bindings and its tail's temporaries; its
-    /// value passes to the enclosing scope. In a compound yield, such as
-    /// `Option::Some({ .. })` or a tuple, the yield comes after a block
-    /// that is a yield site, which passes everything it holds on: the
-    /// projection's locals live until its session resumes.
-    fn lower_block_expr(&mut self, expr: ExprId, stmts: &[StmtId]) -> SValueId {
+    /// value passes to the enclosing scope.
+    fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
         self.push_drop_scope(true);
         let value = self.lower_block_stmts(stmts);
-        if self.yield_depth > 0 && self.typed_body.yield_shape(expr).is_some() {
-            self.pass_drop_scope();
-        } else {
-            self.pop_drop_scope(Some(value));
-        }
+        self.pop_drop_scope(Some(value));
         value
     }
 
@@ -2818,7 +2883,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             // yields on its own.
             Stmt::Return(expr) => {
                 let slide = self.slide.take();
-                let yield_depth = mem::take(&mut self.yield_depth);
+                let compounds = mem::take(&mut self.compounds);
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
                 if !self.is_terminated(self.current) {
                     self.exit(
@@ -2828,7 +2893,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }),
                     );
                 }
-                self.yield_depth = yield_depth;
+                self.compounds = compounds;
                 self.slide = slide;
             }
             // The operand's scope holds its temporaries, and the bindings of
@@ -2836,11 +2901,11 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
                 let outer = self.slide.replace((slide, self.drop_scopes.len()));
-                let yield_depth = mem::take(&mut self.yield_depth);
+                let compounds = mem::take(&mut self.compounds);
                 self.push_drop_scope(true);
                 let _ = self.lower_expr(*expr);
                 self.pop_drop_scope(None);
-                self.yield_depth = yield_depth;
+                self.compounds = compounds;
                 self.slide = outer;
                 self.switch_to(slide);
             }

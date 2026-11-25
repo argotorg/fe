@@ -1,0 +1,16 @@
+// A branch of an element of a yielded tuple or variant yields on its own
+// path, so each path's grants are checked on their own.
+use core::Option
+
+struct Quad { a: u256, b: u256, c: u256 }
+
+// Accepted: the grants are disjoint on every path.
+fn disjoint(_ q: mut Quad, _ c: bool) -> (mut u256, mut u256) {
+    (if c { mut q.a } else { mut q.b }, mut q.c)
+}
+
+// Rejected: where `c` is false and `d` true, both elements grant `q.b`.
+fn overlapping(_ q: mut Quad, _ c: bool, _ d: bool) -> (mut u256, mut u256) {
+    (if c { mut q.a } else { mut q.b }, if d { mut q.b } else { mut q.c })
+}
+

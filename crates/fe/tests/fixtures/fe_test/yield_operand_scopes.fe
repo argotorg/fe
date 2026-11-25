@@ -294,7 +294,7 @@ fn pair(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
     log(trace, 9)
 }
 
-// A block in a compound yield passes its bindings on to the resume.
+// A block in a compound yield keeps its bindings until the resume.
 fn opt_block(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
     yield Option::Some({
         let _g = Guard { trace, event: 2 }
@@ -546,10 +546,9 @@ fn handed_out(_ cell: mut Cell, _ trace: *u256) -> (Guard, mut u256) {
     log(trace, 9)
 }
 
-// Pins current behavior, the documented limit of
-// `issues/fe/compound-yield-branches`: what a branch inside a compound yield
-// binds ends with the branch, before the yield. The model wants 539.
-fn branch_limit(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+// A branch inside a compound yield yields on its own path, so what it binds
+// ends at resume too.
+fn branch_in_compound(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
     yield (if c {
         let _g = Guard { trace, event: 3 }
         7
@@ -946,10 +945,10 @@ fn passed_owners_initialized_or_moved_on_some_paths() {
 }
 
 #[test]
-fn a_branch_in_a_compound_yield_ends_with_the_branch() {
+fn a_branch_in_a_compound_yield_ends_at_resume() {
     var cell = Cell { a: 0, b: 0 }
     let trace = new_trace()
-    let (n, mut x) = branch_limit(mut cell, trace, true)
+    let (n, mut x) = branch_in_compound(mut cell, trace, true)
     bump(mut x, trace)
-    assert(n == 7 && read(trace) == 359)
+    assert(n == 7 && read(trace) == 539)
 }

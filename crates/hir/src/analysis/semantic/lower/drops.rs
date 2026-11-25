@@ -57,16 +57,6 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
     }
 
-    /// Ends the innermost scope, passing what it holds to the enclosing one.
-    pub(super) fn pass_drop_scope(&mut self) {
-        let owners = self.take_drop_scope();
-        self.drop_scopes
-            .last_mut()
-            .expect("a passed scope lies in the body's scope")
-            .owners
-            .extend(owners);
-    }
-
     /// Ends the innermost scope without destroying its owners, which the
     /// caller hands on.
     pub(super) fn take_drop_scope(&mut self) -> Vec<SLocalId> {

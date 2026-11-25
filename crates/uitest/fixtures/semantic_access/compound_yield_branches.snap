@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/compound_yield_branches.fe
+---
+error[16-0001]: access conflict in `fn overlapping`
+   ┌─ compound_yield_branches.fe:14:48
+   │
+14 │     (if c { mut q.a } else { mut q.b }, if d { mut q.b } else { mut q.c })
+   │                              -------           ^^^^^^^ cannot mutably access this place while a `mut` access of it is open
+   │                              │
+   │                              access opened here

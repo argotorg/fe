@@ -47,12 +47,12 @@ flowchart TD
   on its own path. The resume block destroys what the scopes the yield
   leaves hold: before the slide, those of a `yield` statement's operand,
   whose own scope holds its temporaries and the bindings of an access block
-  in it, which has no scope of its own; or every scope. A
-  compound yield site, a tuple or variant constructor, yields once after
-  its elements: a block among them passes what it holds to the enclosing
-  scope, a branch of an `if` or `match` among them destroys what it holds
-  where it ends, and a `return` or `yield` statement inside one yields on
-  its own.
+  in it, which has no scope of its own; or every scope. A tuple or variant
+  constructor yielded takes its elements in order on each path and yields
+  its value at the end of each: an element that branches continues the
+  constructor in each branch, with the branch's scopes open, so the
+  elements after it are lowered once per path. A `return` or `yield`
+  statement inside one yields on its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
