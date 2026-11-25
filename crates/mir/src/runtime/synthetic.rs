@@ -1921,6 +1921,8 @@ pub contract NarrowImmutable {
                 .to_string(),
             ),
         );
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
         let top_mod = db.top_mod(file);
         let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
         let init_abi = package

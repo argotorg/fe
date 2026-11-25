@@ -1000,6 +1000,8 @@ pub contract UninhabitedContract {
         Url::parse("file:///uninhabited_v4.fe").unwrap(),
         Some(SOURCE.into()),
     );
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     let diagnostics = db.run_on_top_mod(top_mod);
     assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
@@ -1177,6 +1179,8 @@ pub contract Contract {
         Url::parse("file:///evm_part_a_ops.fe").unwrap(),
         Some(SOURCE.into()),
     );
+    let file = driver::generation::prepare_file_in_place(&mut db, file)
+        .expect("fixture generation should succeed");
     let top_mod = db.top_mod(file);
     let diagnostics = db.run_on_top_mod(top_mod);
     assert!(diagnostics.is_empty(), "{}", diagnostics.format_diags(&db));
