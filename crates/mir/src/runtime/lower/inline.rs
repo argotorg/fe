@@ -304,11 +304,7 @@ impl SumShapeUses {
                 _ => None,
             })
             .collect();
-        let mentioned = |locals: Vec<&mut RLocalId>| {
-            locals
-                .into_iter()
-                .any(|local| copies.contains(local) || tags.contains(local))
-        };
+        let mentioned = |local: RLocalId| copies.contains(&local) || tags.contains(&local);
         for stmt in stmts() {
             let replaced = match stmt {
                 RStmt::Assign { dst, expr } => match expr {
@@ -324,7 +320,12 @@ impl SumShapeUses {
                 RStmt::End { session } => *session == result,
                 _ => false,
             };
-            if !replaced && mentioned(stmt.clone().locals_mut()) {
+            if !replaced
+                && stmt
+                    .locals(&body.provider_bindings)
+                    .into_iter()
+                    .any(mentioned)
+            {
                 return None;
             }
         }
@@ -333,7 +334,14 @@ impl SumShapeUses {
                 &block.terminator,
                 RTerminator::MatchEnumTag { tag, .. } if tags.contains(tag)
             );
-            if !matched && mentioned(block.terminator.clone().values_mut()) {
+            if !matched
+                && block
+                    .terminator
+                    .clone()
+                    .values_mut()
+                    .into_iter()
+                    .any(|value| mentioned(*value))
+            {
                 return None;
             }
         }
@@ -632,7 +640,9 @@ fn index_class<'db>() -> RuntimeClass<'db> {
     })
 }
 
-/// The SSA locals of `callee` its slides mention, with their classes.
+/// The SSA locals of `callee` its slides mention, with their classes,
+/// including the values of the provider bindings they name. A parameter is
+/// left out: the ramp copies its argument before it branches.
 fn slide_locals<'db>(
     callee: &RuntimeBody<'db>,
     resumes: &[RBlockId],
@@ -644,11 +654,17 @@ fn slide_locals<'db>(
         if std::mem::replace(&mut seen[block.index()], true) {
             continue;
         }
-        let mut data = callee.blocks[block.index()].clone();
-        for stmt in &mut data.stmts {
-            locals.extend(stmt.locals_mut().into_iter().map(|local| *local));
+        let data = &callee.blocks[block.index()];
+        for stmt in &data.stmts {
+            locals.extend(stmt.locals(&callee.provider_bindings));
         }
-        locals.extend(data.terminator.values_mut().into_iter().map(|value| *value));
+        locals.extend(
+            data.terminator
+                .clone()
+                .values_mut()
+                .into_iter()
+                .map(|value| *value),
+        );
         stack.extend(data.terminator.successors());
     }
     locals
@@ -657,7 +673,12 @@ fn slide_locals<'db>(
             let data = &callee.locals[local.index()];
             match (&data.carrier, &data.root) {
                 (RuntimeCarrier::Value(class), root)
-                    if !matches!(root, RuntimeLocalRoot::Slot(_)) =>
+                    if !matches!(root, RuntimeLocalRoot::Slot(_))
+                        && callee
+                            .signature
+                            .params
+                            .iter()
+                            .all(|param| param.local != local) =>
                 {
                     Some((local, class.clone()))
                 }

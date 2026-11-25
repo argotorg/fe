@@ -1,0 +1,1 @@
+A projection over an effect that yields at several sites, such as `if c { indented(2) } else { indented(3) }`, now compiles when a site calls another projection over the effect whose code after its `yield` uses the effect. It used to type-check and then fail in code generation with "variable is undefined or used in unreachable block".
