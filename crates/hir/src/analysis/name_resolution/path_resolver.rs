@@ -2667,7 +2667,6 @@ fn select_assoc_const_candidate<'db>(
             cx.rollback_to(snapshot);
         }
     });
-    use crate::analysis::ty::trait_resolution::ChoiceEntry;
     if let Some(choices) = choices {
         let visible = choices
             .items(db)
