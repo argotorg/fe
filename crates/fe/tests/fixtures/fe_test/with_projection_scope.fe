@@ -1,0 +1,677 @@
+use core::{Option, ptr}
+use core::ops::Drop
+
+// A `with` provider that is a projection's result is evaluated once, where
+// the block begins, and its slide runs when control leaves the block: at its
+// end, by `return`, `break`, `continue` or a failing `?`, or for a `yield`
+// statement's operand when the projection's session resumes, whether or not
+// a call in the block takes the provider. Each event appends a digit to a
+// trace a raw pointer reaches, so slides and destructors log too:
+//
+// 0-4 the indent a callee sees, or  3 a binding in the block is destroyed
+//     code in the block             5 the caller uses a grant
+// 6 a second provider slides        7 a nested projection slides
+// 8 the provider slides             9 the slide after a `yield` runs
+fn log(_ trace: *u256, _ event: u256) {
+    unsafe { *trace = *trace * 10 + event }
+}
+
+fn new_trace() -> *u256 {
+    let trace = ptr::alloc<u256>()
+    unsafe { *trace = 0 }
+    trace
+}
+
+fn read(_ trace: *u256) -> u256 {
+    unsafe { *trace }
+}
+
+struct Guard {
+    trace: *u256,
+    event: u256,
+}
+
+impl Drop for Guard {
+    fn drop(own self) {
+        log(self.trace, self.event)
+    }
+}
+
+struct Frame {
+    indent: u256,
+    trace: *u256,
+}
+
+// Indents the frame and logs `event` when its slide runs.
+fn indented(_ by: u256, _ event: u256) -> mut Frame uses (frame: mut Frame) {
+    frame.indent += by
+    yield mut frame
+    frame.indent -= by
+    log(frame.trace, event)
+}
+
+// The same at either mode, without the indent.
+fn viewed(_ event: u256) -> mut? Frame uses (frame: mut? Frame) {
+    yield mut? frame
+    log(frame.trace, event)
+}
+
+// Grants the frame only if `ok`.
+fn maybe(_ ok: bool) -> Option<mut Frame> uses (frame: mut Frame) {
+    if !ok {
+        return Option::None
+    }
+    frame.indent += 1
+    yield Option::Some(mut frame)
+    frame.indent -= 1
+    log(frame.trace, 8)
+}
+
+// Logs the indent the provider in scope has.
+fn mark() uses (frame: mut Frame) {
+    log(frame.trace, frame.indent)
+}
+
+fn look() uses (frame: Frame) {
+    log(frame.trace, frame.indent)
+}
+
+struct Tally {
+    trace: *u256,
+}
+
+fn counted() -> mut Tally uses (tally: mut Tally) {
+    yield mut tally
+    log(tally.trace, 6)
+}
+
+fn tick() uses (tally: mut Tally) {
+    log(tally.trace, 2)
+}
+
+fn counted7() -> mut Tally uses (tally: mut Tally) {
+    yield mut tally
+    log(tally.trace, 7)
+}
+
+struct PtrHolder {
+    p: *Frame,
+    trace: *u256,
+}
+
+// Grants a raw pointer, and logs 8 when its slide runs.
+fn proj_ptr(_ h: mut PtrHolder) -> ref *Frame {
+    yield ref h.p
+    log(h.trace, 8)
+}
+
+fn note(_ t: *u256) -> u256 {
+    log(t, 2)
+    0
+}
+
+struct Holder {
+    v: u256,
+    trace: *u256,
+}
+
+impl Holder {
+    fn project(mut self) -> mut u256 uses (frame: mut Frame) {
+        yield mut self.v
+        log(self.trace, 7)
+    }
+}
+
+fn fresh(_ t: *u256) -> Frame {
+    Frame { indent: 0, trace: t }
+}
+
+fn unused(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        log(t, 1)
+    }
+    log(t, 2)
+}
+
+fn after_last_use(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        mark()
+        let _g = Guard { trace: t, event: 3 }
+        log(t, 2)
+    }
+}
+
+fn nested(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        with (Frame = indented(1, 7)) {
+            mark()
+            log(t, 1)
+        }
+        mark()
+    }
+}
+
+fn early_return(_ t: *u256, _ c: bool) -> u256 uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        mark()
+        let _g = Guard { trace: t, event: 3 }
+        if c {
+            return 1
+        }
+        mark()
+    }
+    2
+}
+
+fn loops(_ t: *u256) uses (frame: mut Frame) {
+    var i: u256 = 0
+    while true {
+        i += 1
+        with (Frame = indented(i, 8)) {
+            mark()
+            let _g = Guard { trace: t, event: 3 }
+            if i == 1 {
+                continue
+            }
+            if i == 2 {
+                break
+            }
+        }
+    }
+}
+
+fn tried(_ t: *u256, _ x: Option<u256>) -> Option<u256> uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        mark()
+        let _g = Guard { trace: t, event: 3 }
+        let v = x?
+        mark()
+        Option::Some(v)
+    }
+}
+
+fn let_else(_ t: *u256, _ x: Option<u256>) -> u256 uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        mark()
+        let Option::Some(v) = x else {
+            let _g = Guard { trace: t, event: 3 }
+            return 0
+        }
+        mark()
+        v
+    }
+}
+
+fn two_providers(_ t: *u256) uses (frame: mut Frame, tally: mut Tally) {
+    with (Frame = indented(1, 8), Tally = counted()) {
+        mark()
+        log(t, 1)
+    }
+}
+
+// An exit from a later provider's expression holds the earlier one.
+fn exit_in_provider(_ t: *u256, _ c: bool) uses (frame: mut Frame, tally: mut Tally) {
+    with (Frame = indented(1, 8), Tally = {
+        if c {
+            let _g = Guard { trace: t, event: 3 }
+            return
+        }
+        counted()
+    }) {
+        mark()
+        tick()
+    }
+}
+
+// The bindings of an access block among the providers end with the `with`
+// block, after the providers that follow it and before those it follows.
+fn later_block(_ t: *u256) uses (frame: mut Frame, tally: mut Tally) {
+    with (Frame = indented(1, 8), Tally = {
+        let _g = Guard { trace: t, event: 3 }
+        counted7()
+    }) {
+        mark()
+    }
+    log(t, 9)
+}
+
+fn later_block_break(_ t: *u256) uses (frame: mut Frame, tally: mut Tally) {
+    loop {
+        with (Frame = indented(1, 8), Tally = {
+            let _g = Guard { trace: t, event: 3 }
+            if true {
+                break
+            }
+            counted7()
+        }) {
+            mark()
+        }
+    }
+    log(t, 9)
+}
+
+fn later_block_return(_ t: *u256, _ c: bool) uses (frame: mut Frame, tally: mut Tally) {
+    with (Frame = indented(1, 8), Tally = {
+        let _g = Guard { trace: t, event: 3 }
+        if c {
+            return
+        }
+        counted7()
+    }) {
+        mark()
+    }
+}
+
+fn first_block(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = {
+        let _g = Guard { trace: t, event: 3 }
+        indented(1, 8)
+    }) {
+        mark()
+    }
+    log(t, 9)
+}
+
+// A value provider's temporary ends with the `with` block, after the
+// projection that follows it.
+fn value_then_projection(_ t: *u256) -> u256 uses (frame: mut Frame) {
+    with (Guard = Guard { trace: t, event: 1 }, Frame = indented(1, 8)) {
+        mark()
+        0
+    } + note(t)
+}
+
+fn grant_field(_ t: *u256) uses (frame: mut Frame) {
+    with (u256 = indented(1, 8).indent) {
+        log(t, 2)
+    }
+}
+
+fn unwrapped(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = maybe(true).unwrap()) {
+        mark()
+        log(t, 2)
+    }
+}
+
+fn block_field(_ t: *u256) uses (frame: mut Frame) {
+    with (u256 = ({ indented(1, 8) }).indent) {
+        log(t, 2)
+    }
+}
+
+fn marked_field(_ t: *u256) uses (frame: mut Frame) {
+    with (u256 = (mut indented(1, 8)).indent) {
+        log(t, 2)
+    }
+}
+
+// A place through a raw pointer a grant holds is not in the grant.
+fn pointer_field(_ t: *u256, _ h: mut PtrHolder) {
+    unsafe {
+        with (u256 = proj_ptr(mut h).indent) {
+            log(t, 2)
+        }
+    }
+}
+
+fn pointer_deref(_ t: *u256, _ h: mut PtrHolder) {
+    unsafe {
+        with (Frame = *proj_ptr(mut h)) {
+            log(t, 2)
+        }
+    }
+}
+
+fn maybe_mut_ref(_ t: *u256) uses (frame: mut Frame) {
+    frame.indent = 4
+    with (Frame = viewed(8)) {
+        look()
+        log(t, 1)
+    }
+    frame.indent = 0
+}
+
+fn maybe_mut_mut(_ t: *u256) uses (frame: mut Frame) {
+    with (Frame = mut viewed(8)) {
+        mark()
+        log(t, 1)
+    }
+}
+
+fn optional(_ t: *u256, _ ok: bool) -> Option<u256> uses (frame: mut Frame) {
+    with (Frame = maybe(ok)?) {
+        mark()
+        log(t, 2)
+    }
+    Option::Some(0)
+}
+
+fn in_closure(_ t: *u256) uses (frame: mut Frame) {
+    let f = |trace: *u256| {
+        with (Frame = indented(1, 8)) {
+            mark()
+            log(trace, 2)
+        }
+    }
+    f(t)
+}
+
+// A block borrowing a place provides the place, and holds nothing after the
+// last call that takes it.
+fn block_provider(_ other: mut Frame) {
+    with (Frame = { mut other }) {
+        mark()
+        other.indent += 1
+    }
+}
+
+// A `with` block that is a projection's yield site: the inner grant is
+// taken through the block's provider, and the session ends both where it
+// resumes, after the caller's use, the block's binding between them.
+fn deeper(_ t: *u256) -> mut Frame uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        let _g = Guard { trace: t, event: 3 }
+        indented(1, 7)
+    }
+}
+
+// A `yield` statement's operand ends where the session resumes: its
+// provider slides after the caller's use, after the operand's bindings and
+// before the slide after the `yield`.
+fn yield_binding(_ t: *u256) -> mut u256 uses (frame: mut Frame) {
+    yield with (Frame = indented(1, 8)) {
+        var h = Holder { v: 0, trace: t }
+        let _g = Guard { trace: t, event: 3 }
+        h.project()
+    }
+    log(t, 9)
+}
+
+fn yield_place(_ t: *u256, _ other: mut u256) -> mut u256 uses (frame: mut Frame) {
+    yield with (Frame = indented(1, 8)) {
+        let _g = Guard { trace: t, event: 3 }
+        mut other
+    }
+    log(t, 9)
+}
+
+// The same inside a compound yield.
+fn yield_compound(_ t: *u256) -> Option<ref u256> uses (frame: mut Frame) {
+    yield Option::Some(with (Frame = indented(1, 8)) {
+        let g = 4
+        let _g = Guard { trace: t, event: 3 }
+        ref g
+    })
+    log(t, 9)
+}
+
+fn yield_two(_ t: *u256, _ other: mut u256) -> Option<mut u256> uses (frame: mut Frame, tally: mut Tally) {
+    yield Option::Some(with (Frame = indented(1, 8), Tally = counted7()) {
+        let _g = Guard { trace: t, event: 3 }
+        mut other
+    })
+    log(t, 9)
+}
+
+// The code after a `yield` in the block still runs under its provider.
+fn shifted(_ t: *u256) -> mut Frame uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        yield indented(1, 7)
+        mark()
+        log(t, 2)
+    }
+}
+
+#[test]
+fn unused_provider_slides_at_block_end() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { unused(t) }
+    assert(read(t) == 182)
+}
+
+#[test]
+fn provider_slides_after_last_use() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { after_last_use(t) }
+    assert(read(t) == 1238)
+}
+
+#[test]
+fn nested_blocks_slide_innermost_first() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { nested(t) }
+    assert(read(t) == 21718)
+}
+
+#[test]
+fn return_destroys_then_slides() {
+    let t = new_trace()
+    var frame = fresh(t)
+    assert(with (frame) { early_return(t, true) } == 1)
+    assert(read(t) == 138)
+    let u = new_trace()
+    var other = fresh(u)
+    assert(with (other) { early_return(u, false) } == 2)
+    assert(read(u) == 1138)
+}
+
+#[test]
+fn break_and_continue_destroy_then_slide() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { loops(t) }
+    assert(read(t) == 138238)
+}
+
+#[test]
+fn failing_try_destroys_then_slides() {
+    let t = new_trace()
+    var frame = fresh(t)
+    assert(with (frame) { tried(t, Option::None) }.is_none())
+    assert(read(t) == 138)
+    let u = new_trace()
+    var other = fresh(u)
+    assert(with (other) { tried(u, Option::Some(5)) }.unwrap() == 5)
+    assert(read(u) == 1138)
+}
+
+#[test]
+fn let_else_destroys_then_slides() {
+    let t = new_trace()
+    var frame = fresh(t)
+    assert(with (frame) { let_else(t, Option::None) } == 0)
+    assert(read(t) == 138)
+}
+
+#[test]
+fn two_providers_slide_newest_first() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var tally = Tally { trace: t }
+    with (frame, tally) { two_providers(t) }
+    assert(read(t) == 1168)
+}
+
+#[test]
+fn exit_in_later_provider_holds_earlier() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var tally = Tally { trace: t }
+    with (frame, tally) { exit_in_provider(t, true) }
+    assert(read(t) == 38)
+}
+
+#[test]
+fn later_provider_block_ends_with_the_block() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var tally = Tally { trace: t }
+    with (frame, tally) { later_block(t) }
+    assert(read(t) == 17389)
+    let u = new_trace()
+    var other = fresh(u)
+    var count = Tally { trace: u }
+    with (other, count) { later_block_break(u) }
+    assert(read(u) == 389)
+    let v = new_trace()
+    var third = fresh(v)
+    var last = Tally { trace: v }
+    with (third, last) { later_block_return(v, true) }
+    assert(read(v) == 38)
+}
+
+#[test]
+fn first_provider_block_ends_with_the_block() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { first_block(t) }
+    assert(read(t) == 1839)
+}
+
+#[test]
+fn value_provider_ends_with_the_block() {
+    let t = new_trace()
+    var frame = fresh(t)
+    assert(with (frame) { value_then_projection(t) } == 0)
+    assert(read(t) == 1812)
+}
+
+#[test]
+fn grant_place_providers_slide_at_block_end() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) {
+        grant_field(t)
+        unwrapped(t)
+        block_field(t)
+        marked_field(t)
+    }
+    assert(read(t) == 281282828)
+}
+
+#[test]
+fn pointer_providers_end_at_once() {
+    let t = new_trace()
+    var h = PtrHolder { p: ptr::alloc<Frame>(), trace: t }
+    unsafe { *h.p = fresh(t) }
+    pointer_field(t, mut h)
+    pointer_deref(t, mut h)
+    assert(read(t) == 8282)
+}
+
+#[test]
+fn compound_yield_with_two_providers() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var tally = Tally { trace: t }
+    var v: u256 = 0
+    with (frame, tally) {
+        if let Option::Some(mut x) = yield_two(t, mut v) {
+            log(t, 5)
+            x += 1
+        }
+    }
+    assert(read(t) == 53789 && v == 1)
+}
+
+#[test]
+fn maybe_mut_providers_slide_at_block_end() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { maybe_mut_ref(t) }
+    assert(read(t) == 418)
+    let u = new_trace()
+    var other = fresh(u)
+    with (other) { maybe_mut_mut(u) }
+    assert(read(u) == 18)
+}
+
+#[test]
+fn optional_provider_slides_at_block_end() {
+    let t = new_trace()
+    var frame = fresh(t)
+    assert(with (frame) { optional(t, true) }.is_some())
+    assert(read(t) == 128)
+    assert(with (frame) { optional(t, false) }.is_none())
+    assert(read(t) == 128)
+}
+
+#[test]
+fn closure_block_slides_at_its_end() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { in_closure(t) }
+    assert(read(t) == 128)
+}
+
+#[test]
+fn block_provider_holds_nothing() {
+    let t = new_trace()
+    var other = fresh(t)
+    block_provider(mut other)
+    assert(read(t) == 0 && other.indent == 1)
+}
+
+#[test]
+fn yield_site_block_ends_at_resume() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) {
+        with (Frame = deeper(t)) {
+            mark()
+            log(t, 5)
+        }
+    }
+    assert(read(t) == 25738)
+}
+
+#[test]
+fn yield_operand_ends_at_resume() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) {
+        let x = mut yield_binding(t)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 57389)
+    let u = new_trace()
+    var other = fresh(u)
+    var v: u256 = 0
+    with (other) {
+        let x = mut yield_place(u, mut v)
+        log(u, 5)
+        x += 1
+    }
+    assert(read(u) == 5389)
+}
+
+#[test]
+fn compound_yield_operand_ends_at_resume() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) {
+        if let Option::Some(ref x) = yield_compound(t) {
+            log(t, 5)
+            assert(x == 4)
+        }
+    }
+    assert(read(t) == 5389)
+}
+
+#[test]
+fn slide_after_yield_keeps_provider() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) {
+        with (Frame = shifted(t)) {
+            mark()
+            log(t, 5)
+        }
+    }
+    assert(read(t) == 257128)
+}

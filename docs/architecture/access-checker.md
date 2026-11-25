@@ -63,7 +63,14 @@ flowchart TD
   carrier or any carrier derived from it may be used. It ends right after its
   last use on each path; an access that dies on a control-flow edge ends at
   the start of the successor, on an edge block of its own when the successor
-  has other predecessors. The accesses ending at one point end newest first,
+  has other predecessors. A `with` provider that is a projection's result
+  gets a drop scope of its own, begun right after it is lowered, which
+  holds its carrier: each exit of the scope records a `Hold`, a use of the
+  carrier and nothing else, after the drops of its owners, all newer than
+  it, so the session lasts at least until the block, or a later provider's
+  expression, is left. A yield site inside the block yields with the scope
+  open, so it ends where that path's session resumes, as a `yield`
+  statement's operand does. The accesses ending at one point end newest first,
   so an access ends before any access it depends on: a session finishes
   before the borrow passed to its call closes, and its slide can still write
   through the borrow.

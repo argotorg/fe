@@ -9,10 +9,11 @@
 //! statement's operand leaves the operand's scopes, any other every scope.
 //! The value a scope ends with passes to the enclosing scope. A `Drop` is
 //! placed for every owner at each such exit, and drop elaboration decides
-//! what of the owner is still initialized there.
+//! what of the owner is still initialized there. A `with` block's scope
+//! likewise keeps the providers it opens open to each exit with a `Hold`.
 use cranelift_entity::EntityRef;
 
-use super::body::SmirLowerCtxt;
+use super::{body::SmirLowerCtxt, elaborate::Hold};
 use crate::analysis::{
     semantic::{
         SBlockId, SExpr, SLocalId, SOperand, SPlace, SStmtKind, STerminatorKind, SemOrigin,
@@ -29,6 +30,33 @@ pub(super) struct DropScope {
     /// arm's are, or belong to an enclosing one, as a statement's do.
     bindings: bool,
     owners: Vec<SLocalId>,
+    /// The carrier of the access held open until control leaves the scope:
+    /// the projection result a `with` block's provider opened. Every owner
+    /// of the scope is newer than it.
+    held: Option<SLocalId>,
+}
+
+/// What leaving a scope does to one of its owners or held accesses.
+enum Exit {
+    Drop(SLocalId),
+    Hold(SLocalId),
+}
+
+impl DropScope {
+    /// Leaving the scope destroys its owners newest first, then ends the
+    /// held access, which is older than all of them. `value` leaves with the
+    /// path.
+    fn exits(&self, value: Option<SLocalId>) -> Vec<Exit> {
+        let drops = self
+            .owners
+            .iter()
+            .rev()
+            .filter(|owner| Some(**owner) != value);
+        drops
+            .map(|&owner| Exit::Drop(owner))
+            .chain(self.held.map(Exit::Hold))
+            .collect()
+    }
 }
 
 impl<'db> SmirLowerCtxt<'_, 'db> {
@@ -37,24 +65,39 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             id: self.next_drop_scope,
             bindings,
             owners: Vec::new(),
+            held: None,
         });
         self.next_drop_scope += 1;
     }
 
+    /// Begins a `with` block's scope, which holds the access `carrier`
+    /// carries, and what the later providers' expressions bind.
+    pub(super) fn push_with_scope(&mut self, carrier: SLocalId) {
+        debug_assert!(
+            holds_carrier(self.db, self.locals[carrier.index()].ty),
+            "a `with` scope holds a carrier"
+        );
+        self.push_drop_scope(true);
+        self.drop_scopes
+            .last_mut()
+            .expect("a scope was pushed")
+            .held = Some(carrier);
+    }
+
     /// Ends the innermost scope; a path falling through it destroys its
-    /// owners. `value`, what the scope evaluates to, passes to the enclosing
-    /// scope instead.
+    /// owners and holds what it holds. `value`, what the scope evaluates to,
+    /// passes to the enclosing scope instead.
     pub(super) fn pop_drop_scope(&mut self, value: Option<SLocalId>) {
-        let mut owners = self.take_drop_scope();
+        let scope = self
+            .drop_scopes
+            .pop()
+            .expect("lowering ends only the scopes it begins");
         if let Some(value) = value
-            && let Some(position) = owners.iter().position(|owner| *owner == value)
+            && scope.owners.contains(&value)
         {
-            owners.remove(position);
             self.hold_in_innermost(value);
         }
-        if !self.is_terminated(self.current) {
-            self.destroy(&owners);
-        }
+        self.leave(scope.exits(value));
     }
 
     /// Ends the innermost scope without destroying its owners, which the
@@ -66,15 +109,16 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             .owners
     }
 
-    /// Destroys the owners of the scopes from `depth` in, for a path leaving
-    /// them; `value` leaves with the path.
+    /// Destroys the owners of the scopes from `depth` in, and holds what
+    /// they hold, innermost first, for a path leaving them; `value` leaves
+    /// with the path.
     pub(super) fn destroy_scopes_from(&mut self, depth: usize, value: Option<SLocalId>) {
-        let owners: Vec<_> = self.drop_scopes[depth..]
+        let exits = self.drop_scopes[depth..]
             .iter()
-            .flat_map(|scope| scope.owners.iter().copied())
-            .filter(|owner| Some(*owner) != value)
+            .rev()
+            .flat_map(|scope| scope.exits(value))
             .collect();
-        self.destroy(&owners);
+        self.leave(exits);
     }
 
     /// Whether a binding of `pat` holds an access, which may borrow the
@@ -231,6 +275,26 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
             self.push_synthetic_stmt(SStmtKind::Drop {
                 place: SPlace::new(owner),
             });
+        }
+    }
+
+    /// Destroys the owners and keeps the held accesses open to here, in the
+    /// order `exits` gives, on a path that is still live.
+    fn leave(&mut self, exits: Vec<Exit>) {
+        if self.is_terminated(self.current) {
+            return;
+        }
+        for exit in exits {
+            match exit {
+                Exit::Drop(owner) => self.push_synthetic_stmt(SStmtKind::Drop {
+                    place: SPlace::new(owner),
+                }),
+                Exit::Hold(local) => self.holds.push(Hold {
+                    block: self.current,
+                    position: self.blocks[self.current.index()].stmts.len(),
+                    local,
+                }),
+            }
         }
     }
 

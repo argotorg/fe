@@ -44,6 +44,45 @@ implements. Names never choose: neither the callee's label nor the
 provider's name takes part, so two providers of one key in a scope are
 ambiguous where a callee needs the key, and `with (Key = value)` chooses.
 
+A provider is evaluated once, where the block begins. One that is a
+projection's result or a field or element of it, as in
+`with (Frame = frame.clipped(area))`, possibly through `mut`, `ref` or a
+block's tail, is held until control leaves the block, at its end or by
+`return`, `break`, `continue` or a failing `?`, even if no call in the
+block takes it. A place reached through a raw pointer the grant holds,
+`*h.ptr()` or `h.ptr().field`, is not in the grant: reading the pointer
+copies it, which ends the session at once. A block that is a `yield`
+statement's operand is left where the projection's session resumes, as a
+yield site's block is, so its provider is held while the caller uses the
+grant and slides before the code after the `yield`. The projection's
+session lasts until the block is left, or longer while an access the block
+yields from its grant is in use, and its slide runs then; the block's
+bindings are destroyed first, and of several such providers the later
+slides first, each before what the providers' expressions before it bound
+and allocated is destroyed. An exit from a later provider's expression
+leaves the earlier ones. The places the session reserves stay reserved for
+the whole block, so naming one in the block, such as `frame` above or the
+function's own `Frame` effect, is an error rather than a use of the place
+outside the scope:
+
+```fe
+fn label() uses (frame: mut Frame) { .. }
+
+fn indented() -> mut Frame uses (frame: mut Frame) { .. }
+
+fn draw() uses (frame: mut Frame) {
+    with (Frame = indented()) {
+        label()                  // takes the block's provider
+        frame.indent = 0         // rejected: `indented` holds `frame`
+    }
+}
+```
+
+Any other provider is a place, such as `other`, `mut other` or
+`{ mut other }`, which each call in the block reaches when it is made, or a
+temporary holding a value, such as `Counter { n: 0 }`; neither holds
+anything between calls.
+
 Rows compose: `uses (A::E, B::E)` asks for each effect of both rows, and
 two of them of one key, such as a `store: mut Store` in each, take the
 key's one provider.

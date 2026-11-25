@@ -16,7 +16,7 @@ use crate::{
             ty_check::{BodyOwner, EffectArg, EffectParamSite, LocalBinding},
         },
     },
-    hir_def::ExprId,
+    hir_def::{BinOp, Expr, ExprId, Partial, Stmt, UnOp},
     semantic::{
         EffectEnvSite, EffectEnvView, ProviderBinding, resolved_effect_binding_infos_for_site,
     },
@@ -39,10 +39,20 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         body: ExprId,
     ) -> SValueId {
         let mut saved = Vec::with_capacity(bindings.len());
+        // The block's scope holds what its providers' expressions bind and
+        // allocate. A provider that is a projection's result opens its
+        // session here, and a scope begun right after it holds it until
+        // control leaves the block, or the later providers' expressions.
+        self.push_drop_scope(true);
+        let mut scopes = 1;
         for binding in bindings {
             let value_expr = binding.value;
             let value_ty = self.expr_ty(value_expr);
             let source = if let Some(place) = self.try_lower_place_expr(value_expr, true) {
+                if self.names_grant(value_expr) {
+                    self.push_with_scope(place.local);
+                    scopes += 1;
+                }
                 WithBindingSource::Place(place)
             } else {
                 let value = self.lower_expr(value_expr);
@@ -63,6 +73,9 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         }
 
         let body_value = self.lower_expr(body);
+        for _ in 0..scopes {
+            self.pop_drop_scope(Some(body_value));
+        }
         for (expr, previous) in saved.into_iter().rev() {
             if let Some(previous) = previous {
                 self.with_binding_sources.insert(expr, previous);
@@ -71,6 +84,38 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             }
         }
         body_value
+    }
+
+    /// Whether `expr` names a place in a projection's grant: the grant, or a
+    /// field or element of it, through `mut` and `ref` markers and blocks'
+    /// tails. A raw pointer read from a grant is a copy, which ends the
+    /// session, so a place through it is not in the grant.
+    fn names_grant(&self, expr: ExprId) -> bool {
+        match expr.data(self.db, self.body) {
+            Partial::Present(
+                Expr::Call(..)
+                | Expr::MethodCall(..)
+                | Expr::Bin(_, _, BinOp::Index)
+                | Expr::Try(_),
+            ) if self.typed_body.expr_prop(self.db, expr).access().is_some() => true,
+            Partial::Present(Expr::Un(inner, UnOp::Mut | UnOp::MaybeMut | UnOp::Ref)) => {
+                self.names_grant(*inner)
+            }
+            Partial::Present(Expr::Block(stmts, _)) => matches!(
+                stmts.last().map(|stmt| stmt.data(self.db, self.body)),
+                Some(Partial::Present(Stmt::Expr(tail))) if self.names_grant(*tail)
+            ),
+            Partial::Present(Expr::Field(base, _))
+                if self
+                    .projectable_place_ty(self.expr_ty(*base))
+                    .as_ptr(self.db)
+                    .is_none() =>
+            {
+                self.names_grant(*base)
+            }
+            Partial::Present(Expr::Bin(base, _, BinOp::Index)) => self.names_grant(*base),
+            _ => false,
+        }
     }
 
     fn effect_arg_provider_space(&self, arg: &CallEffectArg<'db>) -> Option<AddressSpace> {

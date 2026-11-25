@@ -8,10 +8,11 @@
 //! last use there; one that dies on a control-flow edge ends at the start of
 //! the successor, on an edge block of its own when the successor has other
 //! predecessors. An access whose carrier is never used ends right after it
-//! opens. The accesses ending at one point end in reverse creation order,
-//! which ends an access before any access it depends on: a session finishes
-//! before the borrow passed to its call closes, so its slide can still write
-//! through the borrow.
+//! opens. A [`Hold`] is a use of a carrier and nothing else: a `with` block
+//! holds each provider it opens to every exit. The accesses ending at one
+//! point end in reverse creation order, which ends an access before any
+//! access it depends on: a session finishes before the borrow passed to its
+//! call closes, so its slide can still write through the borrow.
 use std::cmp::Reverse;
 
 use cranelift_entity::EntityRef;
@@ -29,10 +30,31 @@ use crate::analysis::{
 /// An access, by the statement opening it.
 type Access = SStmtId;
 
-pub(super) fn elaborate_ends<'db>(db: &'db dyn HirAnalysisDb, body: &mut SemanticBody<'db>) {
+/// A use of the carrier `local` before statement `position` of `block`,
+/// recorded by lowering, which only appends statements.
+pub(super) struct Hold {
+    pub(super) block: SBlockId,
+    pub(super) position: usize,
+    pub(super) local: SLocalId,
+}
+
+/// The carriers held before each statement, by block and position.
+type Held = FxHashMap<(usize, usize), Vec<SLocalId>>;
+
+pub(super) fn elaborate_ends<'db>(
+    db: &'db dyn HirAnalysisDb,
+    body: &mut SemanticBody<'db>,
+    holds: &[Hold],
+) {
     let families = access_families(db, body);
     if families.is_empty() {
         return;
+    }
+    let mut held = Held::default();
+    for hold in holds {
+        held.entry((hold.block.index(), hold.position))
+            .or_default()
+            .push(hold.local);
     }
     let sorted = |accesses: &mut dyn Iterator<Item = &Access>| -> Vec<Access> {
         let mut accesses: Vec<_> = accesses.copied().collect();
@@ -46,7 +68,7 @@ pub(super) fn elaborate_ends<'db>(db: &'db dyn HirAnalysisDb, body: &mut Semanti
             accesses_of.entry(*local).or_default().push(*access);
         }
     }
-    let live_in = live_in(body);
+    let live_in = live_in(body, &held);
     let live = |locals: &FxHashSet<SLocalId>| -> FxHashSet<Access> {
         locals
             .iter()
@@ -73,6 +95,15 @@ pub(super) fn elaborate_ends<'db>(db: &'db dyn HirAnalysisDb, body: &mut Semanti
     for block in 0..body.blocks.len() {
         let data = &body.blocks[block];
         let mut after: Vec<FxHashSet<SLocalId>> = Vec::with_capacity(data.stmts.len());
+        // What is live just past each point holds are at, before a statement
+        // or the terminator: an access only a hold kept open ends there.
+        let mut past: FxHashMap<usize, FxHashSet<SLocalId>> = FxHashMap::default();
+        let mut hold = |position: usize, locals: &mut FxHashSet<SLocalId>| {
+            if let Some(carriers) = held.get(&(block, position)) {
+                past.insert(position, locals.clone());
+                locals.extend(carriers);
+            }
+        };
         let mut locals: FxHashSet<SLocalId> = data
             .terminator
             .kind
@@ -81,23 +112,35 @@ pub(super) fn elaborate_ends<'db>(db: &'db dyn HirAnalysisDb, body: &mut Semanti
             .flat_map(|successor| live_in[successor.index()].iter().copied())
             .chain(data.terminator.kind.used_locals())
             .collect();
-        for stmt in data.stmts.iter().rev() {
+        hold(data.stmts.len(), &mut locals);
+        for (position, stmt) in data.stmts.iter().enumerate().rev() {
             after.push(locals.clone());
             transfer(stmt, &mut locals);
+            hold(position, &mut locals);
         }
         after.reverse();
         let mut open = live(&live_in[block]);
         let mut stmts = Vec::with_capacity(data.stmts.len());
+        let mut close = |open: &mut FxHashSet<Access>,
+                         live_after: &FxHashSet<SLocalId>,
+                         stmts: &mut Vec<SStmt<'db>>| {
+            for access in sorted(&mut open.difference(&live(live_after))) {
+                open.remove(&access);
+                stmts.push(end(access));
+            }
+        };
         for (index, stmt) in data.stmts.iter().enumerate() {
+            if let Some(live_after) = past.get(&index) {
+                close(&mut open, live_after, &mut stmts);
+            }
             stmts.push(stmt.clone());
             if families.contains_key(&stmt.id) {
                 open.insert(stmt.id);
             }
-            let dead = sorted(&mut open.difference(&live(&after[index])));
-            for access in dead {
-                open.remove(&access);
-                stmts.push(end(access));
-            }
+            close(&mut open, &after[index], &mut stmts);
+        }
+        if let Some(live_after) = past.get(&data.stmts.len()) {
+            close(&mut open, live_after, &mut stmts);
         }
         // Accesses live at the terminator end on each edge that drops them.
         for (position, successor) in data.terminator.kind.successors().iter().enumerate() {
@@ -222,8 +265,13 @@ fn transfer(stmt: &SStmt<'_>, live: &mut FxHashSet<SLocalId>) {
     }
 }
 
+/// The carriers held before statement `position` of `block`.
+fn held_at(held: &Held, block: usize, position: usize) -> impl Iterator<Item = SLocalId> + '_ {
+    held.get(&(block, position)).into_iter().flatten().copied()
+}
+
 /// The locals live on entry to each block.
-fn live_in(body: &SemanticBody<'_>) -> Vec<FxHashSet<SLocalId>> {
+fn live_in(body: &SemanticBody<'_>, held: &Held) -> Vec<FxHashSet<SLocalId>> {
     let mut live_in = vec![FxHashSet::default(); body.blocks.len()];
     loop {
         let mut changed = false;
@@ -235,9 +283,11 @@ fn live_in(body: &SemanticBody<'_>) -> Vec<FxHashSet<SLocalId>> {
                 .iter()
                 .flat_map(|successor| live_in[successor.index()].iter().copied())
                 .chain(data.terminator.kind.used_locals())
+                .chain(held_at(held, block, data.stmts.len()))
                 .collect();
-            for stmt in data.stmts.iter().rev() {
+            for (position, stmt) in data.stmts.iter().enumerate().rev() {
                 transfer(stmt, &mut live);
+                live.extend(held_at(held, block, position));
             }
             if live != live_in[block] {
                 live_in[block] = live;

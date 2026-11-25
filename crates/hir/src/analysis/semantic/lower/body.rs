@@ -50,7 +50,7 @@ use crate::{
 use super::{
     drops::DropScope,
     effects::{WithBindingSource, provisional_owner_effect_bindings},
-    elaborate::elaborate_ends,
+    elaborate::{Hold, elaborate_ends},
     local_facts::{initial_snapshot_source, ordinary_direct_value_role},
     pattern::PatternSource,
 };
@@ -172,8 +172,9 @@ pub(crate) fn lower_to_smir_with_call_sites<'a, 'db>(
         let result = (cx.expr_ty(root) != TyId::unit(db)).then(|| SOperand::expr(result, root));
         cx.exit(SemOrigin::Body(template_owner), result);
     }
+    let holds = std::mem::take(&mut cx.holds);
     let mut body = cx.finish();
-    elaborate_ends(db, &mut body);
+    elaborate_ends(db, &mut body, &holds);
     body
 }
 
@@ -243,6 +244,8 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     /// The scope each temporary was allocated in, by local.
     pub(super) temp_scopes: Vec<Option<u32>>,
     pub(super) next_drop_scope: u32,
+    /// The uses that hold accesses open to the exits of scopes holding them.
+    pub(super) holds: Vec<Hold>,
 }
 
 pub(super) struct BlockState<'db> {
@@ -368,6 +371,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             drop_scopes: Vec::new(),
             temp_scopes: Vec::new(),
             next_drop_scope: 0,
+            holds: Vec::new(),
         };
         cx.collect_binding_locals();
         cx.current = cx.new_block();

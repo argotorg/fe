@@ -27,6 +27,10 @@ value's lifetime ends, and a type that holds a resource releases it in its
       b.span()
   }
   ```
+- The temporaries of a `with` block's providers, and the bindings of a
+  block among them whose value is an access, are destroyed when the `with`
+  block is left, each provider's after the providers that follow it end
+  (see [effects](effects.md#providers)).
 - A loop body's bindings are destroyed at the end of each iteration.
 - `return`, `break`, `continue`, a failing `?` and a `let .. else` that
   leaves destroy what the scopes they leave hold.

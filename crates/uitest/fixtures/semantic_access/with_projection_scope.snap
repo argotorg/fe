@@ -1,0 +1,113 @@
+---
+source: crates/uitest/tests/semantic_access.rs
+expression: diags
+input_file: fixtures/semantic_access/with_projection_scope.fe
+---
+error[16-0001]: access conflict in `fn named`
+   ┌─ with_projection_scope.fe:37:21
+   │
+36 │     with (Frame = indented(4)) {
+   │                   ----------- projection opened here
+37 │         frame.log = frame.indent
+   │                     ^^^^^^^^^^^^ cannot read this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn named_after_use`
+   ┌─ with_projection_scope.fe:45:9
+   │
+43 │     with (Frame = indented(4)) {
+   │                   ----------- projection opened here
+44 │         mark()
+45 │         frame.log = 0
+   │         ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn nested_local`
+   ┌─ with_projection_scope.fe:54:23
+   │
+53 │     with (Frame = frame.clipped(1)) {
+   │                   ----- access opened here
+54 │         with (Frame = frame.clipped(2)) { mark() }
+   │                       ^^^^^ cannot mutably access this place while a `mut` access of it is open
+
+error[16-0001]: access conflict in `fn on_break`
+   ┌─ with_projection_scope.fe:63:17
+   │
+61 │         with (Frame = indented(4)) {
+   │                       ----------- projection opened here
+62 │             if c {
+63 │                 frame.log = 0
+   │                 ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn on_return`
+   ┌─ with_projection_scope.fe:75:13
+   │
+73 │     with (Frame = indented(4)) {
+   │                   ----------- projection opened here
+74 │         if c {
+75 │             frame.log = 0
+   │             ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn on_try`
+   ┌─ with_projection_scope.fe:86:9
+   │
+85 │     with (Frame = indented(4)) {
+   │                   ----------- projection opened here
+86 │         frame.log = 0
+   │         ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn block_field`
+   ┌─ with_projection_scope.fe:95:9
+   │
+94 │     with (u256 = ({ indented(4) }).indent) {
+   │                     ----------- projection opened here
+95 │         frame.log = 0
+   │         ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn marked_field`
+    ┌─ with_projection_scope.fe:101:9
+    │
+100 │     with (u256 = (mut indented(4)).indent) {
+    │                       ----------- projection opened here
+101 │         frame.log = 0
+    │         ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn later_provider_exit`
+    ┌─ with_projection_scope.fe:128:13
+    │
+126 │     with (Frame = indented(1), u256 = {
+    │                   ----------- projection opened here
+127 │         if c {
+128 │             frame.log = 0
+    │             ^^^^^^^^^^^^^ cannot write to this place while a `mut` projection of it is open
+
+error[16-0001]: access conflict in `fn ref_write`
+    ┌─ with_projection_scope.fe:141:9
+    │
+139 │     with (u256 = depth()) {
+    │                  ------- projection opened here
+140 │         let v = read_u()
+141 │         frame.indent = 5
+    │         ^^^^^^^^^^^^^^^^ cannot write to this place while a `ref` projection of it is open
+
+error[16-0001]: access conflict in `fn yielded`
+    ┌─ with_projection_scope.fe:148:34
+    │
+148 │     with (Frame = indented(4)) { mut frame.log }
+    │                   -----------    ^^^^^^^^^^^^^ cannot mutably access this place while a `mut` projection of it is open
+    │                   │
+    │                   projection opened here
+
+error[16-0001]: access conflict in `fn yield_statement`
+    ┌─ with_projection_scope.fe:154:40
+    │
+154 │     yield with (Frame = indented(4)) { mut frame.log }
+    │                         -----------    ^^^^^^^^^^^^^ cannot mutably access this place while a `mut` projection of it is open
+    │                         │
+    │                         projection opened here
+
+error[16-0001]: access conflict in `fn forwarded_row`
+    ┌─ with_projection_scope.fe:162:34
+    │
+162 │     with (Frame = indented(1)) { f() }
+    │                   -----------    ^^^ cannot read this place while a `mut` projection of it is open
+    │                   │
+    │                   projection opened here
