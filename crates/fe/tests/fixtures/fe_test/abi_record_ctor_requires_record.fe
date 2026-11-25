@@ -23,19 +23,17 @@ impl ByteSource for MemInput {
     }
 }
 
-// Word 0 is the offset 32, word 1 the length 3 of a `DynArray<u256>`.
-fn array_input() -> MemInput {
+#[test]
+fn control_part_length_is_three() {
+    // Word 0 is the offset 32, word 1 the length 3 of a `DynArray<u256>`. The
+    // buffer is freed when it goes out of scope, so it is made here and not
+    // in a helper that would return a pointer into it.
     let data = MemBuffer::new(160)
     unsafe {
         store_word(ptr: data.ptr(), value: 32)
         store_word(ptr: ptr::offset_bytes(data.ptr(), 32), value: 3)
     }
-    MemInput { ptr: data.ptr(), len: 160 }
-}
-
-#[test]
-fn control_part_length_is_three() {
-    let input = array_input()
+    let input = MemInput { ptr: data.ptr(), len: 160 }
     let part = decode_part_at<Sol, DynArray<u256>, MemInput>(input, base: 0, head_pos: 0)
     assert!(part.len() == 3)
 }
