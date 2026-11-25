@@ -29,6 +29,14 @@ impl<'db> GenericParamListId<'db> {
             .into_iter()
             .map(|param| GenericParam::lower_ast(ctxt, param))
             .collect::<Vec<_>>();
+        // A generic parameter is a binder of the template that declares it, as a
+        // function parameter is, for the open names of the template and of the
+        // fragments spliced into it.
+        for param in &params {
+            if let Partial::Present(name) = param.name() {
+                ctxt.record_bound_name(name.data(ctxt.db()));
+            }
+        }
         Self::new(ctxt.db(), params)
     }
 
@@ -171,7 +179,7 @@ impl<'db> WhereClauseId<'db> {
                 producer_block,
                 holes,
             } => {
-                let (quote, frame) = ctxt.resolve_quote_template(
+                let (quote, mut frame) = ctxt.resolve_quote_template(
                     quote_file,
                     *quote_range,
                     *producer_module,
@@ -179,12 +187,24 @@ impl<'db> WhereClauseId<'db> {
                     true,
                     holes.clone(),
                 );
+                // An open name is taken from the template that splices the
+                // fragment: it must be a binder that template has declared, a
+                // generic parameter, and it names that binder where the
+                // fragment is spliced. A fragment inside a fragment reads the
+                // binders of the template through the one around it.
+                if let Some(enclosing) = ctxt.quote_frames.last() {
+                    frame.bound_names = enclosing.bound_names.clone();
+                }
                 for (name, range) in &frame.open_names {
-                    ctxt.file_scoped_error(
-                        frame.quote_top_mod.file(ctxt.db()),
-                        *range,
-                        format!("quoted open name `{name}` has no enclosing binder"),
-                    );
+                    if frame.bound_names.contains(name) {
+                        frame.destination_names.insert(name.clone());
+                    } else {
+                        ctxt.file_scoped_error(
+                            frame.quote_top_mod.file(ctxt.db()),
+                            *range,
+                            format!("quoted open name `{name}` has no enclosing binder"),
+                        );
+                    }
                 }
                 ctxt.quote_frames.push(frame);
                 if let Some(where_clause) = quote.where_clause().and_then(|w| w.clause()) {

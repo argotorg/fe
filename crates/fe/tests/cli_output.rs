@@ -8017,3 +8017,33 @@ fn items_spliced_into_a_block_bind_the_later_names_of_the_enclosing_template() {
         "expected the sibling fragment not to capture `helper`:\n{output}"
     );
 }
+
+#[test]
+fn a_where_fragment_may_name_a_generic_parameter_of_the_template_that_splices_it() {
+    for name in [
+        "where_open_type_param_handwritten.fe",
+        "where_open_type_param.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+
+    // A name that no enclosing binder declares keeps its diagnostic, in a
+    // where fragment as in an expression.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("where_open_type_param_unbound.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("quoted open name `U` has no enclosing binder"),
+        "expected the unbound name to be refused:\n{output}"
+    );
+    let (output, exit) =
+        run_fe_main(&["check", &header_generation_fixture("open_name_unlisted.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("undefined variable `other`"),
+        "expected the unlisted name to be refused:\n{output}"
+    );
+}

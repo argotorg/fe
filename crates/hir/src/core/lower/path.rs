@@ -51,7 +51,8 @@ impl<'db> PathId<'db> {
                 {
                     let frame = ctxt.quote_frames.last().unwrap();
                     let origin = frame.path_origin();
-                    let is_bound = quote_name_is_bound(ctxt, seg.syntax(), ident.text(), None);
+                    let is_bound = quote_name_is_bound(ctxt, seg.syntax(), ident.text(), None)
+                        || frame.destination_names.contains(ident.text());
                     let is_member_quote = frame.is_member_quote;
                     let display_ident = IdentId::lower_token(ctxt, ident.clone());
                     let generic_args = GenericArgListId::lower_ast_opt(ctxt, seg.generic_args());

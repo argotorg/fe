@@ -788,6 +788,7 @@ impl<'db> FileLowerCtxt<'db> {
                 is_member_quote: false,
                 open_names,
                 bound_names: rustc_hash::FxHashSet::default(),
+                destination_names: rustc_hash::FxHashSet::default(),
                 holes,
             },
         )
