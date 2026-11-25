@@ -1,0 +1,12 @@
+// The variant Yes is constructed, so its Ring<Bell> is destroyed and has no ordinary proof.
+use core::ops::Drop
+pub trait Chime { fn ring(self) }
+pub struct Bell {}
+pub impl Chime for Bell as Loud { fn ring(self) { assert(false) } }
+pub struct Ring<T: Chime> { t: T }
+impl<T: Chime> Drop for Ring<T> { fn drop(own self) { self.t.ring() } }
+
+enum Maybe<T: Chime> { No, Yes(Ring<T>) }
+fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::Yes(Ring { t }) }
+#[test]
+fn t() { with (Loud) { pick(Bell {}) } }

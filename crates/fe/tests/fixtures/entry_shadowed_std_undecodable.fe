@@ -1,0 +1,8 @@
+// A local module named `std` hides the library from a lexical lookup, not from
+// the entry code of the contract, which `fe build` generates from the library.
+// `NoCodec` has no `Decode<Sol>`, so the `init` arguments cannot be decoded.
+mod std {}
+pub struct NoCodec { word: u256 }
+pub contract C {
+    init(_ value: NoCodec) {}
+}

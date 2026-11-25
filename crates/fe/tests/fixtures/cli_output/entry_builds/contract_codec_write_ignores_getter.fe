@@ -1,0 +1,66 @@
+// A write of a packed entry runs the setter of its lane codec and not the getter, so a drop in the getter is not judged.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, Drop}
+
+struct Codec {}
+impl LaneCodec<u32> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        with (Loud2) { hold(Tag2 {}) }
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+struct Counters<C> {}
+impl<C> Pinned for Counters<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Counters<C> {
+    type Key = u256
+    type Entry = u32
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u32,
+}
+pub contract K {
+    mut c: Counters<Codec>
+    recv M {
+        Run -> u32 uses (mut c) {
+            c[1] = 5
+            42
+        }
+    }
+}

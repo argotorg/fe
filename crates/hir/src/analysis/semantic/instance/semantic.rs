@@ -2381,6 +2381,24 @@ impl<'db> SemanticInstance<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+        self.collect_implicit_dependencies(db, true)
+    }
+
+    /// The constants that running the body evaluates, without the codec
+    /// callees of its place entries. Which codec methods an entry runs, and
+    /// whether it runs, is for the statements of the body to say.
+    pub fn constant_dependencies_with_origins(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+        self.collect_implicit_dependencies(db, false)
+    }
+
+    fn collect_implicit_dependencies(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        codecs: bool,
+    ) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
         let typed_body = self.key(db).typed_body(db);
         let Some(body) = typed_body.body() else {
             return Vec::new();
@@ -2402,7 +2420,8 @@ impl<'db> SemanticInstance<'db> {
             {
                 push(resolved.instance(db), SemOrigin::Expr(expr));
             }
-            if typed_body.place_entry_calls(expr).is_some()
+            if codecs
+                && typed_body.place_entry_calls(expr).is_some()
                 && let Ok(codec) = self.entry_codec_callees(db, expr)
             {
                 codec

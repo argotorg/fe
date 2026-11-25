@@ -953,6 +953,44 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     )
 }
 
+/// Whether code at `from` can name `trait_` through a `use` of another module:
+/// a module of the ingot of `trait_` that `from` can reach, with every module
+/// around it, imports the trait by a name or a glob, and the `use` is visible
+/// from `from`. A trait that sits in a private module can be public by such a
+/// re-export.
+fn is_reexported_to<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> bool {
+    use crate::analysis::name_resolution::{NameDerivation, NameDomain, items_in_scope};
+
+    let ingot = trait_.scope().ingot(db);
+    ingot
+        .all_modules(db)
+        .iter()
+        .flat_map(|top_mod| {
+            std::iter::once(top_mod.scope())
+                .chain(top_mod.all_mods(db).iter().map(|mod_| mod_.scope()))
+        })
+        .filter(|scope| {
+            std::iter::successors(Some(*scope), |scope| scope.parent(db))
+                .all(|scope| is_scope_visible_from(db, scope, from))
+        })
+        .any(|scope| {
+            items_in_scope(db, scope, NameDomain::TYPE)
+                .values()
+                .any(|res| {
+                    res.trait_() == Some(trait_)
+                        && matches!(
+                            res.derivation,
+                            NameDerivation::NamedImported(_) | NameDerivation::GlobImported(_)
+                        )
+                        && res.is_visible(db, from)
+                })
+        })
+}
+
 /// The constraint that stops the one implementation that could prove `goal`:
 /// the first constraint, that no implementation satisfies, of the only
 /// implementation whose head and associated types match `goal`.
@@ -979,6 +1017,7 @@ pub(crate) fn blocking_constraint<'db>(
         scope.ingot(db) != ingot
             && !std::iter::successors(Some(scope), |scope| scope.parent(db))
                 .all(|scope| is_scope_visible_from(db, scope, origin_scope))
+            && !is_reexported_to(db, constraint.def(db), origin_scope)
     };
     let (mut nominal, mut blanket) = (Vec::new(), Vec::new());
     for impl_ in env.impls_for_trait(db, goal.def(db)) {

@@ -731,7 +731,14 @@ fn run_edges<'db>(
         .map(|key| (key, SemOrigin::Body(owner)))
         .collect();
     let mut failures = Vec::new();
-    callees.extend(instance.implicit_dependencies_with_origins(db));
+    // The trust walk follows every constant and every codec callee that the
+    // typed body records. A walk over what runs follows the constants, and
+    // takes the codec methods of an entry from the statements that use it.
+    callees.extend(if live {
+        instance.constant_dependencies_with_origins(db)
+    } else {
+        instance.implicit_dependencies_with_origins(db)
+    });
     // A panic that no statement which runs makes builds no revert data.
     let running = if live {
         running_call_sites(db, instance)
@@ -769,7 +776,7 @@ fn run_edges<'db>(
             callees.extend(drops.keys.into_iter().map(|key| (key, origin)));
             failures.extend(drops.unproved.into_iter().map(|drop| (drop, origin)));
         }
-        let mut visit = |place: &NPlace<'db>| {
+        let mut visit = |place: &NPlace<'db>, usage: PlaceUse| {
             for (idx, projection) in place.path.iter().enumerate() {
                 let NDataProjection::Entry(_, entry) = projection else {
                     continue;
@@ -782,11 +789,23 @@ fn run_edges<'db>(
                     .as_ref()
                     .and_then(|site| site.callee)
                     .map(|callee| callee.key);
+                // A lane that the place ends at is read or written by the
+                // method for that use; one that a projection continues from
+                // is held as a copy and stored back.
+                let usage = if idx + 1 == place.path.len() {
+                    usage
+                } else {
+                    PlaceUse::Address
+                };
                 let codec = instance
                     .state_index_lanes(db, collection)
                     .and_then(|_| instance.entry_codec_callees(db, *entry).ok())
                     .into_iter()
-                    .flatten();
+                    .flat_map(|[get, set]| match usage {
+                        PlaceUse::Read => vec![get],
+                        PlaceUse::Write => vec![set],
+                        PlaceUse::Address => vec![get, set],
+                    });
                 callees.extend(
                     locate
                         .into_iter()
@@ -797,7 +816,10 @@ fn run_edges<'db>(
         };
         match &statement.kind {
             NStatementKind::Define { expr, .. } => {
-                expr.for_each_place_operand(&mut visit);
+                match expr {
+                    NExpr::Load { place, .. } => visit(place, PlaceUse::Read),
+                    _ => expr.for_each_place_operand(|place| visit(place, PlaceUse::Address)),
+                }
                 if let NExpr::CodeRegionRef { region }
                 | NExpr::CodeRegionOffset {
                     target: SemanticCodeRegionTarget::Resolved(region),
@@ -812,10 +834,10 @@ fn run_edges<'db>(
                     );
                 }
             }
-            NStatementKind::Store { destination, .. }
-            | NStatementKind::Drop {
+            NStatementKind::Store { destination, .. } => visit(destination, PlaceUse::Write),
+            NStatementKind::Drop {
                 target: NDropTarget::Place(destination),
-            } => visit(destination),
+            } => visit(destination, PlaceUse::Address),
             NStatementKind::End { .. }
             | NStatementKind::CheckIndex { .. }
             | NStatementKind::Drop {
@@ -824,6 +846,20 @@ fn run_edges<'db>(
         }
     }
     RunEdges { callees, failures }
+}
+
+/// How a statement uses a place that ends at, or runs through, an entry of a
+/// collection that packs its elements into lanes. Runtime lowering decides the
+/// codec method of the entry by the use: a value read calls the getter
+/// (`read_lane`), a store the setter (`write_lane`), and an address, a view, an
+/// effect argument, a drop or a place that a projection continues from holds a
+/// copy of the lane, which it reads with the getter and stores back with the
+/// setter (`hold_lane`).
+#[derive(Clone, Copy)]
+enum PlaceUse {
+    Read,
+    Write,
+    Address,
 }
 
 /// The statements of `body`, a body of `instance`, that no run executes: those

@@ -1,0 +1,13 @@
+// The variant Yes holds a struct with an uninhabited field, so no value of it exists and no drop proof is asked for its Ring<T>.
+use core::ops::Drop
+pub trait Chime { fn ring(self) }
+pub struct Bell {}
+pub impl Chime for Bell as Loud { fn ring(self) { assert(false) } }
+pub struct Ring<T: Chime> { t: T }
+impl<T: Chime> Drop for Ring<T> { fn drop(own self) { self.t.ring() } }
+enum Void {}
+struct Hidden<T: Chime> { v: Void, r: Ring<T> }
+enum Maybe<T: Chime> { No, Yes(Hidden<T>) }
+fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::No }
+#[test]
+fn t() { with (Loud) { pick(Bell {}) } }

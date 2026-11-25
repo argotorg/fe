@@ -1082,12 +1082,6 @@ pub(crate) fn contract_entry_failures<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
 ) -> Vec<ContractEntryFailure<'db>> {
-    let scope = contract.scope();
-    // A contract with no ABI library has no entry code to generate; the
-    // lowering names the missing item.
-    if resolve_sol_abi_ty(db, scope, PredicateListId::empty_list(db)).is_none() {
-        return Vec::new();
-    }
     let contract_name = contract
         .name(db)
         .to_opt()
