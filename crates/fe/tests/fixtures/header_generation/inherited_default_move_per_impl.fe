@@ -1,0 +1,29 @@
+struct NonCopy { a: u256 }
+
+trait Make {
+    const fn make() -> Self
+}
+impl Make for u256 {
+    const fn make() -> Self { 1 }
+}
+impl Make for NonCopy {
+    const fn make() -> Self { NonCopy { a: 1 } }
+}
+
+trait T {
+    type X: Make
+    const PAIR: (Self::X, Self::X) = {
+        let v = <Self::X as Make>::make()
+        (v, v)
+    }
+}
+
+struct Good {}
+impl T for Good {
+    type X = u256
+}
+
+struct Bad {}
+impl T for Bad {
+    type X = NonCopy
+}

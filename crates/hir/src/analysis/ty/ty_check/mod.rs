@@ -398,9 +398,11 @@ pub(crate) fn inherited_assoc_const_bodies<'db>(
 /// retention and the semantic access walk share. An implementation holds, after
 /// the values it writes, each default it inherits that is checked for it
 /// (`inherited_assoc_const_bodies`). A trait's default whose declared type
-/// mentions a parameter is held only when its own check has no diagnostics at
-/// all: a deferred mismatch is found through the implementations' bodies, which
-/// have no invalid type in them.
+/// mentions a parameter is not held by the trait: it is checked for each
+/// implementation that inherits it, with that implementation's types. Checked
+/// once for the trait, with the parameter abstract, it would be refused for
+/// what no implementation does, such as a copy of a `Self::X` that has no
+/// `Copy` bound where every implementation's `X` is `Copy`.
 pub(crate) fn assoc_const_bodies_of<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
@@ -415,10 +417,7 @@ pub(crate) fn assoc_const_bodies_of<'db>(
         ItemKind::Trait(trait_) => trait_default_const_bodies(db, trait_)
             .into_iter()
             .filter(|constant| {
-                !(constant.expected.has_param(db) && !constant.expected.has_invalid(db))
-                    || check_anon_const_body(db, constant.body, constant.expected)
-                        .0
-                        .is_empty()
+                !constant.expected.has_param(db) || constant.expected.has_invalid(db)
             })
             .collect(),
         _ => Vec::new(),

@@ -8078,3 +8078,28 @@ fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_read_through_an_inherited_de
         assert_eq!(exit_code, 0, "{fixture}: trusting `u` allows it:\n{output}");
     }
 }
+
+#[test]
+fn an_inherited_default_constant_is_access_checked_for_the_implementations_that_inherit_it() {
+    // `PAIR` copies a `Self::X`. For `Good`, `X` is `u256`, which is `Copy`, so
+    // the default is accepted; the trait itself is not checked with an
+    // abstract `X`.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("inherited_default_move_good_only.fe"),
+    ]);
+    assert_eq!(exit, 0, "expected acceptance:\n{output}");
+
+    // The same default for an implementation whose `X` is not `Copy` is
+    // refused, as the default written there would be.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("inherited_default_move_per_impl.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[16-0002]")
+            && output.contains("cannot use a value after it was moved"),
+        "expected a move conflict for the non-`Copy` implementation:\n{output}"
+    );
+}
