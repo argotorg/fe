@@ -1,0 +1,20 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let a: Code<Item> = quote {
+            const fn helper() -> u256 { 41 }
+            const fn bump() -> u256 { helper() + 1 }
+        }
+        quote { pub const fn carrier() -> u256 {
+            const fn run() -> u256 { ${a}
+                bump() }
+            run()
+        } }
+    }
+}
+struct S {}
+impl S with (P)
+#[test]
+fn t() { assert(S::carrier() == 42) }

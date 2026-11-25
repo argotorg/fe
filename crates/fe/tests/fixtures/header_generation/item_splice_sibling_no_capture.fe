@@ -1,0 +1,14 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Item, Record}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let a: Code<Item> = quote { const fn helper() -> u256 { 41 } }
+        let b: Code<Expr> = quote { helper() + 1 }
+        let both = quote { ${a}
+            ${b} }
+        quote { pub const fn run() -> u256 { ${both} } }
+    }
+}
+struct S {}
+impl S with (P)

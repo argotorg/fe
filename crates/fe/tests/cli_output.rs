@@ -7990,3 +7990,30 @@ fn a_field_type_over_a_projection_or_a_compound_constant_is_spliced_under_a_gene
         assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
     }
 }
+
+#[test]
+fn items_spliced_into_a_block_bind_the_later_names_of_the_enclosing_template() {
+    // `${a}` declares `helper` and `bump` in the block that holds it, so the
+    // call `bump()` after it names the spliced item, directly or inside a
+    // nested function, as it does for items written in the block.
+    for name in [
+        "item_splice_handwritten.fe",
+        "item_splice_binds_enclosing_call.fe",
+        "item_splice_binds_nested_call.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+
+    // A fragment spliced beside the item does not capture its free names: the
+    // `helper` of the expression fragment is the producer's, which has none.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("item_splice_sibling_no_capture.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("undefined variable `helper`"),
+        "expected the sibling fragment not to capture `helper`:\n{output}"
+    );
+}
