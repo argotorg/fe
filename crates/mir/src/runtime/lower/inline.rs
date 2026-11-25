@@ -222,16 +222,16 @@ fn sum_shape_sites<'db>(callee: &RuntimeBody<'db>) -> Option<(LayoutId<'db>, Sum
         for stmt in &block.stmts {
             if let RStmt::Assign { dst, expr } = stmt {
                 assigned.entry(*dst).or_default().push(expr);
-                for value in expr.clone().values_mut() {
+                for value in expr.values() {
                     *uses.entry(*value).or_default() += 1;
                 }
             } else {
-                for local in stmt.clone().locals_mut() {
+                for local in stmt.locals() {
                     *uses.entry(*local).or_default() += 1;
                 }
             }
         }
-        for value in block.terminator.clone().values_mut() {
+        for value in block.terminator.values() {
             *uses.entry(*value).or_default() += 1;
         }
     }
@@ -322,7 +322,7 @@ impl SumShapeUses {
             };
             if !replaced
                 && stmt
-                    .locals(&body.provider_bindings)
+                    .resolved_locals(&body.provider_bindings)
                     .into_iter()
                     .any(mentioned)
             {
@@ -337,10 +337,10 @@ impl SumShapeUses {
             if !matched
                 && block
                     .terminator
-                    .clone()
-                    .values_mut()
+                    .values()
                     .into_iter()
-                    .any(|value| mentioned(*value))
+                    .copied()
+                    .any(mentioned)
             {
                 return None;
             }
@@ -656,15 +656,9 @@ fn slide_locals<'db>(
         }
         let data = &callee.blocks[block.index()];
         for stmt in &data.stmts {
-            locals.extend(stmt.locals(&callee.provider_bindings));
+            locals.extend(stmt.resolved_locals(&callee.provider_bindings));
         }
-        locals.extend(
-            data.terminator
-                .clone()
-                .values_mut()
-                .into_iter()
-                .map(|value| *value),
-        );
+        locals.extend(data.terminator.values());
         stack.extend(data.terminator.successors());
     }
     locals

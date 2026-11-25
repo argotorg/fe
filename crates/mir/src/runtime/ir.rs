@@ -1708,25 +1708,6 @@ pub enum RTerminator<'db> {
     Stop,
 }
 
-impl<'db> RuntimePlace<'db> {
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut RValueId> {
-        let root = match &mut self.root {
-            PlaceRoot::Slot(local) | PlaceRoot::Ref(local) | PlaceRoot::Ptr { addr: local, .. } => {
-                Some(local)
-            }
-            PlaceRoot::Provider(_) => None,
-        };
-        root.into_iter()
-            .chain(self.path.iter_mut().filter_map(|elem| match elem {
-                PlaceElem::Index(IndexSource::Dynamic(index)) => Some(index),
-                PlaceElem::Index(_)
-                | PlaceElem::Field(_)
-                | PlaceElem::VariantField { .. }
-                | PlaceElem::Deref => None,
-            }))
-    }
-}
-
 impl<'db> RuntimeBuiltin<'db> {
     /// Whether running the builtin can be observed beyond its result: it
     /// writes memory or state, calls out, logs, frees, can revert, or hides
@@ -1808,374 +1789,407 @@ impl<'db> RuntimeBuiltin<'db> {
             | Self::MakeContractFieldRef { .. } => false,
         }
     }
-
-    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
-        match self {
-            Self::Mload { addr }
-            | Self::ExtCodeSize { addr }
-            | Self::ExtCodeHash { addr }
-            | Self::Balance { addr }
-            | Self::StoreConstBytes { dst: addr, .. } => vec![addr],
-            Self::Sload { slot: value }
-            | Self::CallDataLoad { offset: value }
-            | Self::LeadingZeros { value }
-            | Self::TrailingZeros { value }
-            | Self::SwapBytes { value }
-            | Self::BlackBox { value }
-            | Self::BlockHash { block: value }
-            | Self::BlobHash { index: value }
-            | Self::Malloc { size: value }
-            | Self::TryMalloc { size: value }
-            | Self::Free { ptr: value } => vec![value],
-            Self::Mstore { addr: a, value: b }
-            | Self::Mstore8 { addr: a, value: b }
-            | Self::ZeroMem { dst: a, len: b }
-            | Self::ReadPaddedWord { ptr: a, len: b }
-            | Self::Sstore { slot: a, value: b }
-            | Self::Keccak256 { offset: a, len: b }
-            | Self::Byte { pos: a, value: b }
-            | Self::SignExtend { byte: a, value: b }
-            | Self::IntrinsicArith { lhs: a, rhs: b, .. }
-            | Self::Saturating { lhs: a, rhs: b, .. }
-            | Self::Overflowing { lhs: a, rhs: b, .. }
-            | Self::PtrOffsetBytes { ptr: a, offset: b }
-            | Self::Log0 { offset: a, len: b } => vec![a, b],
-            Self::Mcopy {
-                dst: a,
-                src: b,
-                len: c,
-            }
-            | Self::ReturnDataCopy {
-                dst: a,
-                offset: b,
-                len: c,
-            }
-            | Self::CallDataCopy {
-                dst: a,
-                offset: b,
-                len: c,
-            }
-            | Self::CodeCopy {
-                dst: a,
-                offset: b,
-                len: c,
-            }
-            | Self::Realloc {
-                ptr: a,
-                used: b,
-                size: c,
-            }
-            | Self::TryRealloc {
-                ptr: a,
-                used: b,
-                size: c,
-            }
-            | Self::AddMod {
-                lhs: a,
-                rhs: b,
-                modulus: c,
-            }
-            | Self::MulMod {
-                lhs: a,
-                rhs: b,
-                modulus: c,
-            }
-            | Self::Create {
-                value: a,
-                offset: b,
-                len: c,
-            }
-            | Self::Log1 {
-                offset: a,
-                len: b,
-                topic0: c,
-            } => vec![a, b, c],
-            Self::ExtCodeCopy {
-                addr: a,
-                dst: b,
-                offset: c,
-                len: d,
-            }
-            | Self::Create2 {
-                value: a,
-                offset: b,
-                len: c,
-                salt: d,
-            }
-            | Self::Log2 {
-                offset: a,
-                len: b,
-                topic0: c,
-                topic1: d,
-            } => vec![a, b, c, d],
-            Self::Log3 {
-                offset,
-                len,
-                topic0,
-                topic1,
-                topic2,
-            } => vec![offset, len, topic0, topic1, topic2],
-            Self::Log4 {
-                offset,
-                len,
-                topic0,
-                topic1,
-                topic2,
-                topic3,
-            } => vec![offset, len, topic0, topic1, topic2, topic3],
-            Self::StaticCall {
-                gas,
-                addr,
-                args_offset,
-                args_len,
-                ret_offset,
-                ret_len,
-            }
-            | Self::DelegateCall {
-                gas,
-                addr,
-                args_offset,
-                args_len,
-                ret_offset,
-                ret_len,
-            } => vec![gas, addr, args_offset, args_len, ret_offset, ret_len],
-            Self::Call {
-                gas,
-                addr,
-                value,
-                args_offset,
-                args_len,
-                ret_offset,
-                ret_len,
-            } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
-            Self::KeccakWords { words } => words.iter_mut().collect(),
-            Self::Sha256Compress { state, block } => vec![state, block],
-            Self::Msize
-            | Self::CallValue
-            | Self::ReturnDataSize
-            | Self::CallDataSize
-            | Self::CodeSize
-            | Self::Address
-            | Self::Caller
-            | Self::Origin
-            | Self::GasPrice
-            | Self::CoinBase
-            | Self::Timestamp
-            | Self::Number
-            | Self::PrevRandao
-            | Self::GasLimit
-            | Self::ChainId
-            | Self::BaseFee
-            | Self::SelfBalance
-            | Self::BlobBaseFee
-            | Self::Gas
-            | Self::CurrentCodeRegionLen
-            | Self::CodeRegionOffset { .. }
-            | Self::CodeRegionLen { .. }
-            | Self::CallDataSelector
-            | Self::MakeContractFieldRef { .. } => Vec::new(),
-        }
-    }
 }
 
-impl<'db> RExpr<'db> {
-    /// The values the expression reads, including those in its places.
-    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
-        match self {
-            Self::Use(value)
-            | Self::Unary { value, .. }
-            | Self::Cast { value, .. }
-            | Self::MaterializeToObject { src: value }
-            | Self::NativeRef { value }
-            | Self::ProviderRefFromRaw { raw: value, .. }
-            | Self::ObjectFromRaw { raw: value }
-            | Self::WordToRawAddr { value, .. }
-            | Self::ProviderRefToRaw { value }
-            | Self::RetagRef { value }
-            | Self::AggregateExtract { value, .. }
-            | Self::EnumTagOfValue { value }
-            | Self::EnumIsVariant { value, .. }
-            | Self::EnumExtract { value, .. }
-            | Self::EnumAssertVariantRef { root: value, .. } => vec![value],
-            Self::Binary { lhs, rhs, .. } => vec![lhs, rhs],
-            Self::MaterializePlaceToObject { place }
-            | Self::AddrOf { place }
-            | Self::Load { place }
-            | Self::EnumGetTag { place } => place.values_mut().collect(),
-            Self::AggregateMake { fields, .. }
-            | Self::Call { args: fields, .. }
-            | Self::EnumMake { fields, .. } => fields.iter_mut().collect(),
-            Self::Builtin(builtin) => builtin.values_mut(),
-            Self::ConstScalar(_)
-            | Self::Placeholder { .. }
-            | Self::ConstRef { .. }
-            | Self::AllocObject { .. } => Vec::new(),
+/// The operand walks of the runtime IR: the values, places, locals and
+/// successors each node holds, by shared reference (`walks!(; values, ..)`)
+/// or by mutable reference (`walks!(mut; values_mut, ..)`), from one set of
+/// matches.
+macro_rules! walks {
+    (
+        $($mut:ident)?;
+        $values:ident, $place:ident, $places:ident, $locals:ident, $successors:ident, $iter:ident
+    ) => {
+        impl<'db> RuntimePlace<'db> {
+            pub fn $values(& $($mut)? self) -> impl Iterator<Item = & $($mut)? RValueId> {
+                let root = match & $($mut)? self.root {
+                    PlaceRoot::Slot(local)
+                    | PlaceRoot::Ref(local)
+                    | PlaceRoot::Ptr { addr: local, .. } => Some(local),
+                    PlaceRoot::Provider(_) => None,
+                };
+                root.into_iter()
+                    .chain(self.path.$iter().filter_map(|elem| match elem {
+                        PlaceElem::Index(IndexSource::Dynamic(index)) => Some(index),
+                        PlaceElem::Index(_)
+                        | PlaceElem::Field(_)
+                        | PlaceElem::VariantField { .. }
+                        | PlaceElem::Deref => None,
+                    }))
+            }
         }
-    }
+
+        impl<'db> RuntimeBuiltin<'db> {
+            pub fn $values(& $($mut)? self) -> Vec<& $($mut)? RValueId> {
+                match self {
+                    Self::Mload { addr }
+                    | Self::ExtCodeSize { addr }
+                    | Self::ExtCodeHash { addr }
+                    | Self::Balance { addr }
+                    | Self::StoreConstBytes { dst: addr, .. } => vec![addr],
+                    Self::Sload { slot: value }
+                    | Self::CallDataLoad { offset: value }
+                    | Self::LeadingZeros { value }
+                    | Self::TrailingZeros { value }
+                    | Self::SwapBytes { value }
+                    | Self::BlackBox { value }
+                    | Self::BlockHash { block: value }
+                    | Self::BlobHash { index: value }
+                    | Self::Malloc { size: value }
+                    | Self::TryMalloc { size: value }
+                    | Self::Free { ptr: value } => vec![value],
+                    Self::Mstore { addr: a, value: b }
+                    | Self::Mstore8 { addr: a, value: b }
+                    | Self::ZeroMem { dst: a, len: b }
+                    | Self::ReadPaddedWord { ptr: a, len: b }
+                    | Self::Sstore { slot: a, value: b }
+                    | Self::Keccak256 { offset: a, len: b }
+                    | Self::Byte { pos: a, value: b }
+                    | Self::SignExtend { byte: a, value: b }
+                    | Self::IntrinsicArith { lhs: a, rhs: b, .. }
+                    | Self::Saturating { lhs: a, rhs: b, .. }
+                    | Self::Overflowing { lhs: a, rhs: b, .. }
+                    | Self::PtrOffsetBytes { ptr: a, offset: b }
+                    | Self::Log0 { offset: a, len: b } => vec![a, b],
+                    Self::Mcopy {
+                        dst: a,
+                        src: b,
+                        len: c,
+                    }
+                    | Self::ReturnDataCopy {
+                        dst: a,
+                        offset: b,
+                        len: c,
+                    }
+                    | Self::CallDataCopy {
+                        dst: a,
+                        offset: b,
+                        len: c,
+                    }
+                    | Self::CodeCopy {
+                        dst: a,
+                        offset: b,
+                        len: c,
+                    }
+                    | Self::Realloc {
+                        ptr: a,
+                        used: b,
+                        size: c,
+                    }
+                    | Self::TryRealloc {
+                        ptr: a,
+                        used: b,
+                        size: c,
+                    }
+                    | Self::AddMod {
+                        lhs: a,
+                        rhs: b,
+                        modulus: c,
+                    }
+                    | Self::MulMod {
+                        lhs: a,
+                        rhs: b,
+                        modulus: c,
+                    }
+                    | Self::Create {
+                        value: a,
+                        offset: b,
+                        len: c,
+                    }
+                    | Self::Log1 {
+                        offset: a,
+                        len: b,
+                        topic0: c,
+                    } => vec![a, b, c],
+                    Self::ExtCodeCopy {
+                        addr: a,
+                        dst: b,
+                        offset: c,
+                        len: d,
+                    }
+                    | Self::Create2 {
+                        value: a,
+                        offset: b,
+                        len: c,
+                        salt: d,
+                    }
+                    | Self::Log2 {
+                        offset: a,
+                        len: b,
+                        topic0: c,
+                        topic1: d,
+                    } => vec![a, b, c, d],
+                    Self::Log3 {
+                        offset,
+                        len,
+                        topic0,
+                        topic1,
+                        topic2,
+                    } => vec![offset, len, topic0, topic1, topic2],
+                    Self::Log4 {
+                        offset,
+                        len,
+                        topic0,
+                        topic1,
+                        topic2,
+                        topic3,
+                    } => vec![offset, len, topic0, topic1, topic2, topic3],
+                    Self::StaticCall {
+                        gas,
+                        addr,
+                        args_offset,
+                        args_len,
+                        ret_offset,
+                        ret_len,
+                    }
+                    | Self::DelegateCall {
+                        gas,
+                        addr,
+                        args_offset,
+                        args_len,
+                        ret_offset,
+                        ret_len,
+                    } => vec![gas, addr, args_offset, args_len, ret_offset, ret_len],
+                    Self::Call {
+                        gas,
+                        addr,
+                        value,
+                        args_offset,
+                        args_len,
+                        ret_offset,
+                        ret_len,
+                    } => vec![gas, addr, value, args_offset, args_len, ret_offset, ret_len],
+                    Self::KeccakWords { words } => words.$iter().collect(),
+                    Self::Sha256Compress { state, block } => vec![state, block],
+                    Self::Msize
+                    | Self::CallValue
+                    | Self::ReturnDataSize
+                    | Self::CallDataSize
+                    | Self::CodeSize
+                    | Self::Address
+                    | Self::Caller
+                    | Self::Origin
+                    | Self::GasPrice
+                    | Self::CoinBase
+                    | Self::Timestamp
+                    | Self::Number
+                    | Self::PrevRandao
+                    | Self::GasLimit
+                    | Self::ChainId
+                    | Self::BaseFee
+                    | Self::SelfBalance
+                    | Self::BlobBaseFee
+                    | Self::Gas
+                    | Self::CurrentCodeRegionLen
+                    | Self::CodeRegionOffset { .. }
+                    | Self::CodeRegionLen { .. }
+                    | Self::CallDataSelector
+                    | Self::MakeContractFieldRef { .. } => Vec::new(),
+                }
+            }
+        }
+
+        impl<'db> RExpr<'db> {
+            /// The values the expression reads, including those in its places.
+            pub fn $values(& $($mut)? self) -> Vec<& $($mut)? RValueId> {
+                match self {
+                    Self::Use(value)
+                    | Self::Unary { value, .. }
+                    | Self::Cast { value, .. }
+                    | Self::MaterializeToObject { src: value }
+                    | Self::NativeRef { value }
+                    | Self::ProviderRefFromRaw { raw: value, .. }
+                    | Self::ObjectFromRaw { raw: value }
+                    | Self::WordToRawAddr { value, .. }
+                    | Self::ProviderRefToRaw { value }
+                    | Self::RetagRef { value }
+                    | Self::AggregateExtract { value, .. }
+                    | Self::EnumTagOfValue { value }
+                    | Self::EnumIsVariant { value, .. }
+                    | Self::EnumExtract { value, .. }
+                    | Self::EnumAssertVariantRef { root: value, .. } => vec![value],
+                    Self::Binary { lhs, rhs, .. } => vec![lhs, rhs],
+                    Self::MaterializePlaceToObject { place }
+                    | Self::AddrOf { place }
+                    | Self::Load { place }
+                    | Self::EnumGetTag { place } => place.$values().collect(),
+                    Self::AggregateMake { fields, .. }
+                    | Self::Call { args: fields, .. }
+                    | Self::EnumMake { fields, .. } => fields.$iter().collect(),
+                    Self::Builtin(builtin) => builtin.$values(),
+                    Self::ConstScalar(_)
+                    | Self::Placeholder { .. }
+                    | Self::ConstRef { .. }
+                    | Self::AllocObject { .. } => Vec::new(),
+                }
+            }
+
+            pub fn $place(& $($mut)? self) -> Option<& $($mut)? RuntimePlace<'db>> {
+                match self {
+                    Self::MaterializePlaceToObject { place }
+                    | Self::AddrOf { place }
+                    | Self::Load { place }
+                    | Self::EnumGetTag { place } => Some(place),
+                    Self::Use(_)
+                    | Self::ConstScalar(_)
+                    | Self::Placeholder { .. }
+                    | Self::Builtin(_)
+                    | Self::Unary { .. }
+                    | Self::Binary { .. }
+                    | Self::Cast { .. }
+                    | Self::ConstRef { .. }
+                    | Self::AllocObject { .. }
+                    | Self::MaterializeToObject { .. }
+                    | Self::NativeRef { .. }
+                    | Self::ProviderRefFromRaw { .. }
+                    | Self::ObjectFromRaw { .. }
+                    | Self::WordToRawAddr { .. }
+                    | Self::ProviderRefToRaw { .. }
+                    | Self::RetagRef { .. }
+                    | Self::AggregateExtract { .. }
+                    | Self::AggregateMake { .. }
+                    | Self::Call { .. }
+                    | Self::EnumMake { .. }
+                    | Self::EnumTagOfValue { .. }
+                    | Self::EnumIsVariant { .. }
+                    | Self::EnumExtract { .. }
+                    | Self::EnumAssertVariantRef { .. } => None,
+                }
+            }
+        }
+
+        impl<'db> RStmt<'db> {
+            /// The places the statement names, including those of a `HoldLane`'s
+            /// flush.
+            pub fn $places(& $($mut)? self) -> Vec<& $($mut)? RuntimePlace<'db>> {
+                match self {
+                    Self::Assign { expr, .. } => expr.$place().into_iter().collect(),
+                    Self::Store { dst, .. } | Self::CopyInto { dst, .. } => vec![dst],
+                    Self::HoldLane { flush, .. } => {
+                        flush.$iter().flat_map(Self::$places).collect()
+                    }
+                    Self::AssertIndexInBounds { .. }
+                    | Self::EnumAssertVariant { .. }
+                    | Self::EnumSetTag { .. }
+                    | Self::EnumWriteVariant { .. }
+                    | Self::End { .. }
+                    | Self::ReleaseLane { .. } => Vec::new(),
+                }
+            }
+
+            /// The locals the statement holds, including those in its places and in
+            /// a `HoldLane`'s flush. A place rooted at a provider binding reads the
+            /// binding's value, which the body's binding table holds:
+            /// `resolved_locals` adds it.
+            pub fn $locals(& $($mut)? self) -> Vec<& $($mut)? RLocalId> {
+                match self {
+                    Self::Assign { dst, expr } => {
+                        let mut locals = expr.$values();
+                        locals.push(dst);
+                        locals
+                    }
+                    Self::AssertIndexInBounds { index, .. } => match index {
+                        IndexSource::Dynamic(index) => vec![index],
+                        IndexSource::Constant(_) | IndexSource::Any => Vec::new(),
+                    },
+                    Self::EnumAssertVariant { value, .. }
+                    | Self::EnumSetTag { root: value, .. }
+                    | Self::End { session: value }
+                    | Self::ReleaseLane { copy: value } => vec![value],
+                    Self::Store { dst, src } | Self::CopyInto { dst, src } => {
+                        let mut locals: Vec<_> = dst.$values().collect();
+                        locals.push(src);
+                        locals
+                    }
+                    Self::EnumWriteVariant { root, fields, .. } => {
+                        std::iter::once(root).chain(fields.$iter()).collect()
+                    }
+                    Self::HoldLane { copy, flush } => std::iter::once(copy)
+                        .chain(flush.$iter().flat_map(Self::$locals))
+                        .collect(),
+                }
+            }
+        }
+
+        impl<'db> RTerminator<'db> {
+            pub fn $values(& $($mut)? self) -> Vec<& $($mut)? RValueId> {
+                match self {
+                    Self::Branch { cond: value, .. }
+                    | Self::SwitchScalar { discr: value, .. }
+                    | Self::MatchEnumTag { tag: value, .. }
+                    | Self::SelfDestruct { beneficiary: value }
+                    | Self::Panic { code: value }
+                    | Self::Return(Some(value))
+                    | Self::Yield {
+                        value: Some(value), ..
+                    } => vec![value],
+                    Self::TerminalCall { args, .. } => args.$iter().collect(),
+                    Self::ReturnData { offset, len }
+                    | Self::ReturnCode { offset, len }
+                    | Self::Revert { offset, len } => vec![offset, len],
+                    Self::Goto(_)
+                    | Self::RevertEmpty
+                    | Self::Trap
+                    | Self::Return(None)
+                    | Self::Yield { value: None, .. }
+                    | Self::Stop => Vec::new(),
+                }
+            }
+
+            pub fn $successors(& $($mut)? self) -> Vec<& $($mut)? RBlockId> {
+                match self {
+                    Self::Goto(target) | Self::Yield { resume: target, .. } => vec![target],
+                    Self::Branch {
+                        then_bb, else_bb, ..
+                    } => vec![then_bb, else_bb],
+                    Self::SwitchScalar { cases, default, .. } => cases
+                        .$iter()
+                        .map(|(_, target)| target)
+                        .chain(std::iter::once(default))
+                        .collect(),
+                    Self::MatchEnumTag { cases, default, .. } => cases
+                        .$iter()
+                        .map(|(_, target)| target)
+                        .chain(default.$iter())
+                        .collect(),
+                    Self::TerminalCall { .. }
+                    | Self::ReturnData { .. }
+                    | Self::ReturnCode { .. }
+                    | Self::Revert { .. }
+                    | Self::RevertEmpty
+                    | Self::Panic { .. }
+                    | Self::SelfDestruct { .. }
+                    | Self::Trap
+                    | Self::Return(_)
+                    | Self::Stop => Vec::new(),
+                }
+            }
+        }
+    };
 }
 
-impl<'db> RExpr<'db> {
-    pub fn place_mut(&mut self) -> Option<&mut RuntimePlace<'db>> {
-        match self {
-            Self::MaterializePlaceToObject { place }
-            | Self::AddrOf { place }
-            | Self::Load { place }
-            | Self::EnumGetTag { place } => Some(place),
-            Self::Use(_)
-            | Self::ConstScalar(_)
-            | Self::Placeholder { .. }
-            | Self::Builtin(_)
-            | Self::Unary { .. }
-            | Self::Binary { .. }
-            | Self::Cast { .. }
-            | Self::ConstRef { .. }
-            | Self::AllocObject { .. }
-            | Self::MaterializeToObject { .. }
-            | Self::NativeRef { .. }
-            | Self::ProviderRefFromRaw { .. }
-            | Self::ObjectFromRaw { .. }
-            | Self::WordToRawAddr { .. }
-            | Self::ProviderRefToRaw { .. }
-            | Self::RetagRef { .. }
-            | Self::AggregateExtract { .. }
-            | Self::AggregateMake { .. }
-            | Self::Call { .. }
-            | Self::EnumMake { .. }
-            | Self::EnumTagOfValue { .. }
-            | Self::EnumIsVariant { .. }
-            | Self::EnumExtract { .. }
-            | Self::EnumAssertVariantRef { .. } => None,
-        }
-    }
-}
+walks!(; values, place, places, locals, successors, iter);
+walks!(mut; values_mut, place_mut, places_mut, locals_mut, successors_mut, iter_mut);
 
 impl<'db> RStmt<'db> {
-    /// The places the statement names, including those of a `HoldLane`'s
-    /// flush.
-    pub fn places_mut(&mut self) -> Vec<&mut RuntimePlace<'db>> {
-        match self {
-            Self::Assign { expr, .. } => expr.place_mut().into_iter().collect(),
-            Self::Store { dst, .. } | Self::CopyInto { dst, .. } => vec![dst],
-            Self::HoldLane { flush, .. } => flush.iter_mut().flat_map(Self::places_mut).collect(),
-            Self::AssertIndexInBounds { .. }
-            | Self::EnumAssertVariant { .. }
-            | Self::EnumSetTag { .. }
-            | Self::EnumWriteVariant { .. }
-            | Self::End { .. }
-            | Self::ReleaseLane { .. } => Vec::new(),
-        }
-    }
-
-    /// The locals the statement holds, including those in its places and in
-    /// a `HoldLane`'s flush. A place rooted at a provider binding reads the
-    /// binding's value, which the body's binding table holds: `locals` adds
-    /// it.
-    pub fn locals_mut(&mut self) -> Vec<&mut RLocalId> {
-        match self {
-            Self::Assign { dst, expr } => {
-                let mut locals = expr.values_mut();
-                locals.push(dst);
-                locals
-            }
-            Self::AssertIndexInBounds { index, .. } => match index {
-                IndexSource::Dynamic(index) => vec![index],
-                IndexSource::Constant(_) | IndexSource::Any => Vec::new(),
-            },
-            Self::EnumAssertVariant { value, .. }
-            | Self::EnumSetTag { root: value, .. }
-            | Self::End { session: value }
-            | Self::ReleaseLane { copy: value } => vec![value],
-            Self::Store { dst, src } | Self::CopyInto { dst, src } => {
-                let mut locals: Vec<_> = dst.values_mut().collect();
-                locals.push(src);
-                locals
-            }
-            Self::EnumWriteVariant { root, fields, .. } => {
-                std::iter::once(root).chain(fields.iter_mut()).collect()
-            }
-            Self::HoldLane { copy, flush } => std::iter::once(copy)
-                .chain(flush.iter_mut().flat_map(Self::locals_mut))
-                .collect(),
-        }
-    }
-
     /// The locals the statement reads or writes: those it holds, and the
     /// values of the `provider_bindings` its places are rooted at.
-    pub fn locals(&self, provider_bindings: &[RuntimeProviderBinding<'db>]) -> Vec<RLocalId> {
-        let mut stmt = self.clone();
-        let mut locals: Vec<_> = stmt.locals_mut().into_iter().map(|local| *local).collect();
-        locals.extend(
-            stmt.places_mut()
-                .into_iter()
-                .filter_map(|place| match place.root {
-                    PlaceRoot::Provider(binding) => Some(provider_bindings[binding.index()].value),
-                    PlaceRoot::Slot(_) | PlaceRoot::Ref(_) | PlaceRoot::Ptr { .. } => None,
-                }),
-        );
-        locals
-    }
-}
-
-impl<'db> RTerminator<'db> {
-    pub fn values_mut(&mut self) -> Vec<&mut RValueId> {
-        match self {
-            Self::Branch { cond: value, .. }
-            | Self::SwitchScalar { discr: value, .. }
-            | Self::MatchEnumTag { tag: value, .. }
-            | Self::SelfDestruct { beneficiary: value }
-            | Self::Panic { code: value }
-            | Self::Return(Some(value))
-            | Self::Yield {
-                value: Some(value), ..
-            } => vec![value],
-            Self::TerminalCall { args, .. } => args.iter_mut().collect(),
-            Self::ReturnData { offset, len }
-            | Self::ReturnCode { offset, len }
-            | Self::Revert { offset, len } => vec![offset, len],
-            Self::Goto(_)
-            | Self::RevertEmpty
-            | Self::Trap
-            | Self::Return(None)
-            | Self::Yield { value: None, .. }
-            | Self::Stop => Vec::new(),
-        }
-    }
-
-    pub fn successors(&self) -> Vec<RBlockId> {
-        self.clone()
-            .successors_mut()
+    pub fn resolved_locals(
+        &self,
+        provider_bindings: &[RuntimeProviderBinding<'db>],
+    ) -> Vec<RLocalId> {
+        let providers = self
+            .places()
             .into_iter()
-            .map(|block| *block)
+            .filter_map(|place| match place.root {
+                PlaceRoot::Provider(binding) => Some(provider_bindings[binding.index()].value),
+                PlaceRoot::Slot(_) | PlaceRoot::Ref(_) | PlaceRoot::Ptr { .. } => None,
+            });
+        self.locals()
+            .into_iter()
+            .copied()
+            .chain(providers)
             .collect()
-    }
-
-    pub fn successors_mut(&mut self) -> Vec<&mut RBlockId> {
-        match self {
-            Self::Goto(target) | Self::Yield { resume: target, .. } => vec![target],
-            Self::Branch {
-                then_bb, else_bb, ..
-            } => vec![then_bb, else_bb],
-            Self::SwitchScalar { cases, default, .. } => cases
-                .iter_mut()
-                .map(|(_, target)| target)
-                .chain(std::iter::once(default))
-                .collect(),
-            Self::MatchEnumTag { cases, default, .. } => cases
-                .iter_mut()
-                .map(|(_, target)| target)
-                .chain(default.iter_mut())
-                .collect(),
-            Self::TerminalCall { .. }
-            | Self::ReturnData { .. }
-            | Self::ReturnCode { .. }
-            | Self::Revert { .. }
-            | Self::RevertEmpty
-            | Self::Panic { .. }
-            | Self::SelfDestruct { .. }
-            | Self::Trap
-            | Self::Return(_)
-            | Self::Stop => Vec::new(),
-        }
     }
 }
 
