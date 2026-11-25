@@ -1049,6 +1049,7 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = vec![];
+        let parse_errors = !crate::lower::parse_file_impl(db, top_mod).errors.is_empty();
 
         for &contract in top_mod.all_contracts(db) {
             // 1. Validate contract field types
@@ -1203,11 +1204,16 @@ impl ModuleAnalysisPass for ContractAnalysisPass {
                     .map(|diag| diag.to_voucher()),
             );
 
-            diags.extend(
-                ty_check::contract_entry_failures(db, contract)
-                    .into_iter()
-                    .map(|failure| Box::new(failure) as Box<dyn DiagnosticVoucher + 'db>),
-            );
+            // A file with parse errors is not prepared, so the implementations
+            // that its short forms (`msg`, `#[abi]`) rely on do not exist and
+            // the entry code is not judged beside the parse errors.
+            if !parse_errors {
+                diags.extend(
+                    ty_check::contract_entry_failures(db, contract)
+                        .into_iter()
+                        .map(|failure| Box::new(failure) as Box<dyn DiagnosticVoucher + 'db>),
+                );
+            }
 
             diags.extend(
                 ty_check::check_contract_field_address_spaces(db, contract)

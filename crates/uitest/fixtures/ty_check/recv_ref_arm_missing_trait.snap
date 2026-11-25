@@ -18,3 +18,15 @@ error[8-0170]: this arm reads its message where it lies, which needs a trait tha
    │                          ^ `Odd: AbiSize` is not satisfied
    │
    = an arm that names a field with `ref` locates each field it reads by the sizes of the fields before it (`AbiSize`), and needs a copyable input; bind every field by a plain name to decode the whole message instead
+
+error[16-0024]: the entry code of contract `RefAfterUnsized` cannot be generated
+   ┌─ recv_ref_arm_missing_trait.fe:49:9
+   │
+49 │         G { x: _, a: _, ref b } -> u8 {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+
+error[16-0024]: the entry code of contract `DecodedAfterUnsized` cannot be generated
+   ┌─ recv_ref_arm_missing_trait.fe:59:9
+   │
+59 │         G { ref x, a: _, b } -> u8 {
+   │         ^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid

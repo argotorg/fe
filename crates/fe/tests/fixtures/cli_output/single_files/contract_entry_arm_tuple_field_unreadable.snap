@@ -6,11 +6,19 @@ input_file: tests/fixtures/cli_output/single_files/contract_entry_arm_tuple_fiel
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_arm_tuple_field_unreadable.fe
 
+error[8-0170]: this arm reads its message where it lies, which needs a trait that is not implemented
+   ┌─ contract_entry_arm_tuple_field_unreadable.fe:21:16
+   │
+21 │         M { x, ref y } -> u8 { y }
+   │                ^^^^^ `(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8): AbiSize` is not satisfied
+   │
+   = an arm that names a field with `ref` locates each field it reads by the sizes of the fields before it (`AbiSize`), and needs a copyable input; bind every field by a plain name to decode the whole message instead
+
 error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_arm_tuple_field_unreadable.fe:21:9
    │
 21 │         M { x, ref y } -> u8 { y }
-   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8): Decode<Sol>` is not satisfied
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
 
 
 === EXIT CODE: 1 ===

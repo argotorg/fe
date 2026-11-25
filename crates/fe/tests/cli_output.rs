@@ -7145,7 +7145,10 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
 // implied bounds from dictionaries. A message field of a recursive type has no
 // `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
 // `Node: AbiSize` from; the instance stays admitted, as it was before those
-// checks. The refusal where a named implementation is involved is covered by
+// checks, and no conflicting-dictionaries error (16-0019) is reported. The
+// entry code of the contract cannot be generated, since the message has no
+// `Decode<Sol>`, and `fe check` reports that as `fe build` does (16-0024). The
+// refusal where a named implementation is involved is covered by
 // `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
 // `fe-hir`.
 #[test]
@@ -7158,7 +7161,8 @@ fn named_checks_leave_recursive_message_fields_without_choices_alone() {
             .join("tests/fixtures")
             .join(fixture);
         let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
-        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert_eq!(exit, 1, "{fixture}: {output}");
+        assert!(output.contains("16-0024"), "{fixture}: {output}");
         assert!(!output.contains("16-0019"), "{fixture}: {output}");
     }
 }
