@@ -1,0 +1,19 @@
+// The supertrait `Base` of `A` has an ordinary and a named implementation.
+// `K` (declared `Self::X`) and `K2` (declared `u256`) have the same body and
+// agree under `with (BN)`.
+trait Base { const fn base() -> u256 }
+trait Narrow: Base {
+    type X
+    const K: Self::X = Self::base()
+    const K2: u256 = Self::base()
+}
+struct A {}
+impl Base for A { const fn base() -> u256 { 5 } }
+impl Base for A as BN { const fn base() -> u256 { 9 } }
+impl Narrow for A { type X = u256 }
+#[test]
+fn k_agrees() { with (BN) { assert(A::K == A::K2) } }
+#[test]
+fn k5() { with (BN) { assert(A::K == 5) } }
+#[test]
+fn k2_5() { with (BN) { assert(A::K2 == 5) } }

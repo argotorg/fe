@@ -7861,3 +7861,52 @@ fn named_output_walk_does_not_follow_a_body_with_errors() {
     assert!(output.contains("8-0012"), "{output}");
     assert!(!output.contains("16-"), "{output}");
 }
+
+fn inherited_default_choices_fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inherited_default_choices")
+        .join(name)
+        .to_str()
+        .expect("utf-8 path")
+        .to_string()
+}
+
+#[test]
+fn inherited_default_under_a_named_implementation_is_the_implementations_own() {
+    // The default of `K` inherited by a named implementation is checked as if
+    // the implementation had written the same text: `Self::m()` is the named
+    // implementation's, so `K` is 7 there and the ordinary implementation's `K`
+    // is 1, which is refused as it is where the named implementation writes the
+    // constant itself.
+    for name in ["named_inherits_default.fe", "named_writes_default.fe"] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("error[5-0005]")
+                && output.contains("`K` must agree across implementations of this slot"),
+            "{name}: expected 5-0005 on `K`:\n{output}"
+        );
+        assert!(
+            !output.contains("16-0004"),
+            "{name}: expected no internal error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn inherited_default_proofs_come_from_the_implementations_bounds() {
+    // Defaults checked for an implementation that have no named implementation
+    // to open keep their values, read directly, under `with` and through a
+    // generic reader.
+    for name in [
+        "supertrait_method.fe",
+        "supertrait_chosen_by_with.fe",
+        "generic_impl_assoc_bound.fe",
+        "self_other.fe",
+        "generic_impl_supertrait_condition.fe",
+        "trait_param_bound.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+}

@@ -1,0 +1,24 @@
+// A named implementation `NN` inherits `K`, a default that calls `Self::m()`.
+// The text means what it means where `NN` writes it (`named_writes_default.fe`):
+// `NN`'s `K` is 7 and the ordinary implementation's is 1, so the two disagree
+// and the named implementation is refused.
+trait Narrow {
+    type X
+    const fn m() -> u256
+    const K: Self::X = Self::m()
+}
+struct A {}
+impl Narrow for A {
+    type X = u256
+    const fn m() -> u256 { 1 }
+}
+impl Narrow for A as NN {
+    type X = u256
+    const fn m() -> u256 { 7 }
+}
+#[test]
+fn m_is_named() { with (NN) { assert(<A as Narrow>::m() == 7) } }
+#[test]
+fn k_is_named() { with (NN) { assert(<A as Narrow>::K == 7) } }
+#[test]
+fn k_is_ordinary() { with (NN) { assert(<A as Narrow>::K == 1) } }

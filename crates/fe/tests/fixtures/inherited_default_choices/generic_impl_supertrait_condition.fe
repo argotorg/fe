@@ -1,0 +1,17 @@
+// The supertrait `Base` of the generic implementation's self type is provided
+// by a generic implementation whose condition `T: Show` is the inheriting
+// implementation's own bound. The default calls `Self::base()`.
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+trait Base { const fn base() -> u256 }
+struct W<T> {}
+impl<T: Show> Base for W<T> { const fn base() -> u256 { T::show() } }
+trait Narrow: Base {
+    type X
+    const K: Self::X = Self::base()
+}
+impl<T: Show> Narrow for W<T> { type X = u256 }
+fn get<U: Narrow<X = u256>>() -> u256 { U::K }
+#[test]
+fn t() { assert(<W<Foo> as Narrow>::K == 100 && get<W<Foo>>() == 100) }

@@ -361,6 +361,17 @@ impl<'db> TyCheckEnv<'db> {
             }
         };
 
+        // The implementation whose body this is opens itself when it is named. The
+        // default a trait gives a constant is the body of the implementation that
+        // inherits it, as if that implementation had written the same text, so it
+        // is opened for that default too.
+        let choices_owner = match owner {
+            BodyOwner::InheritedConst { implementation, .. } => {
+                Some(ItemKind::ImplTrait(implementation))
+            }
+            _ => owner_scope.parent_item(db),
+        };
+
         let mut env = Self {
             db,
             owner,
@@ -377,7 +388,7 @@ impl<'db> TyCheckEnv<'db> {
             closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
-            choices: match owner_scope.parent_item(db) {
+            choices: match choices_owner {
                 Some(ItemKind::ImplTrait(implementation))
                     if implementation.selection_name(db).is_some() =>
                 {
