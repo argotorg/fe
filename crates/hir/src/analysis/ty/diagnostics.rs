@@ -131,6 +131,14 @@ pub enum TyLowerDiag<'db> {
         name: IdentId<'db>,
         mode: Option<TypeMode>,
     },
+    /// A bound naming an associated item its trait does not declare.
+    /// `declared_by` is a super trait that declares it, if there is one.
+    UnknownAssocBinding {
+        span: DynLazySpan<'db>,
+        name: IdentId<'db>,
+        trait_: Trait<'db>,
+        declared_by: Option<Trait<'db>>,
+    },
     /// A `mut?` function whose result has no `mut?` part, so no call uses it
     /// at `mut`.
     MaybeMutWithoutResult(DynLazySpan<'db>),
@@ -436,6 +444,7 @@ impl TyLowerDiag<'_> {
             Self::MaybeMutBound(_) => 71,
             Self::MaybeMutInShape(_) => 85,
             Self::DuplicateAssocBinding { .. } => 86,
+            Self::UnknownAssocBinding { .. } => 96,
             Self::ViewTypeMode { .. } => 59,
             Self::StateOnlyValue { .. } => 61,
             Self::InvalidTypeArgKind { .. } => 1,

@@ -450,6 +450,27 @@ func inline(always) private %impl_trait_Debt__decode_from__g8f43(v0.@layout_1, v
         return;
 }
 
+func inline(always) private %impl_trait_AddDebt__decode_from__g8f43(v0.@layout_1, v1.i256) -> @layout_2 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.i256 = call %len__g8f43 v0;
+        v5.i64 = call %decode_msg_field_from v0 v1 v1 v3;
+        v6.@layout_2 = agg.make @layout_2 v5;
+        return v6;
+}
+
+func inline(always) private %decode_from__gc8cd(v0.@layout_1, v1.i256) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %word_at v0 v1;
+        v5.i64 = call %decode_u64_word v4;
+        return v5;
+}
+
 func inline(always) private %impl_trait_Open__decode_from__g8f43(v0.@layout_1, v1.i256) {
     block0:
         jump block1;
@@ -468,36 +489,6 @@ func private %decode_from_bounded(v0.@layout_1, v1.i256, v2.i256) -> i64 {
         return v8;
 }
 
-func inline(always) private %decode_from__gc8cd(v0.@layout_1, v1.i256) -> i64 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %word_at v0 v1;
-        v5.i64 = call %decode_u64_word v4;
-        return v5;
-}
-
-func inline(always) private %impl_trait_AddDebt__decode_from__g8f43(v0.@layout_1, v1.i256) -> @layout_2 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.i256 = call %len__g8f43 v0;
-        v5.i64 = call %decode_msg_field_from v0 v1 v1 v3;
-        v6.@layout_2 = agg.make @layout_2 v5;
-        return v6;
-}
-
-func inline(always) private %decode_from_prechecked_head__gb38b(v0.@layout_1, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        call %impl_trait_Debt__decode_from__g8f43 v0 v1;
-        return;
-}
-
 func inline(always) private %decode_from_prechecked_head__gebe5(v0.@layout_1, v1.i256, v2.i256) {
     block0:
         jump block1;
@@ -514,6 +505,15 @@ func inline(always) private %decode_from_prechecked_head__gaa67(v0.@layout_1, v1
     block1:
         v5.@layout_2 = call %impl_trait_AddDebt__decode_from__g8f43 v0 v1;
         return v5;
+}
+
+func inline(always) private %decode_from_prechecked_head__gb38b(v0.@layout_1, v1.i256, v2.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %impl_trait_Debt__decode_from__g8f43 v0 v1;
+        return;
 }
 
 func inline(always) private %decode_msg_field_from(v0.@layout_1, v1.i256, v2.i256, v3.i256) -> i64 {
@@ -822,14 +822,6 @@ func inline(always) private %from_raw_parts(v0.i256, v1.i256) -> @layout_6 {
         return v4;
 }
 
-func private %impl_trait_i256__from_word(v0.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        return v0;
-}
-
 func private %impl_trait_u64__from_word(v0.i256) -> i64 {
     block0:
         jump block1;
@@ -837,6 +829,14 @@ func private %impl_trait_u64__from_word(v0.i256) -> i64 {
     block1:
         v2.i64 = trunc v0 i64;
         return v2;
+}
+
+func private %impl_trait_i256__from_word(v0.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        return v0;
 }
 
 func private %index_out_of_bounds() {
@@ -858,16 +858,6 @@ func private %input() -> @layout_1 {
         return v0;
 }
 
-func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_6>) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v3.objref<i256> = obj.proj v0 1.i256;
-        v4.i256 = obj.load v3;
-        return v4;
-}
-
 func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
     block0:
         jump block1;
@@ -876,6 +866,16 @@ func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
         v2.i64 = call %size v0;
         v3.i256 = zext v2 i256;
         return v3;
+}
+
+func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_6>) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v3.objref<i256> = obj.proj v0 1.i256;
+        v4.i256 = obj.load v3;
+        return v4;
 }
 
 func inline(always) private %impl_AbiFrame__len(v0.@layout_6) -> i256 {

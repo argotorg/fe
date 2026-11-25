@@ -481,6 +481,8 @@ pub enum SyntaxKind {
     ModeType,
     /// `foo::Type<T, U + 2>`
     PathType,
+    /// `trait Decode<Sol>`
+    TraitFamilyType,
     /// `Self`
     SelfType,
     /// `(i32, foo::Bar)`
@@ -732,6 +734,7 @@ impl SyntaxKind {
             SyntaxKind::GtEq => "`>=`",
 
             SyntaxKind::PathType => "type",
+            SyntaxKind::TraitFamilyType => "trait family",
             SyntaxKind::TraitRef => "trait name",
             SyntaxKind::PathSegment => "path segment",
             SyntaxKind::PathPat => "pattern",

@@ -909,9 +909,40 @@ impl ToDoc for ast::Type {
             TypeKind::Mode(mode) => mode.to_doc(ctx),
             TypeKind::Ptr(ptr) => ptr.to_doc(ctx),
             TypeKind::Path(path) => path.to_doc(ctx),
+            TypeKind::TraitFamily(family) => family.to_doc(ctx),
             TypeKind::Tuple(tuple) => tuple.to_doc(ctx),
             TypeKind::Array(array) => array.to_doc(ctx),
             TypeKind::Never(never) => never.to_doc(ctx),
+        }
+    }
+}
+
+impl ToDoc for ast::TraitFamilyType {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        if has_comment_tokens(self.syntax()) {
+            let indent = ctx.config.indent_width as isize;
+            return token_doc(
+                ctx,
+                self.syntax(),
+                indent,
+                |node| {
+                    ast::TraitRef::cast(node)
+                        .map(|reference| TokenPiece::new(reference.to_doc(ctx)))
+                },
+                |token| match token.kind() {
+                    SyntaxKind::TraitKw => {
+                        Some(TokenPiece::new(alloc.text(ctx.token(&token))).space_after())
+                    }
+                    _ => None,
+                },
+            );
+        }
+
+        match self.trait_ref() {
+            Some(reference) => alloc.text("trait ").append(reference.to_doc(ctx)),
+            None => alloc.text("trait"),
         }
     }
 }

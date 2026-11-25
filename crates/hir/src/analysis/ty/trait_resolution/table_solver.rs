@@ -1400,6 +1400,17 @@ pub(crate) fn ty_depth_impl<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> u
         | TyData::AssocTy { .. }
         | TyData::TyVar(_) => 1,
         TyData::QualifiedTy(trait_inst) => ty_depth_impl(db, trait_inst.self_ty(db)) + 1,
+        TyData::ConstraintTerm(goal) => maximum_ty_depth(db, *goal) + 1,
+        TyData::TraitFamily(family) => {
+            family
+                .arguments(db)
+                .iter()
+                .chain(family.associated(db).values())
+                .map(|&ty| ty_depth_impl(db, ty))
+                .max()
+                .unwrap_or(0)
+                + 1
+        }
         TyData::TyApp(lhs, rhs) => {
             let lhs_depth = ty_depth_impl(db, *lhs);
             let rhs_depth = ty_depth_impl(db, *rhs);

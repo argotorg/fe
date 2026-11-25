@@ -437,6 +437,12 @@ pub(crate) fn ty_is_fully_ground<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>)
         | TyData::Invalid(_) => false,
         TyData::TyApp(abs, arg) => ty_is_fully_ground(db, *abs) && ty_is_fully_ground(db, *arg),
         TyData::ConstTy(const_ty) => const_ty_is_fully_ground(db, *const_ty),
+        TyData::ConstraintTerm(goal) => trait_inst_is_fully_ground(db, *goal),
+        TyData::TraitFamily(family) => family
+            .arguments(db)
+            .iter()
+            .chain(family.associated(db).values())
+            .all(|&arg| ty_is_fully_ground(db, arg)),
         TyData::TyBase(_) | TyData::Never => true,
     }
 }
@@ -1285,6 +1291,16 @@ pub fn canonicalize_ty_for_mode<'db>(
             TyData::QualifiedTy(trait_inst) => TyId::qualified_ty(
                 db,
                 canonicalize_trait_inst_for_mode(db, *trait_inst, env, mode),
+            ),
+            TyData::ConstraintTerm(goal) => TyId::new(
+                db,
+                TyData::ConstraintTerm(canonicalize_trait_inst_for_mode(db, *goal, env, mode)),
+            ),
+            TyData::TraitFamily(family) => TyId::new(
+                db,
+                TyData::TraitFamily(
+                    family.map_types(db, |ty| canonicalize_ty_impl(db, ty, env, mode, true, memo)),
+                ),
             ),
             TyData::TyVar(_)
             | TyData::TyParam(_)

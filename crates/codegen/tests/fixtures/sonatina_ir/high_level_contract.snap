@@ -477,6 +477,23 @@ func inline(always) private %decode_field_from_prechecked_head(v0.@layout_3, v1.
         return v14;
 }
 
+func inline(always) private %decode_from__gc8cd(v0.@layout_3, v1.i256) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v4.i256 = call %impl_trait_CallData__word_at v0 v1;
+        return v4;
+}
+
+func inline(always) private %impl_trait_Answer__decode_from__g8f43(v0.@layout_3, v1.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        return;
+}
+
 func inline(always) private %impl_trait_Echo__decode_from__g8f43(v0.@layout_3, v1.i256) -> @layout_3 {
     block0:
         jump block1;
@@ -488,21 +505,12 @@ func inline(always) private %impl_trait_Echo__decode_from__g8f43(v0.@layout_3, v
         return v6;
 }
 
-func inline(always) private %impl_trait_Answer__decode_from__g8f43(v0.@layout_3, v1.i256) {
+func inline(always) private %impl_trait_GetX__decode_from__g8f43(v0.@layout_3, v1.i256) {
     block0:
         jump block1;
 
     block1:
         return;
-}
-
-func inline(always) private %decode_from__gc8cd(v0.@layout_3, v1.i256) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v4.i256 = call %impl_trait_CallData__word_at v0 v1;
-        return v4;
 }
 
 func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
@@ -515,14 +523,6 @@ func private %decode_from_bounded(v0.@layout_3, v1.i256, v2.i256) -> i256 {
         return v8;
 }
 
-func inline(always) private %impl_trait_GetX__decode_from__g8f43(v0.@layout_3, v1.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        return;
-}
-
 func inline(always) private %decode_from_prechecked_head__gc4b9(v0.@layout_3, v1.i256, v2.i256) -> @layout_3 {
     block0:
         jump block1;
@@ -532,21 +532,21 @@ func inline(always) private %decode_from_prechecked_head__gc4b9(v0.@layout_3, v1
         return v5;
 }
 
-func inline(always) private %decode_from_prechecked_head__gf38d(v0.@layout_3, v1.i256, v2.i256) {
-    block0:
-        jump block1;
-
-    block1:
-        call %impl_trait_Answer__decode_from__g8f43 v0 v1;
-        return;
-}
-
 func inline(always) private %decode_from_prechecked_head__g5ec4(v0.@layout_3, v1.i256, v2.i256) {
     block0:
         jump block1;
 
     block1:
         call %impl_trait_GetX__decode_from__g8f43 v0 v1;
+        return;
+}
+
+func inline(always) private %decode_from_prechecked_head__gf38d(v0.@layout_3, v1.i256, v2.i256) {
+    block0:
+        jump block1;
+
+    block1:
+        call %impl_trait_Answer__decode_from__g8f43 v0 v1;
         return;
 }
 
@@ -634,12 +634,12 @@ func private %decoder_new() -> @layout_1 {
         return v1;
 }
 
-func private %downcast_truncate__gaa81(v0.i256) -> i64 {
+func private %downcast_truncate__g3ef4(v0.i256) -> i64 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_u256__to_word v0;
+        v2.i256 = call %impl_trait_usize__to_word v0;
         br 0.i1 block2 block3;
 
     block2:
@@ -657,12 +657,12 @@ func private %downcast_truncate__gaa81(v0.i256) -> i64 {
         return v12;
 }
 
-func private %downcast_truncate__g3ef4(v0.i256) -> i64 {
+func private %downcast_truncate__gaa81(v0.i256) -> i64 {
     block0:
         jump block1;
 
     block1:
-        v2.i256 = call %impl_trait_usize__to_word v0;
+        v2.i256 = call %impl_trait_u256__to_word v0;
         br 0.i1 block2 block3;
 
     block2:
@@ -809,6 +809,16 @@ func private %input() -> @layout_3 {
         return v0;
 }
 
+func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = call %impl_trait_CallData__size v0;
+        v3.i256 = zext v2 i256;
+        return v3;
+}
+
 func inline(always) private %impl_AbiFrame__len(v0.@layout_2) -> i256 {
     block0:
         jump block1;
@@ -836,16 +846,6 @@ func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_2>) -> i25
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         return v4;
-}
-
-func inline(always) private %len__g8f43(v0.@layout_3) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i64 = call %impl_trait_CallData__size v0;
-        v3.i256 = zext v2 i256;
-        return v3;
 }
 
 func inline(always) private %impl_CallData__new() -> @layout_3 {
@@ -1144,16 +1144,6 @@ func private %sign_extend(v0.i256, v1.i256, v2.i256) -> i256 {
         return v17;
 }
 
-func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_2>) -> i64 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i256 = call %len__g79ff v0;
-        v3.i64 = call %downcast_truncate__g3ef4 v2;
-        return v3;
-}
-
 func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block0:
         jump block1;
@@ -1184,6 +1174,16 @@ func inline(always) private %impl_trait_CallData__size(v0.@layout_3) -> i64 {
     block6:
         v16.i64 = call %downcast_truncate__gaa81 v10;
         jump block4;
+}
+
+func private %impl_trait_MemSlice__size(noalias nocapture readonly v0.objref<@layout_2>) -> i64 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i256 = call %len__g79ff v0;
+        v3.i64 = call %downcast_truncate__g3ef4 v2;
+        return v3;
 }
 
 func inline(always) private %slice(v0.@layout_2, v1.i256, v2.i256) -> @layout_2 {

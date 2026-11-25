@@ -205,4 +205,14 @@ The access checker conservatively treats such entries as potentially overlapping
 even when their literal keys differ.
 
 Implementation names are compile-time operands of `with`. This feature does
-not add public evidence values, a `prove` expression, or a `Constraint` kind.
+not add public evidence values or a `prove` expression.
+
+A trait family is written `trait Name` or `trait Name<Args>`, where the
+arguments are those of the trait after its subject. It names the trait with its
+subject left open and has kind `* -> Constraint`. Applying it to a type `T`, as
+`P<T>` for a parameter `P: * -> Constraint`, gives a type of kind `Constraint`:
+the goal that `T` implements the trait. A parameter of that kind is declared
+`G: (Constraint)`. These types describe goals and have no values, so no
+constant or function parameter can have one. A default that does not depend on
+the subject is part of the family, so `trait Fixed` and `trait Fixed<4>` are
+the same family when `4` is the default of `trait Fixed<const N: usize = 4>`.

@@ -74,6 +74,11 @@ pub fn ty_has_drop_glue<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> bool 
         TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier)) => true,
         TyData::TyBase(TyBase::Shape(_)) => false,
         TyData::TyVar(_) | TyData::TyParam(_) | TyData::AssocTy(_) | TyData::QualifiedTy(_) => true,
-        TyData::TyApp(..) | TyData::ConstTy(_) | TyData::Never | TyData::Invalid(_) => false,
+        TyData::TyApp(..)
+        | TyData::ConstTy(_)
+        | TyData::ConstraintTerm(_)
+        | TyData::TraitFamily(_)
+        | TyData::Never
+        | TyData::Invalid(_) => false,
     }
 }

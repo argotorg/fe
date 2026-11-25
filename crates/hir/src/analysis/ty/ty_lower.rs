@@ -76,6 +76,14 @@ fn lower_hir_ty_impl<'db>(
             lowering_cx,
         ),
 
+        HirTyKind::TraitFamily(reference) => reference
+            .to_opt()
+            .and_then(|reference| reference.path(db).to_opt())
+            .map_or_else(
+                || TyId::invalid(db, InvalidCause::ParseError),
+                |path| lower_explicit_trait_family(db, path, scope, assumptions, lowering_cx),
+            ),
+
         HirTyKind::Tuple(tuple_id) => {
             let elems = tuple_id.data(db);
             let len = elems.len();
@@ -387,6 +395,47 @@ fn lower_path_impl<'db>(
     };
     lower_type_position_path(db, path, scope, assumptions, position, lowering_cx)
         .unwrap_or_else(|_| TyId::invalid(db, InvalidCause::PathResolutionFailed { path }))
+}
+
+fn lower_explicit_trait_family<'db>(
+    db: &'db dyn HirAnalysisDb,
+    path: PathId<'db>,
+    scope: ScopeId<'db>,
+    assumptions: PredicateListId<'db>,
+    lowering_cx: &LoweringContext<'db>,
+) -> TyId<'db> {
+    let selected = crate::analysis::name_resolution::resolve_trait_path_with_observer_and_minter(
+        db,
+        path,
+        scope,
+        assumptions,
+        &mut |_, _| {},
+        lowering_cx,
+    );
+    let goal = match selected {
+        Ok(PathRes::Trait(goal)) => goal,
+        Ok(other) => return TyId::invalid(db, InvalidCause::NotAType(other)),
+        Err(_) => return TyId::invalid(db, InvalidCause::PathResolutionFailed { path }),
+    };
+    // The written arguments are captured. A default that does not depend on
+    // the subject is part of the family (see `TraitFamilyId::new`); the others
+    // use the subject when the family is applied.
+    let written = path
+        .generic_args(db)
+        .data(db)
+        .iter()
+        .filter(|arg| !matches!(arg, GenericArg::AssocType(_)))
+        .count();
+    TyId::new(
+        db,
+        TyData::TraitFamily(super::ty_def::TraitFamilyId::new(
+            db,
+            goal.def(db),
+            goal.args(db)[1..1 + written].to_vec(),
+            goal.assoc_type_bindings(db).clone(),
+            goal.mode(db),
+        )),
+    )
 }
 
 /// Lowers `path`, written in a type `position`, from its single resolution
@@ -1673,6 +1722,7 @@ impl<'db> TyParamPrecursor<'db> {
 pub(super) fn lower_kind(kind: &HirKindBound) -> Kind {
     match kind {
         HirKindBound::Mono => Kind::Star,
+        HirKindBound::Constraint => Kind::Constraint,
         HirKindBound::Shape => Kind::Shape,
         HirKindBound::Abs(lhs, rhs) => match (lhs, rhs) {
             (Partial::Present(lhs), Partial::Present(rhs)) => {

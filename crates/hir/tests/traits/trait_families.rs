@@ -1,0 +1,359 @@
+use common::indexmap::IndexMap;
+use fe_hir::{
+    analysis::ty::{
+        trait_def::{AssocBinding, TraitInstId},
+        trait_resolution::PredicateListId,
+        ty_def::{Kind, TraitFamilyId, TyData, TyId},
+    },
+    hir_def::{IdentId, ItemKind, ModeMarker},
+    test_db::{HirAnalysisTestDb, initialize_test_analysis_pass},
+};
+
+#[test]
+fn substituted_trait_family_forms_the_same_goal_as_direct_application() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "trait_families.fe".into(),
+        r#"
+trait Hash<Rhs = Self> {}
+trait Display {}
+trait Constraint {}
+fn existing_bound<T: Constraint>() {}
+struct Requirement<G: (Constraint)> {}
+type ForField<P: * -> Constraint, T> = Requirement<P<T>>
+type HashByte = ForField<trait Hash, u8>
+type DisplayByte = ForField<trait Display, u8>
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let def = module
+        .children_non_nested(&db)
+        .find_map(|item| match item {
+            ItemKind::Trait(def) if def.name(&db).to_opt().unwrap().data(&db) == "Hash" => {
+                Some(def)
+            }
+            _ => None,
+        })
+        .expect("test trait Hash");
+    let hash = TyId::new(
+        &db,
+        TyData::TraitFamily(TraitFamilyId::new(
+            &db,
+            def,
+            Vec::new(),
+            IndexMap::new(),
+            ModeMarker::None,
+        )),
+    );
+
+    let aliases = module.all_type_aliases(&db);
+    let hash_byte = aliases[1].ty(&db).generic_args(&db)[0];
+    let display_byte = aliases[2].ty(&db).generic_args(&db)[0];
+    let TyData::ConstraintTerm(goal) = hash_byte.data(&db) else {
+        panic!(
+            "expected specialized goal, got {}",
+            hash_byte.pretty_print(&db)
+        );
+    };
+    let subject = goal.self_ty(&db);
+    let direct = TyId::new(
+        &db,
+        TyData::ConstraintTerm(TraitInstId::new_simple(&db, def, vec![subject, subject])),
+    );
+    assert_eq!(hash_byte, TyId::app(&db, hash, subject));
+    assert_eq!(hash_byte, direct);
+    assert_eq!(*display_byte.kind(&db), Kind::Constraint);
+    assert_ne!(hash_byte, display_byte);
+}
+
+#[test]
+fn ordinary_type_arguments_and_runtime_positions_keep_their_kinds() {
+    for source in [
+        "trait Hash {}\nstruct Key<T> {}\nfn bad(_ key: Key<Hash>) {}",
+        "trait Hash {}\nfn ask<P: * -> Constraint>() {}\nfn bad() { ask<Hash>() }",
+        "fn bad<G: (Constraint)>(_ goal: G) {}",
+        "struct Option<T> {}\nfn ask<P: * -> Constraint>() {}\nfn bad() { ask<Option>() }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("wrong_family_kind.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        let diagnostics = passes.run_on_module(&db, module);
+        assert!(!diagnostics.is_empty(), "{source}");
+    }
+}
+
+#[test]
+fn associated_bindings_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "family_binding_order.fe".into(),
+        r#"
+trait HasParts {
+    type Left
+    type Right
+}
+struct Family<P: * -> Constraint> {}
+struct Requirement<G: (Constraint)> {}
+type ForField<P: * -> Constraint, T> = Requirement<P<T>>
+type First = Family<trait HasParts<Left = u8, Right = u16>>
+type Second = Family<trait HasParts<Right = u16, Left = u8>>
+type FirstGoal = ForField<trait HasParts<Left = u8, Right = u16>, bool>
+type SecondGoal = ForField<trait HasParts<Right = u16, Left = u8>, bool>
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let aliases = module.all_type_aliases(&db);
+    assert_eq!(aliases[1].ty(&db), aliases[2].ty(&db));
+    assert_eq!(aliases[3].ty(&db), aliases[4].ty(&db));
+}
+
+#[test]
+fn duplicate_associated_bindings_are_diagnosed_in_aliases_and_calls() {
+    for use_site in [
+        "type Bad = Family<trait HasItem<Item = u8, Item = u16>>",
+        "fn bad() { accept<trait HasItem<Item = u8, Item = u16>>() }",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "duplicate_family_bindings.fe".into(),
+            &format!(
+                "trait HasItem {{ type Item }}\nstruct Family<P: * -> Constraint> {{}}\nfn accept<P: * -> Constraint>() {{}}\n{use_site}"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        let diagnostics = db.run_on_top_mod(module);
+        assert!(
+            diagnostics.iter().any(|diagnostic| {
+                diagnostic.to_complete(&db).message == "`Item` is bound more than once"
+            }),
+            "{use_site}"
+        );
+    }
+}
+
+#[test]
+fn family_capture_uses_the_enclosing_impls_associated_binding() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "family_captures_impl_binding.fe".into(),
+        r#"
+trait Rel<T> {}
+struct Family<P: * -> Constraint> {}
+trait Parts {
+    type Left
+    type Right
+}
+struct Pair {}
+impl Parts for Pair {
+    type Left = Family<trait Rel<Self::Right>>
+    type Right = u256
+}
+fn verify(value: <Pair as Parts>::Left) -> Family<trait Rel<u256>> {
+    value
+}
+"#,
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+}
+
+#[test]
+fn impls_over_families_with_projections_overlap_in_coherence() {
+    let header = "trait Assoc {\n    type Item\n}\ntrait Rel<T> {}\ntrait Other<T> {}\ntrait Marker {}\nstruct Family<P: * -> Constraint> {}\nstruct Holder {}\nimpl Assoc for Holder {\n    type Item = u8\n}\n";
+    let diagnostics = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_overlap.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes.run_on_module(&db, module).len()
+    };
+
+    // Two impls whose family arguments are the same projection overlap.
+    assert_ne!(
+        diagnostics(
+            "impl<T: Assoc> Marker for Family<trait Rel<T::Item>> {}\n\
+             impl<U: Assoc> Marker for Family<trait Rel<U::Item>> {}\n"
+        ),
+        0
+    );
+    // Different families do not overlap.
+    assert_eq!(
+        diagnostics(
+            "impl<T: Assoc> Marker for Family<trait Rel<T::Item>> {}\n\
+             impl<U: Assoc> Marker for Family<trait Other<U::Item>> {}\n"
+        ),
+        0
+    );
+}
+
+#[test]
+fn omitted_and_written_defaults_name_one_family() {
+    let header = "trait Fixed<const N: usize = 4> {}\ntrait Kind<T = u8> {}\ntrait Hash<Rhs = Self> {}\nstruct ForField<P: * -> Constraint, A> {}\n";
+    let diagnostics = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_defaults.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes.run_on_module(&db, module).len()
+    };
+
+    // A default that does not mention the subject is part of the family.
+    assert_eq!(
+        diagnostics(
+            "fn c1(_ x: ForField<trait Fixed, u8>) -> ForField<trait Fixed<4>, u8> { x }\n\
+             fn c2(_ x: ForField<trait Kind, u8>) -> ForField<trait Kind<u8>, u8> { x }\n"
+        ),
+        0
+    );
+    // A different written argument, or a default that names the subject, is a
+    // different family.
+    assert_ne!(
+        diagnostics(
+            "fn c3(_ x: ForField<trait Fixed<5>, u8>) -> ForField<trait Fixed, u8> { x }\n"
+        ),
+        0
+    );
+    assert_ne!(
+        diagnostics("fn c4(_ x: ForField<trait Hash<u8>, u8>) -> ForField<trait Hash, u8> { x }\n"),
+        0
+    );
+}
+
+#[test]
+fn family_arguments_satisfy_parameter_bounds() {
+    let header = "trait Bar {}\ntrait Foo<T: Bar> {}\nstruct NoBar {}\nstruct HasBar {}\nimpl Bar for HasBar {}\ntrait Sup {}\ntrait Sub<T>: Sup {}\nstruct Family<P: * -> Constraint> {}\n";
+    let codes = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("family_bounds.fe".into(), &format!("{header}{body}"));
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).error_code.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // The argument of a family must satisfy the trait's bound on that parameter.
+    let refused = codes("fn f(_ x: Family<trait Foo<NoBar>>) {}\n");
+    assert!(refused.iter().any(|code| code == "6-0003"), "{refused:?}");
+    assert_eq!(
+        codes("fn f(_ x: Family<trait Foo<HasBar>>) {}\n"),
+        Vec::<String>::new()
+    );
+    // A requirement on the subject alone is checked where the family is applied.
+    assert_eq!(
+        codes("fn g(_ x: Family<trait Sub<u8>>) {}\n"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn constraint_kind_bound_needs_no_parentheses() {
+    for source in [
+        "struct A<F: Constraint -> *> {}",
+        "struct A<F: (Constraint) -> *> {}",
+    ] {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("constraint_kind.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+    }
+}
+
+#[test]
+fn recursion_through_a_family_argument_ends_bound_elaboration() {
+    // The bound `Chain<Wrap<Self::Next>>` of `Next` names `Next` again at every
+    // step. The family case must end as the type-application case does.
+    let elaborated = |wrap: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "family_recursive_bound.fe".into(),
+            &format!(
+                "trait Rel<T> {{}}\nstruct Box<T> {{}}\nstruct Family<P: * -> Constraint> {{}}\ntrait Chain<X> {{ type Next: Chain<{wrap}> }}\n"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let chain = module
+            .all_traits(&db)
+            .iter()
+            .copied()
+            .find(|def| def.name(&db).to_opt().unwrap().data(&db) == "Chain")
+            .expect("test trait Chain");
+        let bool_ty = TyId::bool(&db);
+        let goal = TraitInstId::new_simple(&db, chain, vec![bool_ty, bool_ty]);
+        PredicateListId::new(&db, vec![goal])
+            .extend_all_bounds(&db)
+            .list(&db)
+            .len()
+    };
+    assert_eq!(
+        elaborated("Family<trait Rel<Self::Next>>"),
+        elaborated("Box<Self::Next>")
+    );
+}
+
+#[test]
+fn associated_bindings_of_a_predicate_are_order_independent() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "predicate_binding_order.fe".into(),
+        "trait Parts {\n    type A\n    type B\n}\n",
+    );
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let parts = module.all_traits(&db)[0];
+    let binding = |name: &str| AssocBinding::of(IdentId::new(&db, name.to_string()));
+    let (a, b) = (binding("A"), binding("B"));
+    let (bool_ty, unit) = (TyId::bool(&db), TyId::unit(&db));
+    let predicate = |bindings: [(_, _); 2]| {
+        TraitInstId::new(
+            &db,
+            parts,
+            vec![bool_ty],
+            bindings.into_iter().collect::<IndexMap<_, _>>(),
+            ModeMarker::None,
+        )
+    };
+    assert_eq!(
+        predicate([(a, bool_ty), (b, unit)]),
+        predicate([(b, unit), (a, bool_ty)])
+    );
+}
+
+#[test]
+fn shadowed_family_trait_keeps_its_associated_shape_checks() {
+    // Inside `Holder`, the associated type `Driver` shadows the trait `Driver`.
+    // A family names the trait as a bound does, so its shape binding without a
+    // mode is reported in both places.
+    let reports = |body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "shadowed_family_trait.fe".into(),
+            &format!(
+                "trait Driver {{\n    shape Step\n}}\nstruct Family<P: * -> Constraint> {{}}\n{body}"
+            ),
+        );
+        let (module, _) = db.top_mod(file);
+        db.run_on_top_mod(module)
+            .iter()
+            .map(|diagnostic| diagnostic.to_complete(&db).message)
+            .collect::<Vec<_>>()
+    };
+    let missing_mode = |messages: &[String]| {
+        messages
+            .iter()
+            .filter(|message| *message == "an associated shape needs a mode here")
+            .count()
+    };
+    let plain = reports("fn f(_ x: Family<trait Driver<Step = u256>>) {}\n");
+    let shadowed = reports(
+        "trait Holder {\n    type Driver: Driver\n    fn f(_ x: Family<trait Driver<Step = u256>>)\n}\n",
+    );
+    assert_eq!(missing_mode(&plain), 1, "{plain:?}");
+    assert_eq!(missing_mode(&shadowed), 1, "{shadowed:?}");
+}

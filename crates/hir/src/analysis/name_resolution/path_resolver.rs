@@ -1265,7 +1265,7 @@ fn find_written_path<'db, R>(
                 }
             })
         }
-        TypeKind::Never => None,
+        TypeKind::Never | TypeKind::TraitFamily(_) => None,
     }
 }
 

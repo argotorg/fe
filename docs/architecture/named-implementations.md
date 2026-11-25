@@ -135,8 +135,9 @@ premise can change when the element becomes packed.
   choice.
 - Compiler-generated ordinary implementations do not serve as output
   representatives and are not compared.
-- There are no evidence values, `prove` expressions or constraint kinds in
-  the language.
+- There are no evidence values or `prove` expressions in the language. The
+  `Constraint` kind and trait families (`trait Name`) describe goals as type
+  arguments and have no values.
 - Implied bounds are followed four associated-type levels below a bound that
   an equality fixes. Beyond that, a program whose dictionaries involve a named
   implementation is refused (16-0019); a program that involves none is

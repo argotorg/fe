@@ -1144,6 +1144,138 @@ fn deallocate(pointer: *u8) { core::ptr::dealloc_raw(pointer) }
 }
 
 #[test]
+fn written_types_report_visibility_in_every_position() {
+    let header = "mod inner {\n    VIS struct S {}\n    pub struct W<T> {}\n    pub struct V<T, U> {}\n    VIS trait Secret {}\n}\ntrait HasItem {\n    type Item\n}\ntrait Marker {}\nstruct Family<P: * -> Constraint> {}\n";
+    let messages = |vis: &str, body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!("{}{body}", header.replace("VIS", vis));
+        let file = db.new_stand_alone("written_types.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| {
+                let diag = diag.to_complete(&db);
+                format!("{} {}", diag.error_code, diag.message)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for body in [
+        "fn f() { let _: inner::W<inner::S> = inner::W {} }\n",
+        "impl Marker for inner::W<inner::S> {}\n",
+        "impl Marker for Family<trait inner::Secret> {}\n",
+        "fn f() { let _: Family<trait inner::Secret> = Family {} }\n",
+        "fn f<T>() where inner::V<T, inner::S>: Marker {}\n",
+    ] {
+        // A private name is refused where it is written.
+        let private = messages("", body);
+        assert!(
+            private.iter().any(|message| message.starts_with("2-0003")),
+            "{body}: {private:?}"
+        );
+        // The same program with public names has no diagnostics.
+        assert_eq!(messages("pub", body), Vec::<String>::new(), "{body}");
+    }
+
+    let duplicate = messages(
+        "pub",
+        "fn f() { let _: Family<trait HasItem<Item = u8, Item = u16>> = Family {} }\n",
+    );
+    assert!(
+        duplicate
+            .iter()
+            .any(|message| message.ends_with("`Item` is bound more than once")),
+        "{duplicate:?}"
+    );
+
+    // Ordinary annotations keep compiling.
+    let controls = messages(
+        "pub",
+        "fn g() { let _: inner::W<u8> = inner::W {}\n    let _: (u8, bool) = (1, true)\n    let _: [u8; 2] = [1, 2] }\n",
+    );
+    assert_eq!(controls, Vec::<String>::new());
+}
+
+#[test]
+fn inherent_impls_on_constraint_types_are_refused() {
+    let codes = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("inherent_constraint.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).error_code.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // A trait family and a constraint term take no inherent implementation.
+    for source in [
+        "trait Foo {}\nimpl trait Foo {\n    pub fn bar() -> u256 { 1 }\n}\n",
+        "trait Foo {}\ntype Goal<P: * -> Constraint, A> = P<A>\nimpl Goal<trait Foo, u8> {\n    pub fn bar() -> u256 { 1 }\n}\n",
+    ] {
+        let codes = codes(source);
+        assert!(
+            codes.iter().any(|code| code == "6-0011"),
+            "{source}: {codes:?}"
+        );
+    }
+
+    // A struct that takes a trait family as an argument is an ordinary type.
+    let codes = codes(
+        "trait Foo {}\nstruct Goal<P: * -> Constraint, A> {}\nimpl Goal<trait Foo, u8> {\n    pub fn bar() -> u256 { 1 }\n}\n",
+    );
+    assert_eq!(codes, Vec::<String>::new());
+}
+
+#[test]
+fn constant_types_have_kind_star() {
+    let messages = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("constant_kind.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).message)
+            .collect::<Vec<_>>()
+    };
+    let star = "expected `*` kind in this context";
+
+    // An associated constant of a trait has a type of kind `*`.
+    let in_trait = messages(
+        "trait Eq {}\ntrait Bad<G: (Constraint), P: * -> Constraint> {\n    const A: G\n    const B: P\n    const C: trait Eq\n}\n",
+    );
+    assert_eq!(
+        in_trait.iter().filter(|message| *message == star).count(),
+        3,
+        "{in_trait:?}"
+    );
+
+    // So does a top-level constant, which is not evaluated against another kind.
+    let top_level = messages("trait Eq {}\nconst X: trait Eq = 1\n");
+    assert_eq!(
+        top_level.iter().filter(|message| *message == star).count(),
+        1,
+        "{top_level:?}"
+    );
+    assert!(
+        !top_level
+            .iter()
+            .any(|message| message.contains("compiler invariant")),
+        "{top_level:?}"
+    );
+
+    // Ordinary constants have no diagnostics.
+    let ordinary = messages("trait Ok<T> {\n    const A: T\n}\nconst Y: u8 = 1\n");
+    assert_eq!(ordinary, Vec::<String>::new());
+}
+
+#[test]
 fn uninhabited_match_exhaustiveness_and_empty_match_never() {
     let mut db = HirAnalysisTestDb::default();
     let file = db.new_stand_alone(

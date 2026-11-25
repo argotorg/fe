@@ -742,6 +742,45 @@ pub(crate) fn check_ty_wf<'db>(
                 return wf;
             }
         }
+        TyData::ConstraintTerm(goal) => {
+            for &arg in goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+            // The arguments satisfy the requirements of the trait that do
+            // not mention the subject.
+            let wf = trait_inst_wf(db, solve_cx, *goal, false);
+            if !wf.is_wf() {
+                return wf;
+            }
+        }
+        TyData::TraitFamily(family) => {
+            for &arg in family
+                .arguments(db)
+                .iter()
+                .chain(family.associated(db).values())
+            {
+                let wf = check_ty_wf(db, solve_cx, arg);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+            // The family's goal, for a placeholder subject, is well formed
+            // apart from the requirements that mention the subject.
+            let subject = family.def(db).self_param(db);
+            if let TyData::ConstraintTerm(goal) = family.apply(db, subject).data(db) {
+                let wf = trait_inst_wf(db, solve_cx, *goal, false);
+                if !wf.is_wf() {
+                    return wf;
+                }
+            }
+        }
         TyData::ConstTy(const_ty) => {
             let wf = check_const_ty_wf(db, solve_cx, *const_ty);
             if !wf.is_wf() {

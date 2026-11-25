@@ -431,16 +431,6 @@ func private %input() -> @layout_1 {
         return v0;
 }
 
-func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
-    block0:
-        jump block1;
-
-    block1:
-        v2.i64 = call %size v0;
-        v3.i256 = zext v2 i256;
-        return v3;
-}
-
 func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i256 {
     block0:
         jump block1;
@@ -449,6 +439,16 @@ func private %len__g79ff(noalias nocapture readonly v0.objref<@layout_4>) -> i25
         v3.objref<i256> = obj.proj v0 1.i256;
         v4.i256 = obj.load v3;
         return v4;
+}
+
+func inline(always) private %len__g8f43(v0.@layout_1) -> i256 {
+    block0:
+        jump block1;
+
+    block1:
+        v2.i64 = call %size v0;
+        v3.i256 = zext v2 i256;
+        return v3;
 }
 
 func inline(always) private %impl_AbiFrame__len(v0.@layout_4) -> i256 {

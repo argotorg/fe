@@ -3,6 +3,7 @@
 
 use std::marker::PhantomData;
 
+use common::indexmap::IndexMap;
 use either::Either;
 use ena::unify::{InPlace, UnifyKey, UnifyValue};
 use num_bigint::BigInt;
@@ -11,7 +12,7 @@ use rustc_hash::FxHashMap;
 use super::{
     const_expr::{ConstExpr, ConstExprId},
     fold::{TyFoldable, TyFolder},
-    trait_def::{ImplementorId, TraitInstId, TraitRefId},
+    trait_def::{AssocBinding, ImplementorId, TraitInstId, TraitRefId},
     ty_def::{
         ApplicableTyProp, ClosureTy, Kind, MAX_INLINE_STRING_BYTES, TyBase, TyData, TyId, TyVar,
         TyVarSort, inference_keys,
@@ -268,6 +269,30 @@ where
                 Ok(())
             }
 
+            (TyData::ConstraintTerm(left), TyData::ConstraintTerm(right))
+                if left.def(self.db) == right.def(self.db)
+                    && left.mode(self.db) == right.mode(self.db) =>
+            {
+                self.unify_constraint_arguments(
+                    left.args(self.db),
+                    right.args(self.db),
+                    left.assoc_type_bindings(self.db),
+                    right.assoc_type_bindings(self.db),
+                )
+            }
+
+            (TyData::TraitFamily(left), TyData::TraitFamily(right))
+                if left.def(self.db) == right.def(self.db)
+                    && left.mode(self.db) == right.mode(self.db) =>
+            {
+                self.unify_constraint_arguments(
+                    left.arguments(self.db),
+                    right.arguments(self.db),
+                    left.associated(self.db),
+                    right.associated(self.db),
+                )
+            }
+
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
                 let const_ty1 = match normalize_const_tys_for_comparison(
                     self.db,
@@ -350,6 +375,38 @@ where
 
             _ => Err(UnificationError::TypeMismatch),
         }
+    }
+
+    fn unify_constraint_arguments(
+        &mut self,
+        left_args: &[TyId<'db>],
+        right_args: &[TyId<'db>],
+        left_assoc: &IndexMap<AssocBinding<'db>, TyId<'db>>,
+        right_assoc: &IndexMap<AssocBinding<'db>, TyId<'db>>,
+    ) -> UnificationResult {
+        if left_args.len() != right_args.len() || left_assoc.len() != right_assoc.len() {
+            return Err(UnificationError::TypeMismatch);
+        }
+        // Arguments of a constraint compare by header, but an overlap query must keep
+        // treating equal-named projections as possibly equal inside them.
+        let old = self.comparison;
+        if old == TypeComparison::Expression {
+            self.comparison = TypeComparison::Header;
+        }
+        let result = left_args
+            .iter()
+            .zip(right_args)
+            .try_for_each(|(&left, &right)| self.unify_ty(left, right))
+            .and_then(|()| {
+                left_assoc.iter().try_for_each(|(name, &left)| {
+                    let &right = right_assoc
+                        .get(name)
+                        .ok_or(UnificationError::TypeMismatch)?;
+                    self.unify_ty(left, right)
+                })
+            });
+        self.comparison = old;
+        result
     }
 
     fn unify_const_expr(

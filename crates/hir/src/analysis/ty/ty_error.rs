@@ -1,7 +1,7 @@
 use crate::{
     hir_def::{
-        GenericArg, GenericArgListId, ItemKind, PathId, PathKind, TraitRefId, TypeId, TypeKind,
-        TypeMode, scope_graph::ScopeId,
+        GenericArg, GenericArgListId, IdentId, ItemKind, PathId, PathKind, Trait, TraitRefId,
+        TypeId, TypeKind, TypeMode, scope_graph::ScopeId,
     },
     span::{
         params::{LazyGenericArgListSpan, LazyGenericArgSpan},
@@ -15,7 +15,7 @@ use crate::analysis::{
     HirAnalysisDb,
     name_resolution::{
         ExpectedPathKind, NameResKind, PathRes, PathResErrorKind, diagnostics::PathResDiag,
-        resolve_path, resolve_path_with_minter, resolve_path_with_observer_and_minter,
+        resolve_path_with_minter, resolve_path_with_observer_and_minter,
         resolve_trait_path_with_observer_and_minter, resolve_type_path_definition,
         trait_arg_path_diag,
     },
@@ -159,12 +159,38 @@ pub(crate) fn path_arg_diags<'db>(
                         return Vec::new();
                     };
                     let span = span.into_assoc_type_arg();
-                    let decl = binding.name.to_opt().and_then(|name| {
-                        match resolve_path(db, path, scope, assumptions, false) {
-                            Ok(PathRes::Trait(inst)) => inst.def(db).assoc_ty(db, name),
-                            _ => None,
-                        }
-                    });
+                    // The trait is named as a trait position names it, which
+                    // looks past an associated type of an enclosing trait that
+                    // shadows its name.
+                    let trait_ = match resolve_trait_path_with_observer_and_minter(
+                        db,
+                        path,
+                        scope,
+                        assumptions,
+                        &mut |_, _| {},
+                        &LoweringContext::for_const_bodies(ConstBodyLowering::Eager),
+                    ) {
+                        Ok(PathRes::Trait(inst)) => Some(inst.def(db)),
+                        _ => None,
+                    };
+                    let decl = binding
+                        .name
+                        .to_opt()
+                        .zip(trait_)
+                        .and_then(|(name, trait_)| trait_.assoc_ty(db, name));
+                    // A binding names an associated item of the trait itself.
+                    if let (Some(name), Some(trait_), None) = (binding.name.to_opt(), trait_, &decl)
+                    {
+                        return vec![
+                            TyLowerDiag::UnknownAssocBinding {
+                                span: span.name().into(),
+                                name,
+                                trait_,
+                                declared_by: super_trait_declaring(db, trait_, name),
+                            }
+                            .into(),
+                        ];
+                    }
                     // An associated shape is bound to a shape at a mode, and
                     // nothing else is bound at one.
                     match (decl.is_some_and(|decl| decl.is_shape()), binding.mode) {
@@ -246,6 +272,34 @@ pub(crate) fn path_arg_diags<'db>(
         })
         .chain(duplicates)
         .collect()
+}
+
+/// A super trait of `trait_`, directly or through others, that declares the
+/// associated type `name`.
+fn super_trait_declaring<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    name: IdentId<'db>,
+) -> Option<Trait<'db>> {
+    let mut seen = vec![trait_];
+    let mut pending = vec![trait_];
+    while let Some(current) = pending.pop() {
+        for super_trait in current
+            .super_trait_bounds(db)
+            .map(|inst| inst.def(db))
+            .collect::<Vec<_>>()
+        {
+            if seen.contains(&super_trait) {
+                continue;
+            }
+            if super_trait.assoc_ty(db, name).is_some() {
+                return Some(super_trait);
+            }
+            seen.push(super_trait);
+            pending.push(super_trait);
+        }
+    }
+    None
 }
 
 /// Diagnostics for the types written as generic arguments of `path`'s
@@ -801,9 +855,6 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                 }
             };
 
-        // TODO(diags): In the future, refine this to walk only generic args
-        // under the trait ref and surface kind/arg mismatches with precise
-        // spans when available from semantic lowering.
         let resolved = resolve_trait_path_with_observer_and_minter(
             self.db,
             path,
@@ -814,7 +865,15 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         );
         match resolved {
             Ok(res) => {
-                if !matches!(res, crate::analysis::name_resolution::PathRes::Trait(_)) {
+                if matches!(res, PathRes::Trait(_)) {
+                    self.diags.extend(path_arg_diags(
+                        self.db,
+                        path,
+                        span.clone().path(),
+                        scope,
+                        self.assumptions,
+                    ));
+                } else {
                     // Expected a trait in this context
                     let ident = path.ident(self.db).unwrap();
                     let seg_span = span.clone().name();
@@ -828,9 +887,12 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     );
                 }
 
-                if let Some((_p, deriv_span)) = invisible {
-                    let seg_span = span.name();
-                    let ident = path.ident(self.db).unwrap();
+                // The segment that is not visible is the one named, as for a
+                // bound: `hidden` in `outer::hidden::T`, not `T`.
+                if let Some((p, deriv_span)) = invisible
+                    && let Some(ident) = p.ident(self.db).to_opt()
+                {
+                    let seg_span = span.path().segment(p.segment_index(self.db)).ident();
                     let diag =
                         crate::analysis::name_resolution::diagnostics::PathResDiag::Invisible(
                             seg_span.into(),
