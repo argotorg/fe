@@ -8143,3 +8143,21 @@ fn provider_failures_are_reported_in_words_at_the_providers_own_code() {
         "expected the failure at the provider's call:\n{output}"
     );
 }
+
+#[test]
+fn an_inherited_default_constant_is_evaluated_for_the_implementations_that_inherit_it() {
+    // `fe check` reports the failure that the test build reports for a default
+    // that is read, as for a constant that the implementation writes.
+    for name in [
+        "inherited_default_divides_by_zero.fe",
+        "inherited_default_divides_by_zero_through_supertrait.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("division by zero in const context")
+                && output.contains("`C` is inherited here"),
+            "{name}: expected the failure at the implementation:\n{output}"
+        );
+    }
+}

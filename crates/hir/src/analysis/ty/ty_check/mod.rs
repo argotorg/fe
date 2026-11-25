@@ -481,18 +481,28 @@ pub fn check_impl_trait_const_bodies<'db>(
                 origin: origin.to_string(),
             });
             diags.extend(
-                const_body_ctfe_diags_with_context(db, body, expected_ty, policy, context)
-                    .into_iter()
-                    .filter(|diag| {
-                        // ImplTrait::diags_assoc_const_evaluability owns the
-                        // dedicated cycle diagnostic for these declarations.
-                        !matches!(
-                            diag,
-                            FuncBodyDiag::Ty(TyDiagCollection::Ty(
-                                TyLowerDiag::ConstEvalRecursiveConst(_)
-                            ))
-                        )
-                    }),
+                const_body_ctfe_diags_with_context(
+                    db,
+                    BodyOwner::AnonConstBody {
+                        body,
+                        expected: expected_ty,
+                    },
+                    body,
+                    expected_ty,
+                    policy,
+                    context,
+                )
+                .into_iter()
+                .filter(|diag| {
+                    // ImplTrait::diags_assoc_const_evaluability owns the
+                    // dedicated cycle diagnostic for these declarations.
+                    !matches!(
+                        diag,
+                        FuncBodyDiag::Ty(TyDiagCollection::Ty(
+                            TyLowerDiag::ConstEvalRecursiveConst(_)
+                        ))
+                    )
+                }),
             );
         }
     }
@@ -1569,7 +1579,27 @@ pub(crate) fn const_body_ctfe_diags<'db>(
     expected: TyId<'db>,
     policy: ConstUsePolicy,
 ) -> Vec<FuncBodyDiag<'db>> {
-    const_body_ctfe_diags_with_context(db, body, expected, policy, None)
+    let owner = BodyOwner::AnonConstBody { body, expected };
+    const_body_ctfe_diags_with_context(db, owner, body, expected, policy, None)
+}
+
+/// The CTFE diagnostics of the default of a trait constant as `owner`, an
+/// implementation that inherits it, would hold it: the same as for a constant
+/// that the implementation writes.
+pub(super) fn inherited_const_ctfe_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    const_body_ctfe_diags_with_context(
+        db,
+        owner,
+        body,
+        expected,
+        ConstUsePolicy::AllowDependent,
+        None,
+    )
 }
 
 struct ConstDiagContext {
@@ -1579,6 +1609,7 @@ struct ConstDiagContext {
 
 fn const_body_ctfe_diags_with_context<'db>(
     db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
     body: Body<'db>,
     expected: TyId<'db>,
     policy: ConstUsePolicy,
@@ -1587,7 +1618,6 @@ fn const_body_ctfe_diags_with_context<'db>(
     if expected.has_invalid(db) {
         return Vec::new();
     }
-    let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
     let require_value = match policy {
         ConstUsePolicy::AllowDependent => false,

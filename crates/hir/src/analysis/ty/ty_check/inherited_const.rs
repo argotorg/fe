@@ -27,7 +27,10 @@ use crate::{
     hir_def::{Body, IdentId, ImplTrait, Trait, scope_graph::ScopeId},
 };
 
-use super::{BodyOwner, check_anon_const_body, check_body, diag_depends_on_param_instantiation};
+use super::{
+    BodyOwner, check_anon_const_body, check_body, diag_depends_on_param_instantiation,
+    inherited_const_ctfe_diags,
+};
 
 /// Whether a trait constant's default is checked per inheriting
 /// implementation: its declared type mentions a parameter of the trait.
@@ -222,7 +225,15 @@ pub(super) fn check_inherited_defaults<'db>(
         };
         let assoc_types = assoc_types_of_self(db, &setup);
         let owner = inherited.owner(implementation);
-        for diag in &check_body(db, owner).0 {
+        // A body that type-checks is evaluated, as the value of a constant that the
+        // implementation writes is.
+        let checked = &check_body(db, owner).0;
+        let evaluated = if checked.is_empty() {
+            inherited_const_ctfe_diags(db, owner, inherited.body, setup.expected)
+        } else {
+            Vec::new()
+        };
+        for diag in checked.iter().chain(&evaluated) {
             diags.push(
                 BodyDiag::InheritedConstDefault {
                     primary: implementation.span().trait_ref().into(),
