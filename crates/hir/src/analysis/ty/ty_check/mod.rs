@@ -24,6 +24,7 @@ mod use_target;
 pub(crate) use use_target::target_at;
 pub use use_target::{UseTarget, item_target};
 mod stmt;
+mod with_operand;
 
 pub use self::contract::{
     RecvArmLookup, RecvArmResolution, RecvArmVariant, RecvMsg, RecvMsgResolution,
