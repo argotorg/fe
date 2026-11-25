@@ -1,3 +1,4 @@
 Struct {x, y}
 Struct {x: 1 + 2}
 Empty {}
+<T as Tr>::Assoc { x: 1 }

@@ -1,9 +1,10 @@
 ---
 source: crates/parser/tests/syntax_node.rs
+assertion_line: 55
 expression: node
-input_file: crates/parser/test_files/syntax_node/exprs/struct_init.fe
+input_file: test_files/syntax_node/exprs/struct_init.fe
 ---
-Root@0..40
+Root@0..67
   RecordInitExpr@0..13
     Path@0..6
       PathSegment@0..6
@@ -56,3 +57,38 @@ Root@0..40
     RecordFieldList@38..40
       LBrace@38..39 "{"
       RBrace@39..40 "}"
+  Newline@40..41 "\n"
+  RecordInitExpr@41..66
+    Path@41..57
+      PathSegment@41..50
+        QualifiedType@41..50
+          Lt@41..42 "<"
+          PathType@42..43
+            Path@42..43
+              PathSegment@42..43
+                Ident@42..43 "T"
+          WhiteSpace@43..44 " "
+          AsKw@44..46 "as"
+          WhiteSpace@46..47 " "
+          TraitRef@47..49
+            Path@47..49
+              PathSegment@47..49
+                Ident@47..49 "Tr"
+          Gt@49..50 ">"
+      Colon2@50..52 "::"
+      PathSegment@52..57
+        Ident@52..57 "Assoc"
+    WhiteSpace@57..58 " "
+    RecordFieldList@58..66
+      LBrace@58..59 "{"
+      WhiteSpace@59..60 " "
+      RecordField@60..64
+        Ident@60..61 "x"
+        Colon@61..62 ":"
+        WhiteSpace@62..63 " "
+        LitExpr@63..64
+          Lit@63..64
+            Int@63..64 "1"
+      WhiteSpace@64..65 " "
+      RBrace@65..66 "}"
+  Newline@66..67 "\n"
