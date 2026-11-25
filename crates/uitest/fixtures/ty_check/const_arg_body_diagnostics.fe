@@ -17,3 +17,26 @@ fn sum(_ h: Holder<{ m::S::CAP + 0 }>) {}
 fn local() {
     let _: Holder<{ m::S::CAP }> = Holder {}
 }
+
+const fn id(_ x: usize) -> usize { x }
+
+fn lone_generic<T>(_ h: Holder<{ m::S::CAP }>) {}
+
+fn sum_generic<T>(_ h: Holder<{ m::S::CAP + 0 }>) {}
+
+fn call_private(_ h: Holder<{ id(m::S::CAP) }>) {}
+
+fn let_private(_ h: Holder<{
+    let x = m::S::CAP
+    x
+}>) {}
+
+fn let_undefined(_ h: Holder<{
+    let _ = missing_var
+    4
+}>) {}
+
+fn open_integer(_ h: Holder<{
+    let _ = 1
+    4
+}>) {}

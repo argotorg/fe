@@ -1426,9 +1426,11 @@ pub(crate) struct ValidatedUnEvaluatedConst<'db> {
 }
 
 /// Why type lowering rejects a constant whose body failed inference, or
-/// `None` if inference succeeded. A trait impl's conformance check reports
-/// its mismatched constants, so the cause for one is `Other`, which renders
-/// nothing.
+/// `None` if inference succeeded. Only a type mismatch has a form at the
+/// type. The body's owner, a named constant's declaration or an anonymous
+/// constant's position, reports any other failure and a trait impl's
+/// conformance check its mismatched constants, so their cause is `Other`,
+/// which renders nothing; the parser reports a parse error.
 pub(crate) fn const_body_failure<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -1446,7 +1448,13 @@ pub(crate) fn const_body_failure<'db>(
         }
         return Some(InvalidCause::ConstTyMismatch { expected, given });
     }
-    (!diags.is_empty()).then(|| const_body_result_cause(db, body, typed_body))
+    if super::ty_check::diags_allow_evaluation(db, diags) {
+        return None;
+    }
+    Some(match const_body_result_cause(db, body, typed_body) {
+        InvalidCause::ParseError => InvalidCause::ParseError,
+        _ => InvalidCause::Other,
+    })
 }
 
 fn const_body_result_cause<'db>(

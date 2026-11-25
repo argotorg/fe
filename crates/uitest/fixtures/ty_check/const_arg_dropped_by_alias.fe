@@ -1,0 +1,34 @@
+type Drop<const N: usize> = u8
+
+const FLAG: bool = true
+
+trait Cap {
+    const N: usize
+}
+
+struct NoCap {}
+
+struct Boxed<const N: usize> {}
+
+impl<const N: usize> Boxed<N> {
+    pub const K: usize = 4
+}
+
+struct Holder<const N: usize> {}
+
+fn runtime() -> usize { 1 }
+
+fn mismatch(_ x: Drop<{ 1 + true }>) {}
+
+fn undefined(_ x: Drop<{
+    let _ = missing
+    4
+}>) {}
+
+fn lone_mismatch(_ x: Drop<{ FLAG }>) {}
+
+fn lone_unmet_bound(_ x: Drop<{ <NoCap as Cap>::N }>) {}
+
+fn evaluation(_ x: Drop<{ 1 / 0 }>, _ y: Drop<{ runtime() }>) {}
+
+fn qualifier(_ h: Holder<{ Boxed<{ 1 + true }>::K }>) {}

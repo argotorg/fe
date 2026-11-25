@@ -297,19 +297,6 @@ pub(crate) fn lower_opt_const_body<'db>(
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
 }
 
-/// Whether lowering reads an anonymous constant as the constant, trait
-/// constant, const type or unit variant its lone path names, rather than
-/// checking it as a body (see `lower_const_body_path`).
-pub(crate) fn const_body_names_a_constant<'db>(
-    db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> bool {
-    const_body_simple_path(db, body).is_some()
-        && lower_const_body_path(db, body, scope, assumptions, &LoweringContext::new()).is_some()
-}
-
 /// How an anonymous constant that is a lone path lowers: to the constant,
 /// trait constant, const type or unit variant it names. `None` when the body
 /// is not such a path, and lowering checks it as a body of its own.

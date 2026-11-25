@@ -17,8 +17,8 @@ use crate::analysis::ty::{
     subst::substitute_complete,
     ty_error::diag_from_invalid_cause,
     ty_lower::{
-        CompleteSubst, SubstError, const_body_names_a_constant, lower_hir_ty_with_resolutions,
-        lower_opt_const_body, lower_type_alias,
+        CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_opt_const_body,
+        lower_type_alias,
     },
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
@@ -970,38 +970,31 @@ fn anon_const_position_check<'db>(
     if diags_allow_evaluation(db, diags) {
         return check_body_requirements(db, owner, typed);
     }
-    // Lowering reads a lone path as the constant it names and checks that
-    // constant's type and bounds where the type is written, but not whether
-    // the path may name it here. Other bodies it evaluates, an integer
-    // expression without inference, so the constant can be valid though its
-    // body failed: the type reports the failure only if the constant is
-    // invalid with an error that renders. The parser reports a parse error.
+    // The type reports a failure only if the constant lowers to an invalid
+    // one whose error renders, never one of name resolution; the parser
+    // reports a parse error. A constant that lowers to a valid one although
+    // its body failed was read without inference: a lone path as what it
+    // names, an integer expression evaluated directly, either retyped to
+    // `expected`, and the type checks what it read. Then the body's other
+    // diagnostics are the type's or false.
     let position = body.scope().parent(db).unwrap_or(body.scope());
-    let assumptions = typed.assumptions();
-    let diags = if const_body_names_a_constant(db, body, position, assumptions) {
-        diags
-            .iter()
-            .filter(|diag| matches!(diag, FuncBodyDiag::NameRes(_)))
-            .cloned()
-            .collect()
-    } else {
-        let lowered = lower_opt_const_body(
-            db,
-            Partial::Present(body),
-            position,
-            assumptions,
-            &LoweringContext::new(),
-        )
-        .evaluate(db, Some(expected));
-        if lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
-            matches!(cause, InvalidCause::ParseError)
-                || diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_some()
-        }) {
-            Vec::new()
-        } else {
-            diags.clone()
-        }
-    };
+    let lowered = lower_opt_const_body(
+        db,
+        Partial::Present(body),
+        position,
+        typed.assumptions(),
+        &LoweringContext::new(),
+    )
+    .evaluate(db, Some(expected));
+    let owns_all = lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
+        !matches!(cause, InvalidCause::ParseError)
+            && diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_none()
+    });
+    let diags = diags
+        .iter()
+        .filter(|diag| owns_all || matches!(diag, FuncBodyDiag::NameRes(_)))
+        .cloned()
+        .collect();
     RequirementCheck {
         diags,
         ..RequirementCheck::default()

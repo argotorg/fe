@@ -1,0 +1,25 @@
+trait Cap {
+    const N: u256
+}
+
+struct S {}
+
+impl Cap for S {
+    const N: u256 = 4
+}
+
+impl S {
+    pub const CAP: u256 = 4
+}
+
+const C: u256 = 4
+
+fn trait_const(_ a: [u8; { S::N }]) {}
+
+fn trait_const_sum(_ a: [u8; { S::N + 0 }]) {}
+
+fn inherent_const(_ a: [u8; { S::CAP }]) {}
+
+fn const_sum(_ a: [u8; { C + 0 }]) {}
+
+fn generic_trait_const<T: Cap>(_ a: [u8; { T::N }]) {}

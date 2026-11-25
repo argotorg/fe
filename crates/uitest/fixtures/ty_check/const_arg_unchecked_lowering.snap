@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_unchecked_lowering.fe
+---
+error[2-0002]: `N` is not found
+   ┌─ const_arg_unchecked_lowering.fe:13:48
+   │
+13 │ fn receiver_bound(_ h: Holder<{ Needy<NoImpl>::N }>) {}
+   │                                                ^ `N` is not found

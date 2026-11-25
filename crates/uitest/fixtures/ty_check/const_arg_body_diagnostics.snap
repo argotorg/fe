@@ -38,3 +38,45 @@ error[2-0003]: `CAP` is not visible
    ·
 18 │     let _: Holder<{ m::S::CAP }> = Holder {}
    │                           ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:23:40
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+23 │ fn lone_generic<T>(_ h: Holder<{ m::S::CAP }>) {}
+   │                                        ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:25:39
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+25 │ fn sum_generic<T>(_ h: Holder<{ m::S::CAP + 0 }>) {}
+   │                                       ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:27:40
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+27 │ fn call_private(_ h: Holder<{ id(m::S::CAP) }>) {}
+   │                                        ^^^ `CAP` is not visible
+
+error[2-0003]: `CAP` is not visible
+   ┌─ const_arg_body_diagnostics.fe:30:19
+   │
+ 5 │         const CAP: usize = 4
+   │               --- `CAP` is defined here
+   ·
+30 │     let x = m::S::CAP
+   │                   ^^^ `CAP` is not visible
+
+error[8-0012]: undefined variable
+   ┌─ const_arg_body_diagnostics.fe:35:13
+   │
+35 │     let _ = missing_var
+   │             ^^^^^^^^^^^ undefined variable `missing_var`
