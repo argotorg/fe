@@ -1554,6 +1554,24 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    pub(super) fn register_pending_literal_receiver(
+        &mut self,
+        pending: PendingLiteralReceiver<'db>,
+    ) {
+        self.deferred.push(DeferredTask::LiteralReceiver(pending))
+    }
+
+    /// The goals of the trait obligations that still wait.
+    pub(super) fn pending_obligation_goals(&self) -> Vec<TraitInstId<'db>> {
+        self.deferred
+            .iter()
+            .filter_map(|task| match task {
+                DeferredTask::Obligation(obligation) => Some(obligation.goal),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(super) fn register_pending_effects(&mut self, pending: PendingEffects<'db>) {
         self.deferred.push(DeferredTask::Effects(pending))
     }
@@ -1602,8 +1620,10 @@ impl<'db> TyCheckEnv<'db> {
 
     /// Whether a method call in `closure`'s body waits to resolve.
     pub(super) fn has_pending_method_in(&self, closure: ClosureDef<'db>) -> bool {
-        self.deferred.iter().any(|task| {
-            matches!(task, DeferredTask::Method(pending) if pending.site.closure == Some(closure))
+        self.deferred.iter().any(|task| match task {
+            DeferredTask::Method(pending) => pending.site.closure == Some(closure),
+            DeferredTask::LiteralReceiver(pending) => pending.site.closure == Some(closure),
+            _ => false,
         })
     }
 
@@ -2665,6 +2685,18 @@ pub(super) struct PendingMethod<'db> {
     pub site: CallSite<'db>,
 }
 
+/// A method call on an open string literal, whose method both `String<N>` and
+/// `DynString` have: it resolves once the literal's type is known, or at the
+/// literal's fallback. The call's type was given when it was checked.
+#[derive(Debug, Clone)]
+pub(super) struct PendingLiteralReceiver<'db> {
+    pub expr: crate::core::hir_def::ExprId,
+    pub recv_ty: TyId<'db>,
+    pub method_name: crate::core::hir_def::IdentId<'db>,
+    pub span: DynLazySpan<'db>,
+    pub site: CallSite<'db>,
+}
+
 /// A call or loop whose callee has a row inference can't yet expand, such as
 /// one of `S<P>` with `P` an open string literal. Its effects resolve once
 /// the row's instance is known, at its call site.
@@ -2707,6 +2739,7 @@ pub(super) struct PendingNegation {
 pub(super) enum DeferredTask<'db> {
     Obligation(TraitObligation<'db>),
     Method(PendingMethod<'db>),
+    LiteralReceiver(PendingLiteralReceiver<'db>),
     Effects(PendingEffects<'db>),
     Negation(PendingNegation),
     TypeEquality(TypeEquality<'db>),

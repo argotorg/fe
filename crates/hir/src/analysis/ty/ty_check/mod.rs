@@ -38,7 +38,7 @@ use crate::analysis::ty::trait_resolution::constraint::{
 };
 use crate::analysis::ty::visitor::{TyVisitable, TyVisitor, walk_const_ty, walk_ty};
 use crate::hir_def::{
-    CallArg, CallableDef, FieldParent, GenericArgListId, ImplTrait, ModeMarker, Trait,
+    CallArg, CallableDef, FieldParent, GenericArgListId, IdentId, ImplTrait, ModeMarker, Trait,
     params::FuncParamMode, scope_graph::ScopeId,
 };
 use crate::{
@@ -2657,6 +2657,10 @@ impl<'db> TyChecker<'db> {
                         });
                     }
                 }
+                env::DeferredTask::LiteralReceiver(pending) => {
+                    // The fallback round resolves every such call.
+                    self.push_diag(BodyDiag::TypeMustBeKnown(pending.span));
+                }
                 env::DeferredTask::Negation(pending) => {
                     self.check_pending_negation(pending);
                 }
@@ -2691,7 +2695,11 @@ impl<'db> TyChecker<'db> {
                 if fallback || closure.is_some() {
                     break;
                 }
-                fallback = true;
+                // A literal that only `DynString` satisfies the bounds of is
+                // that type before any literal takes its default.
+                if !self.settle_literals_by_bounds() {
+                    fallback = true;
+                }
             }
             progressed = false;
             let tasks = self.env.take_deferred_tasks();
@@ -2753,6 +2761,18 @@ impl<'db> TyChecker<'db> {
                             progressed = true;
                         } else {
                             self.env.register_pending_method(pending);
+                        }
+                    }
+                    env::DeferredTask::LiteralReceiver(pending)
+                        if closure.is_some() && pending.site.closure != closure =>
+                    {
+                        self.env.register_pending_literal_receiver(pending);
+                    }
+                    env::DeferredTask::LiteralReceiver(pending) => {
+                        if self.resolve_literal_receiver(&pending, fallback) {
+                            progressed = true;
+                        } else {
+                            self.env.register_pending_literal_receiver(pending);
                         }
                     }
                     env::DeferredTask::Effects(pending)
@@ -2821,24 +2841,16 @@ impl<'db> TyChecker<'db> {
         candidate: env::PendingMethodCandidate<'db>,
         recv_ty: TyId<'db>,
         expr_ty: TyId<'db>,
-        (receiver, generic_args, call_args): PendingCallParts<'db>,
+        parts @ (receiver, ..): PendingCallParts<'db>,
     ) {
         let db = self.db;
         let body = self.env.body();
-        let scope = self.env.scope();
-        let assumptions = self.env.assumptions();
         let call_span = pending.expr.span(body);
         let inst = candidate.inst;
 
-        let receiver_prop = self
-            .env
-            .typed_expr(receiver)
-            .unwrap_or_else(|| ExprProp::invalid(db));
-
         let func_ty = self.instantiate_trait_method_to_term(candidate.method, recv_ty, inst);
 
-        let mut callable = match Callable::new(db, func_ty, receiver.span(body).into(), Some(inst))
-        {
+        let callable = match Callable::new(db, func_ty, receiver.span(body).into(), Some(inst)) {
             Ok(callable) => callable,
             Err(diag) => {
                 self.push_diag(diag);
@@ -2850,12 +2862,48 @@ impl<'db> TyChecker<'db> {
             self.env.register_trait_obligation(env::TraitObligation {
                 goal: inst,
                 origin: env::TraitObligationOrigin::GenericConfirmation,
-                span: call_span.clone().into(),
+                span: call_span.into(),
             });
         }
 
+        self.finish_pending_call(
+            pending.expr,
+            pending.span.clone(),
+            pending.method_name,
+            callable,
+            recv_ty,
+            expr_ty,
+            parts,
+        );
+    }
+
+    /// Completes the deferred call `expr`, typed `expr_ty`, once its method
+    /// is chosen: checks the arguments, which are already typed, against
+    /// `callable`, and registers the call.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn finish_pending_call(
+        &mut self,
+        expr: ExprId,
+        span: DynLazySpan<'db>,
+        method_name: IdentId<'db>,
+        mut callable: Callable<'db>,
+        recv_ty: TyId<'db>,
+        expr_ty: TyId<'db>,
+        (receiver, generic_args, call_args): PendingCallParts<'db>,
+    ) {
+        let db = self.db;
+        let body = self.env.body();
+        let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let call_span = expr.span(body);
+
+        let receiver_prop = self
+            .env
+            .typed_expr(receiver)
+            .unwrap_or_else(|| ExprProp::invalid(db));
+
         // A value call `f(..)` has no explicit generic arguments of its own.
-        let args_span = if self.env.is_value_call(pending.expr) {
+        let args_span = if self.env.is_value_call(expr) {
             call_span.into_call_expr().args()
         } else {
             let call_span = call_span.into_method_call_expr();
@@ -2873,43 +2921,121 @@ impl<'db> TyChecker<'db> {
             true,
         );
 
-        callable.process_constraints(self, pending.expr, pending.span.clone());
+        callable.process_constraints(self, expr, span);
 
         let ret_ty = self.normalize_ty(callable.ret_ty(db));
         match self.table.unify(expr_ty, ret_ty) {
             Ok(()) => {}
             Err(UnificationError::TypeMismatch) => {
                 self.push_diag(BodyDiag::TypeMismatch {
-                    span: pending.expr.span(body).into(),
+                    span: expr.span(body).into(),
                     expected: expr_ty,
                     given: ret_ty,
                 });
                 return;
             }
             Err(UnificationError::OccursCheckFailed) => {
-                let span = pending.expr.span(body).into();
+                let span = expr.span(body).into();
                 self.push_diag(BodyDiag::InfiniteOccurrence(span));
                 return;
             }
         }
 
-        self.check_callable_effects(pending.expr, &mut callable);
+        self.check_callable_effects(expr, &mut callable);
 
-        if let Some(kind) = self.code_region_method_kind(recv_ty, pending.method_name)
+        if let Some(kind) = self.code_region_method_kind(recv_ty, method_name)
             && call_args.len() == 1
             && self.env.typed_expr(call_args[0].expr).is_some_and(|prop| {
                 ty_may_be_code_region_token(db, normalize_ty(db, prop.ty, scope, assumptions))
             })
         {
-            self.env.register_code_region_intrinsic(
-                pending.expr,
-                callable,
-                call_args[0].expr,
-                kind,
-            );
+            self.env
+                .register_code_region_intrinsic(expr, callable, call_args[0].expr, kind);
         } else {
-            self.env.register_semantic_call(pending.expr, callable);
+            self.env.register_semantic_call(expr, callable);
         }
+    }
+
+    /// Binds to `DynString` each open string literal that a pending trait
+    /// bound rules out as an inline `String` and no pending bound rules out as
+    /// a `DynString`, before any literal takes its default. Each literal is
+    /// judged against the same state and the bindings follow, so the result
+    /// does not depend on the order the bounds were registered in. Returns
+    /// whether any literal was bound.
+    fn settle_literals_by_bounds(&mut self) -> bool {
+        let db = self.db;
+        let goals: Vec<_> = self
+            .env
+            .pending_obligation_goals()
+            .into_iter()
+            .map(|goal| self.normalize_trait_goal(goal))
+            .filter(|goal| !collect_flags(db, *goal).contains(TyFlags::HAS_INVALID))
+            .collect();
+        let mut literals = std::collections::BTreeMap::new();
+        for goal in &goals {
+            for key in inference_keys(db, goal) {
+                if let Some(TyVarSort::String {
+                    min_len,
+                    fallback: StringFallback::Fixed,
+                }) = self.table.unbound_sort(key)
+                {
+                    literals.insert(key, min_len);
+                }
+            }
+        }
+        let Some(dyn_ty) = resolve_lib_type_path(db, self.env.scope(), "core::abi::DynString")
+        else {
+            return false;
+        };
+        let mut dyn_literals = Vec::new();
+        for (key, min_len) in literals {
+            let sort = TyVarSort::String {
+                min_len,
+                fallback: StringFallback::Fixed,
+            };
+            let literal = TyId::ty_var(db, sort, Kind::Star, key);
+            let mentioning: Vec<_> = goals
+                .iter()
+                .copied()
+                .filter(|goal| inference_keys(db, goal).contains(&key))
+                .collect();
+            let inline_ty = TyId::string_with_len(db, min_len);
+            if self.goals_unsatisfiable_with(literal, inline_ty, &mentioning) == Some(true)
+                && self.goals_unsatisfiable_with(literal, dyn_ty, &mentioning) == Some(false)
+            {
+                dyn_literals.push(literal);
+            }
+        }
+        for &literal in &dyn_literals {
+            let _ = self.table.unify(literal, dyn_ty);
+        }
+        !dyn_literals.is_empty()
+    }
+
+    /// Whether some of `goals` is unsatisfiable when `literal` is `ty`, or
+    /// `None` if `literal` cannot be `ty`.
+    fn goals_unsatisfiable_with(
+        &mut self,
+        literal: TyId<'db>,
+        ty: TyId<'db>,
+        goals: &[TraitInstId<'db>],
+    ) -> Option<bool> {
+        let db = self.db;
+        let solve_cx =
+            TraitSolveCx::new(db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let snapshot = self.snapshot_state();
+        let unsatisfiable = self.table.unify(literal, ty).ok().map(|()| {
+            goals.iter().any(|&goal| {
+                let goal = self.normalize_trait_goal(goal);
+                let query = CanonicalGoalQuery::new(db, goal, self.env.assumptions());
+                matches!(
+                    is_goal_query_satisfiable(db, solve_cx, &query),
+                    GoalSatisfiability::UnSat(_)
+                )
+            })
+        });
+        self.rollback_state(snapshot);
+        unsatisfiable
     }
 
     /// Whether each open string literal among `operands`, as unified so far,
@@ -3353,20 +3479,6 @@ impl<'db> TyChecker<'db> {
 
     fn fresh_tys_n(&mut self, n: usize) -> Vec<TyId<'db>> {
         (0..n).map(|_| self.fresh_ty()).collect()
-    }
-
-    /// Types to look a receiver's methods up on: the receiver's type, and the
-    /// runtime text type for a string literal.
-    fn receiver_candidates(&self, ty: TyId<'db>) -> Vec<TyId<'db>> {
-        let mut candidates = vec![ty];
-        if let TyData::TyVar(var) = ty.base_ty(self.db).data(self.db)
-            && matches!(var.sort, TyVarSort::String { .. })
-            && let Some(text_ty) =
-                resolve_lib_type_path(self.db, self.env.scope(), "core::abi::DynString")
-        {
-            candidates.push(text_ty);
-        }
-        candidates
     }
 
     fn pattern_binds_any(&self, pat: PatId) -> bool {

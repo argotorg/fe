@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_no_such_method.fe
+---
+error[2-0010]: no method named `nope` found for String `String`
+  ┌─ string_literal_no_such_method.fe:3:10
+  │
+3 │     "ab".nope()
+  │          ^^^^ method not found in `String`

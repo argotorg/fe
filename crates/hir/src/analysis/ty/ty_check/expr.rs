@@ -21,8 +21,8 @@ use super::{
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
-        ParamSite, PendingEffects, PendingEffectsTarget, PendingNegation, Prober, ProvidedEffect,
-        TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
+        ParamSite, PendingEffects, PendingEffectsTarget, PendingLiteralReceiver, PendingNegation,
+        Prober, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
     },
     has_invisible_newtype_field, merged_borrow_provider,
     path::ResolvedPathInBody,
@@ -80,7 +80,7 @@ use crate::analysis::ty::{
         Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
     },
     ty_def::{
-        BorrowKind, ClosureDef, ClosureTy, PrimTy, TyBase, TyData, TyVarSort,
+        BorrowKind, ClosureDef, ClosureTy, PrimTy, StringFallback, TyBase, TyData, TyVarSort,
         int_literal_fits_prim, prim_int_bits,
     },
     ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, generic_arg_list_diags},
@@ -113,7 +113,7 @@ use crate::analysis::{
     },
 };
 use crate::core::semantic::storage_slot_span;
-use crate::hir_def::{BlockKind, FieldParent, ItemKind, scope_graph::ScopeId};
+use crate::hir_def::{BlockKind, FieldParent, ItemKind, Trait, scope_graph::ScopeId};
 use common::{compilation::Target, indexmap::IndexMap};
 
 #[derive(Debug, Clone, Copy)]
@@ -142,6 +142,22 @@ struct EffectEvidence<'db> {
     /// The type a type key is provided as; a trait key has none.
     target_ty: Option<TyId<'db>>,
     commit: EffectCommitPlan<'db>,
+}
+
+/// The types an open string literal can take as the receiver of a method:
+/// see `string_receiver_choice`.
+pub(super) enum StringReceiver<'db> {
+    /// The receiver is not an open string literal.
+    NotLiteral,
+    /// Neither type has the method; the type is the literal's default.
+    Neither(TyId<'db>),
+    /// Only this type has the method.
+    Only(TyId<'db>),
+    /// Both types have it: the literal's default, and the other.
+    Both {
+        default: TyId<'db>,
+        other: TyId<'db>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2240,6 +2256,340 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// The candidates of a call whose method is one of several trait methods.
+    fn pending_method_candidates(
+        &mut self,
+        ambiguous: AmbiguousTraitMethods<'db>,
+        canonical: &Canonicalized<'db, TyId<'db>>,
+        method_name: IdentId<'db>,
+    ) -> Vec<super::env::PendingMethodCandidate<'db>> {
+        ambiguous
+            .candidates
+            .into_iter()
+            .map(|candidate| {
+                let inst = canonical.extract_solution(&mut self.table, candidate.cand.inst);
+                let inst = self.specialize_same_trait_method_inst(method_name, inst);
+                super::env::PendingMethodCandidate {
+                    inst,
+                    method: candidate.cand.method,
+                    needs_confirmation: candidate.needs_confirmation,
+                }
+            })
+            .collect()
+    }
+
+    /// Which of the two string types a method looked up on `ty` can be found
+    /// on, if `ty` is an open string literal: the inline `String` (only for a
+    /// literal that fits one) and `DynString`. A trait method is looked up in
+    /// `trait_` only, if given.
+    pub(super) fn string_receiver_choice(
+        &mut self,
+        ty: TyId<'db>,
+        method_name: IdentId<'db>,
+        trait_: Option<Trait<'db>>,
+    ) -> StringReceiver<'db> {
+        let db = self.db;
+        // The sort of the root variable, not the one the type was made with:
+        // a literal unified with a longer one takes its length.
+        let ty = ty.fold_with(db, &mut self.table);
+        let TyData::TyVar(var) = ty.data(db) else {
+            return StringReceiver::NotLiteral;
+        };
+        let TyVarSort::String { min_len, fallback } = var.sort else {
+            return StringReceiver::NotLiteral;
+        };
+        let Some(dyn_ty) = resolve_lib_type_path(db, self.env.scope(), "core::abi::DynString")
+        else {
+            return StringReceiver::NotLiteral;
+        };
+        let has_method = |this: &mut Self, ty: TyId<'db>| {
+            !matches!(
+                select_method_candidate(
+                    db,
+                    &Canonicalized::new(db, ty),
+                    method_name,
+                    this.env.scope(),
+                    this.env.assumptions(),
+                    trait_,
+                ),
+                Err(MethodSelectionError::NotFound)
+            )
+        };
+        match fallback {
+            StringFallback::Dynamic if has_method(self, dyn_ty) => StringReceiver::Only(dyn_ty),
+            StringFallback::Dynamic => StringReceiver::Neither(dyn_ty),
+            StringFallback::Fixed => {
+                let string = TyId::new(db, TyData::TyBase(TyBase::Prim(PrimTy::String)));
+                let inline = self.table.instantiate_to_term(string);
+                let default = TyId::string_with_len(db, min_len);
+                match (has_method(self, inline), has_method(self, dyn_ty)) {
+                    (true, true) => StringReceiver::Both {
+                        default,
+                        other: dyn_ty,
+                    },
+                    (true, false) => StringReceiver::Only(inline),
+                    (false, true) => StringReceiver::Only(dyn_ty),
+                    (false, false) => StringReceiver::Neither(default),
+                }
+            }
+        }
+    }
+
+    /// What a call of `method_name` on a receiver of type `ty` would return,
+    /// to type a call whose receiver is not yet chosen. `None` if the call
+    /// cannot wait for the receiver's type: the method is not a method, or its
+    /// result is not a plain value. `Some(None)` if the result is not known
+    /// before the arguments and the receiver are.
+    fn probe_literal_receiver(
+        &mut self,
+        ty: TyId<'db>,
+        method_name: IdentId<'db>,
+        span: DynLazySpan<'db>,
+    ) -> Option<Option<TyId<'db>>> {
+        let db = self.db;
+        let snapshot = self.snapshot_state();
+        let canonical = Canonicalized::new(db, ty);
+        let selected = select_method_candidate(
+            db,
+            &canonical,
+            method_name,
+            self.env.scope(),
+            self.env.assumptions(),
+            None,
+        );
+        let ret_ty = match selected {
+            Ok(candidate) => {
+                let (func_ty, inst) =
+                    self.selected_method_ty(candidate, &canonical, ty, span.clone());
+                Callable::new(db, func_ty, span, inst)
+                    .ok()
+                    .filter(|callable| {
+                        callable.callable_def().is_method(db) && callable.ret_shape(db).is_none()
+                    })
+                    .map(|callable| {
+                        let ret_ty = self.normalize_ty(callable.ret_ty(db));
+                        (!ret_ty.has_var(db)).then_some(ret_ty)
+                    })
+            }
+            Err(MethodSelectionError::AmbiguousTraitMethod(_)) => Some(None),
+            Err(_) => None,
+        };
+        self.rollback_state(snapshot);
+        ret_ty
+    }
+
+    /// Defers a method call whose receiver is an open string literal that
+    /// both `candidates` (its default type, then the other) have the method
+    /// for, until the literal's type is known: see `PendingLiteralReceiver`.
+    /// The call's type is what both give if they agree, the literal's own type
+    /// if each returns its receiver, else not yet known. `None` if the call
+    /// cannot wait, and nothing was checked.
+    #[allow(clippy::too_many_arguments)]
+    fn defer_literal_receiver(
+        &mut self,
+        expr: ExprId,
+        receiver: ExprId,
+        receiver_ty: TyId<'db>,
+        candidates: [TyId<'db>; 2],
+        method_name: IdentId<'db>,
+        args: &[HirCallArg<'db>],
+        span: DynLazySpan<'db>,
+    ) -> Option<ExprProp<'db>> {
+        let receiver_span: DynLazySpan<'db> = receiver.span(self.body()).into();
+        let [default, other] = candidates;
+        let default_ret =
+            self.probe_literal_receiver(default, method_name, receiver_span.clone())?;
+        let other_ret = self.probe_literal_receiver(other, method_name, receiver_span)?;
+        let call_ty = match (default_ret, other_ret) {
+            (Some(ret), Some(other_ret)) if ret == other_ret => ret,
+            (Some(ret), Some(other_ret)) if ret == default && other_ret == other => receiver_ty,
+            _ => self.fresh_ty(),
+        };
+        let typed = ExprProp::new(call_ty, true);
+        self.env.type_expr(expr, typed.clone());
+        // The arguments are typed now so that they constrain the choice.
+        for arg in args {
+            self.check_expr_unknown(arg.expr);
+        }
+        let site = self.env.call_site();
+        self.env
+            .register_pending_literal_receiver(PendingLiteralReceiver {
+                expr,
+                recv_ty: receiver_ty,
+                method_name,
+                span,
+                site,
+            });
+        Some(typed)
+    }
+
+    /// Resolves the deferred call `pending` once its literal receiver has a
+    /// type. Returns whether it did: not before the fallback round while the
+    /// literal is open. In the fallback round the literal takes the first of
+    /// its default type and the other whose method gives the call's type.
+    pub(super) fn resolve_literal_receiver(
+        &mut self,
+        pending: &PendingLiteralReceiver<'db>,
+        fallback: bool,
+    ) -> bool {
+        let db = self.db;
+        let Some(parts) = super::pending_call_parts(db, self.body(), &self.env, pending.expr)
+        else {
+            return true;
+        };
+        let Some(expr_prop) = self.env.typed_expr(pending.expr) else {
+            return true;
+        };
+        let mut recv_ty = pending.recv_ty.fold_with(db, &mut self.table);
+        if let TyData::TyVar(var) = recv_ty.data(db) {
+            let TyVarSort::String {
+                min_len,
+                fallback: literal_fallback,
+            } = var.sort
+            else {
+                return false;
+            };
+            if !fallback {
+                return false;
+            }
+            let dyn_ty = resolve_lib_type_path(db, self.env.scope(), "core::abi::DynString");
+            let candidates: Vec<_> = match literal_fallback {
+                StringFallback::Fixed => [Some(TyId::string_with_len(db, min_len)), dyn_ty]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                StringFallback::Dynamic => dyn_ty.into_iter().collect(),
+            };
+            let Some(&first) = candidates.first() else {
+                return true;
+            };
+            let chosen = candidates
+                .iter()
+                .copied()
+                .find(|&ty| self.literal_receiver_fits(pending, expr_prop.ty, ty))
+                .unwrap_or(first);
+            self.equate_ty(recv_ty, chosen, pending.span.clone());
+            recv_ty = chosen;
+        }
+
+        self.env.enter_call_site(&pending.site);
+        self.complete_literal_receiver_call(pending, parts, expr_prop.ty, recv_ty);
+        self.env.leave_call_site();
+        true
+    }
+
+    /// Whether the method of the deferred call `pending` on `candidate_ty`,
+    /// as its literal receiver, exists and returns the call's type `expr_ty`.
+    fn literal_receiver_fits(
+        &mut self,
+        pending: &PendingLiteralReceiver<'db>,
+        expr_ty: TyId<'db>,
+        candidate_ty: TyId<'db>,
+    ) -> bool {
+        let db = self.db;
+        let snapshot = self.snapshot_state();
+        let fits = (|| {
+            self.table.unify(pending.recv_ty, candidate_ty).ok()?;
+            let canonical = Canonicalized::new(db, candidate_ty);
+            match select_method_candidate(
+                db,
+                &canonical,
+                pending.method_name,
+                self.env.scope(),
+                self.env.assumptions(),
+                None,
+            ) {
+                Ok(candidate) => {
+                    let (func_ty, inst) = self.selected_method_ty(
+                        candidate,
+                        &canonical,
+                        candidate_ty,
+                        pending.span.clone(),
+                    );
+                    let callable = Callable::new(db, func_ty, pending.span.clone(), inst).ok()?;
+                    let ret_ty = self.normalize_ty(callable.ret_ty(db));
+                    self.table.unify(expr_ty, ret_ty).ok()
+                }
+                // Which of the traits is chosen is left to the call, once
+                // the receiver is known.
+                Err(MethodSelectionError::AmbiguousTraitMethod(_)) => Some(()),
+                Err(_) => None,
+            }
+        })()
+        .is_some();
+        self.rollback_state(snapshot);
+        fits
+    }
+
+    /// Completes the deferred call `pending` on the receiver type `recv_ty`.
+    fn complete_literal_receiver_call(
+        &mut self,
+        pending: &PendingLiteralReceiver<'db>,
+        parts: super::PendingCallParts<'db>,
+        expr_ty: TyId<'db>,
+        recv_ty: TyId<'db>,
+    ) {
+        let db = self.db;
+        let body = self.body();
+        let receiver = parts.0;
+        let canonical = Canonicalized::new(db, recv_ty);
+        let candidate = match select_method_candidate(
+            db,
+            &canonical,
+            pending.method_name,
+            self.env.scope(),
+            self.env.assumptions(),
+            None,
+        ) {
+            Ok(candidate) => candidate,
+            Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
+                let candidates =
+                    self.pending_method_candidates(ambiguous, &canonical, pending.method_name);
+                self.env.register_pending_method(super::env::PendingMethod {
+                    expr: pending.expr,
+                    recv_ty,
+                    method_name: pending.method_name,
+                    candidates,
+                    span: pending.span.clone(),
+                    site: pending.site.clone(),
+                });
+                return;
+            }
+            Err(err) => {
+                let diag = body_diag_from_method_selection_err(
+                    db,
+                    err,
+                    Spanned::new(recv_ty, receiver.span(body).into()),
+                    Spanned::new(pending.method_name, pending.span.clone()),
+                );
+                self.push_diag(diag);
+                return;
+            }
+        };
+        let (func_ty, inst) = self.selected_method_ty(
+            candidate,
+            &canonical,
+            recv_ty,
+            pending.expr.span(body).into(),
+        );
+        let callable = match Callable::new(db, func_ty, receiver.span(body).into(), inst) {
+            Ok(callable) => callable,
+            Err(diag) => {
+                self.push_diag(diag);
+                return;
+            }
+        };
+        self.finish_pending_call(
+            pending.expr,
+            pending.span.clone(),
+            pending.method_name,
+            callable,
+            recv_ty,
+            expr_ty,
+            parts,
+        );
+    }
+
     /// Defers a call whose method is one of several trait methods, which
     /// argument and result types choose once the body is checked, unless the
     /// arguments already leave one. `span` is the method's name, or a value
@@ -2265,19 +2615,7 @@ impl<'db> TyChecker<'db> {
         for arg in args {
             self.check_expr_unknown(arg.expr);
         }
-        let candidates = ambiguous
-            .candidates
-            .into_iter()
-            .map(|candidate| {
-                let inst = canonical.extract_solution(&mut self.table, candidate.cand.inst);
-                let inst = self.specialize_same_trait_method_inst(method_name, inst);
-                super::env::PendingMethodCandidate {
-                    inst,
-                    method: candidate.cand.method,
-                    needs_confirmation: candidate.needs_confirmation,
-                }
-            })
-            .collect();
+        let candidates = self.pending_method_candidates(ambiguous, canonical, method_name);
         let pending = super::env::PendingMethod {
             expr,
             recv_ty: receiver_ty,
@@ -3594,12 +3932,36 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        let receiver_tys = self.receiver_candidates(receiver_prop.ty);
+        // An open string literal is an inline `String` or a `DynString`: a
+        // method only one has fixes the literal to it, and a method both have
+        // waits for the context, else the literal's default.
+        let mut selected_receiver_ty = receiver_prop.ty;
+        match self.string_receiver_choice(receiver_prop.ty, method_name, None) {
+            StringReceiver::NotLiteral => {}
+            StringReceiver::Neither(ty) => selected_receiver_ty = ty,
+            StringReceiver::Only(ty) => {
+                self.equate_ty(receiver_prop.ty, ty, receiver.span(self.body()).into());
+                selected_receiver_ty = ty;
+            }
+            StringReceiver::Both { default, other } => {
+                if let Some(deferred) = self.defer_literal_receiver(
+                    expr,
+                    *receiver,
+                    receiver_prop.ty,
+                    [default, other],
+                    method_name,
+                    args,
+                    call_span.clone().method_name().into(),
+                ) {
+                    return deferred;
+                }
+                self.equate_ty(receiver_prop.ty, default, receiver.span(self.body()).into());
+                selected_receiver_ty = default;
+            }
+        }
         let method_assumptions = self.env.assumptions();
-
-        let mut selected_receiver_ty = receiver_tys[0];
-        let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
-        let mut candidate = select_method_candidate(
+        let canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
+        let candidate = select_method_candidate(
             self.db,
             &canonical_r_ty,
             method_name,
@@ -3607,29 +3969,6 @@ impl<'db> TyChecker<'db> {
             method_assumptions,
             None,
         );
-        if matches!(
-            candidate,
-            Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
-        ) {
-            for &receiver_ty in receiver_tys.iter().skip(1) {
-                let fallback_canonical = Canonicalized::new(self.db, receiver_ty);
-                let fallback = select_method_candidate(
-                    self.db,
-                    &fallback_canonical,
-                    method_name,
-                    self.env.scope(),
-                    method_assumptions,
-                    None,
-                );
-
-                if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound)) {
-                    selected_receiver_ty = receiver_ty;
-                    canonical_r_ty = fallback_canonical;
-                    candidate = fallback;
-                    break;
-                }
-            }
-        }
         let candidate = match candidate {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
@@ -5152,10 +5491,23 @@ impl<'db> TyChecker<'db> {
                 }
             }
         } else {
-            let lhs_candidates = self.receiver_candidates(lhs_ty);
-            let mut selected_lhs_ty = lhs_candidates[0];
-            let mut c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
-            let mut method_candidate = select_method_candidate(
+            // An open string literal is an inline `String` or a `DynString`:
+            // the one that has the operator, else its default.
+            let selected_lhs_ty = match self.string_receiver_choice(
+                lhs_ty,
+                op.trait_method(self.db),
+                Some(trait_def),
+            ) {
+                StringReceiver::NotLiteral => lhs_ty,
+                StringReceiver::Neither(ty)
+                | StringReceiver::Only(ty)
+                | StringReceiver::Both { default: ty, .. } => {
+                    self.equate_ty(lhs_ty, ty, expr.span(self.body()).into());
+                    ty
+                }
+            };
+            let c_lhs_ty = Canonicalized::new(self.db, selected_lhs_ty);
+            let method_candidate = select_method_candidate(
                 self.db,
                 &c_lhs_ty,
                 op.trait_method(self.db),
@@ -5163,29 +5515,6 @@ impl<'db> TyChecker<'db> {
                 method_assumptions,
                 Some(trait_def),
             );
-            if matches!(
-                method_candidate,
-                Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
-            ) {
-                for &candidate_ty in lhs_candidates.iter().skip(1) {
-                    let c_candidate_ty = Canonicalized::new(self.db, candidate_ty);
-                    let fallback = select_method_candidate(
-                        self.db,
-                        &c_candidate_ty,
-                        op.trait_method(self.db),
-                        self.env.scope(),
-                        method_assumptions,
-                        Some(trait_def),
-                    );
-                    if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
-                    {
-                        selected_lhs_ty = candidate_ty;
-                        c_lhs_ty = c_candidate_ty;
-                        method_candidate = fallback;
-                        break;
-                    }
-                }
-            }
 
             match method_candidate {
                 Ok(MethodCandidate::InherentMethod(_)) => unreachable!(),
