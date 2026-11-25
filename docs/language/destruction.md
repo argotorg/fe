@@ -35,10 +35,13 @@ value's lifetime ends, and a type that holds a resource releases it in its
   indexed element (`v[i] = x`) does the same.
 - A projection's own locals are destroyed when the access it grants ends,
   where its session resumes. A `yield` statement's operand ends there, not
-  with the enclosing block: its temporaries and what its blocks and arms
-  bind are destroyed innermost first before the slide runs, those inside a
-  yielded tuple or variant among them, as in
-  `Option::Some(if c { .. } else { .. })`. After a `return` or a tail
+  with the enclosing block: its temporaries, and what the blocks and
+  branches its value comes out of bind, are destroyed innermost first
+  before the slide runs. The value comes out of block tails, the branches
+  of an `if` or `match` and the elements of a tuple or variant of the
+  result's shape, as in `Option::Some(if c { .. } else { .. })`; a block or
+  branch inside any other expression, such as an argument or an owned
+  tuple within an element, ends where it ends. After a `return` or a tail
   yield, every scope ends there.
 
 A value that moved is not destroyed where it moved from, and a partial move

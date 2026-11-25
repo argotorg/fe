@@ -61,9 +61,12 @@ impl<'db> TyChecker<'db> {
                     self.check_yield_site(*tail, shape);
                 }
             }
-            Expr::If(_, then, Some(else_)) => {
+            // An `if` without `else` yields `()` past it.
+            Expr::If(_, then, else_) => {
                 self.check_yield_site(*then, shape);
-                self.check_yield_site(*else_, shape);
+                if let Some(else_) = else_ {
+                    self.check_yield_site(*else_, shape);
+                }
             }
             Expr::Match(_, Partial::Present(arms)) => {
                 for arm in arms {

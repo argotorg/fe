@@ -1248,6 +1248,10 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             });
             self.lower_expr(first);
             self.compounds.pop();
+            debug_assert!(
+                self.is_terminated(self.current),
+                "a compound yield ends each of its paths"
+            );
             return self.alloc_temp(self.expr_ty(expr));
         }
         // A `!` expression typed as its context's type ends its block where it
@@ -1604,7 +1608,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.unit_value()
             }
-            Expr::Block(stmts, _) => self.lower_block_expr(stmts),
+            Expr::Block(stmts, _) => self.lower_block_expr(expr, stmts),
             Expr::If(cond, then_expr, else_expr) => {
                 self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
@@ -2781,10 +2785,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// A block's scope holds its bindings and its tail's temporaries; its
-    /// value passes to the enclosing scope.
-    fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
+    /// value passes to the enclosing scope. A yield site whose tail does not
+    /// yield, a block ending in a statement, yields `()` within its scope.
+    fn lower_block_expr(&mut self, expr: ExprId, stmts: &[StmtId]) -> SValueId {
         self.push_drop_scope(true);
         let value = self.lower_block_stmts(stmts);
+        if self.typed_body.yield_shape(expr).is_some() && !self.is_terminated(self.current) {
+            self.yield_value(expr, value);
+        }
         self.pop_drop_scope(Some(value));
         value
     }
@@ -3193,6 +3201,14 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.switch_to(else_bb);
         self.push_drop_scope(false);
         let else_value = else_expr.map(|expr| (expr, self.lower_expr(expr)));
+        // A yield site without `else` yields `()` on the path past it.
+        if else_expr.is_none()
+            && self.typed_body.yield_shape(expr).is_some()
+            && !self.is_terminated(self.current)
+        {
+            let unit = self.unit_value();
+            self.yield_value(expr, unit);
+        }
         let else_falls = !self.is_terminated(self.current);
         if else_falls {
             let else_value = match else_value {
