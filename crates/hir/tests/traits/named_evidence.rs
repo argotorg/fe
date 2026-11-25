@@ -5568,3 +5568,26 @@ const fn plain_q01() -> u256 {{ q01<A, B>() }}
         &[("plain_d04", 112), ("plain_q01", 11)],
     );
 }
+
+// Checking the conditions of implementations that form a chain asks for the
+// implementations of the trait, which lowers the headers of those very
+// implementations. Deriving the associated-type bound of a closed condition
+// while a header is lowered must not read an implementation.
+#[test]
+fn closed_condition_chain_lowers() {
+    let codes = diagnostics(
+        r#"
+pub trait Show {}
+pub trait Hold { type A: Show }
+pub struct Foo {}
+impl Show for Foo {}
+pub struct X {}
+impl Hold for X { type A = Foo }
+pub struct S {}
+impl Hold for S where X: Hold { type A = Foo }
+pub struct D {}
+impl Hold for D where S: Hold { type A = Foo }
+"#,
+    );
+    assert!(codes.is_empty(), "{codes:?}");
+}

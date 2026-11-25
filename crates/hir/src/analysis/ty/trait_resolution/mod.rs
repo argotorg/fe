@@ -7,7 +7,7 @@ use super::{
     normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::{ImplementorId, TraitInstId},
     ty_def::{BorrowKind, TyData, TyFlags, TyId},
-    visitor::{TyVisitable, TyVisitor, collect_flags, walk_ty},
+    visitor::{TyVisitable, TyVisitor, walk_ty},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -29,9 +29,11 @@ use constraint::collect_constraints;
 use rustc_hash::FxHashSet;
 use salsa::SalsaValue;
 
+mod component_walk;
 pub(crate) mod constraint;
 mod table_solver;
 
+pub(crate) use component_walk::component_path_goal;
 pub(crate) use table_solver::{
     answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
     match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
@@ -1247,7 +1249,7 @@ impl<'db> PredicateListId<'db> {
         self,
         db: &'db dyn HirAnalysisDb,
     ) -> &'db BoundWalk<'db> {
-        bound_walk_keeping_concrete_query(db, self)
+        component_walk::bound_walk_keeping_concrete_query(db, self)
     }
 
     /// The derivations among the members of this list, as positions in it:
@@ -1259,7 +1261,12 @@ impl<'db> PredicateListId<'db> {
         implied_edges_query(db, self)
     }
 
-    fn walk_bounds(self, db: &'db dyn HirAnalysisDb, keep_concrete: bool) -> BoundWalk<'db> {
+    fn walk_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        components: Option<component_walk::Components>,
+    ) -> BoundWalk<'db> {
+        let keep_concrete = components.is_some();
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
         let mut edges: Vec<BoundEdge<'db>> = Vec::new();
@@ -1288,6 +1295,14 @@ impl<'db> PredicateListId<'db> {
                 .get_index_of(&pred)
                 .and_then(|index| u32::try_from(index).ok())
                 .expect("a predicate on the worklist is in the list");
+            // The plain walk reads no implementation. Only the walk that keeps
+            // concrete bounds holds the value that lets a step below a concrete
+            // member do so.
+            let parent_is_member = parent as usize >= slots;
+            let derive = |step| match &components {
+                None => step_bound(db, pred, step),
+                Some(components) => components.child(db, pred, parent_is_member, step),
+            };
             let mut record = |child: usize, step: BoundStep<'db>| {
                 let edge = BoundEdge {
                     parent,
@@ -1301,7 +1316,7 @@ impl<'db> PredicateListId<'db> {
             // 1. Collect super traits
             for index in 0..hir_trait.super_traits(db).len() {
                 let step = BoundStep::Super(index as u32);
-                let Some(inst) = step_bound(db, pred, step) else {
+                let Some(inst) = derive(step) else {
                     continue;
                 };
                 if predicate_has_recursive_assoc_projection(db, inst) {
@@ -1344,7 +1359,7 @@ impl<'db> PredicateListId<'db> {
                         assoc,
                         index: index as u32,
                     };
-                    let Some(trait_inst) = step_bound(db, pred, step) else {
+                    let Some(trait_inst) = derive(step) else {
                         continue;
                     };
                     // An equality can make the bound a concrete one,
@@ -1686,7 +1701,7 @@ impl<'db> BoundWalk<'db> {
 /// arguments, normalized by `pred`'s own equalities. The walk and every
 /// projection read a derivation through this one computation. A bound that an
 /// equality makes concrete is returned as it is: dropping it is the walk's
-/// decision.
+/// decision. Reads no implementation: header lowering reaches it.
 pub(crate) fn step_bound<'db>(
     db: &'db dyn HirAnalysisDb,
     pred: TraitInstId<'db>,
@@ -1700,15 +1715,11 @@ pub(crate) fn step_bound<'db>(
                 .super_traits(db)
                 .get_index(index as usize)
                 .copied()?;
-            Some(normalize_below_concrete(
+            Some(normalize_from_assumptions(
                 db,
-                pred,
-                normalize_from_assumptions(
-                    db,
-                    super_trait.instantiate(db, pred.args(db)),
-                    hir_trait.scope(),
-                    evidence,
-                ),
+                super_trait.instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
             ))
         }
         BoundStep::AssocBound { assoc, index } => {
@@ -1723,40 +1734,14 @@ pub(crate) fn step_bound<'db>(
             let bound = assoc_ty
                 .assoc_type_bounds(db, trait_type)
                 .nth(index as usize)?;
-            Some(normalize_below_concrete(
+            Some(normalize_from_assumptions(
                 db,
-                pred,
-                normalize_from_assumptions(
-                    db,
-                    Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
-                    hir_trait.scope(),
-                    evidence,
-                ),
+                Binder::bind(hir_trait.into(), bound).instantiate(db, pred.args(db)),
+                hir_trait.scope(),
+                evidence,
             ))
         }
     }
-}
-
-/// A bound derived from a concrete bound `pred` has no equality of its own to
-/// fix a projection in it: `<U<Foo> as Tr>::A: Show` below `U<Foo>: Tr`. The
-/// implementation that defines the associated type fixes it, as ordinary
-/// normalization reads it, so the bound is `Foo: Show`. A choice never changes
-/// this normalization. The walk of declared bounds has no concrete parent and
-/// never takes this path.
-fn normalize_below_concrete<'db>(
-    db: &'db dyn HirAnalysisDb,
-    pred: TraitInstId<'db>,
-    bound: TraitInstId<'db>,
-) -> TraitInstId<'db> {
-    if !is_concrete_bound(db, pred) || !collect_flags(db, bound).contains(TyFlags::HAS_PROJECTION) {
-        return bound;
-    }
-    let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
-        db,
-        pred.def(db).scope().top_mod(db).ingot(db),
-        bound,
-    );
-    normalize_trait_inst_preserving_validity(db, bound, scope, PredicateListId::empty_list(db))
 }
 
 // Normalizing implied bounds can resolve traits under assumptions that lead
@@ -1766,15 +1751,7 @@ fn bound_walk_query<'db>(
     db: &'db dyn HirAnalysisDb,
     predicates: PredicateListId<'db>,
 ) -> BoundWalk<'db> {
-    predicates.walk_bounds(db, false)
-}
-
-#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
-fn bound_walk_keeping_concrete_query<'db>(
-    db: &'db dyn HirAnalysisDb,
-    predicates: PredicateListId<'db>,
-) -> BoundWalk<'db> {
-    predicates.walk_bounds(db, true)
+    predicates.walk_bounds(db, None)
 }
 
 fn bound_walk_cycle_initial<'db>(
@@ -2519,5 +2496,55 @@ fn probe<T: Picks>() {}
             solve.select_impl(&db, goal),
             Selection::Ambiguous(_)
         ));
+    }
+
+    /// The plain walk is a function of the predicates and the trait
+    /// declarations alone: it reads no implementation, so a closed bound's
+    /// associated-type bound stays a projection, however an implementation
+    /// defines the type.
+    #[test]
+    fn plain_walk_of_a_closed_bound_reads_no_implementation() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "plain_walk_closed.fe".into(),
+            r#"
+trait Show {}
+trait Hold { type A: Show }
+struct Foo {}
+impl Show for Foo {}
+struct X {}
+impl Hold for X { type A = Foo }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let (x, foo) = (
+            named_struct_ty(&db, top_mod, "X"),
+            named_struct_ty(&db, top_mod, "Foo"),
+        );
+        let hold = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Hold"),
+            vec![x],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
+        let show = named_trait(&db, top_mod, "Show");
+        let walked = PredicateListId::new(&db, vec![hold]).extend_all_bounds(&db);
+        let shows: Vec<_> = walked
+            .list(&db)
+            .iter()
+            .filter(|bound| bound.def(&db) == show)
+            .collect();
+        assert!(
+            shows
+                .iter()
+                .any(|bound| bound.args(&db)[0].has_projection(&db)),
+            "`<X as Hold>::A: Show` is derived"
+        );
+        assert!(
+            !shows.iter().any(|bound| bound.args(&db)[0] == foo),
+            "`Foo: Show` needs the implementation of `Hold` for `X`"
+        );
     }
 }

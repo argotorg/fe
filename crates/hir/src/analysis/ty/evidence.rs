@@ -30,7 +30,7 @@ use super::{
     trait_lower::lower_impl_trait,
     trait_resolution::{
         BoundStep, ChosenImpls, Component, PredicateListId, Selection, TraitSolveCx,
-        answering_assumption, assumption_matcher, concrete_components,
+        answering_assumption, assumption_matcher, component_path_goal, concrete_components,
         constraint::collect_candidate_constraints, has_concrete_components,
         normalize_trait_inst_preserving_validity, same_identity, step_bound,
     },
@@ -213,11 +213,27 @@ fn component_goal<'db>(
         .get(slot.index as usize)?;
     match slot.component {
         None => Some(root),
-        Some(path) => path
-            .steps(db)
-            .iter()
-            .try_fold(root, |goal, &step| step_bound(db, goal, step)),
+        Some(path) => component_path_goal(db, root, path.steps(db)),
     }
+}
+
+/// The bound that `step` derives from the bound `slot` names: one more step
+/// along its path.
+fn component_step_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    slot: BoundSlotRef<'db>,
+    step: BoundStep<'db>,
+) -> Option<TraitInstId<'db>> {
+    let root = *slot
+        .schema
+        .basis_slots(db)
+        .list(db)
+        .get(slot.index as usize)?;
+    let mut steps = slot
+        .component
+        .map_or_else(Vec::new, |path| path.steps(db).clone());
+    steps.push(step);
+    component_path_goal(db, root, &steps)
 }
 
 /// Supplies for a particular namespace. Index equality alone never authorizes
@@ -253,14 +269,14 @@ impl<'db> BoundEvidence<'db> {
         let Some(path) = slot.component else {
             return Some(root);
         };
-        let mut goal = *slot
+        let root_goal = *slot
             .schema
             .basis_slots(db)
             .list(db)
             .get(slot.index as usize)?;
         let mut proof = root;
-        for &step in path.steps(db) {
-            goal = step_bound(db, goal, step)?;
+        for (position, &step) in path.steps(db).iter().enumerate() {
+            let goal = component_path_goal(db, root_goal, &path.steps(db)[..=position])?;
             proof = project_step(db, proof, step, Some(goal), PredicateListId::empty_list(db))
                 .proof()?;
         }
@@ -1753,8 +1769,7 @@ pub(crate) fn project_step<'db>(
                     }),
                 ));
             }
-            let Some(child) = component_goal(db, *slot).and_then(|goal| step_bound(db, goal, step))
-            else {
+            let Some(child) = component_step_goal(db, *slot, step) else {
                 return Projection::Pending;
             };
             // The child is the canonical member of its identity, the one every
