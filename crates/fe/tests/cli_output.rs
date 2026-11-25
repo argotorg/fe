@@ -3999,6 +3999,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "event_dynamic_mixed",
     "event_in_function_module",
     "event_many_fields",
+    "event_wide_fields",
     "event_zero_fields",
     "evm_init_code_hash",
     "factory",
