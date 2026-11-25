@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_result_needed.fe
+---
+error[8-0014]: type must be known
+   ┌─ string_literal_result_needed.fe:98:5
+   │
+98 │     "ab".conv() as u256
+   │     ^^^^^^^^^^^ the type of this string literal is needed here; annotate it as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_result_needed.fe:101:5
+    │
+101 │     "ab".p().w()
+    │     ^^^^^^^^ the type of this string literal is needed here; annotate it as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_result_needed.fe:107:5
+    │
+107 │     a[0]
+    │     ^ the type of this string literal is needed here; annotate it as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_result_needed.fe:113:5
+    │
+113 │     y == 20
+    │     ^ the type of this string literal is needed here; annotate it as `String<N>` or `DynString`

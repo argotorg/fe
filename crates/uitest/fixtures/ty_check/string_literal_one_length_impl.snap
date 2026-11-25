@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_one_length_impl.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ string_literal_one_length_impl.fe:12:10
+   │
+12 │     "ab".only4()
+   │          ^^^^^ `String<2>` doesn't implement `Only4`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ string_literal_one_length_impl.fe:15:13
+   │
+15 │     "abcde".only4()
+   │             ^^^^^ `String<5>` doesn't implement `Only4`
