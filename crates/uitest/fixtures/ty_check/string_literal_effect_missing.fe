@@ -1,0 +1,25 @@
+// The effect of a trait method called on a literal inside a closure reaches
+// the closure's row, so the caller that provides no `Log` is told so.
+use core::abi::DynString
+struct Log {
+    n: u256,
+}
+trait Note {
+    fn note(self) -> u256 uses (log: Log)
+}
+impl<const N: usize> Note for String<N> {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + N as u256
+    }
+}
+impl Note for DynString {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + 1000
+    }
+}
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E {
+    f()
+}
+fn passed() -> u256 {
+    apply(|| "ab".note())
+}

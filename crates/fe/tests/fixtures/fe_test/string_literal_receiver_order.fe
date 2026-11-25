@@ -1,0 +1,1002 @@
+// A method call on an open string literal is typed as the trait-path call with
+// the same method would be: the literal's type comes from the context, in any
+// statement order, else from its default (`String<len>` up to 31 bytes). A
+// result that depends on the literal's type is decided by the annotation or
+// bound that uses it.
+use core::abi::DynString
+use core::hash::{FoldHasher, Hash, Hasher}
+use core::marker::Copy
+use core::num::IntDowncast
+use core::ops::{Drop, Eq}
+use core::ptr::MemBuffer
+use std::io::Display
+
+trait Kind {
+    fn kind(self) -> usize
+}
+impl<const N: usize> Kind for String<N> {
+    fn kind(self) -> usize {
+        N
+    }
+}
+impl Kind for DynString {
+    fn kind(self) -> usize {
+        1000
+    }
+}
+
+trait P {
+    type Out
+    fn p(self) -> Self::Out
+}
+impl<const N: usize> P for String<N> {
+    type Out = u8
+    fn p(self) -> u8 {
+        1
+    }
+}
+impl P for DynString {
+    type Out = u16
+    fn p(self) -> u16 {
+        2
+    }
+}
+
+trait W {
+    fn w(self) -> u256
+}
+impl W for u8 {
+    fn w(self) -> u256 {
+        8
+    }
+}
+impl W for u16 {
+    fn w(self) -> u256 {
+        16
+    }
+}
+
+trait Conv {
+    type Out
+    fn conv(self) -> Self::Out
+}
+impl<const N: usize> Conv for String<N> {
+    type Out = u8
+    fn conv(self) -> u8 {
+        1
+    }
+}
+impl Conv for DynString {
+    type Out = u16
+    fn conv(self) -> u16 {
+        1000
+    }
+}
+
+fn width<T: W>(_ t: own T) -> u256 {
+    t.w()
+}
+fn kind_of<T: Kind>(_ x: own T) -> usize {
+    x.kind()
+}
+
+// A result annotation decides the literal whichever statement comes first.
+fn kind_then_result() -> usize {
+    let s = "ab"
+    let k = s.kind()
+    let x = s.p()
+    let y: u16 = x
+    k
+}
+fn result_then_kind() -> usize {
+    let s = "ab"
+    let x = s.p()
+    let y: u16 = x
+    let k = s.kind()
+    k
+}
+fn len_then_conv() -> bool {
+    let s = "ab"
+    let n = s.len()
+    let x: u16 = s.conv()
+    n == 2 && x == 1000
+}
+fn conv_then_len() -> bool {
+    let s = "ab"
+    let x: u16 = s.conv()
+    let n = s.len()
+    n == 2 && x == 1000
+}
+fn clone_then_conv() -> u16 {
+    let x: u16 = "ab".clone().conv()
+    x
+}
+
+#[test]
+fn result_annotation_before_kind() {
+    assert(kind_then_result() == 1000)
+}
+#[test]
+fn result_annotation_after_kind() {
+    assert(result_then_kind() == 1000)
+}
+#[test]
+fn len_then_result() {
+    assert(len_then_conv())
+}
+#[test]
+fn result_then_len() {
+    assert(conv_then_len())
+}
+#[test]
+fn clone_then_result() {
+    assert(clone_then_conv() == 1000)
+}
+
+// An older deferred trait method and a literal receiver on one literal.
+struct Width {}
+trait Measure<T> {
+    fn measure(self, _ x: T) -> u256
+}
+impl<const N: usize> Measure<String<N>> for Width {
+    fn measure(self, _ x: String<N>) -> u256 {
+        N as u256
+    }
+}
+impl Measure<DynString> for Width {
+    fn measure(self, _ x: DynString) -> u256 {
+        0
+    }
+}
+fn measure_then_result() -> u256 {
+    let w = Width {}
+    let s = "ab"
+    let m: u256 = w.measure(s)
+    let x = s.p()
+    let y: u16 = x
+    m
+}
+fn result_then_measure() -> u256 {
+    let w = Width {}
+    let s = "ab"
+    let x = s.p()
+    let y: u16 = x
+    let m: u256 = w.measure(s)
+    m
+}
+
+#[test]
+fn older_deferred_method_then_result() {
+    assert(measure_then_result() == 0)
+    assert(result_then_measure() == 0)
+}
+
+// A closure argument is typed against the trait's parameter.
+trait Ap {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E
+}
+impl<const N: usize> Ap for String<N> {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E {
+        f(1)
+    }
+}
+impl Ap for DynString {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E {
+        f(2)
+    }
+}
+fn closure_arg() -> u8 {
+    "ab".ap(|x| x + 10)
+}
+
+#[test]
+fn closure_argument_typed_by_trait() {
+    assert(closure_arg() == 11)
+}
+
+// An effect of the trait method reaches the closure's effect row.
+struct Log {
+    n: u256,
+}
+trait Note {
+    fn note(self) -> u256 uses (log: Log)
+}
+impl<const N: usize> Note for String<N> {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + N as u256
+    }
+}
+impl Note for DynString {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + 1000
+    }
+}
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E {
+    f()
+}
+fn note_direct() -> u256 uses (log: Log) {
+    let g = || "ab".note()
+    g()
+}
+fn note_passed() -> u256 {
+    with (Log = Log { n: 5 }) {
+        apply(|| "ab".note())
+    }
+}
+fn note_outer() -> u256 {
+    with (Log = Log { n: 5 }) {
+        note_direct()
+    }
+}
+fn note_fixed_direct() -> u256 uses (log: Log) {
+    let g = || {
+        let s = "ab"
+        let r = s.note()
+        let d: DynString = s
+        r
+    }
+    g()
+}
+fn note_fixed_outer() -> u256 {
+    with (Log = Log { n: 5 }) {
+        note_fixed_direct()
+    }
+}
+fn note_plain_direct() -> u256 uses (log: Log) {
+    "ab".note()
+}
+fn note_plain_with() -> u256 {
+    with (Log = Log { n: 5 }) {
+        "ab".note()
+    }
+}
+fn note_plain_outer() -> u256 {
+    with (Log = Log { n: 5 }) {
+        note_plain_direct()
+    }
+}
+
+struct Counter {
+    n: usize,
+}
+trait Tick {
+    fn tick(self) -> usize uses (c: mut Counter)
+}
+impl<const N: usize> Tick for String<N> {
+    fn tick(self) -> usize uses (c: mut Counter) {
+        c.n += N
+        c.n
+    }
+}
+impl Tick for DynString {
+    fn tick(self) -> usize uses (c: mut Counter) {
+        c.n += 100
+        c.n
+    }
+}
+fn tick_closure() -> usize {
+    var c = Counter { n: 0 }
+    let f = || "ab".tick()
+    let out = with (mut c) {
+        f()
+    }
+    out
+}
+fn tick_widened_after_closure() -> bool {
+    var c = Counter { n: 0 }
+    let s = "ab"
+    let f = || s.tick()
+    let w: String<16> = s
+    let out = with (mut c) {
+        f()
+    }
+    out == 16 && w.len() == 2
+}
+
+#[test]
+fn effect_in_closure_reaches_row() {
+    assert(note_outer() == 7)
+    assert(note_passed() == 7)
+    assert(tick_closure() == 2)
+    assert(tick_widened_after_closure())
+}
+#[test]
+fn effect_in_closure_resolved_in_body() {
+    assert(note_fixed_outer() == 1005)
+}
+#[test]
+fn effect_without_closure() {
+    assert(note_plain_outer() == 7)
+    assert(note_plain_with() == 7)
+}
+
+// `mut` and `ref` arguments keep their mode.
+struct C {
+    n: u256,
+}
+trait Bump {
+    fn bump(self, _ c: mut C)
+}
+impl<const N: usize> Bump for String<N> {
+    fn bump(self, _ c: mut C) {
+        c.n += N as u256
+    }
+}
+impl Bump for DynString {
+    fn bump(self, _ c: mut C) {
+        c.n += 1000
+    }
+}
+fn bumped() -> u256 {
+    var c = C { n: 0 }
+    "ab".bump(mut c)
+    c.n
+}
+trait PushTo {
+    fn push_to(self, _ out: mut usize)
+}
+impl<const N: usize> PushTo for String<N> {
+    fn push_to(self, _ out: mut usize) {
+        out += N
+    }
+}
+impl PushTo for DynString {
+    fn push_to(self, _ out: mut usize) {
+        out += 100
+    }
+}
+trait ReadFrom {
+    fn read_from(self, _ src: ref usize) -> usize
+}
+impl<const N: usize> ReadFrom for String<N> {
+    fn read_from(self, _ src: ref usize) -> usize {
+        src + N
+    }
+}
+impl ReadFrom for DynString {
+    fn read_from(self, _ src: ref usize) -> usize {
+        src + 100
+    }
+}
+
+#[test]
+fn mut_and_ref_arguments() {
+    assert(bumped() == 2)
+    var n: usize = 0
+    "ab".push_to(mut n)
+    assert(n == 2)
+    let x: usize = 5
+    let r = "ab".read_from(ref x)
+    assert(r == 7)
+}
+
+// Core traits with a `mut` argument.
+struct SumHasher {
+    acc: u64,
+}
+impl Hasher for SumHasher {
+    fn write_word(mut self, _ word: u256) {
+        self.acc = self.acc ^ word.downcast_truncate()
+    }
+    fn write_u64(mut self, _ value: u64) {
+        self.acc = self.acc ^ value
+    }
+    fn finish(self) -> u64 {
+        self.acc
+    }
+}
+fn hash_lit() -> u64 {
+    var h = FoldHasher::new()
+    "ab".hash(mut h)
+    h.finish()
+}
+fn hash_dyn() -> u64 {
+    var h = FoldHasher::new()
+    let d: DynString = "ab"
+    d.hash(mut h)
+    h.finish()
+}
+fn hash_inl() -> u64 {
+    var h = FoldHasher::new()
+    let s: String<2> = "ab"
+    s.hash(mut h)
+    h.finish()
+}
+
+#[test]
+fn core_hash_and_display() {
+    assert(hash_lit() == hash_inl())
+    assert(hash_inl() == hash_dyn())
+    var h1 = SumHasher { acc: 0 }
+    "ab".hash(mut h1)
+    var h2 = SumHasher { acc: 0 }
+    let d: DynString = "ab"
+    d.hash(mut h2)
+    assert(h1.finish() == h2.finish())
+    var buf1 = MemBuffer::new(0)
+    "hello".fmt(mut buf1)
+    var buf2 = MemBuffer::new(0)
+    let e: DynString = "hello"
+    e.fmt(mut buf2)
+    assert(buf1.len() == 5 && buf1.span() == buf2.span())
+}
+
+// `Eq::eq` has an implementation for each pair of string types; the argument
+// decides.
+#[test]
+fn eq_with_typed_argument() {
+    let d: DynString = "ab"
+    assert("ab".eq(d))
+    let s: String<16> = "ab"
+    assert("ab".eq(s))
+    let a = "ab"
+    let b = "ab"
+    assert(a.eq(b))
+    let b_dyn: DynString = b
+    assert(b_dyn.len() == 2)
+    let t = "ab"
+    let ok = "ab".eq(t)
+    let w: String<16> = t
+    assert(ok && w.len() == 2)
+}
+
+// The argument types choose the trait instance.
+trait Accept<T> {
+    fn accept(self, _ x: T) -> usize
+}
+impl<const N: usize> Accept<u8> for String<N> {
+    fn accept(self, _ x: u8) -> usize {
+        1
+    }
+}
+impl Accept<u16> for DynString {
+    fn accept(self, _ x: u16) -> usize {
+        2
+    }
+}
+trait Pair {
+    fn pair(self, _ other: Self) -> usize
+}
+impl<const N: usize> Pair for String<N> {
+    fn pair(self, _ other: Self) -> usize {
+        N
+    }
+}
+impl Pair for DynString {
+    fn pair(self, _ other: Self) -> usize {
+        1000
+    }
+}
+
+#[test]
+fn argument_decides_trait_instance() {
+    let x: u16 = 5
+    assert("ab".accept(x) == 2)
+    let d: DynString = "xy"
+    assert("ab".pair(d) == 1000)
+}
+
+// A method name that comes from several traits: the argument types choose.
+trait T1 {
+    fn foo(self, _ x: u8) -> usize
+}
+trait T2 {
+    fn foo(self, _ x: u16) -> usize
+}
+impl<const N: usize> T1 for String<N> {
+    fn foo(self, _ x: u8) -> usize {
+        10 + N
+    }
+}
+impl<const N: usize> T2 for String<N> {
+    fn foo(self, _ x: u16) -> usize {
+        20 + N
+    }
+}
+impl T1 for DynString {
+    fn foo(self, _ x: u8) -> usize {
+        100
+    }
+}
+trait U1 {
+    fn bar(self, _ x: u8) -> usize
+}
+trait U2 {
+    fn bar(self, _ x: u16) -> usize
+}
+trait U3 {
+    fn bar(self, _ x: u32) -> usize
+}
+impl<const N: usize> U1 for String<N> {
+    fn bar(self, _ x: u8) -> usize {
+        10 + N
+    }
+}
+impl<const N: usize> U2 for String<N> {
+    fn bar(self, _ x: u16) -> usize {
+        20 + N
+    }
+}
+impl U3 for DynString {
+    fn bar(self, _ x: u32) -> usize {
+        300
+    }
+}
+
+#[test]
+fn argument_decides_trait() {
+    let x: u32 = 5
+    assert("ab".bar(x) == 300)
+    let y: u16 = 5
+    assert("ab".foo(y) == 22)
+}
+
+// Explicit generic arguments fix the result.
+trait TagN {
+    fn tag_n<T>(self, _ x: T) -> usize
+}
+impl<const N: usize> TagN for String<N> {
+    fn tag_n<T>(self, _ x: T) -> usize {
+        N
+    }
+}
+impl TagN for DynString {
+    fn tag_n<T>(self, _ x: T) -> usize {
+        1000
+    }
+}
+trait TagT {
+    fn tag_t<T: Copy>(self, _ x: T) -> T
+}
+impl<const N: usize> TagT for String<N> {
+    fn tag_t<T: Copy>(self, _ x: T) -> T {
+        x
+    }
+}
+impl TagT for DynString {
+    fn tag_t<T: Copy>(self, _ x: T) -> T {
+        x
+    }
+}
+trait G {
+    fn g<T>(self, _ t: own T) -> T
+}
+impl<const N: usize> G for String<N> {
+    fn g<T>(self, _ t: own T) -> T {
+        t
+    }
+}
+impl G for DynString {
+    fn g<T>(self, _ t: own T) -> T {
+        t
+    }
+}
+
+#[test]
+fn explicit_generic_result() {
+    let v = "ab".tag_t<u32>(42)
+    assert(v == 42)
+    let u = "ab".tag_t<u32>(42) as u64
+    assert(u == 42)
+    assert("ab".tag_n<u32>(42) == 2)
+    let five: u8 = "ab".g<u8>(5)
+    assert(five == 5)
+}
+
+// A method whose result is an access.
+struct Wrapper {
+    val: u8,
+}
+trait Peek {
+    fn peek(self, _ w: ref Wrapper) -> ref u8
+}
+impl<const N: usize> Peek for String<N> {
+    fn peek(self, _ w: ref Wrapper) -> ref u8 {
+        ref w.val
+    }
+}
+impl Peek for DynString {
+    fn peek(self, _ w: ref Wrapper) -> ref u8 {
+        ref w.val
+    }
+}
+
+#[test]
+fn access_result_then_dyn() {
+    let w = Wrapper { val: 42 }
+    let s = "ab"
+    let r = s.peek(ref w)
+    let d: DynString = s
+    assert(r == 42 && d.len() == 2)
+}
+
+// A where-clause, or an implementation for one length, that rules out the
+// inline type.
+trait KD {
+    fn kd(self) -> usize
+}
+impl<T: Drop> KD for T {
+    fn kd(self) -> usize {
+        1000
+    }
+}
+fn kd_of<T: KD>(_ x: own T) -> usize {
+    x.kd()
+}
+trait KC {
+    fn kc(self) -> usize
+}
+impl<T: Copy> KC for T {
+    fn kc(self) -> usize {
+        7
+    }
+}
+trait K4 {
+    fn k4(self) -> usize
+}
+impl K4 for String<4> {
+    fn k4(self) -> usize {
+        4
+    }
+}
+impl K4 for DynString {
+    fn k4(self) -> usize {
+        1000
+    }
+}
+fn k4_of<T: K4>(_ x: own T) -> usize {
+    x.k4()
+}
+trait Only4OrDyn {
+    fn only4(self) -> usize
+}
+impl Only4OrDyn for String<4> {
+    fn only4(self) -> usize {
+        44
+    }
+}
+impl Only4OrDyn for DynString {
+    fn only4(self) -> usize {
+        1000
+    }
+}
+trait Size4OrDyn {
+    fn size_tag(self) -> usize
+}
+impl Size4OrDyn for String<4> {
+    fn size_tag(self) -> usize {
+        4
+    }
+}
+impl Size4OrDyn for DynString {
+    fn size_tag(self) -> usize {
+        1000
+    }
+}
+fn size_tag_of<T: Size4OrDyn>(_ x: own T) -> usize {
+    x.size_tag()
+}
+
+#[test]
+fn where_clause_rules_out_inline() {
+    assert("ab".kd() == 1000)
+}
+#[test]
+fn one_length_impl_and_dyn() {
+    assert("ab".k4() == 1000)
+    assert("abcde".only4() == 1000)
+    assert("ab".only4() == 1000)
+}
+#[test]
+fn blanket_bounds() {
+    assert(kd_of("ab") == 1000)
+    assert("ab".kc() == 7)
+    assert(k4_of("ab") == 1000)
+    assert(size_tag_of("ab") == 1000)
+}
+
+// A literal whose first byte is zero is a `DynString`: `String<N>` drops
+// leading zero bytes from its length. The first byte of each literal below
+// is the byte 0x00.
+fn nul_len() -> usize {
+    " ab".len()
+}
+fn nul_byte_0() -> u8 {
+    " ab".byte_at(0)
+}
+fn nul_annotated_len() -> usize {
+    let s: String<3> = " ab"
+    s.len()
+}
+
+#[test]
+fn leading_zero_byte() {
+    assert(nul_len() == 3)
+    assert(nul_byte_0() == 0)
+    assert(" a".len() == 2)
+    assert(" a".byte_at(0) == 0)
+    assert(" a".byte_at(1) == 0x61)
+}
+// An annotation still gives such a literal an inline type, with the length the
+// inline type reports today.
+#[test]
+fn leading_zero_byte_annotated() {
+    assert(nul_annotated_len() == 2)
+}
+
+// A result passed to a bound takes the default.
+fn result_into_bound() -> u256 {
+    width("ab".p())
+}
+
+#[test]
+fn result_into_bound_takes_default() {
+    assert(result_into_bound() == 8)
+}
+
+// A result the trait declares without `Self`, or that is the same for both
+// types, is known at once.
+trait TL {
+    fn tl(self) -> u8
+}
+impl<const N: usize> TL for String<N> {
+    fn tl(self) -> u8 {
+        2
+    }
+}
+impl TL for DynString {
+    fn tl(self) -> u8 {
+        100
+    }
+}
+trait S {
+    type Out
+    fn s(self) -> Self::Out
+}
+impl<const N: usize> S for String<N> {
+    type Out = u8
+    fn s(self) -> u8 {
+        1
+    }
+}
+impl S for DynString {
+    type Out = u8
+    fn s(self) -> u8 {
+        2
+    }
+}
+fn same_c() -> u256 {
+    Kind::kind("ab") as u256
+}
+fn same_w() -> u256 {
+    TL::tl("ab").w()
+}
+fn same_m() -> u256 {
+    "ab".kind() as u256
+}
+fn same_mw() -> u256 {
+    "ab".tl().w()
+}
+fn same_assoc_c() -> u256 {
+    "ab".s() as u256
+}
+fn method_equals_path() -> bool {
+    "ab".kind() == Kind::kind("ab")
+}
+fn method_equals_path_p() -> bool {
+    width("ab".p()) == width(P::p("ab"))
+}
+
+#[test]
+fn same_result_cast_and_chain() {
+    assert(same_m() == 2)
+    assert(same_mw() == 8)
+    assert(same_c() == 2)
+    assert(same_w() == 8)
+}
+#[test]
+fn same_assoc_result_cast() {
+    assert(same_assoc_c() == 1)
+}
+#[test]
+fn method_form_matches_path_form() {
+    assert(method_equals_path())
+    assert(method_equals_path_p())
+}
+
+// A trait parameter as the result decides the literal.
+trait Cv<T> {
+    fn cv(self) -> T
+}
+impl<const N: usize> Cv<u8> for String<N> {
+    fn cv(self) -> u8 {
+        1
+    }
+}
+impl Cv<u16> for DynString {
+    fn cv(self) -> u16 {
+        2
+    }
+}
+fn cv_u16() -> u16 {
+    "ab".cv()
+}
+fn cv_u8() -> u8 {
+    "ab".cv()
+}
+
+#[test]
+fn trait_parameter_result() {
+    assert(cv_u16() == 2)
+    assert(cv_u8() == 1)
+}
+
+// The two string types take `m` from different traits with the same signature.
+trait M1 {
+    fn m(self) -> usize
+}
+trait M2 {
+    fn m(self) -> usize
+}
+impl<const N: usize> M1 for String<N> {
+    fn m(self) -> usize {
+        N
+    }
+}
+impl M2 for DynString {
+    fn m(self) -> usize {
+        1000
+    }
+}
+fn m_default() -> usize {
+    "ab".m()
+}
+fn m_then_dyn() -> usize {
+    let s = "ab"
+    let k = s.m()
+    let d: DynString = s
+    k
+}
+
+#[test]
+fn different_traits_same_signature() {
+    assert(m_default() == 2)
+    assert(m_then_dyn() == 1000)
+}
+
+// A third type implements the trait as well.
+trait Kind3 {
+    fn kind3(self) -> usize
+}
+impl<const N: usize> Kind3 for String<N> {
+    fn kind3(self) -> usize {
+        N
+    }
+}
+impl Kind3 for DynString {
+    fn kind3(self) -> usize {
+        1000
+    }
+}
+impl Kind3 for u8 {
+    fn kind3(self) -> usize {
+        8
+    }
+}
+fn third_method() -> usize {
+    "ab".kind3()
+}
+fn third_path() -> usize {
+    Kind3::kind3("ab")
+}
+
+#[test]
+fn third_implementor() {
+    assert(third_method() == 2)
+    assert(third_path() == 2)
+}
+
+// Positions that give a literal its type before a receiver call.
+struct Holder<T> {
+    v: T,
+}
+fn pos_field() -> usize {
+    let s = Holder { v: "ab" }
+    s.v.kind()
+}
+fn pos_tuple() -> usize {
+    let t = ("ab", true)
+    t.0.kind()
+}
+fn pos_arr() -> usize {
+    let a = ["ab", "cd"]
+    a[0].kind()
+}
+fn pos_ret() -> String<2> {
+    "ab"
+}
+fn pos_retk() -> usize {
+    pos_ret().kind()
+}
+fn pos_branch(_ c: bool) -> usize {
+    let d: DynString = "xy"
+    let x = if c { "ab" } else { d }
+    x.kind()
+}
+fn pos_arms(_ c: bool) -> usize {
+    let x = match c {
+        true => "ab"
+        false => "abcd"
+    }
+    x.kind()
+}
+fn pos_arms_bound(_ c: bool) -> usize {
+    let x = match c {
+        true => "ab"
+        false => "abcd"
+    }
+    kind_of(x)
+}
+fn pos_if_lengths() -> usize {
+    let c = true
+    let s = if c { "a" } else { "abcd" }
+    s.kind()
+}
+fn pos_match_lengths() -> bool {
+    let x: u8 = 1
+    let s = match x {
+        0 => "a"
+        1 => "abc"
+        _ => "abcdef"
+    }
+    s.len() == 3 && s.kind() == 6
+}
+
+#[test]
+fn positions() {
+    assert(pos_field() == 2)
+    assert(pos_tuple() == 2)
+    assert(pos_arr() == 2)
+    assert(pos_retk() == 2)
+    assert(pos_branch(true) == 1000)
+    assert(pos_arms(true) == 4)
+    assert(pos_arms_bound(true) == 4)
+    assert(pos_if_lengths() == 4)
+    assert(pos_match_lengths())
+}
+
+// Literals of length 0, 31 and 32 and with multi-byte characters.
+fn len_empty() -> usize {
+    "".len()
+}
+fn len_31() -> usize {
+    "abcdefghijklmnopqrstuvwxyz01234".len()
+}
+fn len_32() -> usize {
+    "abcdefghijklmnopqrstuvwxyz012345".len()
+}
+fn byte_31() -> u8 {
+    "abcdefghijklmnopqrstuvwxyz01234".byte_at(30)
+}
+fn text_len_empty() -> usize {
+    "".text_len()
+}
+
+#[test]
+fn lengths() {
+    assert(len_empty() == 0 && len_31() == 31 && len_32() == 32)
+    assert(byte_31() == 0x34 && text_len_empty() == 0)
+    assert("".len() == 0)
+    assert("a".len() == 1)
+    assert("1234567890123456789012345678901".len() == 31)
+    assert("12345678901234567890123456789012".len() == 32)
+    assert("123456789012345678901234567890123".len() == 33)
+    // "é" is 2 bytes, "🦀" is 4 bytes -> 2 + 4 = 6 bytes
+    assert("é🦀".len() == 6)
+    assert("é🦀".byte_at(0) == 0xc3)
+    assert("é🦀".byte_at(1) == 0xa9)
+    assert("é🦀".byte_at(2) == 0xf0)
+    // 7 * 4 = 28 + 3 = 31 bytes (inline) vs 8 * 4 = 32 bytes (DynString)
+    assert("🦀🦀🦀🦀🦀🦀🦀abc".len() == 31)
+    assert("🦀🦀🦀🦀🦀🦀🦀🦀".len() == 32)
+}
