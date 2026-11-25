@@ -397,6 +397,46 @@ fn handed_both(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Guard, mut u256) {
     log(trace, 9)
 }
 
+fn look_unit(_ u: ref (), _ trace: *u256) {
+    log(trace, 5)
+}
+
+// An access to `()` that a block ending in a statement or an `if` without
+// `else` yields grants a frame temporary holding it, as `()` itself does.
+fn unit_block(_ trace: *u256) -> ref () {
+    let _g = Guard { trace, event: 3 }
+}
+
+fn unit_empty() -> ref () {}
+
+fn unit_if(_ trace: *u256, _ c: bool) -> ref () {
+    if c {
+        let _g = Guard { trace, event: 3 }
+        ()
+    }
+}
+
+fn unit_mut(_ trace: *u256, _ c: bool) -> mut () {
+    yield if c {
+        let _g = Guard { trace, event: 3 }
+    }
+    log(trace, 9)
+}
+
+fn unit_pair(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (ref (), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+    }, mut q.a)
+    log(trace, 9)
+}
+
+fn unit_some(_ trace: *u256, _ c: bool) -> Option<ref ()> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+    })
+    log(trace, 9)
+}
+
 #[test]
 fn branches_ending_in_accesses() {
     var q = quad()
@@ -785,4 +825,32 @@ fn an_owned_drop_value_before_a_branch() {
     }
     assert(read(trace) == 592)
     assert(sum(q) == 1200)
+}
+
+#[test]
+fn unit_accesses_grant_a_frame_temporary() {
+    let trace = new_trace()
+    look_unit(ref unit_block(trace), trace)
+    assert(read(trace) == 53)
+    look_unit(ref unit_empty(), trace)
+    assert(read(trace) == 535)
+    let trace = new_trace()
+    look_unit(ref unit_if(trace, true), trace)
+    look_unit(ref unit_if(trace, false), trace)
+    assert(read(trace) == 535)
+    let trace = new_trace()
+    let u = mut unit_mut(trace, true)
+    look_unit(ref u, trace)
+    assert(read(trace) == 539)
+    var q = quad()
+    let trace = new_trace()
+    let (ref v, mut x) = unit_pair(mut q, trace, true)
+    look_unit(ref v, trace)
+    bump(mut x, trace)
+    assert(read(trace) == 5539)
+    let trace = new_trace()
+    if let Option::Some(ref w) = unit_some(trace, true) {
+        look_unit(ref w, trace)
+    }
+    assert(read(trace) == 539)
 }

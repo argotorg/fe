@@ -1185,8 +1185,25 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 SExpr::Forward(SOperand::expr(local, expr)),
             );
         }
-        let place = self.try_lower_place(expr).unwrap_or_else(|| {
-            let value = self.lower_expr_inner(expr);
+        let place = self.try_lower_place(expr);
+        self.grant_yield(expr, &shape, kind, place, |this| {
+            this.lower_expr_inner(expr)
+        })
+    }
+
+    /// The `kind` grant `shape` names of `place`, or else of a frame
+    /// temporary holding `value`, what `expr` evaluates to.
+    fn grant_yield(
+        &mut self,
+        expr: ExprId,
+        shape: &Shape<'db>,
+        kind: BorrowKind,
+        place: Option<SPlace<'db>>,
+        value: impl FnOnce(&mut Self) -> SValueId,
+    ) -> SValueId {
+        let origin = SemOrigin::Expr(expr);
+        let place = place.unwrap_or_else(|| {
+            let value = value(self);
             let mutability = match kind {
                 BorrowKind::Mut => Mutability::Mutable,
                 BorrowKind::Ref => Mutability::Immutable,
@@ -1210,6 +1227,22 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 provider: self.typed_body.expr_prop(self.db, expr).borrow_provider,
             },
         )
+    }
+
+    /// Yields the `()` that `expr`, a yield site with no yield site inside,
+    /// leaves at its end: a block ending in a statement, or the path past an
+    /// `if` without `else`. An access shape grants a frame temporary holding
+    /// it, as it does for any value.
+    fn yield_unit(&mut self, expr: ExprId) {
+        let shape = self
+            .typed_body
+            .yield_shape(expr)
+            .expect("a yield site has a shape");
+        let value = match *shape {
+            Shape::Access(kind, _) => self.grant_yield(expr, shape, kind, None, Self::unit_value),
+            _ => self.unit_value(),
+        };
+        self.yield_value(expr, value);
     }
 
     /// Lowers `expr`. A projection's yield site yields on its own path, so
@@ -2791,7 +2824,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         self.push_drop_scope(true);
         let value = self.lower_block_stmts(stmts);
         if self.typed_body.yield_shape(expr).is_some() && !self.is_terminated(self.current) {
-            self.yield_value(expr, value);
+            self.yield_unit(expr);
         }
         self.pop_drop_scope(Some(value));
         value
@@ -3206,8 +3239,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             && self.typed_body.yield_shape(expr).is_some()
             && !self.is_terminated(self.current)
         {
-            let unit = self.unit_value();
-            self.yield_value(expr, unit);
+            self.yield_unit(expr);
         }
         let else_falls = !self.is_terminated(self.current);
         if else_falls {
