@@ -3687,6 +3687,51 @@ fn f() -> u256 {{
     }
 }
 
+// A derive provider is named by its type path; a value expression is always an
+// effect value, even when its type implements `Derive`.
+const PROVIDER_OPERAND_PRELUDE: &str = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tr { fn op(self) -> u256 }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+fn takes() -> u256 uses (e: P) { 1 }
+"#;
+
+#[test]
+fn with_operand_names_a_provider_by_its_type_path() {
+    let source = format!(
+        "{PROVIDER_OPERAND_PRELUDE}fn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    assert_eq!(prepared_diagnostics(&source), "");
+}
+
+/// `P {}` is an effect value: it offers no implementation of `Tr`, it is
+/// accepted where an effect `P` is asked for, and nothing provides it where
+/// none is given.
+#[test]
+#[ignore = "the literal route of check_with is removed on the metaprogramming layer (#2053); this base still has it"]
+fn with_operand_literal_of_a_provider_type_is_an_effect_value() {
+    let diagnostics_of = |body: &str| {
+        let source = format!("{PROVIDER_OPERAND_PRELUDE}fn f() -> u256 {{ {body} }}\n");
+        let (db, file) = input(&source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        output_diagnostics(&db)
+    };
+    assert_ne!(diagnostics_of("with (P {}) { R { a: 0 }.op() }"), "");
+    assert_eq!(diagnostics_of("with (P {}) { takes() }"), "");
+    assert_ne!(diagnostics_of("takes()"), "");
+}
+
 #[test]
 fn open_provider_does_not_claim_traits_with_outputs() {
     let evaluated = |source: &str| {
