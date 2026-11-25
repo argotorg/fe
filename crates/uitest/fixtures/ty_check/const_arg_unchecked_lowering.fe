@@ -10,7 +10,21 @@ impl<T: Need> Needy<T> {
 
 struct Holder<const N: usize> {}
 
-fn receiver_bound(_ h: Holder<{ Needy<NoImpl>::N }>) {}
+fn bound_on_impl(_ h: Holder<{ Needy<NoImpl>::N }>) {}
+
+trait Pick<X> {
+    const N: usize
+}
+
+struct Picker {}
+
+impl<X> Pick<X> for Picker {
+    const N: usize = 4
+}
+
+fn unsat_arg_bound(_ h: Holder<{ <Picker as Pick<Needy<NoImpl>>>::N }>) {}
+
+fn unsat_arg_bound_sum(_ h: Holder<{ <Picker as Pick<Needy<NoImpl>>>::N + 0 }>) {}
 
 const NARROW: u8 = 4
 
@@ -41,3 +55,13 @@ fn copied_access(_ h: Holder<{
     var y = b.get()
     y
 }>) {}
+
+fn inner_mismatch_hides_undefined(_ h: Holder<{
+    let _: u8 = true
+    let _ = missing
+    4
+}>) {}
+
+const BAD: MissingTy = 4
+
+fn bad_declared_type(_ h: Holder<BAD>) {}

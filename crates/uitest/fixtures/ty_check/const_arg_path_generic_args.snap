@@ -1,0 +1,46 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_path_generic_args.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ const_arg_path_generic_args.fe:29:48
+   │
+29 │ fn missing_inherent_arg(_ h: Holder<{ m::Boxed<Missing>::N }>) {}
+   │                                                ^^^^^^^ `Missing` is not found
+
+error[2-0002]: `Missing` is not found
+   ┌─ const_arg_path_generic_args.fe:31:52
+   │
+31 │ fn missing_trait_arg(_ h: Holder<{ <m::S as m::Cap<Missing>>::K }>) {}
+   │                                                    ^^^^^^^ `Missing` is not found
+
+error[2-0003]: `Priv` is not visible
+   ┌─ const_arg_path_generic_args.fe:23:48
+   │
+ 2 │     struct Priv {}
+   │            ---- `Priv` is defined here
+   ·
+23 │ fn priv_inherent_arg(_ h: Holder<{ m::Boxed<m::Priv>::N }>) {}
+   │                                                ^^^^ `Priv` is not visible
+
+error[2-0003]: `Priv` is not visible
+   ┌─ const_arg_path_generic_args.fe:25:52
+   │
+ 2 │     struct Priv {}
+   │            ---- `Priv` is defined here
+   ·
+25 │ fn priv_inherent_arg_sum(_ h: Holder<{ m::Boxed<m::Priv>::N + 0 }>) {}
+   │                                                    ^^^^ `Priv` is not visible
+
+error[3-0013]: expected a normal type
+   ┌─ const_arg_path_generic_args.fe:35:43
+   │
+35 │ fn const_for_ty_arg(_ h: Holder<{ m::Boxed<1>::N }>) {}
+   │                                           ^^^ expected a normal type here, but `1` is given
+
+error[3-0058]: `ref` and `mut` are not types
+   ┌─ const_arg_path_generic_args.fe:33:39
+   │
+33 │ fn mode_in_arg(_ h: Holder<{ m::Boxed<ref u8>::N }>) {}
+   │                                       ^^^^^^ modes are only allowed on parameters and in projection returns

@@ -1,0 +1,35 @@
+mod m {
+    struct Priv {}
+
+    pub struct Boxed<T> {}
+
+    impl<T> Boxed<T> {
+        pub const N: usize = 4
+    }
+
+    pub trait Cap<T> {
+        const K: usize
+    }
+
+    pub struct S {}
+
+    impl<T> Cap<T> for S {
+        const K: usize = 4
+    }
+}
+
+struct Holder<const N: usize> {}
+
+fn priv_inherent_arg(_ h: Holder<{ m::Boxed<m::Priv>::N }>) {}
+
+fn priv_inherent_arg_sum(_ h: Holder<{ m::Boxed<m::Priv>::N + 0 }>) {}
+
+fn priv_trait_arg(_ h: Holder<{ <m::S as m::Cap<m::Priv>>::K }>) {}
+
+fn missing_inherent_arg(_ h: Holder<{ m::Boxed<Missing>::N }>) {}
+
+fn missing_trait_arg(_ h: Holder<{ <m::S as m::Cap<Missing>>::K }>) {}
+
+fn mode_in_arg(_ h: Holder<{ m::Boxed<ref u8>::N }>) {}
+
+fn const_for_ty_arg(_ h: Holder<{ m::Boxed<1>::N }>) {}
