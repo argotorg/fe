@@ -377,9 +377,9 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
     }
 }
 
-/// Refuses a module's `with` declaration until its implementations are applied
-/// to the bodies of the module. The declaration parses and lowers, but a
-/// program that carries one must not compile as if its choices were absent.
+/// Reports the diagnostics of every module's `with` declaration. The frame of
+/// a module is built by `ty_check::module_with`; this pass also keeps the
+/// refusal of the declaration until the frame reaches the bodies of its module.
 pub struct ModuleWithAnalysisPass {}
 
 impl ModuleAnalysisPass for ModuleWithAnalysisPass {
@@ -388,16 +388,22 @@ impl ModuleAnalysisPass for ModuleWithAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        top_mod
-            .all_items(db)
-            .iter()
-            .filter_map(|item| match item {
-                ItemKind::With(with) => Some(Box::new(BodyDiag::ModuleWithUnavailable {
-                    primary: with.span().into(),
-                }) as _),
-                _ => None,
+        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = std::iter::once(top_mod.scope())
+            .chain(top_mod.all_mods(db).iter().map(|module| module.scope()))
+            .flat_map(|module| {
+                ty_check::module_with::module_choices(db, module)
+                    .diags
+                    .iter()
             })
-            .collect()
+            .map(|diag| diag.to_voucher())
+            .collect();
+        diags.extend(top_mod.all_items(db).iter().filter_map(|item| match item {
+            ItemKind::With(with) => Some(Box::new(BodyDiag::ModuleWithUnavailable {
+                primary: with.span().into(),
+            }) as _),
+            _ => None,
+        }));
+        diags
     }
 }
 

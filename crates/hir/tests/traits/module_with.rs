@@ -195,3 +195,249 @@ fn block_operand_codes() {
         "operand P, a provider type and a named implementation"
     );
 }
+
+/// The codes of a program, sorted, without the refusal that a module `with`
+/// still earns until its frame reaches the bodies.
+fn codes_without_refusal(source: &str) -> Vec<String> {
+    let mut codes = diagnostics(source);
+    codes.retain(|code| code != "8-0171");
+    codes.sort();
+    codes
+}
+
+/// The same operand, written as a module's declaration.
+#[test]
+fn module_operand_codes() {
+    let rows: &[(&str, &str, &[&str])] = &[
+        ("Nope", "with (Nope)", &["8-0012"]),
+        ("nope::Loud", "with (nope::Loud)", &["2-0002"]),
+        ("hidden::Secret", "with (hidden::Secret)", &["2-0003"]),
+        ("Loud2", "with (Loud2)", &["2-0004"]),
+        ("Loud<u8>", "with (Loud<u8>)", &["3-0016"]),
+        ("Two<u8>", "with (Two<u8>)", &["8-0163"]),
+        ("Loud, Quiet", "with (Loud, Quiet)", &["8-0160"]),
+        ("<Item as Show>", "with (<Item as Show>)", &["6-0003"]),
+        (
+            "Choice<Restricted<0>>",
+            "with (Choice<Restricted<0>>)",
+            &["8-0093"],
+        ),
+    ];
+    for (name, declaration, codes) in rows {
+        let source = [
+            OPERANDS,
+            &format!("mod m {{\n    use super::*\n    {declaration}\n    pub fn f() -> u256 {{ 1 }}\n}}\n"),
+        ]
+        .concat();
+        assert_eq!(codes_without_refusal(&source), *codes, "operand {name}");
+    }
+    let broken = [
+        OPERANDS,
+        "mod m {\n    use super::*\n    with (Broken)\n    pub fn f() { let _: NeedsSub<Item> }\n}\n",
+    ]
+    .concat();
+    assert_eq!(codes_without_refusal(&broken), ["6-0003"], "operand Broken");
+    let provider = [
+        PROVIDER_AND_IMPL,
+        "mod m {\n    use super::*\n    with (P)\n    pub fn f() -> u256 { 1 }\n}\n",
+    ]
+    .concat();
+    assert_eq!(
+        codes_without_refusal(&provider),
+        ["2-0004"],
+        "operand P, a provider type and a named implementation"
+    );
+}
+
+/// A value, a provider or any other name that is not an implementation is not
+/// a module operand: values and providers are written in a `with` block.
+#[test]
+fn a_module_operand_that_is_not_an_implementation_is_refused() {
+    for operand in ["val", "Show", "Foo", "hidden"] {
+        let source = [
+            OPERANDS,
+            &format!("mod m {{\n    use super::*\n    with ({operand})\n}}\n"),
+        ]
+        .concat();
+        assert_eq!(
+            codes_without_refusal(&source),
+            ["2-0021"],
+            "operand {operand}"
+        );
+    }
+}
+
+#[test]
+fn module_operands_follow_visibility() {
+    assert_eq!(
+        codes_without_refusal(&with_picks(
+            r#"
+mod hidden {
+    use super::*
+    impl Pick for Item as Private { const fn value() -> u256 { 1 } }
+}
+mod m {
+    use super::*
+    with (hidden::Private)
+}
+"#,
+        )),
+        ["2-0003"]
+    );
+}
+
+#[test]
+fn ambiguous_module_operands_are_refused() {
+    assert_eq!(
+        codes_without_refusal(&with_picks(
+            r#"
+mod a {
+    use super::*
+    pub impl Pick for Item as Same { const fn value() -> u256 { 1 } }
+}
+mod b {
+    use super::*
+    pub impl Pick for Item as Same { const fn value() -> u256 { 2 } }
+}
+mod m {
+    use super::a::*
+    use super::b::*
+    with (Same)
+}
+"#,
+        )),
+        ["2-0004"]
+    );
+}
+
+#[test]
+fn two_operands_answering_one_goal_are_refused() {
+    let codes = codes_without_refusal(&with_picks(
+        r#"
+mod a {
+    use super::*
+    with (Tiny, Discount)
+    pub const fn f() -> u256 { Item::value() }
+}
+mod b {
+    use super::*
+    with (Discount, <Item as Pick>)
+    pub const fn f() -> u256 { Item::value() }
+}
+mod c {
+    use super::*
+    with (Discount)
+    pub mod d {
+        use super::super::*
+        with (Tiny)
+        pub const fn f() -> u256 { Item::value() }
+    }
+}
+"#,
+    ));
+    // One for each of `a` and `b`; a child's declaration is another frame.
+    assert_eq!(codes, ["8-0160", "8-0160"]);
+}
+
+#[test]
+fn an_openings_conditions_are_proved_once_at_the_declaration() {
+    let codes = codes_without_refusal(&with_picks(
+        r#"
+pub trait Gate {}
+pub struct Box<T> {}
+impl<T: Gate> Pick for Box<T> { const fn value() -> u256 { 1 } }
+mod m {
+    use super::*
+    with (<Box<Item> as Pick>)
+    pub const fn a() -> u256 { 1 }
+    pub const fn b() -> u256 { 2 }
+}
+"#,
+    ));
+    assert_eq!(codes, ["6-0003"]);
+}
+
+#[test]
+fn an_openings_conditions_see_every_other_operand_of_the_declaration() {
+    let codes = codes_without_refusal(&with_picks(
+        r#"
+pub trait Gate { const fn g() -> u256 }
+pub impl Gate for Item as G { const fn g() -> u256 { 5 } }
+pub struct Box<T> {}
+pub trait Total { const fn total() -> u256 }
+impl<T: Gate> Total for Box<T> { const fn total() -> u256 { T::g() + 1 } }
+mod opening_first {
+    use super::*
+    with (<Box<Item> as Total>, G)
+    pub const fn f() -> u256 { 1 }
+}
+mod gate_first {
+    use super::*
+    with (G, <Box<Item> as Total>)
+    pub const fn f() -> u256 { 1 }
+}
+"#,
+    ));
+    assert!(codes.is_empty(), "{codes:?}");
+}
+
+#[test]
+fn types_inside_module_operands_are_checked_for_their_requirements() {
+    let source = |operand: &str| {
+        format!(
+            r#"
+pub struct Restricted<const N: u256> where {{ N > 0 }} {{}}
+pub struct Boxed<T> {{}}
+pub trait Mark {{ const fn mark() -> u256 }}
+impl<T> Mark for Boxed<T> {{ const fn mark() -> u256 {{ 1 }} }}
+pub impl<T> Mark for Boxed<T> as Choice {{ const fn mark() -> u256 {{ 2 }} }}
+mod m {{
+    use super::*
+    with ({operand})
+}}
+"#
+        )
+    };
+    for operand in [
+        "Choice<Restricted<0>>",
+        "<Boxed<Restricted<0>> as Mark>",
+        "<Boxed<(Restricted<0>, u8)> as Mark>",
+    ] {
+        assert_eq!(
+            codes_without_refusal(&source(operand)),
+            ["8-0093"],
+            "{operand}"
+        );
+    }
+    for operand in [
+        "Choice<Restricted<1>>",
+        "<Boxed<Restricted<1>> as Mark>",
+        "<Boxed<(Restricted<1>, u8)> as Mark>",
+    ] {
+        assert!(
+            codes_without_refusal(&source(operand)).is_empty(),
+            "{operand}"
+        );
+    }
+}
+
+/// Resolving the declaration needs a constant whose body is checked under the
+/// frame being resolved. The result is an error, never a panic and never an
+/// accepted program.
+#[test]
+fn a_declaration_that_needs_its_own_modules_constant_is_refused() {
+    let codes = codes_without_refusal(&with_picks(
+        r#"
+pub struct Arr<const N: u256> {}
+pub trait Size { const fn size() -> u256 }
+mod m {
+    use super::*
+    with (Discount, <Arr<70> as Size>)
+    pub const K: u256 = Item::value()
+    impl Size for Arr<{ K }> { const fn size() -> u256 { 1 } }
+    pub const fn f() -> u256 { Arr<70>::size() }
+}
+"#,
+    ));
+    assert!(!codes.is_empty(), "the declaration is accepted");
+}

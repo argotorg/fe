@@ -2544,6 +2544,23 @@ fn written_types_query<'db>(
             }
         }
 
+        // The types written in a module's `with` operands are checked where
+        // they are written, as the types of an operand of a block are.
+        fn visit_with_item(
+            &mut self,
+            ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyWithItemSpan<'db>>,
+            with: crate::hir_def::WithItem<'db>,
+        ) {
+            for (idx, operand) in with.operands(self.db).iter().enumerate() {
+                let Some(path) = operand.to_opt() else {
+                    continue;
+                };
+                let mut operand_ctxt =
+                    VisitorCtxt::new(self.db, ctxt.scope(), with.span().operands().operand(idx));
+                walk_path(self, &mut operand_ctxt, path);
+            }
+        }
+
         fn visit_generic_param(
             &mut self,
             ctxt: &mut VisitorCtxt<'db, crate::visitor::prelude::LazyGenericParamSpan<'db>>,

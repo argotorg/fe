@@ -23,6 +23,7 @@ pub(crate) use projection::constructed_variant;
 mod use_target;
 pub(crate) use use_target::target_at;
 pub use use_target::{UseTarget, item_target};
+pub(crate) mod module_with;
 mod stmt;
 mod with_operand;
 

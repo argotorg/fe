@@ -1357,6 +1357,21 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 )
             }
 
+            Self::ExpectedImpl(prim_span, name, given_kind) => {
+                let name = name.data(db);
+                CompleteDiagnostic::new(
+                    Severity::Error,
+                    "expected a named implementation here".into(),
+                    vec![SubDiagnostic::new(
+                        LabelStyle::Primary,
+                        format!("`{name}` is a {given_kind}, not an implementation"),
+                        prim_span.resolve(db),
+                    )],
+                    vec!["values and providers are written in a `with` block".to_string()],
+                    error_code,
+                )
+            }
+
             Self::ExpectedValue(prim_span, name, given_kind) => {
                 let name = name.data(db);
                 primary_diag(
