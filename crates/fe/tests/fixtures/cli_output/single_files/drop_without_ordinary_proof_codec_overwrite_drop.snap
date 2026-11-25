@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/drop_without_ordinary_proof_codec_overwrite_drop.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/drop_without_ordinary_proof_codec_overwrite_drop.fe
+
+error[16-0021]: `Drop` without an ordinary proof in `fn hold`
+   ┌─ drop_without_ordinary_proof_codec_overwrite_drop.fe:78:13
+   │
+67 │     let _held = Holder { t }
+   │         ----- `Holder<Tag2>` is destroyed here
+   ·
+78 │             p[1] = Pair { a: 1, b: 2 }
+   │             ^^^^^^^^^^^^^^^^^^^^^^^^^^ this call reaches `hold`, which destroys `Holder<Tag2>`; its `Drop` implementation needs `Tag2: Show`, which no ordinary implementation proves (only one that a `with` chose does); a drop does not read a `with`
+
+
+=== EXIT CODE: 1 ===

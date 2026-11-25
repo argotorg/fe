@@ -4129,6 +4129,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "lane_holds_before_halts",
     "lane_pattern_writes",
     "lane_projection_spaces",
+    "lane_reads_skip_setter",
     "leading_zeros",
     "library_state_index",
     "long_error_event_names",

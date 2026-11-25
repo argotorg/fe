@@ -1,0 +1,94 @@
+// A read of a packed entry that only reads it runs the getter of its lane codec and not the setter, whose unproved drop would otherwise be reached at run time. The contract reads a field and passes the entry by reference.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, Drop}
+use std::evm::{Evm, Wei}
+
+pub struct Pair {
+    pub a: u16,
+    pub b: u16,
+}
+
+fn peek(_ x: ref Pair) -> u16 {
+    x.a
+}
+
+struct Codec {}
+impl LaneCodec<Pair> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> Pair {
+        let raw: u256 = (word >> offset) & 0xffffffff
+        Pair {
+            a: (raw & 0xffff).downcast_truncate(),
+            b: ((raw >> 16) & 0xffff).downcast_truncate(),
+        }
+    }
+    fn set(_ word: u256, offset: u256, value: own Pair) -> u256 {
+        with (Loud2) { hold(Tag2 {}) }
+        let packed: u256 = (value.a as u256) | ((value.b as u256) << 16)
+        (word & !(0xffffffff << offset)) | (packed << offset)
+    }
+}
+struct Pairs<C> {}
+impl<C> Pinned for Pairs<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Pairs<C> {
+    type Key = u256
+    type Entry = Pair
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+msg M {
+    #[selector = 1]
+    Field -> u16,
+    #[selector = 2]
+    Peek -> u16,
+}
+pub contract K {
+    mut p: Pairs<Codec>
+    recv M {
+        Field -> u16 uses (p) {
+            p[1].a
+        }
+        Peek -> u16 uses (p) {
+            peek(p[1])
+        }
+    }
+}
+
+#[test]
+fn reads_run_the_getter_only() uses (evm: mut Evm) {
+    let k = evm.create2<K>(value: Wei::zero(), args: (), salt: 0)
+    let a: u16 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Field {})
+    assert(a == 0)
+    let b: u16 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: M::Peek {})
+    assert(b == 0)
+}
