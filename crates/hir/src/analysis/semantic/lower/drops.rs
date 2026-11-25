@@ -100,17 +100,18 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         }
     }
 
-    /// Holds the `var` bindings `pat` declares without a value in the block
-    /// declaring them, in declaration order. An assignment in a nested scope
-    /// then gives a binding its value without making that scope its owner;
-    /// drop elaboration finds whether it has one at each exit. A `let`
-    /// declared without a value can never be given one.
+    /// Allocates the locals of the bindings `pat` declares without a value,
+    /// and holds the `var` ones in the block declaring them, in declaration
+    /// order. An assignment in a nested scope then gives a binding its value
+    /// without making that scope its owner; drop elaboration finds whether
+    /// it has one at each exit. A `let` declared without a value can never
+    /// be given one.
     pub(super) fn hold_declared(&mut self, pat: PatId) {
-        if let Some(binding) = self.typed_body.pat_binding(pat)
-            && binding.is_mut()
-            && let Some(&local) = self.binding_locals.get(&binding)
-        {
-            self.hold_defined(local);
+        if let Some(binding) = self.typed_body.pat_binding(pat) {
+            let local = self.alloc_binding_local(binding);
+            if binding.is_mut() {
+                self.hold_defined(local);
+            }
         }
         match pat.data(self.db, self.body) {
             Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {

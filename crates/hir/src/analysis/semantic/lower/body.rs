@@ -431,12 +431,6 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                     .insert(capture.binding, (place, capture.ty));
             }
         }
-
-        for (pat, _) in self.body.pats(self.db).iter() {
-            if let Some(binding) = self.typed_body.pat_binding(pat) {
-                self.alloc_binding_local(binding);
-            }
-        }
     }
 
     /// Gathers each product parameter's parts, the inputs a call passes, into
@@ -1322,9 +1316,15 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         let value = self.take_operand(expr, value);
         next.values.push(SOperand::expr(value, expr));
         if let Some(&elem) = next.elems.get(next.values.len()) {
+            // The element is lowered again on each path, as new code: what
+            // the lowering defines, the locals of the bindings declared in
+            // it among them, is its own, while what the path defined before
+            // the element is shared, as after a branch.
+            let bindings = self.binding_locals.clone();
             self.compounds.push(next);
             self.lower_expr(elem);
             self.compounds.pop();
+            self.binding_locals = bindings;
         } else {
             let ty = self.expr_ty(next.expr);
             let fields = next.values.into_boxed_slice();
@@ -3153,6 +3153,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             // Close it like a dead `if`/`match` join.
             self.set_synthetic_terminator(latch_bb, STerminatorKind::Goto(latch_bb));
         }
+        self.loop_bases.remove(&base_expr);
         self.switch_to(exit_bb);
     }
 

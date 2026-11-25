@@ -209,6 +209,56 @@ fn diverging(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
     log(trace, 9)
 }
 
+fn reborrow(_ x: mut u256) -> mut u256 {
+    yield mut x
+}
+
+// Each path lowers the elements after a branching one anew, with bindings
+// of its own, so an access bound there lives across the element's blocks
+// on each path.
+fn rebound(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> (mut u256, mut u256) {
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        let _g = Guard { trace, event: 3 }
+        let r = mut reborrow(mut q.c)
+        var i: u256 = 0
+        while i < 2 {
+            i += 1
+        }
+        if d {
+            mut r
+        } else {
+            mut q.d
+        }
+    })
+    log(trace, 9)
+}
+
+fn rebound_owned(_ q: mut Quad, _ c: bool) -> (u256, mut u256) {
+    (if c { 1 } else { 2 }, {
+        let r = mut q.c
+        var i: u256 = 0
+        while i < 1 {
+            i += 1
+        }
+        mut r
+    })
+}
+
+fn rebound_ref(_ q: ref Quad, _ c: bool, _ d: bool) -> (ref u256, ref u256) {
+    (if c { ref q.a } else { ref q.b }, {
+        let r = ref q.c
+        if d {
+            ref r
+        } else {
+            ref q.d
+        }
+    })
+}
+
 #[test]
 fn branches_ending_in_accesses() {
     var q = quad()
@@ -404,4 +454,24 @@ fn a_branch_whose_sibling_never_returns() {
         bump(mut x, trace)
     }
     assert(read(trace) == 539)
+}
+
+#[test]
+fn bindings_of_a_later_element_on_each_path() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, mut y) = rebound(mut q, trace, true, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5539)
+    let trace = new_trace()
+    let (mut x, mut y) = rebound(mut q, trace, false, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5539)
+    let (n, mut z) = rebound_owned(mut q, false)
+    z += n
+    let (ref a, ref b) = rebound_ref(ref q, true, true)
+    assert(a == 1 && b == 3)
+    assert(sum(q) == 1131)
 }
