@@ -1,0 +1,5 @@
+struct S {}
+impl S { pub fn open(self) -> u256 { 2 } }
+impl S with (prov::AliasSelf)
+#[test]
+fn alias_pub() { assert!(S {}.via_alias_pub() == 2) }

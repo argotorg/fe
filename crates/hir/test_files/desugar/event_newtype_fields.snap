@@ -19,19 +19,25 @@ impl std::evm::Event for Swap {
 
     #[inline(always)]
     fn emit<L: Log>(own self, _ log: mut L) {
-        let head = 0 as u256 + abi_field_head_size<Int24>() + abi_field_head_size<u256>()
-        let total = head + 0 as u256 + dynamic_payload_size<Int24>(self.tick) + dynamic_payload_size<u256>(self.amount)
+        var size = DataSize { head: 0, payload: 0 }
+        {
+            ()
+            size.add(self.tick)
+            size.add(self.amount)
+            ()
+        }
+        let head = size.head
+        let total = head + size.payload
         let buffer = MemBuffer::new(allocation_len(total))
         let out = unsafe {
             AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
         }
         var writer = RecordWriter<Sol>::new(out, head_size: head, fields: 2 as usize)
         {
-            {
-                ()
-                push_record_field(mut writer, self.tick)
-            }
-            push_record_field(mut writer, self.amount)
+            ()
+            writer.push(self.tick)
+            writer.push(self.amount)
+            ()
         }
         let data = buffer.span()
         log.log2(data: data, topic0: Self::TOPIC0, topic1: self.sender.as_topic())

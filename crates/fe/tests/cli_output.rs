@@ -4026,6 +4026,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "code_struct_field_offsets",
     "coin",
     "composed_abi_decoder",
+    "concrete_component_entry_codec",
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",
@@ -4062,6 +4063,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "event_dynamic_mixed",
     "event_in_function_module",
     "event_many_fields",
+    "event_wide_fields",
     "event_zero_fields",
     "evm_init_code_hash",
     "factory",
@@ -4106,7 +4108,10 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "mutex_lock_slot_no_transient_collision",
     "named_storage_codecs",
     "named_storage_deferred_codec",
+    "named_storage_entry_codec_identity",
     "named_storage_evidence",
+    "named_storage_local_generic_choice",
+    "named_storage_local_generic_codec",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -4872,6 +4877,36 @@ fn test_cli_test_unsafe_trust_allows_trusted_and_safe_uses() {
             "untrusted_provider_splices_a_trusted_item",
         ),
         (
+            "unsafe_trust_spliced_safe_fragment",
+            "spliced_safe_fragment",
+        ),
+        ("unsafe_trust_spliced_operation_allowed", "spliced_deref"),
+        ("unsafe_trust_unused_unsafe_impls", "builds_values"),
+        (
+            "generated_code_visibility_own_record",
+            "reads_its_own_record_and_helpers",
+        ),
+        (
+            "generated_code_visibility_provider_items",
+            "provider_pub_ingot_helper",
+        ),
+        (
+            "generated_code_visibility_provider_items",
+            "provider_private_helper",
+        ),
+        ("generated_code_visibility_provider_members", "own_method"),
+        ("generated_code_visibility_provider_members", "own_field"),
+        ("generated_code_visibility_provider_cast", "cast_own"),
+        ("generated_code_visibility_generated_path", "by_call"),
+        ("generated_code_visibility_generated_path", "by_path"),
+        ("generated_code_visibility_alias_self", "alias_pub"),
+        ("generated_code_visibility_own_paths", "own_paths"),
+        ("unsafe_trust_const_allowed", "via_const"),
+        ("unsafe_trust_const_allowed", "assoc"),
+        ("unsafe_trust_const_allowed", "pat"),
+        ("unsafe_trust_const_safe", "reads_a_safe_constant"),
+        ("unsafe_trust_panic_payload_allowed", "unwrap_err"),
+        (
             "unsafe_trust_dispatcher_allowed",
             "dispatcher_encodes_with_trusted_code",
         ),
@@ -4940,6 +4975,21 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
             "evm.create2<dep::Vault>(value: Wei::zero(), args: (), salt: 0)",
             "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
         ),
+        (
+            // The default of a trait constant whose declared type is `Self::X`
+            // calls code of `dep` that runs unsafe code. The package wrote the
+            // default, so the call is judged where it is written.
+            "unsafe_trust_default_constant_own",
+            "dep::peek()",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
+        (
+            // The default of a trait of `dep` whose declared type is `Self::X`
+            // runs unsafe code of `dep`, which a read of the constant reaches.
+            "unsafe_trust_default_constant_read",
+            "A::K",
+            "to trust `dep`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml",
+        ),
     ] {
         let fixture_dir = fe_test_runner_fixture_dir(fixture);
         let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
@@ -4953,6 +5003,274 @@ fn test_cli_test_unsafe_trust_rejects_untrusted_unsafe_uses() {
             "{fixture}: unexpected diagnostics:\n{output}"
         );
     }
+}
+
+#[test]
+fn test_cli_test_checks_moves_in_the_initializer_of_every_constant() {
+    // The initializer of a constant is a body that moves values like any
+    // other. A module constant, an inherent constant, an override in an
+    // `impl Trait` and a default in a trait are each refused when the
+    // initializer moves a value twice, whether or not the constant is read.
+    let prelude = "struct B { v: u256 }\nconst fn take(_ b: own B) -> u256 { b.v }\n";
+    let twice =
+        "{ let b = B { v: 1 }\n        let x = take(b)\n        let y = take(b)\n        x + y }";
+    let cases = [
+        (
+            "module_constant",
+            format!("{prelude}const D: u256 = {twice}\n#[test]\nfn t() {{ assert!(D == 2) }}\n"),
+        ),
+        (
+            "nested_module_constant",
+            "mod m {\n    pub struct B { v: u256 }\n    pub const fn take(_ b: own B) -> u256 { b.v }\n    pub const D: u256 = { let b = B { v: 1 }\n        let x = take(b)\n        let y = take(b)\n        x + y }\n}\n#[test]\nfn t() { assert!(m::D == 2) }\n"
+                .to_string(),
+        ),
+        (
+            "trait_default_read",
+            format!(
+                "{prelude}trait Tr {{\n    const D: u256 = {twice}\n}}\nstruct S {{}}\nimpl Tr for S {{}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "trait_default_unread",
+            format!(
+                "{prelude}trait Tr {{\n    const D: u256 = {twice}\n}}\nstruct S {{}}\nimpl Tr for S {{}}\n#[test]\nfn t() {{ assert!(true) }}\n"
+            ),
+        ),
+        (
+            "inherent_constant_read",
+            format!(
+                "{prelude}struct S {{}}\nimpl S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "impl_override_read",
+            format!(
+                "{prelude}trait Tr {{ const D: u256 }}\nstruct S {{}}\nimpl Tr for S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(S::D == 2) }}\n"
+            ),
+        ),
+        (
+            "inherent_constant_unread",
+            format!(
+                "{prelude}struct S {{}}\nimpl S {{\n    const D: u256 = {twice}\n}}\n#[test]\nfn t() {{ assert!(true) }}\n"
+            ),
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, source) in cases {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let (output, exit_code) = run_fe_main(&["test", path.to_str().expect("utf-8 path")]);
+        assert_ne!(exit_code, 0, "{name}: expected a move error:\n{output}");
+        assert!(
+            output.contains("error[16-0002]")
+                && output.contains("cannot use a value after it was moved"),
+            "{name}: expected a move conflict, got:\n{output}"
+        );
+    }
+
+    // A default whose declared type is `Self::X` is walked through the
+    // implementations that inherit it, and reports a move once, where the
+    // trait wrote it, however many implementations inherit it.
+    let param_typed = |impls: &str| {
+        format!(
+            "{prelude}trait Tr {{\n    type X\n    const D: Self::X = {{ let b = B {{ v: 1 }}\n        let x = take(b)\n        let y = take(b)\n        (-3 as i8) }}\n}}\n{impls}#[test]\nfn t() {{ assert!(true) }}\n"
+        )
+    };
+    for (name, impls) in [
+        (
+            "trait_default_param_typed",
+            "struct S {}\nimpl Tr for S {\n    type X = i8\n}\n",
+        ),
+        (
+            "trait_default_param_typed_three_impls",
+            "struct S {}\nimpl Tr for S {\n    type X = i8\n}\nstruct U {}\nimpl Tr for U {\n    type X = i8\n}\nstruct V {}\nimpl Tr for V {\n    type X = i8\n}\n",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, param_typed(impls)).expect("write fixture");
+        let (output, exit_code) = run_fe_main(&["test", path.to_str().expect("utf-8 path")]);
+        assert_ne!(exit_code, 0, "{name}: expected a move error:\n{output}");
+        assert_eq!(
+            output.matches("error[16-0002]").count(),
+            1,
+            "{name}: expected one move conflict, got:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_checks_a_trait_default_against_the_type_of_each_use() {
+    // `const NEG: Self::X = -3 as i8` has type `i8`. It is accepted for an
+    // implementation where `X` is `i8`, and refused at an implementation where
+    // `X` is `u256`, whether or not the constant is read: the error is at the
+    // implementation, and a read adds none.
+    let source = |x: &str, check: &str| {
+        format!(
+            "trait Narrow {{\n    type X\n    const NEG: Self::X = -3 as i8\n}}\nstruct A {{}}\nimpl Narrow for A {{\n    type X = {x}\n}}\n#[test]\nfn t() {{ {check} }}\n"
+        )
+    };
+    let temp = tempdir().expect("tempdir");
+    let run = |name: &str, source: String| {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        run_fe_main(&["test", path.to_str().expect("utf-8 path")])
+    };
+    let (output, exit_code) = run("agreeing", source("i8", "assert!(A::NEG == -3)"));
+    assert_eq!(exit_code, 0, "expected the read to be accepted:\n{output}");
+    for (name, check) in [
+        ("unread", "assert!(true)"),
+        ("differing", "assert!(A::NEG == 0)"),
+    ] {
+        let (output, exit_code) = run(name, source("u256", check));
+        assert_ne!(exit_code, 0, "{name}: expected a type error:\n{output}");
+        assert!(
+            output.contains("error[8-0167]")
+                && output.contains("the default value of `NEG` does not type-check")
+                && !output.contains("error[8-0000]")
+                && !output.contains("16-0004"),
+            "{name}: expected one error at the implementation, got:\n{output}"
+        );
+        assert_eq!(
+            output.matches("error[").count(),
+            1,
+            "{name}: a read adds no second error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_checks_an_inherited_default_for_each_implementation() {
+    // A default whose declared type mentions `Self`, an associated type of
+    // `Self` or a parameter of the trait is checked again for each
+    // implementation that inherits it, as if the implementation had written
+    // the same text with its own types. A mismatch is an error at that
+    // implementation, whether or not the constant is read.
+    const NEG: &str =
+        "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct A {}\n";
+    let cases: Vec<(&str, String, bool)> = vec![
+        (
+            "inner_mismatch",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = {\n        let x: Self::X = 200 as u8\n        (-3 as i8)\n    }\n}\nstruct A {}\nimpl Narrow for A {\n    type X = i8\n}\n#[test]\nfn t() { assert!(A::NEG == -3) }\n"
+                .to_string(),
+            true,
+        ),
+        (
+            "pattern_read",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = u256\n}}\nfn f(_ v: u256) -> bool {{\n    match v {{\n        A::NEG => true\n        _ => false\n    }}\n}}\n#[test]\nfn t() {{ assert!(f(0) == false) }}\n"
+            ),
+            true,
+        ),
+        (
+            "unread_mismatch",
+            format!("{NEG}impl Narrow for A {{\n    type X = u256\n}}\n#[test]\nfn t() {{ assert!(true) }}\n"),
+            true,
+        ),
+        (
+            "generic_reader",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = i16\n}}\nfn get<T: Narrow>() -> T::X {{ T::NEG }}\n#[test]\nfn t() {{ assert!(get<A>() == -3) }}\n"
+            ),
+            true,
+        ),
+        (
+            "generic_impl_open",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct W<T> {}\nimpl<T> Narrow for W<T> {\n    type X = T\n}\n#[test]\nfn t() { assert!(W<i8>::NEG == -3) }\n"
+                .to_string(),
+            true,
+        ),
+        (
+            "inner_annotation_agrees",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = {\n        let x: Self::X = -3 as i8\n        x\n    }\n}\nstruct A {}\nimpl Narrow for A {\n    type X = i8\n}\n#[test]\nfn t() { assert!(A::NEG == -3) }\n"
+                .to_string(),
+            false,
+        ),
+        (
+            "tuple_hint_read",
+            "trait Narrow {\n    type X\n    const P: (Self::X, u8) = (-3 as i8, 255)\n}\nstruct A {}\nimpl Narrow for A {\n    type X = i8\n}\n#[test]\nfn t() { assert!(A::P.1 == 255) }\n"
+                .to_string(),
+            false,
+        ),
+        (
+            "tuple_hint_unread",
+            "trait Narrow {\n    type X\n    const P: (Self::X, u8) = (-3 as i8, 255)\n}\nstruct A {}\nimpl Narrow for A {\n    type X = i8\n}\n#[test]\nfn t() { assert!(true) }\n"
+                .to_string(),
+            false,
+        ),
+        (
+            "pattern_value",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = i8\n}}\nfn f(_ v: i8) -> bool {{\n    match v {{\n        A::NEG => true\n        _ => false\n    }}\n}}\n#[test]\nfn t() {{\n    assert!(f(-3) == true)\n    assert!(f(3) == false)\n}}\n"
+            ),
+            false,
+        ),
+        (
+            "const_patterns_shape",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = i8\n}}\nfn f(_ x: i8, _ y: u256) -> u256 {{\n    match (x, y) {{\n        (A::NEG, 1) => 1\n        _ => 0\n    }}\n}}\n#[test]\nfn t() {{ assert!(f(-3, 1) == 1) }}\n"
+            ),
+            false,
+        ),
+        (
+            "generic_impl_closed",
+            "trait Narrow {\n    type X\n    const NEG: Self::X = -3 as i8\n}\nstruct W<T> {}\nimpl<T> Narrow for W<T> {\n    type X = i8\n}\n#[test]\nfn t() { assert!(W<u8>::NEG == -3) }\n"
+                .to_string(),
+            false,
+        ),
+        (
+            "override_never_checks_the_default",
+            format!(
+                "{NEG}impl Narrow for A {{\n    type X = u8\n    const NEG: u8 = 3\n}}\n#[test]\nfn t() {{ assert!(A::NEG == 3) }}\n"
+            ),
+            false,
+        ),
+        (
+            "literal_default_u32",
+            "trait Tr {\n    type X\n    const C: Self::X = 1\n}\nstruct A {}\nimpl Tr for A {\n    type X = u32\n}\nfn reader<T: Tr<X = u32>>() -> u32 { T::C }\n#[test]\nfn t() { assert!(A::C == 1 && reader<A>() == 1) }\n"
+                .to_string(),
+            false,
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, source, refused) in cases {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).expect("write fixture");
+        let (output, exit_code) = run_fe_main(&["test", path.to_str().expect("utf-8 path")]);
+        if refused {
+            assert_ne!(exit_code, 0, "{name}: expected a refusal:\n{output}");
+            assert!(
+                output.contains("error[8-0167]")
+                    && output.contains("the default value of `NEG` does not type-check"),
+                "{name}: expected the default to be refused at the implementation, got:\n{output}"
+            );
+            if name == "generic_reader" {
+                assert!(
+                    !output.contains("16-0004"),
+                    "{name}: expected no internal error, got:\n{output}"
+                );
+            }
+        } else {
+            assert_eq!(exit_code, 0, "{name}: expected acceptance:\n{output}");
+        }
+    }
+
+    // The default of a dependency's trait is checked for an implementation in
+    // the package that checks: the error is at the implementation, with the
+    // default as a secondary label in the dependency.
+    let fixture_dir = fe_test_runner_fixture_dir("inherited_default_dep");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(
+        exit_code, 0,
+        "dependency_default: expected a refusal:\n{output}"
+    );
+    assert!(
+        output.contains("error[8-0167]")
+            && output.contains("the default value of `NEG` does not type-check")
+            && output.contains("impl dep::Narrow for A")
+            && output.contains("-3 as i8"),
+        "dependency_default: expected the error at the implementation, got:\n{output}"
+    );
 }
 
 #[test]
@@ -5084,6 +5402,37 @@ fn test_cli_test_unsafe_trust_judges_a_spliced_fragment_by_every_package_that_co
 }
 
 #[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_operation_by_the_package_that_wrote_it() {
+    // `t` is trusted, `u` is not. `t`'s provider writes the `unsafe` block and
+    // splices `u`'s fragment `*p` into it. The dereference needs an `unsafe`
+    // block, and the package that wrote its text is `u`, so the call is
+    // refused although the block is `t`'s. The control `spliced_safe_fragment`
+    // splices a fragment that needs no `unsafe` block, which stays accepted.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_spliced_operation");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("this call reaches unsafe code in `u`")
+            && output.contains("S {}.run(p)")
+            && output.contains("unsafe code in `u`")
+            && output.contains("*p"),
+        "unexpected diagnostics:\n{output}"
+    );
+    assert_eq!(
+        output
+            .matches("call reaches unsafe code in `u`, which is not allowed to use it")
+            .count(),
+        1,
+        "one error for the call:\n{output}"
+    );
+    assert!(
+        !output.contains("unsafe code in `t`"),
+        "a trusted package is never named:\n{output}"
+    );
+}
+
+#[test]
 fn test_cli_test_unsafe_trust_still_refuses_unsafe_code_that_u_wrote_in_its_own_quotation() {
     // Controls of the per-contributor rule, refused with or without it: a
     // trusted provider whose quotation calls an ordinary function of `u`, and
@@ -5104,6 +5453,328 @@ fn test_cli_test_unsafe_trust_still_refuses_unsafe_code_that_u_wrote_in_its_own_
             .count(),
         2,
         "one error for each call:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_follows_the_constants_a_body_reads() {
+    // The initializer of a constant runs wherever the constant is read, in an
+    // expression or in a pattern, and when a `static_assert` of the checked
+    // package is evaluated. `u` wrote the `unsafe` blocks of its constants and
+    // nothing trusts `u`. `unsafe_trust_const_safe` reads a constant of `u`
+    // without unsafe code, which stays accepted.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_const_reads");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected trust errors:\n{output}");
+    for call in ["u::get()", "u::get_assoc()", "u::pat(0)", "u::SA == 0"] {
+        assert!(
+            output.contains("this call reaches unsafe code in `u`") && output.contains(call),
+            "{call}: unexpected diagnostics:\n{output}"
+        );
+    }
+    assert!(
+        output.contains("call reaches unsafe code in `u`, which is not allowed to use it"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_follows_the_encoding_of_a_panic_value() {
+    // `Result::unwrap` on an error panics with the error value, and the revert
+    // data is the value's `Encode` implementation, which no call names. `u`
+    // wrote an `unsafe` block in it and nothing trusts `u`.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_panic_payload");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("call reaches unsafe code in `u`, which is not allowed to use it")
+            && output.contains("mk().unwrap()"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_sees_only_what_is_public() {
+    // `prov` writes `leak` and a header in `user` asks for it. Code that a
+    // package writes into another package can use what is public there, the
+    // fields of the requested record, and what `prov` itself generated. The
+    // private method `hidden` of the requested record and the private field
+    // `balance` of an unrelated struct are `user`'s, not handed over by the
+    // header. `self.vault`, a field of the requested record, is.
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected visibility errors:\n{output}");
+    assert!(
+        output.contains("`hidden` is not visible") && output.contains("`balance` is not visible"),
+        "unexpected diagnostics:\n{output}"
+    );
+    assert!(
+        !output.contains("`vault` is not visible"),
+        "a field of the requested record stays visible:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_by_path() {
+    // The same rule holds for a member named by a path through `Self`: `prov`
+    // writes `Self::hidden(self)`, `Self::secret()` and `Self::K`, and the
+    // private method, function and constant belong to `user`, not to the
+    // record that the header hands over.
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_path_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected visibility errors:\n{output}");
+    for name in ["hidden", "secret", "K"] {
+        assert!(
+            output.contains(&format!("`{name}` is not visible")),
+            "expected `{name}` to be refused:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_generated_code_of_another_package_cannot_name_private_members_in_types() {
+    // A name in a type position is judged by the package that wrote it, as a
+    // name in a value position is: the constant `K` belongs to the package that
+    // asked, so a generic argument `Packed<Self::K>` written by the provider
+    // is refused in a signature, in a path of a body and in an annotation. The
+    // alias `Same<Self>` and a method value or pattern reach the same members.
+    for (fixture, names) in [
+        ("generated_code_visibility_type_sig_leak", &["K"][..]),
+        ("generated_code_visibility_type_body_path_leak", &["K"][..]),
+        ("generated_code_visibility_type_body_annot_leak", &["K"][..]),
+        ("generated_code_visibility_alias_self_leak", &["hidden"][..]),
+        (
+            "generated_code_visibility_value_and_pattern_leak",
+            &["hidden", "K"][..],
+        ),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(
+            exit_code, 0,
+            "{fixture}: expected visibility errors:\n{output}"
+        );
+        for name in names {
+            assert!(
+                output.contains(&format!("`{name}` is not visible")),
+                "{fixture}: expected `{name}` to be refused:\n{output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_cli_test_generated_code_sees_through_a_newtype_by_the_field_that_its_writer_sees() {
+    // A cast sees through a newtype only if the writer of the cast can see its
+    // field. `prov` writes `self.vault as u256`, and the field `balance` of
+    // `Vault` is private to the package that asked, so the cast is refused with
+    // the reason. A cast that `prov` writes of its own newtype `W`, whose field
+    // is `pub(ingot)` in `prov`, is accepted (`generated_code_visibility_provider_cast`).
+    let fixture_dir = fe_test_runner_fixture_dir("generated_code_visibility_cast_leak");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a cast error:\n{output}");
+    assert!(
+        output.contains("error[8-0055]")
+            && output.contains("cannot cast `Vault` to `u256`")
+            && output.contains("cast is not allowed because the struct field is not `pub`"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_check_types_a_quotation_by_its_syntax() {
+    // A quotation has type `Code<K>` only if its syntax admits `K`. `x + 1` is
+    // an expression, not a list of items, and an item with a function is not a
+    // pattern. Each was accepted until it was evaluated, then failed late or
+    // with an internal error.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let check = |name: &str| {
+        let path = fixtures.join(name);
+        run_fe_main(&["check", path.to_str().expect("fixture path utf8")])
+    };
+    // The control: a quotation of items as `Code<Item>` is accepted.
+    let (output, exit_code) = check("quote_kind_ok.fe");
+    assert_eq!(exit_code, 0, "{output}");
+    let (output, exit_code) = check("quote_kind_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
+    assert!(
+        output.contains("but `Code<Item>` is expected") && output.contains("error[8-0164]"),
+        "unexpected diagnostics:\n{output}"
+    );
+    let (output, exit_code) = check("quote_splice_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a kind error:\n{output}");
+    assert!(
+        output.contains("but `Code<Pat>` is expected")
+            && output.contains("error[8-0164]")
+            && !output.contains("16-0004"),
+        "unexpected diagnostics:\n{output}"
+    );
+    // A splice that cannot fill its hole is a different error.
+    let (output, exit_code) = check("quote_splice_hole_mismatch.fe");
+    assert_ne!(exit_code, 0, "expected a splice error:\n{output}");
+    assert!(
+        output.contains("error[8-0165]") && output.contains("cannot fill its position"),
+        "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_check_reports_parse_and_type_errors_beside_a_derive_header() {
+    // A file with a derive header and a parse error is checked like a file
+    // without a header: the parse error and the type error are both reported,
+    // and generation is skipped for it, so no raw generation line and no
+    // report of an unprepared header appears.
+    let temp = tempdir().expect("tempdir");
+    let source = temp.path().join("header_with_parse_error.fe");
+    fs::write(
+        &source,
+        "use core::derive::DeriveInherent\n\
+use core::meta::{Code, Item, Record}\n\
+struct Make {}\n\
+impl DeriveInherent for Make {\n\
+    const fn derive(_ record: Record) -> Code<Item> {\n\
+        quote { pub fn generated() -> u256 { 1 } }\n\
+    }\n\
+}\n\
+struct S { a: u256 }\n\
+impl S with (Make)\n\
+fn bad() -> u256 { true }\n\
+fn broken( {\n",
+    )
+    .expect("write source");
+    let source = source.to_str().expect("UTF-8 source path");
+    for args in [
+        vec!["check", source],
+        vec!["check", "--recovery-mode", source],
+    ] {
+        let (output, exit_code) = run_fe_main(&args);
+        assert_ne!(exit_code, 0, "{args:?}: expected errors:\n{output}");
+        assert!(
+            output.contains("error[1-0001]") && output.contains("error[8-0000]"),
+            "{args:?}: expected the parse error and the type error:\n{output}"
+        );
+        assert!(
+            !output.contains("authored parse errors")
+                && !output.contains("derive header was not prepared"),
+            "{args:?}: generation reported a cascade:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_check_reports_parse_and_type_errors_beside_a_short_form() {
+    // A file with `#[abi]`, `#[event]` or `msg` and a parse error is checked
+    // like a file without them, as for a derive header: the parse error and
+    // the type error are both reported, and generation is skipped for the
+    // file, so no raw generation line and no report of an unprepared header
+    // appears.
+    let tail = "fn bad() -> u256 { true }\nfn broken( {\n";
+    let sources = [
+        (
+            "abi",
+            format!("#[abi]\npub struct Good {{ pub a: u256 }}\n{tail}"),
+        ),
+        (
+            "event",
+            format!(
+                "#[event]\nstruct Ev {{\n    #[indexed]\n    a: u256,\n    b: bool,\n}}\n{tail}"
+            ),
+        ),
+        (
+            "msg",
+            format!("msg M {{\n    #[selector = 1]\n    Run {{ a: u256 }} -> u256,\n}}\n{tail}"),
+        ),
+    ];
+    let temp = tempdir().expect("tempdir");
+    for (name, text) in sources {
+        let source = temp.path().join(format!("{name}_with_parse_error.fe"));
+        fs::write(&source, text).expect("write source");
+        let source = source.to_str().expect("UTF-8 source path");
+        for args in [
+            vec!["check", source],
+            vec!["check", "--recovery-mode", source],
+        ] {
+            let (output, exit_code) = run_fe_main(&args);
+            assert_ne!(exit_code, 0, "{name} {args:?}: expected errors:\n{output}");
+            assert!(
+                output.contains("error[1-0001]") && output.contains("error[8-0000]"),
+                "{name} {args:?}: expected the parse error and the type error:\n{output}"
+            );
+            assert!(
+                !output.contains("authored parse errors")
+                    && !output.contains("derive header was not prepared"),
+                "{name} {args:?}: generation reported a cascade:\n{output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_cli_lsif_indexes_the_members_a_header_generates() {
+    // `S::arity` is written in a quotation and published into `S` by the
+    // header. The index covers it and the call that names it, as `fe check`
+    // and `fe doc` do.
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("app");
+    fs::create_dir_all(root.join("src")).expect("src dir");
+    fs::write(
+        root.join("fe.toml"),
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("fe.toml");
+    let source = "use core::derive::DeriveInherent\n\
+use core::meta::{Code, Item, Record, field_count}\n\
+struct Count {}\n\
+impl DeriveInherent for Count {\n\
+    const fn derive(_ record: Record) -> Code<Item> {\n\
+        let n = field_count(record)\n\
+        quote { pub fn arity() -> usize { ${n} } }\n\
+    }\n\
+}\n\
+pub struct S { a: u256 }\n\
+impl S with (Count)\n\
+pub fn user() -> usize { S::arity() }\n";
+    fs::write(root.join("src/lib.fe"), source).expect("lib.fe");
+    let root = root.to_str().expect("UTF-8 path");
+
+    let lsif = temp.path().join("out.lsif");
+    let (output, exit_code) = run_fe_main(&["lsif", root, "-o", lsif.to_str().expect("UTF-8")]);
+    assert_eq!(exit_code, 0, "fe lsif failed:\n{output}");
+    let lsif = fs::read_to_string(&lsif).expect("read lsif");
+    // The name in the quotation and the call `S::arity()` are ranges of the
+    // index: each ends five characters after the name starts.
+    let ends = |line: usize| {
+        let text = source.lines().nth(line).expect("line of the source");
+        let start = text.find("arity").expect("arity on the line");
+        format!(r#""end":{{"character":{},"line":{line}}}"#, start + 5)
+    };
+    for range in [ends(6), ends(11)] {
+        assert!(
+            lsif.contains(&range),
+            "the LSIF index has no range {range}:\n{lsif}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_does_not_trust_a_package_by_its_name() {
+    // The package `evil` calls itself `std` in its fe.toml. A package is
+    // trusted as `core` or `std` only if it is the embedded library or is
+    // trusted through the dependency graph, so its `unsafe` code is judged
+    // like any dependency's and nothing trusts it.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_named_std");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("which is not allowed to use it") && output.contains("evil::raw()"),
+        "unexpected diagnostics:\n{output}"
     );
 }
 
@@ -5209,22 +5880,113 @@ fn test_cli_test_unsafe_trust_follows_the_drop_that_drop_elaboration_inserts() {
 }
 
 #[test]
-fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_with_no_function_where_it_is_declared() {
-    // `peek` of the trusted `t` relies on what `unsafe impl Pod` asserts, and an
-    // `unsafe impl` with no function has nothing for a call to reach. The one
-    // that `v`, which nothing trusts, wrote for its own type is refused where
-    // it is declared.
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_where_it_is_relied_on_without_a_call_of_its_own()
+ {
+    // `peek` of the trusted `t` relies on what `unsafe impl Pod` asserts. The
+    // one that `v`, which nothing trusts, wrote for its own type is judged
+    // where the call to `peek` passes the type, not where it is declared.
     let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_pod_written");
     let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
     let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
     assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
     assert!(
-        output.contains("unsafe impl from `v`, which is not allowed to use unsafe code")
+        output.contains("call relies on an `unsafe impl` that `v` wrote, which is not allowed to use unsafe code")
+            && output.contains("peek(VType {})")
             && output.contains("unsafe impl t::Pod for VType {}")
             && output.contains(
                 "to trust `v`, add `allow_unsafe = true` to its entry under `[dependencies]` in fe.toml"
             ),
         "unexpected diagnostics:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_where_a_running_body_relies_on_it() {
+    // An `unsafe impl` of `u`, which nothing trusts, is relied on by code that
+    // runs: through a bound that it proves (with a method, and without one),
+    // and through the default method of its trait. Each is refused at the call
+    // that makes the code run, whether or not a method of the impl is called.
+    for (fixture, call) in [
+        ("unsafe_trust_relied_method_impl", "t::peek_m(u1::Evil {})"),
+        ("unsafe_trust_relied_default_method", "u2::Evil2 {}.b()"),
+        ("unsafe_trust_relied_marker_impl", "t::peek_e(u0::Evil0 {})"),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        assert!(
+            output.contains("call relies on an `unsafe impl` that `u` wrote")
+                && output.contains(call),
+            "{fixture}: unexpected diagnostics:\n{output}"
+        );
+        assert_eq!(
+            output
+                .matches("which is not allowed to use unsafe code")
+                .count(),
+            1,
+            "{fixture}: one error for the call:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_each_shape_of_reliance_on_an_unsafe_impl() {
+    // Each program relies on an `unsafe impl` of `u`, which nothing trusts,
+    // without calling a method of it: through the supertrait of a bound, the
+    // condition of a blanket implementation, the default constant of its
+    // trait, a named implementation of `u` that `with` chooses, and the
+    // provider of a trait-keyed effect.
+    for (fixture, calls) in [
+        (
+            "unsafe_trust_relied_supertrait",
+            &["t::peek_w(u::Sup {})"][..],
+        ),
+        (
+            "unsafe_trust_relied_blanket_condition",
+            &["t::show2_it(u::X {})", "u::X {}.show2()"][..],
+        ),
+        (
+            "unsafe_trust_relied_default_constant",
+            &["t::read_k2<u::K2>()", "u::K2::K"][..],
+        ),
+        ("unsafe_trust_relied_untrusted_choice", &["u::Y {}.b()"][..]),
+        ("unsafe_trust_relied_effect_provider", &["t::charge2()"][..]),
+    ] {
+        let fixture_dir = fe_test_runner_fixture_dir(fixture);
+        let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+        let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        for call in calls {
+            assert!(
+                output.contains("call relies on an `unsafe impl` that `u` wrote")
+                    && output.contains(call),
+                "{fixture}: expected a reliance error at `{call}`:\n{output}"
+            );
+        }
+        assert_eq!(
+            output
+                .matches("which is not allowed to use unsafe code")
+                .count(),
+            calls.len(),
+            "{fixture}: one error for each call:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_does_not_judge_an_unsafe_impl_that_a_choice_replaces() {
+    // The default method `b` of `Checked` is checked under `Self: Checked`.
+    // `with (t::GoodC)` chooses the trusted named implementation `GoodC` for
+    // it, so `u`'s ordinary `unsafe impl Checked for Y` never runs and needs
+    // no trust.
+    let fixture_dir = fe_test_runner_fixture_dir("unsafe_trust_relied_trusted_choice");
+    let fixture_dir = fixture_dir.to_str().expect("fixture dir utf8");
+    let (output, exit_code) = run_fe_main(&["test", fixture_dir]);
+    assert_eq!(exit_code, 0, "fe test failed:\n{output}");
+    assert!(
+        output.contains("PASS  [<time>] chosen_default"),
+        "expected chosen_default to pass, got:\n{output}"
     );
 }
 
@@ -6380,6 +7142,32 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
     }
 }
 
+// A program that names no implementation is unaffected by the checks that read
+// implied bounds from dictionaries. A message field of a recursive type has no
+// `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
+// `Node: AbiSize` from; the instance stays admitted, as it was before those
+// checks, and no conflicting-dictionaries error (16-0019) is reported. The
+// entry code of the contract cannot be generated, since the message has no
+// `Decode<Sol>`, and `fe check` reports that as `fe build` does (16-0024). The
+// refusal where a named implementation is involved is covered by
+// `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
+// `fe-hir`.
+#[test]
+fn named_checks_leave_recursive_message_fields_without_choices_alone() {
+    for fixture in [
+        "named_checks_recursive_field_without_choice.fe",
+        "named_checks_phantom_field_without_choice.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 1, "{fixture}: {output}");
+        assert!(output.contains("16-0024"), "{fixture}: {output}");
+        assert!(!output.contains("16-0019"), "{fixture}: {output}");
+    }
+}
+
 #[test]
 fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
     let source = include_str!("fixtures/named_storage_alias.fe");
@@ -6751,4 +7539,646 @@ fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
             "unrelated choice cannot reject ordinary generic codec: {output}"
         );
     }
+}
+
+/// A workspace whose member `tool` has a derive header naming a type that is
+/// not a provider and depends on `lib`, which sets another target.
+fn write_header_error_workspace(root: &Path) {
+    fs::create_dir_all(root.join("lib/src")).unwrap();
+    fs::create_dir_all(root.join("tool/src")).unwrap();
+    fs::write(
+        root.join("fe.toml"),
+        "[workspace]\nname = \"ws\"\nversion = \"0.1.0\"\nmembers = [\"tool\"]\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib/fe.toml"),
+        "[ingot]\nname = \"lib\"\nversion = \"0.1.0\"\ntarget = \"native\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("lib/src/lib.fe"),
+        "pub fn answer() -> u256 { 0 }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tool/fe.toml"),
+        "[ingot]\nname = \"tool\"\nversion = \"0.1.0\"\n[dependencies]\nlib = { path = \"../lib\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("tool/src/lib.fe"),
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_cli_workspace_reports_a_dependency_target_mismatch_before_any_provider_runs() {
+    // For a single ingot the mismatch is reported first. In a workspace the
+    // header of the member was prepared first, so a provider ran against a
+    // dependency that this command does not compile, and its error hid the
+    // mismatch.
+    let temp = tempdir().unwrap();
+    write_header_error_workspace(temp.path());
+    for command in ["check", "build"] {
+        let (output, exit) = run_fe_main_in_dir(&[command], temp.path());
+        assert_eq!(exit, 1, "{command}: {output}");
+        assert!(
+            output.contains("targets `native`, but this command compiles for"),
+            "{command}: {output}"
+        );
+        assert!(!output.contains("NotAProvider"), "{command}: {output}");
+    }
+}
+
+#[test]
+fn test_cli_check_locates_a_generation_error_by_line_and_column() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("bad_header.fe");
+    fs::write(
+        &path,
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("bad_header.fe:3:1: "), "{output}");
+    assert!(!output.contains(".fe:44..70"), "{output}");
+}
+
+#[test]
+fn test_cli_report_records_a_generation_error() {
+    // A report of a failed command holds the generation error, as the report
+    // of `fe check` on a package does.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("bad_header.fe");
+    fs::write(
+        &path,
+        "struct NotAProvider {}\nstruct S { a: u256 }\nimpl S with (NotAProvider)\n",
+    )
+    .unwrap();
+    for command in ["check", "build"] {
+        let archive = temp.path().join(format!("{command}-report.tar.gz"));
+        let args = [
+            command,
+            "--report",
+            "--report-out",
+            archive.to_str().unwrap(),
+            path.to_str().unwrap(),
+        ];
+        let (output, exit) = run_fe_main(&args);
+        assert_eq!(exit, 1, "{command}: {output}");
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&archive)
+            .output()
+            .expect("tar lists the report");
+        let listing = String::from_utf8_lossy(&listing.stdout).to_string();
+        let entry = listing
+            .lines()
+            .find(|line| line.ends_with("errors/generation.txt"))
+            .unwrap_or_else(|| panic!("{command}: no generation error in the report:\n{listing}"));
+        let text = Command::new("tar")
+            .arg("-xzOf")
+            .arg(&archive)
+            .arg(entry)
+            .output()
+            .expect("tar reads the entry");
+        assert!(
+            String::from_utf8_lossy(&text.stdout).contains("NotAProvider"),
+            "{command}: {text:?}"
+        );
+    }
+}
+
+#[test]
+fn named_output_possible_overlap_is_refused() {
+    // The named header and the ordinary one overlap where `T::Out` is `u8`,
+    // and give different `Result` types there.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/named_output_possible_overlap.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+    assert!(output.contains("may overlap"), "{output}");
+
+    // The same shape with equal outputs is accepted and runs the named one.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_output_possible_overlap_agree.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+const OUTPUT_AGREEMENT_A: &str = r#"pub trait Marker {}
+pub trait Foo {
+    type Out
+    fn make() -> Self::Out
+}
+impl<T: Marker> Foo for T {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+pub impl<T: Marker> Foo for T as NamedInA {
+    type Out = u8
+    fn make() -> u8 { 2 }
+}
+"#;
+
+fn write_output_agreement_ingots(root: &Path, b_source: &str) {
+    for (path, content) in [
+        ("a/fe.toml", "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n"),
+        ("a/src/lib.fe", OUTPUT_AGREEMENT_A),
+        (
+            "b/fe.toml",
+            "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n\n[dependencies]\na = { path = \"../a\" }\n",
+        ),
+        ("b/src/lib.fe", b_source),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+}
+
+#[test]
+fn named_output_agreement_across_ingots() {
+    // An ordinary implementation in a downstream ingot gives `S` other
+    // outputs than the upstream named implementation a use chooses.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = (u256, u256)
+    fn make() -> (u256, u256) { (1, 2) }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> (u256, u256) { with (NamedInA, FakeMarker) { call<S>() } }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["check", b.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("call<S>()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the use is accepted and runs the named implementation.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> u8 { with (NamedInA, FakeMarker) { call<S>() } }
+
+#[test]
+fn t() { assert(boom() == 2) }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", b.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_condition_cannot_change_ordinary_outputs() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // An ordinary blanket implementation whose condition holds only through a
+    // choice, beside an ordinary implementation with other outputs.
+    let path = fixtures.join("named_condition_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn gen"), "{output}");
+    assert!(output.contains("<T as Foo>::make()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+    assert!(
+        output.contains("`S: Foo` is answered here by `impl<T: Marker> Foo for T`"),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+
+    // No ordinary implementation defines the outputs at the goal.
+    let path = fixtures.join("named_condition_no_ordinary_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains("no ordinary implementation defines its associated outputs"),
+        "{output}"
+    );
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // The same in a generic body whose instance picks the choice.
+    let path = fixtures.join("named_condition_generic_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn g"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the blanket implementation runs.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("agree.fe");
+    // The fixture is read as checked out, so its line endings depend on the
+    // platform. Each replaced fragment stays within one line, and each must
+    // match exactly once, so a fragment that no longer matches fails here
+    // instead of leaving the fixture unchanged.
+    let mut agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe")).unwrap();
+    for (from, to) in [
+        ("type Out = u8", "type Out = u256"),
+        ("fn make() -> u8 { 2 }", "fn make() -> u256 { 2 }"),
+        ("fn boom() -> u8", "fn boom() -> u256"),
+        ("assert(boom() == 2)", "assert(boom() == 1)"),
+    ] {
+        assert_eq!(agreeing.matches(from).count(), 1, "`{from}` in {agreeing}");
+        agreeing = agreeing.replace(from, to);
+    }
+    fs::write(&path, agreeing).unwrap();
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_entry_codec_identity() {
+    // Two reads of one entry of a generic collection, one under a codec
+    // choice and one without, run their own codecs. Two reads under the same
+    // choice share a dispatch.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_storage_entry_codec_identity.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_local_generic_choice() {
+    // A named implementation declared inside a generic function applies, with
+    // the function's own arguments, to a codec proof that completes at the
+    // instance. The control has a header that matches at check time.
+    for fixture in [
+        "named_storage_local_generic_choice.fe",
+        "named_storage_local_generic_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn concrete_component_runtime() {
+    // A goal on a concrete type that the dictionary of a pinned bound holds
+    // reads that dictionary: in a function, an implementation's method, a
+    // closure and a function item. A named implementation with a generic
+    // condition opens in a function whose bound pins the condition's
+    // associated type. A `for` loop and the call it sits beside read one
+    // iteration, and an indexing read and a call read one lane codec.
+    for fixture in [
+        "concrete_component_call_bound.fe",
+        "concrete_component_impl_method.fe",
+        "concrete_component_pinned_named_condition.fe",
+        "concrete_component_closure_item.fe",
+        "concrete_component_loop_plan.fe",
+        "concrete_component_entry_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn named_function_item_and_spliced_row_forms() {
+    // A function item passed to a callable bound runs with the proofs of its
+    // bounds made where it is passed, in the forms of a trait method, a
+    // method with its own bound, a function with an effect passed under
+    // several providers, and a relay through a generic body. A spliced row
+    // supplies its components in the forms of two components, a direct effect
+    // before the row, a supertrait of the key trait and two generic bodies.
+    for (fixture, passed) in [
+        ("named_function_item_trait_method.fe", 7),
+        ("named_function_item_forms.fe", 6),
+        ("named_function_item_providers.fe", 1),
+        ("named_function_item_method_bound.fe", 3),
+        ("named_function_item_relay_by_choice.fe", 3),
+        ("named_function_item_relay_named_only.fe", 3),
+        ("named_spliced_row_forms.fe", 7),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(
+            output.contains(&format!("test result: ok. {passed} passed; 0 failed")),
+            "{fixture}: {output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
+    // Two implementations of a foreign trait overlap through an implementation
+    // of a foreign bound that the checking ingot declares, which the trait's
+    // own ingot cannot see.
+    let conflicting = fe_test_runner_fixture_dir("overlap_foreign_trait");
+    let (output, exit_code) = run_fe_main(&["check", conflicting.to_str().expect("utf8")]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("conflicting trait implementations"),
+        "{output}"
+    );
+
+    // Where one of them names a type the bound does not cover, they stay disjoint.
+    let disjoint = fe_test_runner_fixture_dir("overlap_foreign_trait_disjoint");
+    let (output, exit_code) = run_fe_main(&["check", disjoint.to_str().expect("utf8")]);
+    assert_eq!(exit_code, 0, "{output}");
+}
+
+/// Runs `fe` and fails the test, killing the process, if it has not finished
+/// within `limit`. A compiler that does not stop is the failure under test.
+fn run_fe_main_within(args: &[&str], limit: std::time::Duration) -> (String, i32) {
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let dir = tempdir().expect("tempdir");
+    let stdout = fs::File::create(dir.path().join("stdout")).expect("stdout file");
+    let stderr = fs::File::create(dir.path().join("stderr")).expect("stderr file");
+    let mut child = Command::new(fe_binary())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to spawn fe {args:?}"));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for fe") {
+            break Some(status);
+        }
+        if start.elapsed() > limit {
+            child.kill().expect("kill fe");
+            child.wait().expect("reap fe");
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let read = |name: &str| {
+        normalize_output(&String::from_utf8_lossy(
+            &fs::read(dir.path().join(name)).expect("read output"),
+        ))
+    };
+    let output = format!("{}{}", read("stdout"), read("stderr"));
+    let Some(status) = status else {
+        panic!("fe {args:?} did not finish within {limit:?}: {output}");
+    };
+    (output, status.code().unwrap_or(-1))
+}
+
+#[test]
+fn named_polymorphic_recursion_reaches_the_instance_limit() {
+    // The recursive call's dictionary holds a named implementation, and every
+    // instance of `deep` is new. The instance limit ends the chain, as it does
+    // for the same recursion without a choice or with the choice inside the
+    // body.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for name in [
+        "named_polyrec_control.fe",
+        "named_polyrec_local_choice.fe",
+        "named_polyrec_named.fe",
+    ] {
+        let path = fixtures.join(name);
+        let (output, exit) = run_fe_main_within(
+            &["check", path.to_str().unwrap()],
+            std::time::Duration::from_secs(120),
+        );
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(output.contains("16-0016"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_condition_answered_goal_needs_ordinary_outputs() {
+    // A goal with outputs, answered only through a choice, is refused even
+    // where the program reads no output: no ordinary implementation defines
+    // the outputs the type checker would assume for it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_unused_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains(
+            "`S: Foo` is answered here by `impl<T: Marker> Foo for T`, but no ordinary implementation defines its associated outputs at `S: Foo`"
+        ),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+}
+
+#[test]
+fn named_constant_computed_under_its_own_choice() {
+    // The constant of a named implementation runs a method of the same
+    // implementation under `with`. Checking the constant checks the
+    // computation, which uses the implementation again.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let limit = std::time::Duration::from_secs(120);
+    let path = fixtures.join("named_const_cycle.fe");
+    let (output, exit) =
+        run_fe_main_within(&["test", "--jobs", "1", path.to_str().unwrap()], limit);
+    assert_eq!(exit, 0, "{output}");
+
+    let path = fixtures.join("named_const_cycle_disagree.fe");
+    let (output, exit) = run_fe_main_within(&["check", path.to_str().unwrap()], limit);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+}
+
+#[test]
+fn named_output_walk_does_not_follow_a_body_with_errors() {
+    // `boom` fails internally because `gen<S>` under a named choice disagrees
+    // with ordinary normalization, so admission looks for a disagreement in the
+    // instances `boom` calls. The body of `deep` has an unresolved name, and
+    // its calls are not followed: `deep` calls itself at an ever-growing type,
+    // and no instance limit is reported for a body with errors.
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_walk_blocked_body.fe");
+    let (output, exit) = run_fe_main_within(
+        &["check", path.to_str().unwrap()],
+        std::time::Duration::from_secs(120),
+    );
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("8-0012"), "{output}");
+    assert!(!output.contains("16-"), "{output}");
+}
+
+#[test]
+fn a_constant_generated_under_a_derive_header_cannot_open_a_provider() {
+    // The value of a constant that `impl Target with (MakeConst)` generates
+    // writes `with (P2) { 7 }`. The constant is generated code, so it opens no
+    // provider, whichever file holds the header; the check ends with a
+    // diagnostic and does not panic.
+    let manifest = "[ingot]\nname = \"opening\"\nversion = \"0.1.0\"\n";
+    let lib = "use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+
+pub trait Arity { const fn arity() -> usize }
+pub struct P2 {}
+impl Derive<trait Arity> for P2 {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { const fn arity() -> usize { 7 } }
+    }
+}
+pub struct MakeConst {}
+impl DeriveInherent for MakeConst {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote {
+            pub const K: usize = with (P2) { 7 }
+        }
+    }
+}
+pub struct Target { a: u256 }
+";
+    let header = "use super::{Target, MakeConst}\nimpl Target with (MakeConst)\n";
+    let control = lib.replace(
+        "pub const K: usize = with (P2) { 7 }",
+        "pub const K: usize = 7",
+    );
+    let temp = tempdir().unwrap();
+    for (name, lib, expected_exit) in [("opens", lib, 1), ("control", control.as_str(), 0)] {
+        let root = temp.path().join(name);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("fe.toml"), manifest).unwrap();
+        fs::write(root.join("src/lib.fe"), lib).unwrap();
+        fs::write(root.join("src/other.fe"), header).unwrap();
+        let (output, exit) = run_fe_main(&["check", root.to_str().unwrap()]);
+        assert!(!output.contains("panicked"), "{name}: {output}");
+        assert_eq!(exit, expected_exit, "{name}: {output}");
+        if expected_exit != 0 {
+            assert!(
+                output.contains("generated openings need a portable generated-owner identity"),
+                "{name}: {output}"
+            );
+        }
+    }
+}
+
+fn inherited_default_choices_fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/inherited_default_choices")
+        .join(name)
+        .to_str()
+        .expect("utf-8 path")
+        .to_string()
+}
+
+#[test]
+fn inherited_default_under_a_named_implementation_is_the_implementations_own() {
+    // The default of `K` inherited by a named implementation is checked as if
+    // the implementation had written the same text: `Self::m()` is the named
+    // implementation's, so `K` is 7 there and the ordinary implementation's `K`
+    // is 1, which is refused as it is where the named implementation writes the
+    // constant itself.
+    for name in ["named_inherits_default.fe", "named_writes_default.fe"] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("error[5-0005]")
+                && output.contains("`K` must agree across implementations of this slot"),
+            "{name}: expected 5-0005 on `K`:\n{output}"
+        );
+        assert!(
+            !output.contains("16-0004"),
+            "{name}: expected no internal error:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn inherited_default_proofs_come_from_the_implementations_bounds() {
+    // Defaults checked for an implementation that have no named implementation
+    // to open keep their values, read directly, under `with` and through a
+    // generic reader.
+    for name in [
+        "supertrait_method.fe",
+        "supertrait_chosen_by_with.fe",
+        "generic_impl_assoc_bound.fe",
+        "self_other.fe",
+        "generic_impl_supertrait_condition.fe",
+        "trait_param_bound.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &inherited_default_choices_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+}
+
+#[test]
+fn opened_implementation_is_a_constant_candidate_only_where_its_conditions_hold() {
+    // An implementation opened by `with` whose condition does not hold for the
+    // receiver is not a candidate for a constant, as it is not for a method.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &inherited_default_choices_fixture("opened_condition_unmet.fe"),
+    ]);
+    assert_eq!(exit, 0, "expected both reads to select `T1`:\n{output}");
+
+    // Where it holds, the constant and the method are ambiguous alike.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("opened_condition_met.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[2-0018]") && output.contains("`K` is ambiguous"),
+        "expected the constant to be ambiguous:\n{output}"
+    );
+    assert!(
+        output.contains("error[2-0016]"),
+        "expected the method to be ambiguous:\n{output}"
+    );
+}
+
+#[test]
+fn path_applications_of_an_inherited_default_are_checked_for_the_implementation() {
+    // `Bounded<{ Self::N }>` in an inherited default is refused for an
+    // implementation whose `N` is 0, as it is where the implementation writes
+    // the same text. The default is refused at the implementation, with the
+    // unmet requirement as the reason.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_written.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0093]") && output.contains("condition evaluated to `false`"),
+        "expected 8-0093:\n{output}"
+    );
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &inherited_default_choices_fixture("path_application_inherited.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[8-0167]")
+            && output.contains("the default value of `K` does not type-check")
+            && output.contains("const requirement is not satisfied"),
+        "expected the default refused at the implementation:\n{output}"
+    );
 }

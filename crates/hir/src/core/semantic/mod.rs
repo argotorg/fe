@@ -57,7 +57,7 @@ pub use storage_layout::{
     AllocatedContractStorageLayout, ContractFieldId, ContractLayoutEntry, ContractLayoutEntryKind,
     ContractLayoutError, ContractLayoutLane, ContractLayoutPath, ContractLayoutPathSegment,
     ContractLayoutReport, ContractLayoutValue, ContractStorageLayoutResult, FieldStorageLayout,
-    ValidatedFieldLayoutPlan, contract_field_lane, storage_lane_bytes,
+    ValidatedFieldLayoutPlan, ZeroInvalidReason, contract_field_lane, storage_lane_bytes,
 };
 pub(crate) use storage_layout::{storage_field_lanes, storage_slot_span};
 pub use symbol::{
@@ -1931,6 +1931,22 @@ impl<'db> RecvArmView<'db> {
         let is_ref = |pat: PatId| name_marker(pat) == Some(BindingMarker::Ref);
         let in_place = bindings.iter().any(|binding| is_ref(binding.pat));
         let field_tys = variant_ty.field_types(db);
+        // The fields the arm decodes in full: every field of a message that is
+        // read whole, else the fields bound by a plain name or by a pattern
+        // that binds a name. A `ref` name reads its field where it lies and a
+        // field that binds no name is not read.
+        let decoded: Vec<u32> = if in_place {
+            bindings
+                .iter()
+                .filter(|binding| match name_marker(binding.pat) {
+                    Some(marker) => marker != BindingMarker::Ref,
+                    None => pat_binds_name(db, hir_arm.body, binding.pat),
+                })
+                .map(|binding| binding.tuple_index)
+                .collect()
+        } else {
+            (0..field_tys.len() as u32).collect()
+        };
         let fields = bindings
             .iter()
             .filter(|binding| name_marker(binding.pat).is_some())
@@ -1951,6 +1967,7 @@ impl<'db> RecvArmView<'db> {
                 in_place: false,
                 input_ty: None,
                 fields,
+                decoded,
                 failures: Vec::new(),
             };
         }
@@ -1959,6 +1976,7 @@ impl<'db> RecvArmView<'db> {
             in_place: true,
             input_ty: None,
             fields,
+            decoded,
             failures: Vec::new(),
         };
         let invalid = TyId::invalid(db, InvalidCause::Other);
@@ -2008,34 +2026,51 @@ impl<'db> RecvArmView<'db> {
                 GoalSatisfiability::Satisfied(_)
             )
         };
-        let (Some(abi_fields), Some(part)) = (
+        let (Some(abi_fields), Some(part), Some(abi_size), Some(heads_before), Some(copy)) = (
             resolve_lib_trait_path(db, scope, "std::abi::AbiFields"),
             resolve_lib_trait_path(db, scope, "std::abi::Part"),
+            resolve_core_trait(db, scope, &["abi", "AbiSize"]),
+            resolve_lib_trait_path(db, scope, "std::abi::HeadsBefore"),
+            resolve_core_trait(db, scope, &["marker", "Copy"]),
         ) else {
             unreadable(&mut reading);
             return reading;
         };
+        let Some(first_in_place) = reading
+            .fields
+            .iter()
+            .find(|field| field.in_place)
+            .map(|field| field.pat)
+        else {
+            unreadable(&mut reading);
+            return reading;
+        };
         if !satisfied(abi_fields, vec![variant_ty]) {
-            if let Some(first) = reading.fields.iter().find(|field| field.in_place) {
-                reading.failures.push(RecvReadingFailure::NotFieldwise {
-                    pat: first.pat,
-                    variant_ty,
+            reading.failures.push(RecvReadingFailure::NotFieldwise {
+                pat: first_in_place,
+                variant_ty,
+            });
+            unreadable(&mut reading);
+            return reading;
+        }
+        // `std::abi::message_args` needs the message's size and a copyable
+        // input; each read below needs the sizes of the heads before it.
+        for (trait_, ty) in [(abi_size, variant_ty), (copy, input_ty)] {
+            if !satisfied(trait_, vec![ty]) {
+                reading.failures.push(RecvReadingFailure::BoundNotMet {
+                    pat: first_in_place,
+                    bound: TraitInstId::new_simple(db, trait_, vec![ty]),
                 });
             }
+        }
+        if !reading.failures.is_empty() {
             unreadable(&mut reading);
             return reading;
         }
         let part_of = IdentId::new(db, "Of".to_string());
         for field in reading.fields.iter_mut().filter(|field| field.in_place) {
             let inst = TraitInstId::new_simple(db, part, vec![field.field_ty, input_ty, abi]);
-            if satisfied(part, vec![field.field_ty, input_ty, abi]) {
-                field.binding_ty = normalize_ty(
-                    db,
-                    TyId::assoc_ty(db, inst.trait_ref(db), part_of),
-                    scope,
-                    assumptions,
-                );
-            } else {
+            if !satisfied(part, vec![field.field_ty, input_ty, abi]) {
                 reading.failures.push(RecvReadingFailure::FieldNotPart {
                     pat: field.pat,
                     field_ty: field.field_ty,
@@ -2043,7 +2078,56 @@ impl<'db> RecvArmView<'db> {
                     abi_ty: abi,
                 });
                 field.binding_ty = invalid;
+            } else if !satisfied(abi_size, vec![field.field_ty]) {
+                reading.failures.push(RecvReadingFailure::BoundNotMet {
+                    pat: field.pat,
+                    bound: TraitInstId::new_simple(db, abi_size, vec![field.field_ty]),
+                });
+                field.binding_ty = invalid;
+            } else {
+                field.binding_ty = normalize_ty(
+                    db,
+                    TyId::assoc_ty(db, inst.trait_ref(db), part_of),
+                    scope,
+                    assumptions,
+                );
             }
+        }
+        // Where a field's head lies is the sum of the sizes of the heads
+        // before it, for a field read in place and for one decoded in full.
+        let mut unsized_before = FxHashSet::default();
+        for binding in &bindings {
+            let read = reading
+                .fields
+                .iter()
+                .any(|field| field.pat == binding.pat && field.in_place)
+                || reading.decoded.contains(&binding.tuple_index);
+            if !read {
+                continue;
+            }
+            let earlier = &field_tys[..binding.tuple_index as usize];
+            let before_ty = crate::analysis::ty::fields_before_ty(db, earlier);
+            if satisfied(heads_before, vec![before_ty]) {
+                continue;
+            }
+            // `HeadsBefore` holds when every earlier field has a size.
+            let bound = match earlier.iter().find(|ty| !satisfied(abi_size, vec![**ty])) {
+                Some(ty) => TraitInstId::new_simple(db, abi_size, vec![*ty]),
+                None => TraitInstId::new_simple(db, heads_before, vec![before_ty]),
+            };
+            if unsized_before.insert(bound) {
+                reading.failures.push(RecvReadingFailure::BoundNotMet {
+                    pat: binding.pat,
+                    bound,
+                });
+            }
+        }
+        if reading
+            .failures
+            .iter()
+            .any(|failure| matches!(failure, RecvReadingFailure::BoundNotMet { .. }))
+        {
+            unreadable(&mut reading);
         }
         reading
     }
@@ -2101,7 +2185,23 @@ impl<'db> RecvArmView<'db> {
                 )?,
             });
         }
-        let Some(input_ty) = reading.input_ty.filter(|_| reading.failures.is_empty()) else {
+        // The failures of the reading are reported at their fields by the
+        // arm's type check; the plan names the same unmet traits, so that the
+        // entry code is refused whether or not that check ran.
+        if !reading.failures.is_empty() {
+            return Err(EntryPlanError::NoInstance(
+                reading
+                    .failures
+                    .iter()
+                    .map(|failure| UnmetGoal {
+                        arg: None,
+                        goal: failure.unmet_goal(db),
+                        cause: None,
+                    })
+                    .collect(),
+            ));
+        }
+        let Some(input_ty) = reading.input_ty else {
             return Err(EntryPlanError::Failed(
                 "recv arm reads in place but its reads are not valid".to_string(),
             ));
@@ -2169,6 +2269,11 @@ pub struct RecvArmReading<'db> {
     pub input_ty: Option<TyId<'db>>,
     /// One entry for each field the pattern binds, in the pattern's order.
     pub fields: Vec<RecvFieldReading<'db>>,
+    /// The tuple indices of the fields the arm decodes in full, so that each
+    /// needs `Decode<Sol>`: all fields of a message read whole; else the
+    /// fields bound by a plain name or by a pattern that binds a name. A field
+    /// read with `ref`, or bound to no name, is not decoded.
+    pub decoded: Vec<u32>,
     /// Why a `ref` field cannot be read in place; the arm's type check
     /// reports them.
     pub failures: Vec<RecvReadingFailure<'db>>,
@@ -2203,6 +2308,33 @@ pub enum RecvReadingFailure<'db> {
         input_ty: TyId<'db>,
         abi_ty: TyId<'db>,
     },
+    /// A trait that reading the message in place relies on is not
+    /// implemented: the size of the message or of a field, or the copy of the
+    /// input; reported at the field the read is for.
+    BoundNotMet { pat: PatId, bound: TraitInstId<'db> },
+}
+
+impl<'db> RecvReadingFailure<'db> {
+    /// The goal that is not satisfied, as the entry plan names it.
+    fn unmet_goal(&self, db: &'db dyn HirAnalysisDb) -> String {
+        match self {
+            Self::NotFieldwise { variant_ty, .. } => {
+                format!("{}: AbiFields", variant_ty.pretty_print(db))
+            }
+            Self::FieldNotPart {
+                field_ty,
+                input_ty,
+                abi_ty,
+                ..
+            } => format!(
+                "{}: Part<{}, {}>",
+                field_ty.pretty_print(db),
+                input_ty.pretty_print(db),
+                abi_ty.pretty_print(db)
+            ),
+            Self::BoundNotMet { bound, .. } => bound.pretty_print(db, true),
+        }
+    }
 }
 
 /// The instances the dispatcher of a recv arm runs to read the message.
@@ -3375,6 +3507,25 @@ fn contract_effect_resolutions_canonical<'db>(
         .collect()
 }
 
+/// Whether `pat` binds a name, whatever its marker: a name, or a pattern with
+/// one inside. `_`, `..`, literals and paths that are not a single name bind
+/// none.
+fn pat_binds_name<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>, pat: PatId) -> bool {
+    match pat.data(db, body) {
+        Partial::Present(Pat::Path(Partial::Present(path), _)) => path.as_ident(db).is_some(),
+        Partial::Present(Pat::Tuple(pats) | Pat::PathTuple(_, pats)) => {
+            pats.iter().any(|pat| pat_binds_name(db, body, *pat))
+        }
+        Partial::Present(Pat::Record(_, fields)) => fields
+            .iter()
+            .any(|field| pat_binds_name(db, body, field.pat)),
+        Partial::Present(Pat::Or(left, right)) => {
+            pat_binds_name(db, body, *left) || pat_binds_name(db, body, *right)
+        }
+        _ => false,
+    }
+}
+
 fn compute_arg_bindings<'db>(
     db: &'db dyn HirAnalysisDb,
     variant_struct: Struct<'db>,
@@ -3679,7 +3830,7 @@ fn selector_signature_from_expr<'db>(
                 visited,
             )
         }
-        crate::analysis::ty::ty_check::ConstRef::InherentConst(use_) => {
+        crate::analysis::ty::ty_check::ConstRef::InherentConst { use_, .. } => {
             // Follow the inherent const's value body so a selector that
             // delegates to `Selectors::TRANSFER` resolves the underlying
             // `sol("...")` signature, mirroring the top-level `Const` branch.
@@ -4184,6 +4335,25 @@ impl<'db> WherePredicateView<'db> {
         let owner_item = ItemKind::from(self.clause.owner);
         let assumptions = header_constraints_for(db, owner_item);
         Some(lower_hir_ty(db, hir_ty, owner_item.scope(), assumptions))
+    }
+
+    /// Errors the written subject type reports, as a type written anywhere
+    /// does: an invisible name, a duplicate or unknown associated binding.
+    pub fn subject_written_ty_errors(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TyDiagCollection<'db>> {
+        let Some(hir_ty) = self.hir_pred(db).ty.to_opt() else {
+            return Vec::new();
+        };
+        let owner_item = ItemKind::from(self.clause.owner);
+        collect_ty_lower_errors(
+            db,
+            owner_item.scope(),
+            hir_ty,
+            self.span().ty(),
+            header_constraints_for(db, owner_item),
+        )
     }
 
     /// True if the lowered subject type is a const type.
@@ -5214,12 +5384,18 @@ impl<'db> ImplTrait<'db> {
     /// Semantic self type of this impl-trait block.
     pub fn ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
         let assumptions = constraints_for(db, self.into());
+        match self.type_ref(db).to_opt() {
+            Some(_) => self.normalize_self_ty(db, self.declared_ty(db), assumptions),
+            None => TyId::invalid(db, InvalidCause::ParseError),
+        }
+    }
+
+    /// The self type as the header writes it, before normalization.
+    pub(crate) fn declared_ty(self, db: &'db dyn HirAnalysisDb) -> TyId<'db> {
+        let assumptions = constraints_for(db, self.into());
         self.type_ref(db).to_opt().map_or_else(
             || TyId::invalid(db, InvalidCause::ParseError),
-            |hir_ty| {
-                let ty = lower_hir_ty(db, hir_ty, self.scope(), assumptions);
-                self.normalize_self_ty(db, ty, assumptions)
-            },
+            |hir_ty| lower_hir_ty(db, hir_ty, self.scope(), assumptions),
         )
     }
 
@@ -5289,7 +5465,7 @@ impl<'db> ImplTrait<'db> {
                 if cand_impl_trait == self {
                     continue;
                 }
-                if does_impl_trait_conflict(db, cand_view, implementor)
+                if does_impl_trait_conflict(db, self.scope(), cand_view, implementor)
                     && !Self::impl_trait_conflict_is_sealed_marker_disjoint(
                         db,
                         cand_impl_trait,
@@ -5721,13 +5897,14 @@ impl<'db> ImplTrait<'db> {
         };
         use crate::analysis::ty::diagnostics::TraitLowerDiag;
 
-        // First check implementor type
+        // First check implementor type. The written type reports its own
+        // errors whether or not lowering produced an invalid type.
         let ty = self.ty(db);
+        let diags = self.ty_errors(db);
+        if !diags.is_empty() {
+            return (None, diags);
+        }
         if ty.has_invalid(db) {
-            let diags = self.ty_errors(db);
-            if !diags.is_empty() {
-                return (None, diags);
-            }
             if let Some(diag) = ty.emit_diag(db, self.span().ty().into()) {
                 return (None, vec![diag]);
             }
@@ -5787,18 +5964,21 @@ impl<'db> ImplTrait<'db> {
                             }
                             NamedOutputMismatch::AssocType {
                                 ordinary: true,
+                                possible,
                                 name,
                                 expected,
                                 given,
                                 ..
                             } => TraitLowerDiag::NamedAssociatedTypeMismatch {
                                 primary: self,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
                             NamedOutputMismatch::AssocType {
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
@@ -5806,25 +5986,31 @@ impl<'db> ImplTrait<'db> {
                             } => TraitLowerDiag::NamedAssociatedTypeDisagreement {
                                 primary: self,
                                 with,
+                                possible,
                                 name,
                                 expected,
                                 given,
                             },
-                            NamedOutputMismatch::AssocConst { with, name } => {
-                                TraitLowerDiag::NamedAssociatedConstMismatch {
-                                    primary: self,
-                                    with,
-                                    name,
-                                }
-                            }
+                            NamedOutputMismatch::AssocConst {
+                                with,
+                                possible,
+                                name,
+                            } => TraitLowerDiag::NamedAssociatedConstMismatch {
+                                primary: self,
+                                with,
+                                possible,
+                                name,
+                            },
                             NamedOutputMismatch::Row {
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             } => TraitLowerDiag::NamedAssociatedRowMismatch {
                                 primary: self,
                                 with,
                                 ordinary,
+                                possible,
                                 name,
                             },
                         }
@@ -7027,11 +7213,12 @@ impl<'db> FieldView<'db> {
                         collection: *collection,
                     }
                 }
-                ContractLayoutError::ZeroInvalidInState { invalid } => {
+                ContractLayoutError::ZeroInvalidInState { invalid, reason } => {
                     TyLowerDiag::ContractFieldZeroInvalid {
                         span,
                         ty,
                         invalid: *invalid,
+                        reason: *reason,
                     }
                 }
                 ContractLayoutError::EntryLayout { entry, reason } => {

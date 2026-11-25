@@ -1,7 +1,7 @@
 //! Use-based trust for the unsafe code of dependencies.
 //!
 //! An ingot's unsafe code is trusted when the ingot is the user's own code
-//! (a trust root), `core` or `std`, or a dependency that a trusted ingot
+//! (a trust root), the embedded `core` or `std`, or a dependency that a trusted ingot
 //! declares with `allow_unsafe = true`. Only use counts: the semantic access
 //! walk starts from the bodies of a trust root's modules, follows calls into
 //! every ingot, including indexing's generated `locate` calls and the bodies
@@ -17,74 +17,91 @@
 //! that asked is not a contributor. A fragment that a quotation splices keeps
 //! its writer, and each quotation around it placed the fragment into the code
 //! that runs, so the writer and every placer must be trusted for an `unsafe`
-//! block in it. An `unsafe impl` asserts all of its members, whoever wrote
+//! block in it. The same holds for each operation that needs an unsafe
+//! context, such as a dereference: the packages of the operation's own text
+//! must be trusted, whoever wrote the block that allows it. An `unsafe impl` asserts all of its members, whoever wrote
 //! them, so the ingot that wrote the `unsafe impl` is the one that must be
 //! trusted for them.
 //!
 //! This is build policy, not typing: whether a caller builds depends on what
 //! the dependency's bodies contain, but nothing it means does.
-use std::collections::HashSet;
+use std::{cell::OnceCell, collections::HashSet};
 
 use common::{
     diagnostics::{
         CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
     },
     ingot::{Ingot, IngotKind},
+    stdlib::is_embedded_builtin,
 };
+use rustc_hash::FxHashSet;
 use url::Url;
+
+use super::EntryKind;
 
 use crate::{
     analysis::{
         HirAnalysisDb,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
-        semantic::{SemOrigin, diagnostics::SemanticDiagnosticSpan},
-        ty::ty_check::BodyOwner,
+        semantic::{SemOrigin, SemanticInstance, diagnostics::SemanticDiagnosticSpan},
+        ty::{
+            evidence::{Evidence, EvidenceId},
+            trait_def::ImplementorOrigin,
+            ty_check::{BodyOwner, infer_body},
+            unsafe_check::UnsafeOpSite,
+        },
     },
     hir_def::{BlockKind, Expr, HirIngot, ImplTrait, ItemKind, Partial, TopLevelMod},
     span::LazySpan,
 };
 
 /// The ingots whose unsafe code may run, for a walk from a trust root.
-pub(super) struct UnsafeTrust {
+pub(super) struct UnsafeTrust<'db> {
     trusted: HashSet<Url>,
+    root: Ingot<'db>,
+    /// The `unsafe impl`s of the program that an untrusted ingot wrote or
+    /// placed, found when first asked.
+    untrusted_impls: OnceCell<FxHashSet<ImplTrait<'db>>>,
 }
 
-impl UnsafeTrust {
+impl<'db> UnsafeTrust<'db> {
     /// The trust for a walk from `top_mod`, if its ingot is a trust root.
-    pub(super) fn for_root(db: &dyn HirAnalysisDb, top_mod: TopLevelMod<'_>) -> Option<Self> {
+    pub(super) fn for_root(db: &'db dyn HirAnalysisDb, top_mod: TopLevelMod<'db>) -> Option<Self> {
         let graph = db.dependency_graph();
-        graph
-            .is_trust_root(db, top_mod.ingot(db).base(db))
-            .then(|| Self {
-                trusted: graph.trusted_ingots(db),
-            })
+        let root = top_mod.ingot(db);
+        graph.is_trust_root(db, root.base(db)).then(|| Self {
+            trusted: graph.trusted_ingots(db),
+            root,
+            untrusted_impls: OnceCell::new(),
+        })
     }
 
     fn allows(&self, db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
+        // A package is not `core` or `std` because its manifest says so: the
+        // embedded libraries are trusted through the dependency graph, as
+        // the members of a checked workspace are.
         let url = ingot.base(db);
-        matches!(
-            ingot.kind(db),
-            IngotKind::Core | IngotKind::Std | IngotKind::StandAlone
-        ) || self.trusted.contains(url)
+        ingot.kind(db) == IngotKind::StandAlone
+            || self.trusted.contains(url)
             || !db.dependency_graph().contains_url(db, url)
     }
 
     /// Whether every ingot that contributed to `owner` is trusted: the one
     /// that wrote its body, and the ones that wrote or placed its unsafe code
-    /// (see `untrusted_site`). A body with an untrusted contributor is not
-    /// the trusted code's own: a call into it is judged, at the call.
-    pub(super) fn trusts_authors_of<'db>(
+    /// (see `owner_site`). A body with an untrusted contributor is not the
+    /// trusted code's own: a call into it is judged, at the call.
+    pub(super) fn trusts_authors_of(
         &self,
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
     ) -> bool {
-        self.allows(db, author_ingot(db, owner)) && self.untrusted_site(db, owner).is_none()
+        self.allows(db, author_ingot(db, owner)) && self.owner_site(db, owner).is_none()
     }
 
     /// The first ingot of `chain` that is not trusted. A chain lists the
     /// modules of the quotations that wrote and placed code: the writer
     /// first, the outermost placer last.
-    fn first_untrusted<'db>(
+    fn first_untrusted(
         &self,
         db: &'db dyn HirAnalysisDb,
         chain: &[TopLevelMod<'db>],
@@ -95,77 +112,162 @@ impl UnsafeTrust {
             .find(|ingot| !self.allows(db, *ingot))
     }
 
-    /// The `unsafe impl`s of the program that no call can reach, because they
-    /// have no function, and that an untrusted ingot wrote or placed. The
-    /// program is the ingot `root` and the ingots it depends on, and an
-    /// implementation counts wherever it is, with or without a use: it asserts
-    /// a contract that trusted code may rely on without any call into it.
-    pub(super) fn untrusted_unsafe_impls<'db>(
-        &self,
-        db: &'db dyn HirAnalysisDb,
-        root: Ingot<'db>,
-    ) -> Vec<UntrustedUnsafeImpl<'db>> {
-        let graph = db.dependency_graph();
-        let root_url = root.base(db).clone();
-        let urls = std::iter::once(root_url.clone()).chain(graph.dependency_urls(db, &root_url));
-        let mut found = Vec::new();
-        for url in urls {
-            let Some(ingot) = db.workspace().containing_ingot(db, url) else {
-                continue;
-            };
-            if matches!(ingot.kind(db), IngotKind::Core | IngotKind::Std) {
-                continue;
-            }
-            for implementation in ingot.all_impl_traits(db) {
-                if !implementation.is_unsafe(db) || implementation.methods(db).next().is_some() {
+    /// The `unsafe impl`s of the program, the root ingot and the ingots it
+    /// depends on, that an untrusted ingot wrote or placed. Empty in the
+    /// common case, which lets the walk skip every proof it would read.
+    fn untrusted_impls(&self, db: &'db dyn HirAnalysisDb) -> &FxHashSet<ImplTrait<'db>> {
+        self.untrusted_impls.get_or_init(|| {
+            let graph = db.dependency_graph();
+            let root_url = self.root.base(db).clone();
+            let urls =
+                std::iter::once(root_url.clone()).chain(graph.dependency_urls(db, &root_url));
+            let mut found = FxHashSet::default();
+            for url in urls {
+                let Some(ingot) = db.workspace().containing_ingot(db, url) else {
+                    continue;
+                };
+                if is_embedded_builtin(ingot.base(db)) {
                     continue;
                 }
-                if let Some(author) = self.first_untrusted(db, &impl_chain(db, *implementation)) {
-                    found.push(UntrustedUnsafeImpl {
-                        root,
-                        implementation: *implementation,
-                        author,
-                    });
+                for implementation in ingot.all_impl_traits(db) {
+                    if implementation.is_unsafe(db)
+                        && self
+                            .first_untrusted(db, &impl_chain(db, *implementation))
+                            .is_some()
+                    {
+                        found.insert(*implementation);
+                    }
                 }
             }
-        }
-        found
+            found
+        })
     }
 
-    /// The unsafe code `owner` runs and the first untrusted ingot that
-    /// contributed to it:
-    /// - all of the body, for a method of an `unsafe impl` that an untrusted
-    ///   ingot wrote, whose body is what the impl asserts correct (even if a
-    ///   provider of a trusted ingot supplied it);
-    /// - all of the body, for an `unsafe fn` that an untrusted ingot wrote or
-    ///   placed;
-    /// - else the first `unsafe` block, in any position of the body, that an
-    ///   untrusted ingot wrote or placed. Each block has its own chain: a
-    ///   fragment spliced into a body keeps the writer of its text, and the
-    ///   quotations around the fragment are its placers.
-    pub(super) fn untrusted_site<'db>(
+    /// The `unsafe impl`s that the untrusted ingots wrote or placed and that
+    /// `instance` relies on: those that prove one of the assumptions its body
+    /// is checked under, a bound of the function, of its implementation or of
+    /// its trait, `Self: Trait` for a member of a trait, and recursively the
+    /// implementations selected for the conditions of each. The proofs are
+    /// the ones the instance's body stores (`TypedBody::instance_bound_evidence`,
+    /// bound where the instance is made), the ones it runs with, so an
+    /// implementation that a `with` choice replaced is not reached. They are
+    /// read, not proved again. An assumption of a generic caller proves nothing here: it is
+    /// judged at the call that supplies the implementation.
+    fn relied_unsafe_impls(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) -> Vec<ImplTrait<'db>> {
+        let untrusted = self.untrusted_impls(db);
+        if untrusted.is_empty() {
+            return Vec::new();
+        }
+        let Some(bound) = instance.key(db).typed_body(db).instance_bound_evidence() else {
+            return Vec::new();
+        };
+        let mut pending: Vec<EvidenceId<'db>> = bound
+            .entries
+            .entries(db)
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
+        let mut relied = Vec::new();
+        while let Some(proof) = pending.pop() {
+            if let Evidence::Impl {
+                selected, conds, ..
+            } = proof.data(db)
+            {
+                if let ImplementorOrigin::Hir(implementation) = selected.origin(db)
+                    && untrusted.contains(&implementation)
+                    && !relied.contains(&implementation)
+                {
+                    relied.push(implementation);
+                }
+                pending.extend(conds.iter().copied());
+            }
+        }
+        relied
+    }
+
+    /// The unsafe code `instance` runs, or relies on, and the first untrusted
+    /// ingot that contributed to it: the first of its owner's obligations
+    /// (`owner_site`), else the first `unsafe impl` it relies on whose chain
+    /// has an untrusted ingot. A method of an `unsafe impl` is reported as
+    /// that, so a call gets one error.
+    pub(super) fn untrusted_site(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) -> Option<(TrustSite<'db>, Ingot<'db>)> {
+        self.owner_site(db, instance.key(db).owner(db)).or_else(|| {
+            self.relied_unsafe_impls(db, instance)
+                .into_iter()
+                .find_map(|implementation| {
+                    let ingot = self.first_untrusted(db, &impl_chain(db, implementation))?;
+                    Some((TrustSite::UnsafeImpl(implementation), ingot))
+                })
+        })
+    }
+
+    /// The first obligation of `owner`'s own body (see `obligations`) whose
+    /// chain has an untrusted ingot.
+    fn owner_site(
         &self,
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
-    ) -> Option<(SemOrigin<'db>, Ingot<'db>)> {
-        let body = owner.body(db)?;
-        if let Some(chain) = unsafe_impl_chain(db, owner)
-            && let Some(ingot) = self.first_untrusted(db, &chain)
-        {
-            return Some((SemOrigin::Body(owner), ingot));
+    ) -> Option<(TrustSite<'db>, Ingot<'db>)> {
+        self.obligations(db, owner)
+            .into_iter()
+            .find_map(|(site, chain)| {
+                Some((TrustSite::Origin(site), self.first_untrusted(db, &chain)?))
+            })
+    }
+
+    /// The places where `owner` relies on an unsafe assertion, each with the
+    /// modules of the quotations that wrote and placed the asserting text,
+    /// writer first. Each is unsafe code of every package of its chain:
+    /// - all of the body, for a method of an `unsafe impl`, whose body is what
+    ///   the impl asserts correct (even if a provider of a trusted ingot
+    ///   supplied it); the chain is the impl's;
+    /// - all of the body, for an `unsafe fn`;
+    /// - each `unsafe` block, in any position of the body. Each block has its
+    ///   own chain: a fragment spliced into a body keeps the writer of its
+    ///   text, and the quotations around the fragment are its placers;
+    /// - each operation that needs an unsafe context (a dereference of a
+    ///   pointer, a call of an `unsafe fn`, an `unsafe` field), found by the
+    ///   unsafe checker. Its chain is that of the operation's own text, which
+    ///   may differ from the chain of the context that allows it.
+    fn obligations(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+    ) -> Vec<(SemOrigin<'db>, Vec<TopLevelMod<'db>>)> {
+        let Some(body) = owner.body(db) else {
+            return Vec::new();
+        };
+        let mut obligations = Vec::new();
+        if let Some(chain) = unsafe_impl_chain(db, owner) {
+            obligations.push((SemOrigin::Body(owner), chain));
         }
-        if matches!(owner, BodyOwner::Func(func, _) if func.is_unsafe(db))
-            && let Some(ingot) = self.first_untrusted(db, &body.quote_chain(db))
-        {
-            return Some((SemOrigin::Body(owner), ingot));
+        if matches!(owner, BodyOwner::Func(func, _) if func.is_unsafe(db)) {
+            obligations.push((SemOrigin::Body(owner), body.quote_chain(db)));
         }
-        body.exprs(db).iter().find_map(|(expr, data)| {
-            if !matches!(data, Partial::Present(Expr::Block(_, BlockKind::Unsafe))) {
-                return None;
+        for (expr, data) in body.exprs(db).iter() {
+            if matches!(data, Partial::Present(Expr::Block(_, BlockKind::Unsafe))) {
+                obligations.push((SemOrigin::Expr(expr), body.expr_quote_chain(db, expr)));
             }
-            let ingot = self.first_untrusted(db, &body.expr_quote_chain(db, expr))?;
-            Some((SemOrigin::Expr(expr), ingot))
-        })
+        }
+        let typed_body = &infer_body(db, owner).1;
+        for site in typed_body.discharged_unsafe_ops() {
+            obligations.push(match *site {
+                UnsafeOpSite::Expr(expr) => {
+                    (SemOrigin::Expr(expr), body.expr_quote_chain(db, expr))
+                }
+                UnsafeOpSite::Pat(pat) => (SemOrigin::Pat(pat), body.pat_quote_chain(db, pat)),
+            });
+        }
+        obligations
     }
 }
 
@@ -176,22 +278,32 @@ fn author_ingot<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Ingot
 }
 
 /// The modules of the quotations that wrote and placed the `unsafe impl` that
-/// `owner` is a method of, if it is one, writer first. A header is written by
-/// the ingot that holds it, though a provider of another ingot supplies its
-/// members.
+/// `owner` is a member of, if it is one, writer first: a method of it, or the
+/// value of one of its associated constants. A header is written by the ingot
+/// that holds it, though a provider of another ingot supplies its members.
 fn unsafe_impl_chain<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Option<Vec<TopLevelMod<'db>>> {
-    let BodyOwner::Func(func, _) = owner else {
-        return None;
+    let impl_trait = match owner {
+        BodyOwner::Func(func, _) => match func.scope().parent_item(db) {
+            Some(ItemKind::ImplTrait(impl_trait)) => impl_trait,
+            _ => return None,
+        },
+        BodyOwner::AnonConstBody { body, .. } => match body.scope().parent_item(db) {
+            Some(ItemKind::ImplTrait(impl_trait))
+                if impl_trait
+                    .hir_consts(db)
+                    .iter()
+                    .any(|assoc| assoc.value == Partial::Present(body)) =>
+            {
+                impl_trait
+            }
+            _ => return None,
+        },
+        _ => return None,
     };
-    match func.scope().parent_item(db) {
-        Some(ItemKind::ImplTrait(impl_trait)) if impl_trait.is_unsafe(db) => {
-            Some(impl_chain(db, impl_trait))
-        }
-        _ => None,
-    }
+    impl_trait.is_unsafe(db).then(|| impl_chain(db, impl_trait))
 }
 
 /// The modules of the quotations that wrote and placed `impl_trait`, writer
@@ -207,6 +319,14 @@ fn impl_chain<'db>(
     }
 }
 
+/// The unsafe code that a call reaches: a place in the body of the called
+/// function, or an `unsafe impl` that the call relies on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum TrustSite<'db> {
+    Origin(SemOrigin<'db>),
+    UnsafeImpl(ImplTrait<'db>),
+}
+
 /// A call in the user's code reaches unsafe code in a dependency that no
 /// trusted ingot allows to use it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -215,12 +335,12 @@ pub(super) struct UntrustedUnsafeUse<'db> {
     pub root: Ingot<'db>,
     /// The call in the trust root's code.
     pub call: SemanticDiagnosticSpan<'db>,
-    /// Whether `call` stands for the run of a generated `#[test]` function by
-    /// `fe test`, which no call in the code names.
-    pub runs_as_test: bool,
+    /// Why `call` stands for the run of a generated body that no call in the
+    /// code names, such as a `#[test]` function that `fe test` runs.
+    pub entry: Option<EntryKind>,
     /// The function whose body holds the unsafe code.
     pub user: BodyOwner<'db>,
-    pub site: SemOrigin<'db>,
+    pub site: TrustSite<'db>,
     /// The untrusted ingot that wrote the unsafe code.
     pub author: Ingot<'db>,
 }
@@ -229,16 +349,39 @@ impl DiagnosticVoucher for UntrustedUnsafeUse<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let ingot = self.author;
         let name = ingot_name(db, ingot.base(db));
-        let site = SemanticDiagnosticSpan::Origin {
-            owner: self.user,
-            origin: self.site,
+        let (secondary_text, secondary) = match self.site {
+            TrustSite::Origin(origin) => (
+                format!("unsafe code in `{name}`"),
+                SemanticDiagnosticSpan::Origin {
+                    owner: self.user,
+                    origin,
+                }
+                .resolve(db),
+            ),
+            TrustSite::UnsafeImpl(implementation) => (
+                format!("`unsafe impl` that `{name}` wrote or placed"),
+                implementation.span().resolve(db),
+            ),
         };
-        let (title, primary) = if self.runs_as_test {
+        let (title, primary) = if let Some(entry) = self.entry {
+            let what = match entry {
+                EntryKind::Test => "test",
+                EntryKind::Export => "export",
+                EntryKind::Main => "entry point",
+                EntryKind::Contract => "contract",
+            };
             (
                 format!(
-                    "generated test runs unsafe code in `{name}`, which is not allowed to use it"
+                    "generated {what} runs unsafe code in `{name}`, which is not allowed to use it"
                 ),
-                format!("this generated test runs unsafe code in `{name}`"),
+                format!("this generated {what} runs unsafe code in `{name}`"),
+            )
+        } else if matches!(self.site, TrustSite::UnsafeImpl(_)) {
+            (
+                format!(
+                    "call relies on an `unsafe impl` that `{name}` wrote, which is not allowed to use unsafe code"
+                ),
+                format!("this call relies on an `unsafe impl` of `{name}`"),
             )
         } else {
             (
@@ -251,41 +394,9 @@ impl DiagnosticVoucher for UntrustedUnsafeUse<'_> {
             title,
             vec![
                 SubDiagnostic::new(LabelStyle::Primary, primary, self.call.resolve(db)),
-                SubDiagnostic::new(
-                    LabelStyle::Secondary,
-                    format!("unsafe code in `{name}`"),
-                    site.resolve(db),
-                ),
+                SubDiagnostic::new(LabelStyle::Secondary, secondary_text, secondary),
             ],
             vec![trust_fix(db, self.root, ingot, &name)],
-            GlobalErrorCode::new(DiagnosticPass::SemanticAccess, 15),
-        )
-    }
-}
-
-/// An `unsafe impl` with no function, which no call reaches, that an untrusted
-/// ingot wrote or placed.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(super) struct UntrustedUnsafeImpl<'db> {
-    /// The trust root whose program contains it.
-    pub root: Ingot<'db>,
-    pub implementation: ImplTrait<'db>,
-    /// The first untrusted ingot that wrote or placed it.
-    pub author: Ingot<'db>,
-}
-
-impl DiagnosticVoucher for UntrustedUnsafeImpl<'_> {
-    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
-        let name = ingot_name(db, self.author.base(db));
-        CompleteDiagnostic::new(
-            Severity::Error,
-            format!("unsafe impl from `{name}`, which is not allowed to use unsafe code"),
-            vec![SubDiagnostic::new(
-                LabelStyle::Primary,
-                format!("`unsafe impl` that `{name}` wrote or placed"),
-                self.implementation.span().resolve(db),
-            )],
-            vec![trust_fix(db, self.root, self.author, &name)],
             GlobalErrorCode::new(DiagnosticPass::SemanticAccess, 15),
         )
     }

@@ -1,0 +1,14 @@
+// A module named `std` in the file does not stand for the library in the
+// code that `#[event]` generates.
+mod std {
+    pub mod derive {
+        pub struct StructEvent {}
+    }
+}
+
+#[event]
+struct Ev {
+    #[indexed]
+    a: u256,
+    b: bool,
+}

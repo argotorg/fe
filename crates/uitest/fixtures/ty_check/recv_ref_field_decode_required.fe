@@ -1,0 +1,77 @@
+// Controls for `recv_ref_field_without_decode.fe`: an arm that decodes a field
+// still needs `Decode<Sol>` of its type. The field `a` is bound by a plain
+// name, by a pattern that binds a name, or decoded with the whole message.
+mod Manual {
+    use std::abi::sol
+
+    // Has a size but no `Decode<Sol>`.
+    pub struct Odd {
+        pub n: u8,
+    }
+
+    impl core::abi::AbiSize for Odd {
+        const HEAD_SIZE: u256 = 32
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            32
+        }
+    }
+
+    pub struct G {
+        pub a: Odd,
+        pub b: u8,
+    }
+
+    impl std::abi::AbiFields for G {}
+
+    impl core::abi::AbiSize for G {
+        const HEAD_SIZE: u256 = 64
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            64
+        }
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for G {
+        fn encode(self, _ out: core::abi::AbiFrame) {}
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for G {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            Self { a: Odd { n: 0 }, b: 0 }
+        }
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for G {
+        const SELECTOR: u32 = sol("g(uint8)")
+        type Return = u8
+    }
+}
+// `a` is bound by a plain name, so it is decoded.
+pub contract ByName {
+    recv Manual {
+        G { a, ref b } -> u8 {
+            b
+        }
+    }
+}
+
+// `a` is bound by a pattern that binds a name, so it is decoded.
+pub contract ByNestedName {
+    recv Manual {
+        G { a: Manual::Odd { n }, ref b } -> u8 {
+            n + b
+        }
+    }
+}
+
+// An arm without `ref` decodes the whole message, `a` included.
+pub contract Whole {
+    recv Manual {
+        G { a: _, b } -> u8 {
+            b
+        }
+    }
+}

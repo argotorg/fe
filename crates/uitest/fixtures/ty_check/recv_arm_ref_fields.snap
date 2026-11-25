@@ -18,7 +18,7 @@ error[8-0120]: a `mut` binding needs a place or an access
    │
    = write `var` for a mutable value
 
-error[8-0160]: this arm reads its message where it lies, but `Hand` is not read field by field
+error[8-0168]: this arm reads its message where it lies, but `Hand` is not read field by field
    ┌─ recv_arm_ref_fields.fe:77:16
    │
 77 │         Hand { ref v } -> u256 {
@@ -26,7 +26,7 @@ error[8-0160]: this arm reads its message where it lies, but `Hand` is not read 
    │
    = a `ref` field reads the message in place, which needs its encoding to be the tuple of its fields; `msg` variants and `#[abi]` structs have it, and a hand-written message states `impl AbiFields for Hand {}`
 
-error[8-0161]: a `ref` field cannot be read where it lies
+error[8-0169]: a `ref` field cannot be read where it lies
    ┌─ recv_arm_ref_fields.fe:86:13
    │
 86 │         V { ref p } -> u256 {
@@ -34,14 +34,14 @@ error[8-0161]: a `ref` field cannot be read where it lies
    │
    = declare `Plain` with `#[abi]`, or bind the field by its plain name to decode it
 
-error[16-0022]: the entry code of contract `NotFieldwise` cannot be generated
+error[16-0024]: the entry code of contract `NotFieldwise` cannot be generated
    ┌─ recv_arm_ref_fields.fe:77:9
    │
 77 │         Hand { ref v } -> u256 {
-   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Hand: AbiFields` is not satisfied
 
-error[16-0022]: the entry code of contract `NotPart` cannot be generated
+error[16-0024]: the entry code of contract `NotPart` cannot be generated
    ┌─ recv_arm_ref_fields.fe:86:9
    │
 86 │         V { ref p } -> u256 {
-   │         ^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Plain: Part<CallData, Sol>` is not satisfied

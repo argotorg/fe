@@ -155,7 +155,7 @@ func private %ret_param_collision(v0.i32) -> i32 {
         return v3;
 }
 
-func private %impl_trait_MultiTraitImpl_b140__same_method(v0.@layout_1) -> i32 {
+func private %impl_trait_MultiTraitImpl_b9bc__same_method(v0.@layout_1) -> i32 {
     block0:
         jump block1;
 
@@ -173,7 +173,7 @@ func private %impl_trait_MultiTraitImpl_b140__same_method(v0.@layout_1) -> i32 {
         return v5;
 }
 
-func private %impl_trait_MultiTraitImpl_5bd8__same_method(v0.@layout_1) -> i32 {
+func private %impl_trait_MultiTraitImpl_1ce4__same_method(v0.@layout_1) -> i32 {
     block0:
         jump block1;
 
@@ -274,10 +274,10 @@ func private %test_trait_method_collision() -> i32 {
     block1:
         v1.@layout_1 = agg.make @layout_1 100.i32;
         v2.@layout_1 = agg.make @layout_1 100.i32;
-        v3.i32 = call %impl_trait_MultiTraitImpl_5bd8__same_method v2;
+        v3.i32 = call %impl_trait_MultiTraitImpl_1ce4__same_method v2;
         v4.@layout_1 = agg.make @layout_1 100.i32;
         v5.@layout_1 = agg.make @layout_1 100.i32;
-        v6.i32 = call %impl_trait_MultiTraitImpl_b140__same_method v5;
+        v6.i32 = call %impl_trait_MultiTraitImpl_b9bc__same_method v5;
         (v7.i32, v8.i1) = uaddo v3 v6;
         br v8 block2 block3;
 

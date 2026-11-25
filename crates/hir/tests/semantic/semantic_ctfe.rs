@@ -891,7 +891,9 @@ fn owner_name(db: &HirAnalysisTestDb, owner: BodyOwner<'_>) -> String {
             Partial::Present(name) => name.data(db).to_string(),
             Partial::Absent => "<const>".to_string(),
         },
-        BodyOwner::AnonConstBody { .. } => "<anon const>".to_string(),
+        BodyOwner::AnonConstBody { .. } | BodyOwner::InheritedConst { .. } => {
+            "<anon const>".to_string()
+        }
         BodyOwner::Closure { .. } => "<closure>".to_string(),
         BodyOwner::ContractInit { contract } => match contract.name(db) {
             Partial::Present(name) => format!("{}::__init__", name.data(db)),

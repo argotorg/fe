@@ -1,0 +1,11 @@
+struct S {}
+impl S {
+    fn hidden(self) -> u256 { 3 }
+    fn secret() -> u256 { 4 }
+    const K: u256 = 5
+}
+impl S with (prov::PathLeak)
+#[test]
+fn path_leaks() {
+    assert!(S {}.leak_method_path() + S::leak_assoc_fn() + S::leak_const() == 12)
+}

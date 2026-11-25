@@ -1,0 +1,6 @@
+[ingot]
+name = "inherited_default_dep"
+version = "0.1.0"
+
+[dependencies]
+dep = { path = "dep" }

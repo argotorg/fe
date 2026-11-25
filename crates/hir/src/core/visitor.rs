@@ -1093,6 +1093,28 @@ pub fn walk_impl_trait_bounds<'db, V>(
     );
 }
 
+/// Walks the header of an implementation of a trait that names no bound: the
+/// type it is for and the arguments of its trait. The trait itself is not
+/// visited.
+pub fn walk_impl_trait_header<'db, V>(
+    visitor: &mut V,
+    ctxt: &mut VisitorCtxt<'db, LazyImplTraitSpan<'db>>,
+    impl_trait: ImplTrait<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
+    if let Some(trait_ref) = impl_trait.trait_ref(ctxt.db).to_opt() {
+        ctxt.with_new_ctxt(
+            |span| span.trait_ref(),
+            |ctxt| walk_trait_ref(visitor, ctxt, trait_ref),
+        );
+    }
+
+    if let Some(ty) = impl_trait.type_ref(ctxt.db).to_opt() {
+        ctxt.with_new_ctxt(|span| span.ty(), |ctxt| visitor.visit_ty(ctxt, ty));
+    }
+}
+
 pub fn walk_const<'db, V>(
     visitor: &mut V,
     ctxt: &mut VisitorCtxt<'db, LazyConstSpan<'db>>,

@@ -1,0 +1,7 @@
+// The default constant `K` of `HasK2`, read through `u`'s unsafe impl,
+// which writes only `m`. Expected: refused at both reads.
+use t::HasK2
+#[test]
+fn through_bound() { assert!(t::read_k2<u::K2>() == 7) }
+#[test]
+fn direct() { assert!(u::K2::K == 7) }

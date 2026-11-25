@@ -228,6 +228,9 @@ impl<'db> RmirEmitter<'db> {
         ty: TyId<'db>,
         field_wise: bool,
     ) -> RBlockId {
+        if ty.is_uninhabited_in(self.db, self.env.scope, self.env.assumptions) {
+            return bb;
+        }
         if !field_wise && !self.needs_drop(ty) {
             return bb;
         }
@@ -247,6 +250,14 @@ impl<'db> RmirEmitter<'db> {
             // Destroy the fields of the variant the value holds.
             let join = self.new_block();
             for variant in 0..adt.fields(self.db).len() as u16 {
+                if ty.is_enum_variant_uninhabited_in(
+                    self.db,
+                    usize::from(variant),
+                    self.env.scope,
+                    self.env.assumptions,
+                ) {
+                    continue;
+                }
                 let variant = VariantIndex(variant);
                 let fields = self
                     .semantic_instance()

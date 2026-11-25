@@ -1,0 +1,15 @@
+// Control for named_polyrec_named.fe: the recursion is the same, but the named
+// implementation is chosen inside the body and never reaches the recursive
+// call's dictionary. Expected: 16-0016 (instantiation limit).
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+struct Wrap<T> {}
+
+fn deep<T>(n: u256) -> u256 {
+    if n == 0 { return with (Alt) { <u256 as Pick>::pick() } }
+    deep<Wrap<T>>(n: n - 1)
+}
+fn go() -> u256 { deep<u256>(n: 3) }
+#[test]
+fn t() { assert(go() == 2) }

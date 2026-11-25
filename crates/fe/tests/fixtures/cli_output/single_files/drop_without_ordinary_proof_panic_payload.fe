@@ -1,0 +1,60 @@
+use core::abi::{AbiFrame, AbiSize, Encode}
+use core::ops::Drop
+use core::panic_with_value
+use std::abi::Sol
+
+// The revert data of a panic with a value is built by the `Encode`
+// implementation of the value, which runs when the panic runs. The body of
+// `encode` destroys a `Holder<Tag2>` whose `Drop` implementation needs
+// `Tag2: Show` in the type's own scope, where the choice of the `with` does
+// not apply, so the drop has no proof. The panic is reached by the test.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) -> u256 {
+    let _held = Holder { t }
+    1
+}
+
+pub struct E {
+    pub v: u256,
+}
+
+impl AbiSize for E {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for E {
+    fn encode(self, _ f: AbiFrame) {
+        with (Loud2) {
+            let _ = hold(Tag2 {})
+        }
+    }
+}
+
+fn fail() {
+    panic_with_value(E { v: 1 })
+}
+
+#[test]
+fn a_panic_payload_that_drops_without_a_proof_is_reported() {
+    fail()
+}

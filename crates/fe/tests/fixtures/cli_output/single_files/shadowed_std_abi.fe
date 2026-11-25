@@ -1,0 +1,15 @@
+// A module named `std` in the file does not stand for the library in the
+// code that `#[abi]` generates.
+mod std {
+    pub mod derive {
+        pub struct StructAbiEncode {}
+    }
+}
+
+#[abi]
+struct S { a: u256, b: bool }
+
+// The file's own module is still reachable by its name.
+fn local() -> std::derive::StructAbiEncode {
+    std::derive::StructAbiEncode {}
+}

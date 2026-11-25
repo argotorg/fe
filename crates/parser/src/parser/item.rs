@@ -175,6 +175,7 @@ impl super::Parse for ItemScope {
                 parser.current_kind(),
                 Some(FnKw | ConstKw | ImplKw | TypeKw)
             )
+            && !(parser.current_kind() == Some(UseKw) && at_quoted_block_root(parser))
         {
             parser.error_msg_on_current_token(
                 "only functions, constants, types and impls can be quoted",
@@ -244,6 +245,16 @@ fn at_quoted_item_root<S: TokenStream>(parser: &Parser<S>) -> bool {
             .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr),
         _ => false,
     }
+}
+
+/// Whether the item starts the block of a quoted expression, where an import
+/// declares names for the statements that follow, as in a function body.
+fn at_quoted_block_root<S: TokenStream>(parser: &Parser<S>) -> bool {
+    let mut parents = parser.parents.iter().rev().skip(1);
+    parents.next().map(|entry| entry.kind) == Some(SyntaxKind::BlockExpr)
+        && parents
+            .next()
+            .is_some_and(|entry| entry.kind == SyntaxKind::QuoteExpr)
 }
 
 fn quoted_fn_scope<S: TokenStream>(parser: &Parser<S>) -> FuncDefScope {
@@ -1009,6 +1020,9 @@ impl super::Parse for ImplScope {
                     Some(SyntaxKind::Colon2 | SyntaxKind::Lt)
                 ) {
                     parser.error("an impl name is a single identifier");
+                    // The rest of the written path is part of this report,
+                    // not an unexpected token of the impl header.
+                    let _ = parser.parse(ImplNameTailScope::default());
                 }
             } else {
                 parser.error("expected a name for the impl after `as`");
@@ -1061,6 +1075,58 @@ impl super::Parse for ImplScope {
     }
 }
 
+// What follows the identifier of a malformed impl name: the remaining `::`
+// segments and generic arguments of a path.
+define_scope! { ImplNameTailScope, Error }
+impl super::Parse for ImplNameTailScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        // Inside generic arguments, a braced expression is part of them.
+        let (mut angles, mut braces) = (0usize, 0usize);
+        while let Some(kind) = parser.current_kind() {
+            let consumed = match kind {
+                SyntaxKind::Colon2 | SyntaxKind::Ident => true,
+                SyntaxKind::Lt => {
+                    angles += 1;
+                    true
+                }
+                _ if angles == 0 => false,
+                SyntaxKind::Gt if braces == 0 => {
+                    angles -= 1;
+                    true
+                }
+                SyntaxKind::LBrace => {
+                    braces += 1;
+                    true
+                }
+                SyntaxKind::RBrace if braces > 0 => {
+                    braces -= 1;
+                    true
+                }
+                // Only what starts the next item or ends the block can end
+                // an unclosed list.
+                SyntaxKind::RBrace
+                | SyntaxKind::FnKw
+                | SyntaxKind::StructKw
+                | SyntaxKind::EnumKw
+                | SyntaxKind::TraitKw
+                | SyntaxKind::ImplKw
+                | SyntaxKind::ContractKw
+                | SyntaxKind::ModKw
+                | SyntaxKind::UseKw
+                | SyntaxKind::PubKw => false,
+                _ => true,
+            };
+            if !consumed {
+                break;
+            }
+            parser.bump();
+        }
+        Ok(())
+    }
+}
+
 define_scope! { ImplTraitItemListScope, TraitItemList, (RBrace, UnsafeKw, FnKw, TypeKw, ConstKw, UsesKw) }
 impl super::Parse for ImplTraitItemListScope {
     type Error = Recovery<ErrProof>;
@@ -1079,7 +1145,7 @@ impl super::Parse for ImplItemListScope {
     }
 }
 
-define_scope! { UseScope, Use }
+define_scope! { pub(super) UseScope, Use }
 impl super::Parse for UseScope {
     type Error = Recovery<ErrProof>;
 

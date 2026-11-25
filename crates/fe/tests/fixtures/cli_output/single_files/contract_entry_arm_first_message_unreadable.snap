@@ -12,7 +12,7 @@ error[6-0003]: trait bound is not satisfied
 33 │ W<Raw> { ref tag, v } -> u8 { tag }
    │ ^^^^^^^^^^^^^^^^^^^^^ `Raw` doesn't implement `Decode<Sol>`
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_arm_first_message_unreadable.fe:33:1
    │
 33 │ W<Raw> { ref tag, v } -> u8 { tag }

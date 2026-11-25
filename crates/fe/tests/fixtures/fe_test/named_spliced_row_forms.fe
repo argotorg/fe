@@ -1,0 +1,70 @@
+// Spliced rows in forms named_spliced_row_evidence.fe does not cover.
+// - two components spliced from one row, both chosen;
+// - a trait method with a direct effect before its row;
+// - a spliced component whose key trait has a supertrait the body uses
+//   (must agree with the direct-effect control `read_base`);
+// - a row relayed through two generic bodies.
+// Expected values in the tests.
+trait Base { fn base(self) -> u256 }
+trait Store: Base { fn get(self) -> u256 }
+trait Log { fn tag(self) -> u256 }
+struct S {}
+impl Base for S { fn base(self) -> u256 { 5 } }
+impl Store for S { fn get(self) -> u256 { 10 } }
+impl Store for S as AltStore { fn get(self) -> u256 { 20 } }
+struct L {}
+impl Log for L { fn tag(self) -> u256 { 100 } }
+impl Log for L as AltLog { fn tag(self) -> u256 { 300 } }
+
+trait Two {
+    uses E
+    fn run(self) -> u256 uses E
+}
+struct Both {}
+impl Two for Both {
+    uses E = (store: Store, log: Log)
+    fn run(self) -> u256 uses E { store.get() + log.tag() }
+}
+struct Sup {}
+impl Two for Sup {
+    uses E = (store: Store)
+    fn run(self) -> u256 uses E { store.get() * 10 + store.base() }
+}
+fn read_base() -> u256 uses (store: Store) { store.get() * 10 + store.base() }
+
+trait Mixed {
+    uses E
+    fn run(self) -> u256 uses (log: Log, E)
+}
+struct M {}
+impl Mixed for M {
+    uses E = (store: Store)
+    fn run(self) -> u256 uses (log: Log, E) { log.tag() + store.get() }
+}
+
+fn call_two<T: Two>(_ t: T) -> u256 uses (T::E) { t.run() }
+fn relay_two<T: Two>(_ t: T) -> u256 uses (T::E) { call_two(t) }
+fn call_mixed<T: Mixed>(_ t: T) -> u256 uses (log: Log, T::E) { t.run() }
+
+fn both_direct() -> u256 { with (AltStore, AltLog, Store = S {}, Log = L {}) { Both {}.run() } }
+fn both_relayed() -> u256 { with (AltStore, AltLog, Store = S {}, Log = L {}) { relay_two(Both {}) } }
+fn both_one_choice() -> u256 { with (AltLog, Store = S {}, Log = L {}) { call_two(Both {}) } }
+fn sup_spliced() -> u256 { with (AltStore, Store = S {}) { call_two(Sup {}) } }
+fn sup_direct() -> u256 { with (AltStore, Store = S {}) { read_base() } }
+fn mixed_direct() -> u256 { with (AltStore, AltLog, Store = S {}, Log = L {}) { M {}.run() } }
+fn mixed_generic() -> u256 { with (AltStore, AltLog, Store = S {}, Log = L {}) { call_mixed(M {}) } }
+
+#[test]
+fn t_both_direct() { assert(both_direct() == 320) }
+#[test]
+fn t_both_relayed() { assert(both_relayed() == 320) }
+#[test]
+fn t_both_one_choice() { assert(both_one_choice() == 310) }
+#[test]
+fn t_sup() { assert(sup_spliced() == 205) }
+#[test]
+fn t_sup_agrees_with_direct() { assert(sup_spliced() == sup_direct()) }
+#[test]
+fn t_mixed_direct() { assert(mixed_direct() == 320) }
+#[test]
+fn t_mixed_generic() { assert(mixed_generic() == 320) }

@@ -1,0 +1,13 @@
+// A proof written for a supertrait component must be the implementation the
+// received dictionary holds. `relay` writes `Wholesale<T>` for `T: Price`
+// while the `Item: Sub` it received holds the ordinary one, so `target` is
+// refused.
+struct Item {}
+trait Price { fn price() -> u256 }
+impl Price for Item { fn price() -> u256 { 100 } }
+impl<T> Price for T as Wholesale { fn price() -> u256 { 70 } }
+trait Sub: Price {}
+impl Sub for Item {}
+fn target<T: Sub + Price>() -> u256 { T::price() }
+fn relay<T: Sub>() -> u256 { with (Wholesale<T>) { target<T>() } }
+fn top() -> u256 { relay<Item>() }

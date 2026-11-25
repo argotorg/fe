@@ -20,11 +20,14 @@ use super::{
     EarlyNameQueryId, ExpectedPathKind, NameDomain, Tier, authored_first,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate_in},
+    method_selection::{
+        ImplementorCheck, MethodCandidate, MethodSelectionError, confirm_implementor,
+        select_method_candidate_in,
+    },
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query, resolve_query_in,
     traits_in_scope::traits_available_for_selection,
-    visibility_checker::{is_authored_module, is_ty_visible_from},
+    visibility_checker::{Viewer, is_authored_module, is_ty_visible_from},
 };
 use crate::analysis::{
     HirAnalysisDb,
@@ -35,7 +38,7 @@ use crate::analysis::{
         canonical::Canonicalized,
         const_ty::{ConstBodyLowering, LoweringContext},
         diagnostics::{RevealedBy, TyDiagCollection, TyLowerDiag},
-        fold::TyFoldable as _,
+        fold::{TyFoldable, TyFolder},
         generic_defaults::DefaultApplication,
         method_table::{MethodProbe, probe_method},
         normalize::normalize_ty,
@@ -49,8 +52,8 @@ use crate::analysis::{
             lower_trait_ref_impl_with_minter, lower_trait_ref_with_minter,
         },
         trait_resolution::{
-            GoalSatisfiability, PredicateListId, TraitSolveCx, constraint::collect_constraints,
-            is_goal_satisfiable,
+            ChoiceEntry, GoalSatisfiability, PredicateListId, TraitSolveCx,
+            constraint::collect_constraints, is_goal_satisfiable,
         },
         ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
         ty_error::emit_invalid_ty_error,
@@ -59,6 +62,7 @@ use crate::analysis::{
             lower_type_alias, lower_type_alias_deferred, lower_type_position_path,
         },
         unify::UnificationTable,
+        visitor::{TyVisitable, TyVisitor},
     },
 };
 
@@ -662,7 +666,9 @@ pub(crate) enum ImplNameRes<'db> {
         name: IdentId<'db>,
         definition: Option<DynLazySpan<'db>>,
     },
-    Ambiguous,
+    /// More than one implementation is named so, each with the span of its
+    /// name and whether it came from an implicit import.
+    Ambiguous(Vec<(DynLazySpan<'db>, bool)>),
     NotFound,
 }
 
@@ -716,8 +722,11 @@ pub(crate) fn resolve_impl_name<'db>(
                     }
                     _ => ImplNameRes::NotFound,
                 },
-                Err(NameResolutionError::Ambiguous(_) | NameResolutionError::Conflict(..)) => {
-                    ImplNameRes::Ambiguous
+                Err(NameResolutionError::Ambiguous(candidates)) => {
+                    ImplNameRes::Ambiguous(super::diagnostics::ambiguity_candidates(db, candidates))
+                }
+                Err(NameResolutionError::Conflict(_, spans)) => {
+                    ImplNameRes::Ambiguous(spans.iter().map(|span| (span.clone(), false)).collect())
                 }
                 Err(NameResolutionError::Invisible(definition)) => ImplNameRes::NotVisible {
                     name,
@@ -830,6 +839,67 @@ pub enum PathRes<'db> {
     InherentConst(TyId<'db>, Impl<'db>, IdentId<'db>),
 }
 
+impl<'db> TyVisitable<'db> for PathRes<'db> {
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        match self {
+            PathRes::Ty(ty)
+            | PathRes::TyAlias(_, ty)
+            | PathRes::Func(ty)
+            | PathRes::Const(_, ty)
+            | PathRes::InherentConst(ty, ..) => ty.visit_with(visitor),
+            PathRes::EnumVariant(variant) => variant.ty.visit_with(visitor),
+            PathRes::Trait(inst) | PathRes::TraitMethod(inst, _) => inst.visit_with(visitor),
+            PathRes::Method(ty, candidate) => {
+                ty.visit_with(visitor);
+                candidate.visit_with(visitor);
+            }
+            PathRes::TraitConst(ty, inst, _) => {
+                ty.visit_with(visitor);
+                inst.visit_with(visitor);
+            }
+            PathRes::Mod(_) | PathRes::FuncParam(..) => {}
+        }
+    }
+}
+
+/// Folds every type a resolution carries. A caller that reads the names of one
+/// scope for another (the default of a trait's constant, read for an
+/// implementation) instantiates what the names resolve to this way.
+impl<'db> TyFoldable<'db> for PathRes<'db> {
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        match self {
+            PathRes::Ty(ty) => PathRes::Ty(ty.fold_with(db, folder)),
+            PathRes::TyAlias(alias, ty) => PathRes::TyAlias(alias, ty.fold_with(db, folder)),
+            PathRes::Func(ty) => PathRes::Func(ty.fold_with(db, folder)),
+            PathRes::Const(const_, ty) => PathRes::Const(const_, ty.fold_with(db, folder)),
+            PathRes::EnumVariant(variant) => PathRes::EnumVariant(ResolvedVariant {
+                ty: variant.ty.fold_with(db, folder),
+                ..variant
+            }),
+            PathRes::Trait(inst) => PathRes::Trait(inst.fold_with(db, folder)),
+            PathRes::TraitMethod(inst, method) => {
+                PathRes::TraitMethod(inst.fold_with(db, folder), method)
+            }
+            PathRes::Method(ty, candidate) => {
+                PathRes::Method(ty.fold_with(db, folder), candidate.fold_with(db, folder))
+            }
+            PathRes::TraitConst(ty, inst, name) => {
+                PathRes::TraitConst(ty.fold_with(db, folder), inst.fold_with(db, folder), name)
+            }
+            PathRes::InherentConst(ty, impl_, name) => {
+                PathRes::InherentConst(ty.fold_with(db, folder), impl_, name)
+            }
+            res @ (PathRes::Mod(_) | PathRes::FuncParam(..)) => res,
+        }
+    }
+}
+
 impl<'db> PathRes<'db> {
     pub fn map_over_ty<F>(self, mut f: F) -> Self
     where
@@ -884,6 +954,25 @@ impl<'db> PathRes<'db> {
     }
 
     pub fn is_visible_from(&self, db: &'db dyn HirAnalysisDb, from_scope: ScopeId<'db>) -> bool {
+        self.is_visible_to(db, Viewer::at(db, from_scope))
+    }
+
+    /// The member that this path reaches through a type: an inherent method,
+    /// an inherent constant or an enum variant. What generated code may use of
+    /// them is decided by the package that wrote the code (see `Viewer`).
+    fn member_scope(&self, db: &'db dyn HirAnalysisDb) -> Option<ScopeId<'db>> {
+        match self {
+            PathRes::Method(_, MethodCandidate::InherentMethod(cand)) => Some(cand.def.scope()),
+            PathRes::InherentConst(..) | PathRes::EnumVariant(_) => self.as_scope(db),
+            _ => None,
+        }
+    }
+
+    pub fn is_visible_to(&self, db: &'db dyn HirAnalysisDb, viewer: Viewer<'db>) -> bool {
+        if let Some(member) = self.member_scope(db) {
+            return viewer.sees(db, member);
+        }
+        let from_scope = viewer.scope();
         match self {
             PathRes::Ty(ty) | PathRes::Func(ty) => is_ty_visible_from(db, *ty, from_scope),
             PathRes::Const(const_, _) => is_scope_visible_from(db, const_.scope(), from_scope),
@@ -904,11 +993,14 @@ impl<'db> PathRes<'db> {
     /// Checks a segment whose subject type and explicit trait reference are
     /// visited separately. The trait path owns the visibility check of the
     /// qualification and its associated constant, including quotation origin.
-    pub(crate) fn is_segment_visible_from(
+    /// A name that the quotation's producer resolves is judged where the
+    /// producer wrote it; a member reached through a type, such as
+    /// `Self::hidden`, is judged by `viewer`.
+    pub(crate) fn is_segment_visible_to(
         &self,
         db: &'db dyn HirAnalysisDb,
         segment: PathId<'db>,
-        scope: ScopeId<'db>,
+        viewer: Viewer<'db>,
     ) -> bool {
         let is_qualifier =
             |path: PathId<'db>| matches!(path.kind(db), PathKind::QualifiedType { .. });
@@ -918,7 +1010,22 @@ impl<'db> PathRes<'db> {
         {
             return true;
         }
-        self.is_visible_from(db, segment.hygiene_scope(db).unwrap_or(scope))
+        self.is_visible_as_written(db, segment, viewer)
+    }
+
+    /// Whether the code may use what `path` resolves to, as `path` was
+    /// written: a path that a quotation produced is judged where its producer
+    /// wrote it, any other by `viewer`.
+    pub(crate) fn is_visible_as_written(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        path: PathId<'db>,
+        viewer: Viewer<'db>,
+    ) -> bool {
+        match path.hygiene_scope(db) {
+            Some(producer) => self.is_visible_from(db, producer),
+            None => self.is_visible_to(db, viewer),
+        }
     }
 
     pub fn name_span(&self, db: &'db dyn HirAnalysisDb) -> Option<DynLazySpan<'db>> {
@@ -2531,8 +2638,61 @@ fn select_assoc_const_candidate<'db>(
                 cx.rollback_to(snapshot);
             }
         }
+        // An implementation opened by `with`, or the named implementation whose
+        // body this is, is a candidate as it is for a method: whatever the
+        // receiver is, its parameters are fresh variables here, and a receiver
+        // that does not unify with its self type rejects it. It asserts nothing:
+        // the goal it answers is solved under the choices where the use is
+        // checked. A named implementation is not among the ordinary
+        // implementations of its type, so without this `Self::SIDES` written in
+        // the implementation, by its provider or by hand, names nothing. Its
+        // conditions are confirmed as method selection confirms them
+        // (`confirm_implementor`): one that is proved not to hold for the
+        // receiver is not a candidate.
+        let chosen = choices
+            .map(|choices| choices.items(db).clone())
+            .unwrap_or_default();
+        let solve_cx = TraitSolveCx::new(db, scope, tier)
+            .with_assumptions(assumptions)
+            .with_choices(choices);
+        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
+            let implementation = choice.implementation();
+            let declared = implementation.trait_(db);
+            if declared.def(db).const_(db, name).is_none() {
+                continue;
+            }
+            let mut table = UnificationTable::new(db);
+            let receiver_identity = receiver.canonical().extract_identity(&mut table);
+            let opened = choice.instantiate(&mut table);
+            if matches!(
+                confirm_implementor(
+                    db,
+                    solve_cx,
+                    &mut table,
+                    receiver_identity,
+                    opened,
+                    // A constant read owes no generation of its own.
+                    &mut Vec::new(),
+                ),
+                ImplementorCheck::Rejected | ImplementorCheck::Unsatisfied
+            ) {
+                continue;
+            }
+            let snapshot = cx.snapshot();
+            let inst = cx.instantiate_with_fresh_vars(declared);
+            if cx.unify::<TyId<'db>>(receiver_ty, inst.self_ty(db)).is_ok() {
+                let inst = cx.try_extract::<TraitInstId<'db>>(inst).unwrap_or_else(|| {
+                    unresolved.insert(identity(declared));
+                    declared
+                });
+                matches.entry(identity(inst)).or_insert(inst);
+                if is_enclosing_impl(db, implementation, scope) {
+                    enclosing.insert(identity(inst));
+                }
+            }
+            cx.rollback_to(snapshot);
+        }
     });
-    use crate::analysis::ty::trait_resolution::ChoiceEntry;
     if let Some(choices) = choices {
         let visible = choices
             .items(db)

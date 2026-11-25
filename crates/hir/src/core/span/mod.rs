@@ -308,6 +308,62 @@ pub enum DesugaredOrigin {
     AbiStruct(AbiStructDesugared),
 }
 
+/// The kinds of item that the compiler generates from written syntax, whose
+/// bodies the type checker treats alike: the one place that says which origins
+/// those are, so that no check lists them again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeneratedOrigin {
+    /// An item of a desugared `msg` block.
+    Msg,
+    /// An item generated for an `#[event]` struct.
+    Event,
+    /// An item generated for an `#[error]` struct.
+    Error,
+    /// An item generated for an `#[abi]` struct.
+    AbiStruct,
+}
+
+impl GeneratedOrigin {
+    /// Whether the type checker reports body errors of the generated item.
+    /// It does not: an error in generated code is reported where the code is
+    /// requested.
+    pub fn reports_body_errors(self) -> bool {
+        false
+    }
+
+    /// The label that names the generated item in the diagnostics of the
+    /// constants it holds, if its constants are checked.
+    pub fn const_diag_label(self) -> Option<&'static str> {
+        match self {
+            Self::Msg => None,
+            Self::Event => Some("generated `#[event]` implementation"),
+            Self::Error => Some("generated `#[error]` implementation"),
+            Self::AbiStruct => Some("generated `#[abi]` implementation"),
+        }
+    }
+}
+
+impl<T> HirOrigin<T>
+where
+    T: AstNode,
+{
+    /// The kind of generated item that this origin names, if it names one.
+    /// `Use` desugars a nested import and is no generated item.
+    pub fn generated(&self) -> Option<GeneratedOrigin> {
+        match self {
+            Self::Desugared(DesugaredOrigin::Msg(_)) => Some(GeneratedOrigin::Msg),
+            Self::Desugared(DesugaredOrigin::Event(_)) => Some(GeneratedOrigin::Event),
+            Self::Desugared(DesugaredOrigin::Error(_)) => Some(GeneratedOrigin::Error),
+            Self::Desugared(DesugaredOrigin::AbiStruct(_)) => Some(GeneratedOrigin::AbiStruct),
+            Self::Raw(_)
+            | Self::Expanded(_)
+            | Self::Desugared(DesugaredOrigin::Use(_))
+            | Self::Synthetic
+            | Self::None => None,
+        }
+    }
+}
+
 /// Tracks the origin of HIR nodes desugared from a `msg` block.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MsgDesugared {

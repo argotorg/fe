@@ -1,0 +1,4 @@
+use core::meta::{Code, Item, Record}
+const fn bad(_ record: Record) -> Code<Item> {
+    quote { pub fn f() -> u256 { ${record} } }
+}

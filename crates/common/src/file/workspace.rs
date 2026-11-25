@@ -100,6 +100,28 @@ impl Workspace {
     pub fn all_files(&self, db: &dyn InputDb) -> StringTrie<Url, File> {
         self.files(db).clone()
     }
+
+    /// Copy the selected source files into a freshly created workspace.
+    /// File identities belong to the database that owns the workspace.
+    pub fn copy_selected_into(
+        self,
+        source: &dyn InputDb,
+        target: &mut dyn InputDb,
+        include: impl Fn(&Url) -> bool,
+    ) {
+        let mut files = Trie::new();
+        let mut paths = ArcIndexMap::new();
+        for (url, source_file) in self.files(source).iter() {
+            if include(&url) {
+                let file = File::__new_impl(target, source_file.text(source).clone());
+                files = files.insert(url.clone(), file);
+                paths.insert(file, url);
+            }
+        }
+        let workspace = target.workspace();
+        workspace.set_files(target).to(files);
+        workspace.set_paths(target).to(paths);
+    }
 }
 
 #[cfg(test)]

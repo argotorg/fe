@@ -1,13 +1,14 @@
 use crate::core::hir_def::{
-    Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam, GenericParamOwner,
-    GenericParamView, IdentId, ItemKind, KindBound as HirKindBound, Partial, PathId, Stmt,
-    TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind, TypeMode,
-    scope_graph::ScopeId,
+    AuthoredFieldType, Body, CallableDef, Expr, GenericArg, GenericArgListId, GenericParam,
+    GenericParamOwner, GenericParamView, IdentId, ItemKind, KindBound as HirKindBound, Partial,
+    PathId, Stmt, TypeAlias as HirTypeAlias, TypeBound, TypeId as HirTyId, TypeKind as HirTyKind,
+    TypeMode, scope_graph::ScopeId,
 };
 use salsa::SalsaValue;
 use smallvec::smallvec;
 
 use super::{
+    adt_def::{AdtDef, AdtRef, instantiate_adt_field_shape_in_mode},
     assoc_const::{AssocConstUse, InherentConstUse},
     const_ty::{
         ConstBodyLowering, ConstCaptureEnv, ConstTyData, ConstTyId, LoweringContext,
@@ -113,19 +114,7 @@ fn lower_hir_ty_impl<'db>(
             TyId::foldl(db, base, &args)
         }
         HirTyKind::Never => TyId::never(db),
-        HirTyKind::AuthoredField(field) => match field.bound_type(db) {
-            Some(ty) => {
-                let record = field
-                    .record(db)
-                    .resolve(db)
-                    .to_item()
-                    .and_then(GenericParamOwner::from_item_opt);
-                lowering_cx.with_spliced_record(record, || {
-                    lower_hir_ty_impl(db, ty, scope, assumptions, lowering_cx)
-                })
-            }
-            None => TyId::invalid(db, InvalidCause::Other),
-        },
+        HirTyKind::AuthoredField(field) => lower_authored_field(db, *field, scope, lowering_cx),
     };
     // A `#[view]` type exists only behind accesses, never inside a value.
     match lowered.view_part(db) {
@@ -288,11 +277,6 @@ pub(crate) fn lower_opt_const_body<'db>(
     let Some(body) = body.to_opt() else {
         return ConstTyId::invalid(db, InvalidCause::ParseError);
     };
-    if let Some(record) = lowering_cx.spliced_record()
-        && super::const_ty::lexical_const_body_owner(db, body) == Some(record)
-    {
-        return lower_spliced_record_const(db, body, record, scope, assumptions, lowering_cx);
-    }
     if lowering_cx.const_bodies() == ConstBodyLowering::Deferred {
         if let Some(path) = const_body_simple_path(db, body)
             && path.parent(db).is_none()
@@ -314,6 +298,7 @@ pub(crate) fn lower_opt_const_body<'db>(
             Partial::Present(body),
             None,
             None,
+            None,
             ConstCaptureEnv::identity_for_body(db, body),
             UnevaluatedConstPolicy::DeferValidation,
         );
@@ -322,58 +307,106 @@ pub(crate) fn lower_opt_const_body<'db>(
         .unwrap_or_else(|| ConstTyId::from_body(db, body, None, None))
 }
 
-/// An anonymous constant of a spliced field type: an array length or constant
-/// argument written in the field's record. The splice names the type's other
-/// names in the record and leaves the record's parameters to the use site
-/// (`AuthoredFieldType::bound_type`), but a lowered body cannot be rebound. So
-/// the constant is read in the record, as the record's own field types read
-/// it, and each of the record's parameters is then what its name means where
-/// the type is spliced. A parameter whose name means nothing there keeps the
-/// record's formal, as an unspliced read of the constant would.
-fn lower_spliced_record_const<'db>(
+/// The self type of the derive header that holds `scope`: the type that an
+/// explicit derive request (`impl T for S with (P)`) asks the provider to write
+/// members for. The nearest enclosing header decides. The type is lowered as
+/// the header writes it, before any normalization.
+pub(crate) fn derive_header_self_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    body: Body<'db>,
-    record: GenericParamOwner<'db>,
     scope: ScopeId<'db>,
-    assumptions: PredicateListId<'db>,
+) -> Option<TyId<'db>> {
+    let mut current = Some(scope);
+    while let Some(scope) = current {
+        match scope {
+            ScopeId::Item(ItemKind::Impl(impl_)) if impl_.derive_provider(db).is_some() => {
+                return Some(impl_.ty(db));
+            }
+            ScopeId::Item(ItemKind::ImplTrait(impl_)) if impl_.derive_provider(db).is_some() => {
+                return Some(impl_.declared_ty(db));
+            }
+            _ => {}
+        }
+        current = scope.parent(db);
+    }
+    None
+}
+
+/// The self type, as written, of the implementation that holds `scope` and is
+/// for `adt`: the nearest enclosing implementation or derive header whose self
+/// type is that record. Generated code reads the record's parameters through
+/// it: `impl<X> S<X> with (P)` gives `T := X` for `struct S<T>`, and a
+/// generated `impl ${record}` declares the record's parameters itself, so its
+/// self type is the record at its own parameters.
+fn record_self_ty_at<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    adt: AdtDef<'db>,
+) -> Option<TyId<'db>> {
+    let mut current = Some(scope);
+    while let Some(scope) = current {
+        let self_ty = match scope {
+            ScopeId::Item(ItemKind::Impl(impl_)) => Some(impl_.ty(db)),
+            ScopeId::Item(ItemKind::ImplTrait(impl_)) => Some(impl_.declared_ty(db)),
+            _ => None,
+        };
+        if let Some(self_ty) = self_ty
+            && self_ty.adt_ref(db) == Some(adt.adt_ref(db))
+        {
+            return Some(self_ty);
+        }
+        current = scope.parent(db);
+    }
+    None
+}
+
+/// The type of a field of a record, as generated code splices it
+/// (`${field_type(field(record, i))}`): the record's own lowered field type,
+/// with the record's parameters replaced by position with the arguments of the
+/// self type of the implementation around the splice (`record_self_ty_at`).
+/// The field type means what the record's declaration says, whatever the names
+/// around the splice are.
+///
+/// Where no such implementation exists, nothing says what the record's
+/// parameters stand for. A field type that mentions none of them (`u256`,
+/// `Id<T>` for `type Id<T> = u256`, `[u8; 3 + 1]`) means the same everywhere
+/// and is accepted; one that mentions a parameter is refused.
+fn lower_authored_field<'db>(
+    db: &'db dyn HirAnalysisDb,
+    field: AuthoredFieldType<'db>,
+    scope: ScopeId<'db>,
     lowering_cx: &LoweringContext<'db>,
-) -> ConstTyId<'db> {
-    let declared = lowering_cx.with_spliced_record(None, || {
-        lower_opt_const_body(
+) -> TyId<'db> {
+    let Some(adt) = field
+        .record(db)
+        .resolve(db)
+        .to_item()
+        .and_then(AdtRef::try_from_item)
+        .map(|adt_ref| adt_ref.as_adt(db))
+    else {
+        return TyId::invalid(db, InvalidCause::Other);
+    };
+    let variant = field.variant(db).unwrap_or(0);
+    let splice = |args: &[TyId<'db>]| {
+        instantiate_adt_field_shape_in_mode(
             db,
-            Partial::Present(body),
-            crate::hir_def::ItemKind::from(record).scope(),
-            collect_constraints(db, record).instantiate_identity(),
-            lowering_cx,
+            adt,
+            variant,
+            field.index(db),
+            args,
+            lowering_cx.const_bodies(),
         )
-    });
-    let schema = ParamSchemaId::full(db, record);
-    let subst = CompleteSubst::from_optional_values(db, ParamDomainId::full(db, schema), |slot| {
-        let formal = schema.formal_at(db, slot)?;
-        let name = formal.as_generic_param(db)?.name;
-        let named = lowering_cx.with_spliced_record(None, || {
-            lowering_cx.without_recording(|| {
-                lower_path_impl(
-                    db,
-                    scope,
-                    Partial::Present(PathId::from_ident(db, name)),
-                    assumptions,
-                    TypePosition::GenericArg,
-                    lowering_cx,
-                )
-            })
-        });
-        (!named.has_invalid(db)
-            && named.is_const_ty(db) == formal.is_const_ty(db)
-            && named.kind(db) == formal.kind(db))
-        .then_some(named)
-    });
-    let spliced = Binder::bind(record, TyId::const_ty(db, declared))
-        .instantiate_subst(db, &subst)
-        .expect("a record's constant uses its declaration domain");
-    match spliced.data(db) {
-        TyData::ConstTy(const_ty) => *const_ty,
-        _ => unreachable!("constant parameters are substituted by constants"),
+    };
+    match record_self_ty_at(db, scope, adt) {
+        Some(self_ty) => splice(self_ty.generic_args(db)),
+        None => {
+            // Omitted arguments keep the record's own formals.
+            let declared = splice(&[]);
+            if declared.has_param(db) {
+                TyId::invalid(db, InvalidCause::FieldSpliceOutsideHeader)
+            } else {
+                declared
+            }
+        }
     }
 }
 
@@ -496,8 +529,9 @@ fn lower_explicit_trait_family<'db>(
         Ok(other) => return TyId::invalid(db, InvalidCause::NotAType(other)),
         Err(_) => return TyId::invalid(db, InvalidCause::PathResolutionFailed { path }),
     };
-    // Only the written arguments are captured. Defaults use the subject when
-    // the family is applied.
+    // The written arguments are captured. A default that does not depend on
+    // the subject is part of the family (see `TraitFamilyId::new`); the others
+    // use the subject when the family is applied.
     let written = path
         .generic_args(db)
         .data(db)

@@ -3,7 +3,7 @@ source: crates/fe/tests/cli_output.rs
 expression: output
 ---
 === STDERR ===
-error[16-0022]: the entry code of contract `Reader` cannot be generated
+error[16-0024]: the entry code of contract `Reader` cannot be generated
   ┌─ src/lib.fe:6:10
   │
 6 │     init(w: Wire) {}

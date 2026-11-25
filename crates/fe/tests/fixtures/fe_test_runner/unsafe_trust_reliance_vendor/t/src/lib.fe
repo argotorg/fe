@@ -1,0 +1,46 @@
+use core::abi::{load_word, store_word}
+use core::ptr
+pub unsafe trait PodM { fn tag(self) -> u256 }
+pub unsafe trait PodE {}
+pub unsafe trait Checked {
+    fn a(self)
+    fn b(self) -> u256 { 1 }
+}
+pub unsafe trait HasK { const K: u256 = 7 }
+// A safe trait whose supertrait is unsafe.
+pub trait Wide: PodM {}
+// A safe trait with a blanket implementation conditioned on an unsafe trait.
+pub trait Show { fn show(self) -> u256 }
+impl<T: PodE> Show for T { fn show(self) -> u256 { 7 } }
+fn raw() -> u256 {
+    let p = ptr::alloc_bytes(32)
+    unsafe {
+        store_word(ptr: p, value: 7)
+        load_word(p)
+    }
+}
+pub fn peek_m<T: PodM>(_ t: T) -> u256 { raw() }
+pub fn call_tag<T: PodM>(_ t: T) -> u256 { t.tag() }
+pub fn peek_w<T: Wide>(_ t: T) -> u256 { raw() }
+pub fn show_it<T: Show>(_ t: T) -> u256 { t.show() }
+pub fn read_k<T: HasK>() -> u256 { T::K }
+pub fn charge() -> u256 uses (p: PodE) { raw() }
+// Variants of the shapes above whose unsafe trait has a method, so that an
+// implementation of the trait is never an empty marker.
+pub trait Show2 { fn show2(self) -> u256 }
+impl<T: PodM> Show2 for T { fn show2(self) -> u256 { 7 } }
+pub fn show2_it<T: Show2>(_ t: T) -> u256 { t.show2() }
+pub unsafe trait HasK2 {
+    const K: u256 = 7
+    fn m(self)
+}
+pub fn read_k2<T: HasK2>() -> u256 { T::K }
+// A trait with a marker parameter, so that a trusted package can write a
+// named implementation of it for a type of `u`.
+pub unsafe trait PodG<M> { fn tag(self) -> u256 }
+pub fn call_tag_g<M, T: PodG<M>>(_ t: T) -> u256 { t.tag() }
+pub fn charge2() -> u256 uses (p: PodM) { raw() }
+pub fn peek_e<T: PodE>(_ t: T) -> u256 { raw() }
+// A trusted named template implementation, chosen only by `with`.
+pub unsafe impl<T> PodM for T as Good { fn tag(self) -> u256 { 7 } }
+pub unsafe impl<T> Checked for T as GoodC { fn a(self) {} }

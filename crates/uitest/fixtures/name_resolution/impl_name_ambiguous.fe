@@ -1,0 +1,18 @@
+mod a {
+    pub trait P {}
+    pub struct Foo {}
+    pub impl P for Foo as Dup {}
+}
+
+mod b {
+    pub trait P {}
+    pub struct Foo {}
+    pub impl P for Foo as Dup {}
+}
+
+use a::Dup
+use b::Dup
+
+fn go() {
+    with (Dup) {}
+}

@@ -1,0 +1,7 @@
+[ingot]
+name = "unsafe_trust_relied_method_impl"
+version = "0.1.0"
+
+[dependencies]
+t = { path = "../unsafe_trust_reliance_vendor/t", allow_unsafe = true }
+u1 = { path = "../unsafe_trust_reliance_vendor/u1" }

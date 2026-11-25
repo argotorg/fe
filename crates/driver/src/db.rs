@@ -67,25 +67,11 @@ impl DriverDataBase {
         use common::InputDb;
         use salsa::Setter;
 
-        let mut target = Self::default();
-        // Default construction installs the builtin libraries. Replace the
-        // whole file set so the view keeps removals and edited builtins too.
-        let defaults: Vec<_> = target
-            .workspace()
-            .all_files(&target)
-            .iter()
-            .map(|(url, _)| url.clone())
-            .collect();
-        for url in defaults {
-            target.workspace().remove(&mut target, &url);
-        }
-        for (url, file) in self.workspace().all_files(self).iter() {
-            if include(&url) {
-                target
-                    .workspace()
-                    .update(&mut target, url, file.text(self).clone());
-            }
-        }
+        let mut target = Self::with_empty_workspace(salsa::Storage::default());
+        // The source supplies the complete file set, including any edited or
+        // removed builtins.
+        self.workspace()
+            .copy_selected_into(self, &mut target, include);
         self.dependency_graph().copy_into(self, &mut target);
         target
             .compiler_options()

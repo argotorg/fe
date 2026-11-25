@@ -538,6 +538,7 @@ fn instantiate_const_default<'db>(
         Partial::Present(value),
         Some(template_ty),
         Some(expected),
+        None,
         ConstCaptureEnv::bound(db, owner, Some(index), subst.values().to_vec()),
         application.const_policy(),
     );
@@ -561,6 +562,20 @@ pub(crate) fn default_dependencies<'db>(
     collector.indices.sort_unstable();
     collector.indices.dedup();
     collector.indices
+}
+
+/// Whether a default is written in terms of `Self`, directly or inside a nested
+/// type. Only a trait's parameters can name `Self`. Like
+/// [`default_dependencies`], this is a property of the source.
+#[salsa::tracked]
+pub(crate) fn default_mentions_self<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: GenericParamOwner<'db>,
+    param_idx: usize,
+) -> bool {
+    let mut collector = DefaultSelfUse { db, found: false };
+    visit_default(db, owner, param_idx, &mut collector);
+    collector.found
 }
 
 /// The parameter whose default `body` is written in, directly or nested in
@@ -646,6 +661,23 @@ impl<'db> Visitor<'db> for DefaultDependencies<'db> {
         }
         // Includes qualified receivers and generic arguments on every segment,
         // as well as const bodies nested inside a type.
+        walk_path(self, ctxt, path);
+    }
+}
+
+struct DefaultSelfUse<'db> {
+    db: &'db dyn HirAnalysisDb,
+    found: bool,
+}
+
+impl<'db> Visitor<'db> for DefaultSelfUse<'db> {
+    fn visit_path(&mut self, ctxt: &mut VisitorCtxt<'db, LazyPathSpan<'db>>, path: PathId<'db>) {
+        if path
+            .root_ident(self.db)
+            .is_some_and(|name| name.is_self_ty(self.db))
+        {
+            self.found = true;
+        }
         walk_path(self, ctxt, path);
     }
 }

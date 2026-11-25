@@ -6,7 +6,7 @@ use super::{
     fold::{TyFoldable, TyFolder},
     ty_def::{TyData, TyFlags, TyId, TyVar},
     unify::{InferenceKey, UnificationStore, UnificationTableBase},
-    visitor::{TyVisitable, collect_flags},
+    visitor::{TyVisitable, TyVisitor, collect_flags},
 };
 use crate::analysis::{HirAnalysisDb, ty::ty_def::collect_variables};
 
@@ -214,6 +214,36 @@ where
     T: SalsaValue,
 {
     pub(super) value: T,
+}
+
+impl<'db, T> TyVisitable<'db> for Solution<T>
+where
+    T: SalsaValue + TyVisitable<'db>,
+{
+    fn visit_with<V>(&self, visitor: &mut V)
+    where
+        V: TyVisitor<'db> + ?Sized,
+    {
+        self.value.visit_with(visitor);
+    }
+}
+
+/// Folds the solution as written, for a caller that changes the types the
+/// solution is stated over, as an implementation's types stand in for the
+/// parameters of a trait. It does not extract the solution
+/// ([`Canonicalized::extract_solution`] does).
+impl<'db, T> TyFoldable<'db> for Solution<T>
+where
+    T: SalsaValue + TyFoldable<'db>,
+{
+    fn super_fold_with<F>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self
+    where
+        F: TyFolder<'db>,
+    {
+        Self {
+            value: self.value.fold_with(db, folder),
+        }
+    }
 }
 
 impl<'db> Solution<super::trait_def::TraitInstId<'db>> {

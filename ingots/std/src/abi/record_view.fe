@@ -85,7 +85,7 @@ pub type RecordView<I, T> = Encoded<I, T, Sol>
 /// the offset of a dynamic `T` is below `2**64`, and the head of the record
 /// (`T::HEAD_SIZE` bytes) lies within the input. Fields are not inspected.
 pub fn decode_record_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) -> RecordView<I, T>
-    where I: ByteInput + Copy, T: AbiSize
+    where I: ByteInput + Copy, T: AbiFields + AbiSize
 {
     decode_record_at<Sol, T, I>(input, base: base, head_pos: head_pos)
 }
@@ -95,7 +95,7 @@ pub fn decode_record_view_at<T, I>(_ input: own I, base: u256, head_pos: u256) -
 /// Equivalent to `decode_record_view_at(input, base: 0, head_pos: 0)`; use it
 /// for a return payload of a single `T` value.
 pub fn decode_record_view<T, I>(_ input: own I) -> RecordView<I, T>
-    where I: ByteInput + Copy, T: AbiSize
+    where I: ByteInput + Copy, T: AbiFields + AbiSize
 {
     decode_record_at<Sol, T, I>(input, base: 0, head_pos: 0)
 }
@@ -104,7 +104,7 @@ pub fn decode_record_view<T, I>(_ input: own I) -> RecordView<I, T>
 /// `Decode::decode_from(input, pos)` decodes it. Reverts with empty
 /// returndata unless the record's head lies within the input.
 pub fn decode_record_view_from<T, I>(_ input: own I, _ pos: u256) -> RecordView<I, T>
-    where I: ByteInput + Copy, T: AbiSize
+    where I: ByteInput + Copy, T: AbiFields + AbiSize
 {
     decode_record_from<Sol, T, I>(input, pos)
 }
@@ -116,7 +116,7 @@ impl<I, T> ArrayView<I, T>
     /// (`element_pos`): for a dynamic `T` the element's tail offset is
     /// checked and its head must lie within the input. Reverts with
     /// `Panic(0x32)` if `index >= len()`.
-    pub fn record_at(self, _ index: usize) -> RecordView<I, T> {
+    pub fn record_at(self, _ index: usize) -> RecordView<I, T> where T: AbiFields {
         decode_record_view_from(self.input(), self.element_pos(index))
     }
 }

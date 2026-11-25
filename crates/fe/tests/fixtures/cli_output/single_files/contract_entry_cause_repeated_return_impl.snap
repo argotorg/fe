@@ -18,7 +18,7 @@ error[6-0003]: trait bound is not satisfied
 13 │ impl<T> Decode<Sol> for Out<T> {
    │                         ^^^^^^ `Out<T>` doesn't implement `AbiSize`
 
-error[16-0022]: the entry code of contract `R` cannot be generated
+error[16-0024]: the entry code of contract `R` cannot be generated
    ┌─ contract_entry_cause_repeated_return_impl.fe:18:12
    │
 18 │     Get -> Out<u8>,

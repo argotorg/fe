@@ -1,0 +1,11 @@
+// The default of `dep::Narrow::K` runs unsafe code of `dep`, and nothing
+// trusts `dep`. Expected: refused at the read.
+use dep::Narrow
+struct A {}
+impl Narrow for A {
+    type X = i8
+}
+#[test]
+fn read_default() {
+    assert!(A::K == -3)
+}

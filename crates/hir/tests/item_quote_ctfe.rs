@@ -7,7 +7,7 @@ use fe_hir::{
         ty::{corelib::resolve_lib_type_path, ty_check::BodyOwner},
     },
     core::meta::{MetaValue, RecordInput},
-    test_db::{HirAnalysisTestDb, find_func},
+    test_db::{HirAnalysisTestDb, find_func, format_diagnostics},
 };
 use parser::ast::prelude::*;
 
@@ -66,11 +66,21 @@ fn reflected_count_becomes_an_item_template_in_the_existing_ctfe_instance() {
 
 #[test]
 fn item_constructor_refuses_statement_fragments_and_over_budget_templates() {
+    // An expression fragment is not an item: the type check refuses it before
+    // anything is evaluated.
+    {
+        let mut db = HirAnalysisTestDb::default();
+        let source =
+            "use core::meta::{Code, Item}\nconst fn make() -> Code<Item> { quote { 42 } }\n";
+        let file = db.new_stand_alone("bad-item-provider.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let diags = format_diagnostics(&db, &db.run_on_top_mod(module));
+        assert!(
+            diags.contains("this quotation is `Code<Expr>` code, but `Code<Item>` is expected"),
+            "{diags}"
+        );
+    }
     for (template, cause) in [
-        (
-            "quote { 42 }".to_string(),
-            "item quotation requires item declarations",
-        ),
         (
             format!(
                 "quote {{ fn generated() -> u256 {{ {}\n 42 }} }}",

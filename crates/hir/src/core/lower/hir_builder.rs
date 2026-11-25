@@ -23,29 +23,21 @@ use crate::{
 
 use super::{FileLowerCtxt, body::BodyCtxt};
 
+/// The roots that generated code names library items through. They are paths
+/// that a name in the user's modules cannot shadow: the root of the library
+/// ingot itself (see `FileLowerCtxt::builtin_ingot_path`).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct LibRoots<'db> {
-    pub(super) core: IdentId<'db>,
-    pub(super) std: IdentId<'db>,
+    pub(super) core: PathId<'db>,
+    pub(super) std: PathId<'db>,
 }
 
 impl<'db> LibRoots<'db> {
     pub(super) fn for_ctxt(ctxt: &FileLowerCtxt<'db>) -> Self {
-        let db = ctxt.db();
-        let ingot = ctxt.top_mod().ingot(db);
-
-        let core = if ingot.kind(db) == IngotKind::Core {
-            IdentId::make_ingot(db)
-        } else {
-            IdentId::make_core(db)
-        };
-        let std = if ingot.kind(db) == IngotKind::Std {
-            IdentId::make_ingot(db)
-        } else {
-            IdentId::new(db, "std".to_string())
-        };
-
-        Self { core, std }
+        Self {
+            core: ctxt.builtin_ingot_path(IngotKind::Core, "core"),
+            std: ctxt.builtin_ingot_path(IngotKind::Std, "std"),
+        }
     }
 }
 
@@ -188,9 +180,9 @@ where
         TypeId::fallback_self_ty(self.db())
     }
 
-    pub(super) fn path_from_root(&self, root: IdentId<'db>, segments: &[&str]) -> PathId<'db> {
+    pub(super) fn path_from_root(&self, root: PathId<'db>, segments: &[&str]) -> PathId<'db> {
         let db = self.db();
-        let mut path = PathId::from_ident(db, root);
+        let mut path = root;
         for seg in segments {
             path = path.push_str(db, seg);
         }
@@ -216,7 +208,9 @@ where
 
     pub(super) fn core_abi_trait_ref_sol(&self, name: &str) -> TraitRefId<'db> {
         let db = self.db();
-        let path = PathId::from_ident(db, self.roots.core)
+        let path = self
+            .roots
+            .core
             .push_str(db, "abi")
             .push_str_args(db, name, self.sol_args());
         TraitRefId::new(db, Partial::Present(path))
@@ -224,9 +218,7 @@ where
 
     pub(super) fn core_abi_trait_ref(&self, name: &str) -> TraitRefId<'db> {
         let db = self.db();
-        let path = PathId::from_ident(db, self.roots.core)
-            .push_str(db, "abi")
-            .push_str(db, name);
+        let path = self.roots.core.push_str(db, "abi").push_str(db, name);
         TraitRefId::new(db, Partial::Present(path))
     }
 
@@ -691,14 +683,18 @@ where
     }
 
     pub(super) fn sol_ty(&self) -> TypeId<'db> {
-        let path = PathId::from_ident(self.db(), self.roots.std)
+        let path = self
+            .roots
+            .std
             .push_str(self.db(), "abi")
             .push_str(self.db(), "Sol");
         TypeId::new(self.db(), TypeKind::Path(Partial::Present(path)))
     }
 
     fn abi_size_trait_ref(&self) -> TraitRefId<'db> {
-        let path = PathId::from_ident(self.db(), self.roots.core)
+        let path = self
+            .roots
+            .core
             .push_str(self.db(), "abi")
             .push_str(self.db(), "AbiSize");
         TraitRefId::new(self.db(), Partial::Present(path))
@@ -774,9 +770,11 @@ where
     pub(super) fn abi_field_head_size_expr(&mut self, ty: TypeId<'db>) -> ExprId {
         let db = self.db();
         let args = GenericArgListId::given1_type(db, ty);
-        let path = PathId::from_ident(db, self.roots.core)
-            .push_str(db, "abi")
-            .push_str_args(db, "abi_field_head_size", args);
+        let path =
+            self.roots
+                .core
+                .push_str(db, "abi")
+                .push_str_args(db, "abi_field_head_size", args);
         let callee = self.path_expr(path);
         self.call_expr(callee, vec![])
     }
@@ -868,9 +866,11 @@ where
                     }),
                 ],
             );
-            let encode_field_path = PathId::from_ident(db, self.roots.core)
-                .push_str(db, "abi")
-                .push_str_args(db, "encode_field", encode_field_args);
+            let encode_field_path = self.roots.core.push_str(db, "abi").push_str_args(
+                db,
+                "encode_field",
+                encode_field_args,
+            );
             let encode_field_callee = self.path_expr(encode_field_path);
             let out_arg = self.ident_expr(out_ident);
             let head_pos_arg = self.ident_expr(head_pos_ident);
@@ -911,9 +911,11 @@ where
                     ty: Partial::Present(field_ty),
                 })],
             );
-            let abi_head_size_path = PathId::from_ident(db, self.roots.core)
-                .push_str(db, "abi")
-                .push_str_args(db, "abi_field_head_size", abi_head_size_args);
+            let abi_head_size_path = self.roots.core.push_str(db, "abi").push_str_args(
+                db,
+                "abi_field_head_size",
+                abi_head_size_args,
+            );
             let abi_head_size_callee = self.path_expr(abi_head_size_path);
             let field_head_size = self.call_expr(abi_head_size_callee, vec![]);
             let head_pos = self.ident_expr(head_pos_ident);
@@ -939,9 +941,11 @@ where
         let db = self.db();
         let decode_args =
             GenericArgListId::given_types(db, [self.sol_ty(), ty, decoder_ty, input_ty]);
-        let decode_path = PathId::from_ident(db, self.roots.core)
-            .push_str(db, "abi")
-            .push_str_args(db, "decode_field", decode_args);
+        let decode_path =
+            self.roots
+                .core
+                .push_str(db, "abi")
+                .push_str_args(db, "decode_field", decode_args);
         let decode_callee = self.path_expr(decode_path);
         let decoder_expr = self.mut_ident_expr(decoder_ident);
         let input_expr = self.ident_expr(input_ident);
@@ -976,9 +980,11 @@ where
     ) {
         let db = self.db();
         let decode_args = GenericArgListId::given_types(db, [self.sol_ty(), ty, input.input_ty]);
-        let decode_path = PathId::from_ident(db, self.roots.core)
-            .push_str(db, "abi")
-            .push_str_args(db, decode_fn, decode_args);
+        let decode_path =
+            self.roots
+                .core
+                .push_str(db, "abi")
+                .push_str_args(db, decode_fn, decode_args);
         let decode_callee = self.path_expr(decode_path);
         let input_expr = self.ident_expr(input.input_ident);
         let base_expr = self.ident_expr(input.base_ident);

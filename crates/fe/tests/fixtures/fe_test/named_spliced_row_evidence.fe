@@ -1,0 +1,90 @@
+// A trait method's row `uses E` that an implementation splices into direct
+// effects still carries the chosen dictionary of each component to the
+// implementation's own bound on that effect.
+trait Store { fn get(self) -> u256 }
+struct S {}
+impl Store for S { fn get(self) -> u256 { 10 } }
+impl Store for S as AltStore { fn get(self) -> u256 { 20 } }
+
+trait Service {
+    uses E
+    fn run(self) -> u256 uses E
+}
+struct Svc {}
+impl Service for Svc {
+    uses E = (store: Store)
+    fn run(self) -> u256 uses E { store.get() }
+}
+fn call_it<T: Service>(_ t: T) -> u256 uses (T::E) { t.run() }
+
+fn go_concrete() -> u256 {
+    let s = S {}
+    with (AltStore, Store = s) { Svc {}.run() }
+}
+fn go_generic() -> u256 {
+    let s = S {}
+    with (AltStore, Store = s) { call_it(Svc {}) }
+}
+fn go_ordinary() -> u256 {
+    let s = S {}
+    with (Store = s) { call_it(Svc {}) }
+}
+// A plain declared effect, which no splice touches.
+fn read() -> u256 uses (store: Store) { store.get() }
+fn go_plain() -> u256 {
+    let s = S {}
+    with (AltStore, Store = s) { read() }
+}
+
+struct Item {}
+trait Price {
+    fn amount(self) -> u256
+    fn bump(mut self) -> u256
+}
+impl Price for Item {
+    fn amount(self) -> u256 { 100 }
+    fn bump(mut self) -> u256 { 1 }
+}
+impl Price for Item as Wholesale {
+    fn amount(self) -> u256 { 70 }
+    fn bump(mut self) -> u256 { 2 }
+}
+fn view() -> u256 uses (p: Price) { p.amount() }
+trait Runner {
+    uses E
+    fn run(self) -> u256 uses E
+}
+struct Direct {}
+impl Runner for Direct {
+    uses E = (p: mut Price)
+    fn run(self) -> u256 uses E { p.bump() * 1000 + p.amount() }
+}
+struct Forward {}
+impl Runner for Forward {
+    uses E = (p: mut Price)
+    fn run(self) -> u256 uses E { p.bump() * 1000 + view() }
+}
+struct ForwardView {}
+impl Runner for ForwardView {
+    uses E = (p: Price)
+    fn run(self) -> u256 uses E { view() }
+}
+fn go<C: Runner>(_ c: C) -> u256 uses C::E { c.run() }
+fn run_direct() -> u256 { with (Wholesale, Price = Item {}) { go(Direct {}) } }
+fn run_forward() -> u256 { with (Wholesale, Price = Item {}) { go(Forward {}) } }
+fn run_fv() -> u256 { with (Wholesale, Price = Item {}) { go(ForwardView {}) } }
+
+#[test]
+fn concrete() { assert(go_concrete() == 20) }
+#[test]
+fn generic() { assert(go_generic() == 20) }
+#[test]
+fn ordinary() { assert(go_ordinary() == 10) }
+#[test]
+fn plain_effect() { assert(go_plain() == 20) }
+#[test]
+fn mut_row_direct() { assert(run_direct() == 2070) }
+#[test]
+fn mut_row_forward() { assert(run_forward() == 2070) }
+#[test]
+fn view_row() { assert(run_fv() == 70) }

@@ -1,0 +1,50 @@
+// `storage_slots` of a type that names a parameter, such as `T`, a trait's
+// `Self` or an array of a const parameter's length, is counted at each
+// instance, in a const as at run time.
+use core::intrinsic::storage_slots
+
+trait Slots {
+    fn slot_buf(self) -> u256 {
+        let buf: [u8; { storage_slots<Self>().downcast_unchecked() }] = [0; { storage_slots<Self>().downcast_unchecked() }]
+        buf.len() as u256
+    }
+}
+
+struct Two {
+    a: u256,
+    b: u256,
+}
+
+impl Slots for Two {}
+
+struct Bytes {
+    a: u8,
+    b: u8,
+}
+
+impl Slots for Bytes {}
+
+fn slot_buf_of<T>(_ value: ref T) -> u256 {
+    let buf: [u8; { storage_slots<T>().downcast_unchecked() }] = [0; { storage_slots<T>().downcast_unchecked() }]
+    buf.len() as u256
+}
+
+fn array_slots<const N: usize>() -> u256 {
+    storage_slots<[u256; N]>()
+}
+
+fn element_array_slots<T, const N: usize>() -> u256 {
+    storage_slots<[T; N]>()
+}
+
+#[test]
+fn test_storage_slots_generic() {
+    let two = Two { a: 1, b: 2 }
+    let bytes = Bytes { a: 1, b: 2 }
+    assert!(two.slot_buf() == 2)
+    assert!(bytes.slot_buf() == 1)
+    assert!(slot_buf_of(ref two) == 2)
+    assert!(slot_buf_of(ref bytes) == 1)
+    assert!(array_slots<3>() == 3)
+    assert!(element_array_slots<Two, 2>() == 4)
+}

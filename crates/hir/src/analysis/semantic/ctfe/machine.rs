@@ -1258,6 +1258,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 .collect::<Vec<_>>(),
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::ContractInit { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => Vec::new(),
@@ -1406,7 +1407,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             | BodyOwner::Closure { .. } => Err(CtfeError::NotConstEvaluable { origin }),
             owner @ (BodyOwner::Func(_, _)
             | BodyOwner::Const(_)
-            | BodyOwner::AnonConstBody { .. }) => {
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }) => {
                 if inference_met_lowering_cycle(self.db, infer_body(self.db, owner)) {
                     return Err(CtfeError::InvalidBody { origin });
                 }
@@ -1944,7 +1946,7 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                 return self.eval_intrinsic_size_of(instance, result_ty, args, origin);
             }
             Some(CtfeExternIntrinsic::StorageSlots) => {
-                self.eval_intrinsic_storage_slots(instance, result_ty, args, origin)
+                return self.eval_intrinsic_storage_slots(instance, result_ty, args, origin);
             }
             Some(CtfeExternIntrinsic::Keccak256) => {
                 self.eval_intrinsic_keccak(instance, result_ty, args, origin)
@@ -2550,6 +2552,8 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
                         }
                         .into());
                     };
+                    // Defensive: no source program reaches this. `Code<Expr>` comes from
+                    // `quote`, `construct` and `for_each_field`, and `empty` takes only `Seed` kinds.
                     if code.kind() != common::generation::FrozenCodeKind::Expr
                         || matches!(code.data(), crate::core::meta::CodeData::Empty { .. })
                     {
@@ -3128,9 +3132,9 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
         result_ty: TyId<'db>,
         args: &[CtfeConstValue<'db>],
         origin: SemOrigin<'db>,
-    ) -> Result<CtfeConstValue<'db>, CtfeError<'db>> {
+    ) -> EvalResult<'db, CtfeConstValue<'db>> {
         if !args.is_empty() {
-            return Err(CtfeError::NotConstEvaluable { origin });
+            return Err(CtfeError::NotConstEvaluable { origin }.into());
         }
         let key = instance.key(self.db);
         let ty = *key
@@ -3144,10 +3148,19 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             key.owner(self.db).scope(),
             key.instantiate_typed_body(self.db).assumptions(),
         );
-        let slots = storage_slot_span(self.db, ty).map_err(|_| CtfeError::InvalidOperation {
-            origin,
-            message: format!("`{}` has no storage layout", ty.pretty_print(self.db)),
-        })?;
+        let slots = storage_slot_span(self.db, ty)
+            .map_err(|_| CtfeError::InvalidOperation {
+                origin,
+                message: format!("`{}` has no storage layout", ty.pretty_print(self.db)),
+            })?
+            // Only a type that still names a parameter has no slots yet.
+            .ok_or_else(|| {
+                EvalStop::Blocked(BlockedInfo::new(
+                    ConstDemandKind::Layout,
+                    ConstDependency::Type(ty),
+                    origin,
+                ))
+            })?;
         Ok(CtfeConstValue::int(self.db, result_ty, BigInt::from(slots)))
     }
 

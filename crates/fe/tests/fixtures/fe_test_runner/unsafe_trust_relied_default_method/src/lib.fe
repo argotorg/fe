@@ -1,0 +1,3 @@
+use t::Checked
+#[test]
+fn default_method() { assert!(u2::Evil2 {}.b() == 1) }

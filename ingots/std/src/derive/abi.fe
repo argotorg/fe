@@ -1,6 +1,6 @@
 use core::abi::{Abi, AbiFrame, AbiSize, AbiSpan, ByteInput, Encode, abi_field_head_size, abi_record_field_end, checked_frame_end, dynamic_payload_size, encode_field}
 use core::derive::Derive
-use core::meta::{Code, Expr, Field, FieldInit, Item, Record, field_count, field_types, for_each_field, type_ref}
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, field_count, field_is_indexed, field_types, for_each_field, type_ref}
 use ingot::abi::HeadsBefore
 
 struct PayloadSize { bytes: u256 }
@@ -79,7 +79,7 @@ impl<A: Abi> RecordWriter<A> {
     }
 
     #[inline(always)]
-    fn push<F: Encode<A> + AbiSize>(mut self, _ field: F) {
+    pub fn push<F: Encode<A> + AbiSize>(mut self, _ field: F) {
         self.tails = encode_field<A, F>(field, self.out, head_pos: self.head, tails: self.tails)
         self.remaining = self.remaining - 1
         if self.remaining != 0 {
@@ -88,23 +88,18 @@ impl<A: Abi> RecordWriter<A> {
     }
 }
 
-#[inline(always)]
-fn push_record_field<A: Abi, F: Encode<A> + AbiSize>(_ writer: mut RecordWriter<A>, _ field: F) {
-    writer.push(field)
-}
-
-struct WriteField {}
+/// Writes each data field of `self` through the splice site's mutable
+/// `writer`, in encoding order; splice once per field counted by
+/// `RecordWriter::new`. An indexed field of an event is a topic, not data.
+pub(ingot) struct WriteField {}
 impl FieldInit for WriteField {
     const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
-        quote(writer) { writer.push(self.${field}) }
+        if field_is_indexed(field) {
+            quote { () }
+        } else {
+            quote(writer) { writer.push(self.${field}) }
+        }
     }
-}
-
-/// Write one field of `self` through the splice site's mutable `writer` when
-/// the splice is in a different provider module.
-/// Splice once per field counted by `RecordWriter::new`, in encoding order.
-pub(ingot) const fn write_field_from_provider(_ field: Field) -> Code<Expr> {
-    quote(writer) { push_record_field(mut writer, self.${field}) }
 }
 
 struct SpanCursor {

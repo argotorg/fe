@@ -1,0 +1,10 @@
+// An array is not a record: `record_view` refuses it, since its handle would
+// carry no length.
+use std::abi::{DynArray, RecordView}
+use std::evm::CallData
+
+fn f() -> usize {
+    let cd = CallData::with_base(4)
+    let v: RecordView<CallData, DynArray<u256>> = cd.record_view<DynArray<u256>>(0)
+    v.len()
+}

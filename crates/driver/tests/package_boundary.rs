@@ -5,11 +5,13 @@
 //! dependencies are; it does not read what generation produces in its own
 //! ingot, and generated items do not change what authored code resolves to.
 use common::InputDb;
+use common::stdlib::{HasBuiltinCore, HasBuiltinStd};
 use fe_driver::{DriverDataBase, generation::prepare_ingots};
 use hir::analysis::{
     semantic::{EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const},
     ty::ty_check::BodyOwner,
 };
+use hir::hir_def::HirIngot;
 use url::Url;
 
 const ROOT: &str = "file:///tmp/fe-package-boundary/";
@@ -4945,4 +4947,149 @@ unsafe impl StateIndex for Cells {
 }",
         "the generated implementation of `LaneCodec<u8>` for `CellLanes`",
     );
+}
+
+// ---- Scoped requests of several dependencies in one round ----------------------
+
+/// The dependency `gd` writes a function whose block opens a provider; the
+/// `fn write` is generic, so the request exists only for a concrete call.
+const BATCH_GD: &str = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::{SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+pub struct Arg { value: u8 }
+impl Gate for Arg {
+    fn code(_ value: u8) -> u8 { value }
+}
+struct ProvideGate {}
+impl Derive<trait Gate> for ProvideGate {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn code(_ value: u8) -> u8 { value ^ 1 } }
+    }
+}
+pub struct Elem<K, T> { pub value: u8 }
+impl<T: Gate> SolPacked for Elem<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+pub fn write<K>(array: mut SolArray<Elem<K, Arg>>) {
+    with (ProvideGate) { array[0] = Elem { value: 7 } }
+}
+pub const fn seed() -> u8 { 3 }
+";
+
+/// The dependency `dep` depends on `gd`, writes the same shape and reads a
+/// function of `gd` in its provider.
+const BATCH_DEP: &str = "use core::derive::Derive
+use core::meta::{Code, Item, Record}
+use std::evm::{SolArray, SolPacked}
+use gd::seed
+
+trait Gate2 {
+    fn code(_ value: u8) -> u8
+}
+pub struct Arg2 { value: u8 }
+impl Gate2 for Arg2 {
+    fn code(_ value: u8) -> u8 { value }
+}
+struct ProvideGate2 {}
+impl Derive<trait Gate2> for ProvideGate2 {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let n = seed()
+        quote { fn code(_ value: u8) -> u8 { value ^ ${n} } }
+    }
+}
+pub struct Elem2<K, T> { pub value: u8 }
+impl<T: Gate2> SolPacked for Elem2<u8, T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem2 { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+pub fn write2<K>(array: mut SolArray<Elem2<K, Arg2>>) {
+    with (ProvideGate2) { array[0] = Elem2 { value: 7 } }
+}
+";
+
+/// `app` calls both functions, so one round holds a request for each
+/// dependency, one of which depends on the other.
+#[test]
+fn dependency_demands_in_one_batch_do_not_depend_on_order() {
+    let head = "use std::evm::SolArray
+use gd::{Arg, Elem, write}
+use dep::{Arg2, Elem2, write2}
+";
+    let first =
+        "pub fn first(array: mut SolArray<Elem<u8, Arg>>) { write<u8>(array: mut array) }\n";
+    let second =
+        "pub fn second(array: mut SolArray<Elem2<u8, Arg2>>) { write2<u8>(array: mut array) }\n";
+    let mut requests = Vec::new();
+    for app in [
+        format!("{head}{first}{second}"),
+        format!("{head}{second}{first}"),
+    ] {
+        let layout = Layout::new()
+            .ingot("gd", &[], BATCH_GD)
+            .ingot("dep", &[("gd", "gd")], BATCH_DEP)
+            .ingot("app", &[("dep", "dep"), ("gd", "gd")], &app);
+        let prepared = accepted(&layout, "app");
+        for root in ["app", "dep", "gd"] {
+            assert_eq!(errors(&prepared, root), "", "{root}");
+        }
+        let mut found = prepared
+            .generation_inputs()
+            .requests(&prepared)
+            .iter()
+            .map(|request| format!("{request:?}"))
+            .collect::<Vec<_>>();
+        assert_eq!(found.len(), 2, "one request for each dependency");
+        found.sort();
+        requests.push(found);
+    }
+    assert_eq!(requests[0], requests[1]);
+}
+
+/// A package is prepared whatever its name is: only the embedded libraries
+/// carry no requests. This one calls itself `std`.
+#[test]
+fn a_package_named_std_is_prepared() {
+    let layout = Layout::new().ingot(
+        "std",
+        &[],
+        "use core::derive::DeriveInherent\nuse core::meta::{Code, Item, Record, field_count}\n\
+         struct Count {}\n\
+         impl DeriveInherent for Count {\n    const fn derive(_ record: Record) -> Code<Item> {\n        let n = field_count(record)\n        quote { pub const fn arity() -> usize { ${n} } }\n    }\n}\n\
+         struct S { a: u256, b: u256 }\nimpl S with (Count)\n\
+         pub const fn run() -> usize { S::arity() }\n",
+    );
+    let db = accepted(&layout, "std");
+    assert_eq!(value(&db, "std", "run"), "2");
+}
+
+/// The embedded libraries are skipped by preparation because they hold no
+/// derive header; this keeps that true.
+#[test]
+fn the_embedded_libraries_hold_no_derive_header() {
+    let db = DriverDataBase::default();
+    for ingot in [db.builtin_core(), db.builtin_std()] {
+        for implementation in ingot.all_impl_traits(&db) {
+            assert!(
+                implementation.derive_provider(&db).is_none(),
+                "an embedded library holds a derive header"
+            );
+        }
+        for implementation in ingot.all_impls(&db) {
+            assert!(
+                implementation.derive_provider(&db).is_none(),
+                "an embedded library holds a derive header"
+            );
+        }
+    }
 }

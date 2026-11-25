@@ -1,0 +1,19 @@
+// A generic implementation with its own bound `T: Show` inherits a default
+// that uses a bounded associated type of `Self`, read directly and through a
+// generic reader.
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+trait Tr {
+    type X
+    type Y: Show
+    const K: Self::X = <Self::Y as Show>::show()
+}
+struct W<T> {}
+impl<T: Show> Tr for W<T> {
+    type X = u256
+    type Y = T
+}
+fn get<U: Tr<X = u256>>() -> u256 { U::K }
+#[test]
+fn t() { assert(<W<Foo> as Tr>::K == 100 && get<W<Foo>>() == 100) }

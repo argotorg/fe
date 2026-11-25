@@ -76,7 +76,10 @@ use crate::{
         DynLazySpan, LazySpan,
         lazy_spans::{LazyPathSpan, LazyTraitRefSpan, LazyTySpan},
     },
-    visitor::{Visitor, VisitorCtxt, walk_impl_trait_bounds, walk_path, walk_trait_ref, walk_type},
+    visitor::{
+        Visitor, VisitorCtxt, walk_impl_trait_bounds, walk_impl_trait_header, walk_path,
+        walk_trait_ref, walk_type,
+    },
 };
 
 /// A decision that prefers one implementation to another, made by use.
@@ -432,10 +435,7 @@ impl<'db> Widening<'db> {
             .to_opt()
             .map_or_else(String::new, |name| name.data(db).to_string());
         let trait_name = generated.trait_(db).pretty_print(db, false).to_string();
-        let bound = bounds_naming(db, self.via, named).map_or_else(
-            || "a bound".to_string(),
-            |bound| format!("the bound `{bound}`"),
-        );
+        let bound = bounds_naming(db, self.via, named).unwrap_or_else(|| "a bound".to_string());
         let tail =
             format!("so this implementation of `{trait_name}` could add types that meet them.");
         let deciding = describe(db, here, self.deciding);
@@ -558,11 +558,29 @@ fn bounds_naming<'db>(
     };
     // The same bounds, in the same order, as `written.constraints`.
     let pairs = candidate_decl_constraint_pairs(db, GenericParamOwner::ImplTrait(impl_trait));
-    let (_, source) = pairs.iter().find(|(bound, _)| {
+    let Some((_, source)) = pairs.iter().find(|(bound, _)| {
         let mut names = NamedTraits::new(db);
         names.add_bounds(PredicateListId::new(db, vec![*bound]));
         names.found.contains(&target)
-    })?;
+    }) else {
+        // No bound names it: the type of the implementation or the arguments
+        // of its trait do, as written.
+        let mut names = NamedTraits::new(db);
+        names.read_header_types_as_written(impl_trait);
+        if !names.found.contains(&target) {
+            return None;
+        }
+        let span = impl_trait.span().ty().resolve(db)?;
+        let text = span.file.text(db);
+        return text
+            .get(usize::from(span.range.start())..usize::from(span.range.end()))
+            .map(|text| {
+                format!(
+                    "its type `{}`",
+                    text.split_whitespace().collect::<Vec<_>>().join(" ")
+                )
+            });
+    };
     let span: DynLazySpan = match *source {
         PredicateSource::GenericParamBound { param_idx, .. } => {
             impl_trait.span().generic_params().param(param_idx).into()
@@ -574,7 +592,12 @@ fn bounds_naming<'db>(
     let span = span.resolve(db)?;
     let text = span.file.text(db);
     text.get(usize::from(span.range.start())..usize::from(span.range.end()))
-        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .map(|text| {
+            format!(
+                "the bound `{}`",
+                text.split_whitespace().collect::<Vec<_>>().join(" ")
+            )
+        })
 }
 
 /// Every trait that the bounds of `written` name: the trait of each bound,
@@ -594,6 +617,13 @@ fn named_traits<'db>(
 ) -> FxHashSet<Trait<'db>> {
     let mut names = NamedTraits::new(db);
     names.add_bounds(written.constraints(db));
+    // Which types the implementation covers is decided by its whole header: a
+    // const expression in the type or in the arguments of the trait is a
+    // condition as a bound is.
+    for &arg in written.trait_inst(db).args(db) {
+        arg.visit_with(&mut names);
+    }
+    written.self_ty(db).visit_with(&mut names);
     if let ImplementorOrigin::Hir(impl_trait) = written.origin(db) {
         names.read_bounds_as_written(impl_trait);
     }
@@ -736,7 +766,7 @@ impl<'db> NamedTraits<'db> {
                 self.name_used(use_.inst());
                 use_.inst().visit_with(self);
             }
-            ConstRef::InherentConst(use_) => self.read_inherent_const(use_),
+            ConstRef::InherentConst { use_, .. } => self.read_inherent_const(use_),
         }
     }
 
@@ -796,7 +826,15 @@ impl<'db> NamedTraits<'db> {
     fn read_bounds_as_written(&mut self, impl_trait: ImplTrait<'db>) {
         let mut ctxt = VisitorCtxt::with_impl_trait(self.db, impl_trait);
         walk_impl_trait_bounds(&mut WrittenNames { names: self }, &mut ctxt, impl_trait);
+        self.read_header_types_as_written(impl_trait);
         self.read_const_conditions(ItemKind::ImplTrait(impl_trait));
+    }
+
+    /// The type that an implementation is for and the arguments of its trait,
+    /// as written. The trait itself is not named by its own header.
+    fn read_header_types_as_written(&mut self, impl_trait: ImplTrait<'db>) {
+        let mut ctxt = VisitorCtxt::with_impl_trait(self.db, impl_trait);
+        walk_impl_trait_header(&mut WrittenNames { names: self }, &mut ctxt, impl_trait);
     }
 
     /// The types and traits as written in a body. Inference normalizes a
@@ -904,10 +942,15 @@ impl<'db> TyVisitor<'db> for NamedTraits<'db> {
                 ..
             } => match (const_def, template_ty.or(*ty)) {
                 (Some(const_def), _) => self.read_body(BodyOwner::Const(*const_def)),
-                (None, Some(expected)) => self.read_body(BodyOwner::AnonConstBody {
-                    body: *body,
-                    expected,
-                }),
+                (None, Some(expected)) => self.read_body(
+                    const_ty
+                        .data(self.db)
+                        .unevaluated_owner(expected)
+                        .unwrap_or(BodyOwner::AnonConstBody {
+                            body: *body,
+                            expected,
+                        }),
+                ),
                 // The type of the expression is not known here, so inference
                 // cannot be asked; the body is read as written.
                 (None, None) => self.read_written(*body),

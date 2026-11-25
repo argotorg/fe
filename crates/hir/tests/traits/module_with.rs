@@ -52,7 +52,7 @@ fn a_declaration_lowers_to_one_item_with_its_operands() {
 fn a_declaration_is_refused_until_its_meaning_is_available() {
     assert_eq!(
         diagnostics(&with_picks("with (Discount)\n")),
-        vec!["8-0163"]
+        vec!["8-0171"]
     );
 }
 
@@ -62,7 +62,7 @@ fn a_declaration_in_a_child_module_is_refused_once() {
         diagnostics(&with_picks(
             "mod m {\n    use super::*\n    with (Discount)\n    pub fn f() -> u256 { 1 }\n}\n"
         )),
-        vec!["8-0163"]
+        vec!["8-0171"]
     );
 }
 

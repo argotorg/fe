@@ -1,0 +1,34 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/recv_ref_field_decode_required.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ recv_ref_field_decode_required.fe:55:9
+   │
+55 │         G { a, ref b } -> u8 {
+   │         ^^^^^^^^^^^^^^ `Odd` doesn't implement `Decode<Sol>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ recv_ref_field_decode_required.fe:64:9
+   │
+64 │         G { a: Manual::Odd { n }, ref b } -> u8 {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Odd` doesn't implement `Decode<Sol>`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ recv_ref_field_decode_required.fe:73:9
+   │
+73 │         G { a: _, b } -> u8 {
+   │         ^^^^^^^^^^^^^ `Odd` doesn't implement `Decode<Sol>`
+
+error[16-0024]: the entry code of contract `ByName` cannot be generated
+   ┌─ recv_ref_field_decode_required.fe:55:9
+   │
+55 │         G { a, ref b } -> u8 {
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Odd: Decode<Sol>` is not satisfied
+
+error[16-0024]: the entry code of contract `ByNestedName` cannot be generated
+   ┌─ recv_ref_field_decode_required.fe:64:9
+   │
+64 │         G { a: Manual::Odd { n }, ref b } -> u8 {
+   │         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Odd: Decode<Sol>` is not satisfied

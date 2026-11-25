@@ -1,20 +1,45 @@
-use core::abi::{AbiFrame, abi_field_head_size, dynamic_payload_size}
+use core::abi::{AbiFrame, AbiSize, abi_field_head_size, dynamic_payload_size}
 use core::derive::Derive
-use core::meta::{Code, Expr, Item, Record, field, field_count, field_type, field_is_indexed}
+use core::meta::{Code, Expr, Field, FieldInit, Item, Record, field, field_count, field_is_indexed, for_each_field}
 use core::ptr::{MemBuffer, allocation_len}
 use ingot::abi::Sol
 use ingot::evm::{Event, Log, TopicValue}
-use super::abi::{RecordWriter, write_field_from_provider}
+use super::abi::{RecordWriter, WriteField}
+
+/// The head size and the payload size of the data fields of an event: what
+/// `emit` allocates before it writes them.
+struct DataSize {
+    head: u256,
+    payload: u256,
+}
+
+impl DataSize {
+    #[inline(always)]
+    fn add<F: AbiSize>(mut self, _ field: F) {
+        self.head = self.head + abi_field_head_size<F>()
+        self.payload = self.payload + dynamic_payload_size(field)
+    }
+}
+
+/// Adds each data field of an event to the `size` of the splice site. An
+/// indexed field is a topic, not data.
+struct AddDataSize {}
+impl FieldInit for AddDataSize {
+    const fn init(_ field: Field, _ index: usize) -> Code<Expr> {
+        if field_is_indexed(field) {
+            quote { () }
+        } else {
+            quote(size) { size.add(self.${field}) }
+        }
+    }
+}
 
 /// Provides the log encoding of an authored event.
 pub struct StructEvent {}
 impl Derive<trait Event> for StructEvent {
     const fn derive(_ record: Record) -> Code<Item> {
         let n = field_count(record)
-        var head: Code<Expr> = quote { 0 as u256 }
-        var payload: Code<Expr> = quote { 0 as u256 }
         var data_fields: usize = 0
-        var steps: Code<Expr> = quote { () }
         var topic_a: Code<Expr> = quote { 0 as u256 }
         var topic_b: Code<Expr> = quote { 0 as u256 }
         var topic_c: Code<Expr> = quote { 0 as u256 }
@@ -22,7 +47,6 @@ impl Derive<trait Event> for StructEvent {
         var i: usize = 0
         while i < n {
             let f = field(record, i)
-            let ty = field_type(f)
             if field_is_indexed(f) {
                 let topic = quote { self.${f}.as_topic() }
                 if topics == 0 {
@@ -35,18 +59,12 @@ impl Derive<trait Event> for StructEvent {
                 topics += 1
             } else {
                 data_fields += 1
-                head = quote { ${head} + abi_field_head_size<${ty}>() }
-                payload = quote { ${payload} + dynamic_payload_size<${ty}>(self.${f}) }
-                let step = write_field_from_provider(f)
-                steps = quote(writer) {
-                    {
-                        ${steps}
-                        ${step}
-                    }
-                }
             }
             i += 1
         }
+
+        // `emit` has room for three topics after the event signature.
+        assert!(topics <= 3)
 
         let emit = if topics == 0 {
             quote(log, data) { log.log1(data: data, topic0: Self::TOPIC0) }
@@ -71,11 +89,15 @@ impl Derive<trait Event> for StructEvent {
                 }
             }
         }
-        quote(log, data, writer) {
+        let sizes = for_each_field<AddDataSize>(record)
+        let steps = for_each_field<WriteField>(record)
+        quote(log, data, writer, size) {
             #[inline(always)]
             fn emit<L: Log>(own self, _ log: mut L) {
-                let head = ${head}
-                let total = head + ${payload}
+                var size = DataSize { head: 0, payload: 0 }
+                ${sizes}
+                let head = size.head
+                let total = head + size.payload
                 let buffer = MemBuffer::new(allocation_len(total))
                 let out = unsafe { AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total) }
                 var writer = RecordWriter<Sol>::new(out, head_size: head, fields: ${data_fields})

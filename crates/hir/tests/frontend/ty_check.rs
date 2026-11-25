@@ -1148,3 +1148,427 @@ fn deallocate(pointer: *u8) { core::ptr::dealloc_raw(pointer) }
         );
     }
 }
+
+#[test]
+fn written_types_report_visibility_in_every_position() {
+    let header = "mod inner {\n    VIS struct S {}\n    pub struct W<T> {}\n    pub struct V<T, U> {}\n    VIS trait Secret {}\n}\ntrait HasItem {\n    type Item\n}\ntrait Marker {}\nstruct Family<P: * -> Constraint> {}\n";
+    let messages = |vis: &str, body: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let source = format!("{}{body}", header.replace("VIS", vis));
+        let file = db.new_stand_alone("written_types.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| {
+                let diag = diag.to_complete(&db);
+                format!("{} {}", diag.error_code, diag.message)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for body in [
+        "fn f() { let _: inner::W<inner::S> = inner::W {} }\n",
+        "impl Marker for inner::W<inner::S> {}\n",
+        "impl Marker for Family<trait inner::Secret> {}\n",
+        "fn f() { let _: Family<trait inner::Secret> = Family {} }\n",
+        "fn f<T>() where inner::V<T, inner::S>: Marker {}\n",
+    ] {
+        // A private name is refused where it is written.
+        let private = messages("", body);
+        assert!(
+            private.iter().any(|message| message.starts_with("2-0003")),
+            "{body}: {private:?}"
+        );
+        // The same program with public names has no diagnostics.
+        assert_eq!(messages("pub", body), Vec::<String>::new(), "{body}");
+    }
+
+    let duplicate = messages(
+        "pub",
+        "fn f() { let _: Family<trait HasItem<Item = u8, Item = u16>> = Family {} }\n",
+    );
+    assert!(
+        duplicate
+            .iter()
+            .any(|message| message.ends_with("`Item` is bound more than once")),
+        "{duplicate:?}"
+    );
+
+    // Ordinary annotations keep compiling.
+    let controls = messages(
+        "pub",
+        "fn g() { let _: inner::W<u8> = inner::W {}\n    let _: (u8, bool) = (1, true)\n    let _: [u8; 2] = [1, 2] }\n",
+    );
+    assert_eq!(controls, Vec::<String>::new());
+}
+
+#[test]
+fn inherent_impls_on_constraint_types_are_refused() {
+    let codes = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("inherent_constraint.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).error_code.to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // A trait family and a constraint term take no inherent implementation.
+    for source in [
+        "trait Foo {}\nimpl trait Foo {\n    pub fn bar() -> u256 { 1 }\n}\n",
+        "trait Foo {}\ntype Goal<P: * -> Constraint, A> = P<A>\nimpl Goal<trait Foo, u8> {\n    pub fn bar() -> u256 { 1 }\n}\n",
+    ] {
+        let codes = codes(source);
+        assert!(
+            codes.iter().any(|code| code == "6-0011"),
+            "{source}: {codes:?}"
+        );
+    }
+
+    // A struct that takes a trait family as an argument is an ordinary type.
+    let codes = codes(
+        "trait Foo {}\nstruct Goal<P: * -> Constraint, A> {}\nimpl Goal<trait Foo, u8> {\n    pub fn bar() -> u256 { 1 }\n}\n",
+    );
+    assert_eq!(codes, Vec::<String>::new());
+}
+
+#[test]
+fn constant_types_have_kind_star() {
+    let messages = |source: &str| {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("constant_kind.fe".into(), source);
+        let (module, _) = db.top_mod(file);
+        let mut passes = initialize_test_analysis_pass();
+        passes
+            .run_on_module(&db, module)
+            .into_iter()
+            .map(|diag| diag.to_complete(&db).message)
+            .collect::<Vec<_>>()
+    };
+    let star = "expected `*` kind in this context";
+
+    // An associated constant of a trait has a type of kind `*`.
+    let in_trait = messages(
+        "trait Eq {}\ntrait Bad<G: (Constraint), P: * -> Constraint> {\n    const A: G\n    const B: P\n    const C: trait Eq\n}\n",
+    );
+    assert_eq!(
+        in_trait.iter().filter(|message| *message == star).count(),
+        3,
+        "{in_trait:?}"
+    );
+
+    // So does a top-level constant, which is not evaluated against another kind.
+    let top_level = messages("trait Eq {}\nconst X: trait Eq = 1\n");
+    assert_eq!(
+        top_level.iter().filter(|message| *message == star).count(),
+        1,
+        "{top_level:?}"
+    );
+    assert!(
+        !top_level
+            .iter()
+            .any(|message| message.contains("compiler invariant")),
+        "{top_level:?}"
+    );
+
+    // Ordinary constants have no diagnostics.
+    let ordinary = messages("trait Ok<T> {\n    const A: T\n}\nconst Y: u8 = 1\n");
+    assert_eq!(ordinary, Vec::<String>::new());
+}
+
+#[test]
+fn uninhabited_match_exhaustiveness_and_empty_match_never() {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(
+        "uninhabited_match.fe".into(),
+        r#"
+use core::result::Result
+
+enum Empty {}
+enum AllEmpty {
+    A(!),
+    B(Empty),
+    C(u256, Empty),
+}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+
+fn match_never(_ x: !) -> u256 {
+    let v: u256 = match x {}
+    v
+}
+
+fn match_empty(_ e: Empty) -> u256 {
+    let v: u256 = match e {}
+    v
+}
+
+fn match_all_empty(_ a: AllEmpty) -> u256 {
+    match a {}
+}
+
+fn match_mixed(_ m: Mixed) -> u256 {
+    match m {}
+}
+
+fn match_array(_ arr: [Empty; 3]) -> u256 {
+    match arr {}
+}
+
+fn match_ref_empty(_ r: ref Empty) -> u256 {
+    match r {}
+}
+
+fn match_result_omit_err(_ r: Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+    }
+}
+
+fn match_result_explicit_err(_ r: Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(e) => match e {}
+    }
+}
+
+fn match_result_wildcard_err(_ r: Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(_) => 0
+    }
+}
+
+fn match_never_wildcard(_ x: !) -> u256 {
+    match x {
+        _ => 7
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(file);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(diags.is_empty(), "{diags:#?}");
+
+    // Shadowed arms over uninhabited variants must still report unreachable pattern.
+    let shadowed = db.new_stand_alone(
+        "uninhabited_shadowed.fe".into(),
+        r#"
+use core::result::Result
+
+enum Empty {}
+
+fn shadowed_err(_ r: Result<Empty, u256>) -> u256 {
+    match r {
+        Result::Ok(v) => v
+        Result::Err(_) => 0
+        Result::Err(_) => 1
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(shadowed);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(
+        diagnostics_contain(&diags, "unreachable pattern"),
+        "{diags:#?}"
+    );
+}
+
+#[test]
+fn uninhabited_contract_state_and_clearable() {
+    let mut db = HirAnalysisTestDb::default();
+    let invalid = db.new_stand_alone(
+        "uninhabited_state_invalid.fe".into(),
+        r#"
+use core::marker::Clearable
+use core::result::Result
+use std::evm::{StorageMap, TSlot}
+
+enum Empty {}
+enum AllEmpty {
+    A(!),
+    B(Empty),
+}
+struct Mixed {
+    a: u256,
+    b: !,
+}
+enum Flipped {
+    Err(Empty),
+    Ok(u256),
+}
+
+fn require_clearable<T: Clearable>() {}
+
+fn bad_clearable() {
+    require_clearable<Empty>()
+    require_clearable<!>()
+    require_clearable<AllEmpty>()
+    require_clearable<Mixed>()
+    require_clearable<[Empty; 3]>()
+    require_clearable<Flipped>()
+}
+
+msg M {
+    #[selector = 1]
+    Ping -> u256,
+}
+
+pub contract Bad {
+    mut a: Empty,
+    mut b: !,
+    mut c: AllEmpty,
+    mut d: Mixed,
+    mut e: [Empty; 3],
+    mut f: Flipped,
+    mut g: StorageMap<u256, Empty>,
+    mut h: TSlot<Flipped>,
+    i: Empty,
+
+    recv M {
+        Ping -> u256 { 0 }
+    }
+}
+"#,
+    );
+    let (top_mod, _) = db.top_mod(invalid);
+    let diags: Vec<_> = fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, top_mod)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    for expected in [
+        "contract state cannot hold `Empty`",
+        "contract state cannot hold `!`",
+        "contract state cannot hold `AllEmpty`",
+        "contract state cannot hold `Mixed`",
+        "contract state cannot hold `[Empty; 3]`",
+        "contract state cannot hold `Flipped`",
+        "`Empty` doesn't implement `Clearable`",
+        "`!` doesn't implement `Clearable`",
+        "`AllEmpty` doesn't implement `Clearable`",
+        "`Mixed` doesn't implement `Clearable`",
+        "`[Empty; 3]` doesn't implement `Clearable`",
+        "`Flipped` doesn't implement `Clearable`",
+    ] {
+        assert!(
+            diagnostics_contain(&diags, expected),
+            "missing diagnostic `{expected}` in:\n{diags:#?}"
+        );
+    }
+
+    let valid = db.new_stand_alone(
+        "uninhabited_state_valid.fe".into(),
+        r#"
+use core::marker::Clearable
+use core::option::Option
+use core::result::Result
+use std::evm::{StorageMap, TSlot}
+
+enum Empty {}
+
+fn require_clearable<T: Clearable>() {}
+
+fn ok_clearable() {
+    require_clearable<Option<Empty>>()
+    require_clearable<Result<Empty, u256>>()
+    require_clearable<[Empty; 0]>()
+}
+
+msg M {
+    #[selector = 1]
+    Ping -> u256,
+}
+
+pub contract Good {
+    mut opt: Option<Empty>,
+    mut res: Result<Empty, u256>,
+    mut zero_arr: [Empty; 0],
+    mut map: StorageMap<u256, Result<Empty, u256>>,
+    mut tslot: TSlot<Option<Empty>>,
+
+    recv M {
+        Ping -> u256 { 0 }
+    }
+}
+"#,
+    );
+    crate::prepared_fixture::prepare_generation(&mut db, valid);
+    let (top_mod, _) = db.top_mod(valid);
+    let diags: Vec<_> = fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, top_mod)
+        .into_iter()
+        .map(|diag| diag.to_complete(&db))
+        .collect();
+    assert!(diags.is_empty(), "{diags:#?}");
+}
+
+// The trait solver asks `is_uninhabited` of a `Clearable` goal's type, and
+// `is_uninhabited` normalizes that type's fields through the solver: here
+// `S<X>: Clearable` needs `X::Out`, whose impl is bounded by `S<X>: Clearable`.
+#[test]
+fn uninhabited_query_cycle_through_clearable() {
+    let mut db = HirAnalysisTestDb::default();
+    let source = |out: &str| {
+        format!(
+            r#"
+use core::marker::Clearable
+use core::option::Option
+
+trait Tr {{
+    type Out
+}}
+
+struct S<T: Tr> {{
+    f: T::Out,
+}}
+
+struct X {{}}
+
+impl Tr for X where S<X>: Clearable {{
+    type Out = {out}
+}}
+
+fn need<T: Clearable>() {{}}
+
+fn read(_ s: own S<X>) -> S<X> {{
+    s
+}}
+
+fn clear() {{
+    need<S<X>>()
+}}
+
+fn matched(_ o: own Option<S<X>>) -> u256 {{
+    match o {{
+        Option::Some(_) => 1
+        Option::None => 0
+    }}
+}}
+"#
+        )
+    };
+
+    let inhabited = db.new_stand_alone("uninhabited_cycle.fe".into(), &source("u256"));
+    let (top_mod, _) = db.top_mod(inhabited);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(diags.is_empty(), "{diags:#?}");
+
+    // `S<X>` is clearable only if `X::Out` is `!`, which makes it not
+    // clearable, so the bound fails as it would without the query.
+    let paradox = db.new_stand_alone("uninhabited_cycle_never.fe".into(), &source("!"));
+    let (top_mod, _) = db.top_mod(paradox);
+    let diags = diagnostics_for(&db, top_mod);
+    assert!(
+        diagnostics_contain(&diags, "`X` doesn't implement `Tr`"),
+        "{diags:#?}"
+    );
+}

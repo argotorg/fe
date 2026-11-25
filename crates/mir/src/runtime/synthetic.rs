@@ -530,7 +530,17 @@ impl<'db> SyntheticBodyBuilder<'db> {
                     .checked_mul(32)
                     .expect("code-space byte extent was validated by contract layout"),
             );
-            Some(self.push_malloc_bytes(cont_bb, immut_len))
+            let immut_ptr = self.push_malloc_bytes(cont_bb, immut_len);
+            // Zero the entire immutable buffer so unwritten padding or narrow-field
+            // tail bytes never expose dirty heap memory in deployed bytecode.
+            self.push_side_effect_builtin(
+                cont_bb,
+                RuntimeBuiltin::ZeroMem {
+                    dst: immut_ptr,
+                    len: immut_len,
+                },
+            );
+            Some(immut_ptr)
         };
 
         if let Some(user_init) = plan.user_init {
@@ -702,16 +712,8 @@ impl<'db> SyntheticBodyBuilder<'db> {
 
         let immut_slots = self.contract_code_address_space_slots(contract);
         if immut_slots == 0 {
-            self.push_side_effect_builtin(
-                entry,
-                RuntimeBuiltin::CodeCopy {
-                    dst: zero,
-                    offset: runtime_offset,
-                    len: runtime_len,
-                },
-            );
-            self.blocks[entry.index()].terminator = RTerminator::ReturnData {
-                offset: zero,
+            self.blocks[entry.index()].terminator = RTerminator::ReturnCode {
+                offset: runtime_offset,
                 len: runtime_len,
             };
             return;
@@ -946,10 +948,10 @@ impl<'db> SyntheticBodyBuilder<'db> {
     ) -> Result<RLocalId, LowerError> {
         let root = match binding.materialization {
             TargetRootProviderMaterialization::MemoryObject { layout } => {
-                self.push_zeroed_memory_object_ref(bb, binding.declared_ty, layout)
+                self.push_zero_sized_object_ref(bb, binding.declared_ty, layout)?
             }
             TargetRootProviderMaterialization::MemoryRawAddr { layout } => {
-                self.push_zeroed_memory_raw_root(bb, binding.declared_ty, layout)?
+                self.push_zero_sized_raw_root(bb, binding.declared_ty, layout)?
             }
         };
         Ok(
@@ -1494,13 +1496,22 @@ impl<'db> SyntheticBodyBuilder<'db> {
         local
     }
 
-    fn push_zeroed_memory_raw_root(
+    /// The root of a zero-sized memory `TargetRootProvider` as a raw
+    /// address. Every root provider is zero-sized, so no byte of it needs
+    /// initializing.
+    fn push_zero_sized_raw_root(
         &mut self,
         bb: RBlockId,
         semantic_ty: TyId<'db>,
         layout: crate::LayoutId<'db>,
     ) -> Result<RLocalId, LowerError> {
         let size = RuntimeMemoryLayout::raw(self.db).layout_size(layout)?;
+        if size != 0 {
+            return Err(LowerError::Unsupported(format!(
+                "target root provider `{}` is not zero-sized",
+                semantic_ty.pretty_print(self.db)
+            )));
+        }
         let size_local = self.push_local(
             TyId::usize(self.db),
             RuntimeCarrier::Value(RuntimeClass::Scalar(address_int_class(
@@ -1525,12 +1536,20 @@ impl<'db> SyntheticBodyBuilder<'db> {
         Ok(self.coerce_runtime_value(bb, addr, &raw_class, semantic_ty))
     }
 
-    fn push_zeroed_memory_object_ref(
+    /// The root of a zero-sized memory `TargetRootProvider` as an object
+    /// reference; see `push_zero_sized_raw_root`.
+    fn push_zero_sized_object_ref(
         &mut self,
         bb: RBlockId,
         semantic_ty: TyId<'db>,
         layout: crate::LayoutId<'db>,
-    ) -> RLocalId {
+    ) -> Result<RLocalId, LowerError> {
+        if !(RuntimeClass::AggregateValue { layout }).is_runtime_zst(self.db) {
+            return Err(LowerError::Unsupported(format!(
+                "target root provider `{}` is not zero-sized",
+                semantic_ty.pretty_print(self.db)
+            )));
+        }
         let dst = self.push_local(
             semantic_ty,
             RuntimeCarrier::Value(RuntimeClass::object_ref(layout)),
@@ -1543,7 +1562,7 @@ impl<'db> SyntheticBodyBuilder<'db> {
                 expr: RExpr::AllocObject { layout },
             },
         );
-        dst
+        Ok(dst)
     }
 
     fn push_binary_word(
@@ -1870,6 +1889,77 @@ fn test_raw_storage_root() uses (storage: mut RawStorage) {
                 }
             )),
             "synthetic test root should not seed aggregate memory effect params with a null raw pointer: {body:#?}"
+        );
+    }
+
+    #[test]
+    fn contract_init_abi_zeroes_immutable_buffer() {
+        let mut db = DriverDataBase::default();
+        let file_url = Url::parse("file:///contract_init_abi_zeroes_immutable_buffer.fe").unwrap();
+        let file = db.workspace().touch(
+            &mut db,
+            file_url,
+            Some(
+                r#"
+msg Query {
+    #[selector = 1]
+    Read -> u8,
+}
+
+pub contract NarrowImmutable {
+    val: u8,
+
+    init(v: u8) uses (mut val) {
+        val = v
+    }
+
+    recv Query {
+        Read -> u8 uses (val) { val }
+    }
+}
+"#
+                .to_string(),
+            ),
+        );
+        let file = driver::generation::prepare_file_in_place(&mut db, file)
+            .expect("fixture generation should succeed");
+        let top_mod = db.top_mod(file);
+        let package = build_runtime_package(&db, top_mod).expect("runtime package should build");
+        let init_abi = package
+            .functions(&db)
+            .iter()
+            .find(|function| {
+                matches!(
+                    function.owner(&db),
+                    RuntimeFunctionOwner::Synthetic(RuntimeSyntheticSpec::ContractInitAbi { .. })
+                )
+            })
+            .expect("missing contract init abi wrapper");
+        let body = init_abi.instance(&db).body(&db);
+        let mut malloc_dst = None;
+        let mut zeroed_immut = false;
+        for block in &body.blocks {
+            for stmt in &block.stmts {
+                match stmt {
+                    RStmt::Assign {
+                        dst,
+                        expr: RExpr::Builtin(RuntimeBuiltin::Malloc { .. }),
+                    } => {
+                        malloc_dst = Some(*dst);
+                    }
+                    RStmt::Assign {
+                        expr: RExpr::Builtin(RuntimeBuiltin::ZeroMem { dst, .. }),
+                        ..
+                    } if Some(*dst) == malloc_dst => {
+                        zeroed_immut = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            zeroed_immut,
+            "contract init ABI must zero-initialize the immutable buffer right after malloc: {body:#?}"
         );
     }
 }

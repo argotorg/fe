@@ -6,7 +6,7 @@ input_file: tests/fixtures/cli_output/single_files/contract_entry_arm_tuple17_fi
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_arm_tuple17_field_unreadable.fe
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_arm_tuple17_field_unreadable.fe:21:9
    │
 21 │         M { ref y, x } -> u8 { y }

@@ -13,6 +13,8 @@ mod contract;
 mod effect_env;
 pub(crate) mod env;
 mod expr;
+mod inherited_const;
+pub(crate) use inherited_const::{default_checked_per_implementation, inherited_const_setup};
 mod owner;
 mod pat;
 mod path;
@@ -36,9 +38,8 @@ pub(crate) use self::contract::{
 pub(crate) use self::env::{func_declared_bounds, func_signature};
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::Tier;
-use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
+use crate::analysis::name_resolution::{ResolvedVariant, Viewer};
 pub use crate::analysis::ty::AddressSpace;
-use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::const_check::const_body_language_failure;
 use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
@@ -67,6 +68,7 @@ use crate::{
     },
     visitor::{Visitor, VisitorCtxt, walk_expr, walk_pat},
 };
+pub(crate) use callable::supply_direct_effect_evidence;
 use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_call_generic_args};
 pub use callable::{
     CallParam, Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
@@ -79,6 +81,7 @@ pub use env::{
     PatBindingMode, PathReadSemantics,
 };
 use env::{ProvidedEffect, TyCheckEnv, func_param_bindings, func_row_components};
+use expr::MemberSite;
 pub(super) use expr::TraitOps;
 use num_traits::ToPrimitive;
 pub use owner::BodyOwner;
@@ -104,12 +107,13 @@ use super::{
     },
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
-        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, UseEvidence,
-        declared_bound_evidence_with_pending, impl_const_bound_evidence, instantiated_selection,
+        BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, RefusedGoal, UseEvidence,
+        declared_bound_evidence_with_pending, impl_const_bound_evidence,
+        inherited_const_bound_evidence, instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
     instantiate_trait_self,
-    trait_def::{TraitInstId, selected_assoc_const_body_template},
+    trait_def::{SelectedConstBody, TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
         ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCompletion, TraitSolveCx,
         WellFormedness, check_trait_inst_wf_without_self, check_ty_wf,
@@ -121,7 +125,7 @@ use super::{
     },
     ty_lower::{CompleteSubst, collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
-    unsafe_check::check_unsafe_ops,
+    unsafe_check::{UnsafeOpSite, check_unsafe_ops},
 };
 use crate::analysis::semantic::SemanticCodeRegionRef;
 use crate::analysis::semantic::{
@@ -138,7 +142,8 @@ use crate::analysis::ty::{
     closure::{CallableTrait, CallableValue},
     const_ty::{
         CallableInputOrigin, ConstTyData, ConstTyId, LoweringContext, const_body_assumptions,
-        invalid_cause_from_eval_failure, origin_expr_for_const_eval_diag, root_ctfe_error,
+        inherent_const_body_and_impl_args, inherent_const_decl_ty, invalid_cause_from_eval_failure,
+        origin_expr_for_const_eval_diag, root_ctfe_error,
     },
     normalize::{normalize_ty, normalize_with_trait_evidence},
     pattern_ir::{
@@ -146,7 +151,7 @@ use crate::analysis::ty::{
     },
     registered_root_providers,
     ty_error::{
-        collect_hir_ty_diags, collect_ty_lower_errors, diag_from_invalid_cause,
+        collect_hir_ty_diags, collect_ty_lower_errors_by, diag_from_invalid_cause,
         emit_invalid_ty_error, normalization_limit_diag, path_arg_diags, path_generic_arg_diags,
         qualified_path_wf_diags_under_choices,
     },
@@ -248,6 +253,10 @@ pub(crate) fn const_type_diag<'db>(
     span: DynLazySpan<'db>,
     ty: TyId<'db>,
 ) -> Option<TyDiagCollection<'db>> {
+    // A constant is a value, so its type has kind `*`.
+    if !ty.has_invalid(db) && !ty.is_star_kind(db) {
+        return Some(TyLowerDiag::ExpectedStarKind(span).into());
+    }
     if let Some(view) = ty.is_view(db).then_some(ty).or_else(|| ty.view_part(db)) {
         return Some(
             TyLowerDiag::ViewTypeMode {
@@ -279,6 +288,152 @@ pub fn check_anon_const_body<'db>(
     check_body(db, BodyOwner::AnonConstBody { body, expected })
 }
 
+/// A body that an associated constant keeps, with the type its position
+/// checks it against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AssocConstBody<'db> {
+    pub(crate) name: Option<crate::hir_def::IdentId<'db>>,
+    pub(crate) body: Body<'db>,
+    pub(crate) expected: TyId<'db>,
+    owner: BodyOwner<'db>,
+}
+
+impl<'db> AssocConstBody<'db> {
+    /// A body that its position checks against `expected`.
+    fn anonymous(
+        name: Option<crate::hir_def::IdentId<'db>>,
+        body: Body<'db>,
+        expected: TyId<'db>,
+    ) -> Self {
+        Self {
+            name,
+            body,
+            expected,
+            owner: BodyOwner::AnonConstBody { body, expected },
+        }
+    }
+
+    pub(crate) fn owner(self) -> BodyOwner<'db> {
+        self.owner
+    }
+}
+
+/// The value bodies of an `impl Trait` block's constants. A body is checked
+/// against the trait's declared type for the constant, instantiated with the
+/// impl's trait arguments; a constant the trait does not declare falls back
+/// to its own header type.
+pub(crate) fn impl_trait_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    impl_trait: ImplTrait<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    let Some(implementor) = lower_impl_trait(db, impl_trait) else {
+        return Vec::new();
+    };
+    let trait_hir = implementor.trait_def(db);
+    let trait_args = implementor.trait_(db).args(db);
+    impl_trait
+        .assoc_consts(db)
+        .filter_map(|constant| {
+            let body = constant.value_body(db)?;
+            let expected = constant
+                .name(db)
+                .and_then(|name| trait_hir.const_(db, name))
+                .and_then(|declared| declared.ty_binder(db))
+                .map(|binder| binder.instantiate(db, trait_args))
+                .or_else(|| constant.ty(db))?;
+            Some(AssocConstBody::anonymous(constant.name(db), body, expected))
+        })
+        .collect()
+}
+
+/// The value bodies of an inherent impl block's constants, each checked
+/// against its declared type.
+pub(crate) fn inherent_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: crate::hir_def::Impl<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    implementation
+        .assoc_consts(db)
+        .filter_map(|constant| {
+            Some(AssocConstBody::anonymous(
+                constant.name(db),
+                constant.value_body(db)?,
+                constant.ty(db)?,
+            ))
+        })
+        .collect()
+}
+
+/// The default bodies of a trait's constants, each checked against its
+/// declared type.
+pub(crate) fn trait_default_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    trait_
+        .assoc_consts(db)
+        .filter_map(|constant| {
+            Some(AssocConstBody::anonymous(
+                constant.name(db),
+                constant.default_body(db)?,
+                constant.ty(db)?,
+            ))
+        })
+        .collect()
+}
+
+/// The defaults that `implementation` inherits whose declared type mentions a
+/// parameter of the trait, each as the body checked for `implementation`.
+pub(crate) fn inherited_assoc_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    inherited_const::inherited_const_bodies(db, implementation)
+        .into_iter()
+        .filter_map(|inherited| {
+            let setup = inherited_const_setup(db, implementation, inherited.body)?;
+            Some(AssocConstBody {
+                name: Some(inherited.name),
+                body: inherited.body,
+                expected: setup.expected,
+                owner: inherited.owner(implementation),
+            })
+        })
+        .collect()
+}
+
+/// The constant bodies that `item` holds as an associated-constant owner: the
+/// one list that the type checker's passes over these bodies, opening
+/// retention and the semantic access walk share. An implementation holds, after
+/// the values it writes, each default it inherits that is checked for it
+/// (`inherited_assoc_const_bodies`). A trait's default whose declared type
+/// mentions a parameter is held only when its own check has no diagnostics at
+/// all: a deferred mismatch is found through the implementations' bodies, which
+/// have no invalid type in them.
+pub(crate) fn assoc_const_bodies_of<'db>(
+    db: &'db dyn HirAnalysisDb,
+    item: ItemKind<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    match item {
+        ItemKind::ImplTrait(impl_trait) => {
+            let mut bodies = impl_trait_const_bodies(db, impl_trait);
+            bodies.extend(inherited_assoc_const_bodies(db, impl_trait));
+            bodies
+        }
+        ItemKind::Impl(implementation) => inherent_const_bodies(db, implementation),
+        ItemKind::Trait(trait_) => trait_default_const_bodies(db, trait_)
+            .into_iter()
+            .filter(|constant| {
+                !(constant.expected.has_param(db) && !constant.expected.has_invalid(db))
+                    || check_anon_const_body(db, constant.body, constant.expected)
+                        .0
+                        .is_empty()
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Type-checks the value bodies of an `impl Trait` block's associated consts.
 /// Bodies are checked against the trait's declared type for the const
 /// (instantiated with the impl's trait args) so a wrong impl-side header
@@ -290,24 +445,20 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let generated_origin = match impl_trait.origin(db) {
-        crate::span::HirOrigin::Raw(_) => None,
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
-            Some("generated `#[event]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
-            Some("generated `#[error]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::AbiStruct(_)) => {
-            Some("generated `#[abi]` implementation")
-        }
-        _ => return Vec::new(),
+    // A written implementation is checked and reports. A generated one is
+    // checked for the constants it holds but reports no body errors, except
+    // that a `msg` item is not checked at all.
+    let origin = impl_trait.origin(db);
+    let generated_origin = match origin.generated() {
+        None if matches!(origin, crate::span::HirOrigin::Raw(_)) => None,
+        Some(generated) => match generated.const_diag_label() {
+            Some(label) => Some((generated, label)),
+            None => return Vec::new(),
+        },
+        None => return Vec::new(),
     };
-    let Some(implementor) = lower_impl_trait(db, impl_trait) else {
-        return Vec::new();
-    };
-    let trait_hir = implementor.trait_def(db);
-    let trait_args = implementor.trait_(db).args(db);
+    let reports_body_errors =
+        generated_origin.is_none_or(|(generated, _)| generated.reports_body_errors());
     let policy = if generated_origin.is_some() {
         ConstUsePolicy::RequireValue
     } else {
@@ -317,29 +468,23 @@ pub fn check_impl_trait_const_bodies<'db>(
     };
 
     let mut diags = Vec::new();
-    for impl_const in impl_trait.assoc_consts(db) {
-        let Some(body) = impl_const.value_body(db) else {
-            continue;
-        };
-        let expected_ty = impl_const
-            .name(db)
-            .and_then(|name| trait_hir.const_(db, name))
-            .and_then(|c| c.ty_binder(db))
-            .map(|binder| binder.instantiate(db, trait_args))
-            .or_else(|| impl_const.ty(db));
-        let Some(expected_ty) = expected_ty else {
-            continue;
-        };
+    for AssocConstBody {
+        name,
+        body,
+        expected: expected_ty,
+        ..
+    } in impl_trait_const_bodies(db, impl_trait)
+    {
         if expected_ty.has_invalid(db) {
             continue;
         }
         let body_diags = &check_anon_const_body(db, body, expected_ty).0;
-        if generated_origin.is_none() {
+        if reports_body_errors {
             diags.extend(body_diags.iter().cloned());
         }
         if body_diags.is_empty() {
-            let context = generated_origin.map(|origin| ConstDiagContext {
-                const_name: impl_const.name(db).map_or_else(
+            let context = generated_origin.map(|(_, origin)| ConstDiagContext {
+                const_name: name.map_or_else(
                     || "<associated const>".to_string(),
                     |name| name.data(db).clone(),
                 ),
@@ -361,6 +506,11 @@ pub fn check_impl_trait_const_bodies<'db>(
             );
         }
     }
+    // The defaults the implementation inherits whose declared type mentions a
+    // parameter of the trait are checked as the implementation's own.
+    if reports_body_errors {
+        diags.extend(inherited_const::check_inherited_defaults(db, impl_trait));
+    }
     diags
 }
 
@@ -373,18 +523,17 @@ pub fn check_trait_const_default_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    if !matches!(trait_.origin(db), crate::span::HirOrigin::Raw(_)) {
+    if trait_.origin(db).generated().is_some() {
         return Vec::new();
     }
 
     let mut diags = Vec::new();
-    for trait_const in trait_.assoc_consts(db) {
-        let Some(body) = trait_const.default_body(db) else {
-            continue;
-        };
-        let Some(expected_ty) = trait_const.ty(db) else {
-            continue;
-        };
+    for AssocConstBody {
+        body,
+        expected: expected_ty,
+        ..
+    } in trait_default_const_bodies(db, trait_)
+    {
         let flags = expected_ty.flags(db);
         if flags.contains(TyFlags::HAS_INVALID) {
             continue;
@@ -864,7 +1013,15 @@ pub(crate) fn invalid_effect_key_diags<'db>(
     let written = match key.data(db) {
         TypeKind::Path(Partial::Present(path)) => {
             let path_span = span.clone().into_path_type().path();
-            let arg_diags = || path_arg_diags(db, *path, path_span.clone(), scope, assumptions);
+            let arg_diags = || {
+                path_arg_diags(
+                    db,
+                    *path,
+                    path_span.clone(),
+                    Viewer::written_in(db, scope),
+                    assumptions,
+                )
+            };
             match resolve_path(db, *path, scope, assumptions, false) {
                 Ok(PathRes::Ty(_) | PathRes::TyAlias(..)) => {
                     collect_hir_ty_diags(db, scope, key, span, assumptions)
@@ -1114,39 +1271,27 @@ pub(crate) fn module_body_owners<'db>(
         }
     }
     for &implementation in module.all_impl_traits(db) {
-        let Some(implementor) = super::trait_lower::lower_impl_trait(db, implementation) else {
-            continue;
-        };
-        for constant in implementation.assoc_consts(db) {
-            let Some(body) = constant.value_body(db) else {
-                continue;
-            };
-            let expected = constant
-                .name(db)
-                .and_then(|name| implementor.trait_def(db).const_(db, name))
-                .and_then(|constant| constant.ty_binder(db))
-                .map(|binder| binder.instantiate(db, implementor.trait_(db).args(db)))
-                .or_else(|| constant.ty(db));
-            if let Some(expected) = expected {
-                owners.push(BodyOwner::AnonConstBody { body, expected });
-            }
-        }
+        owners.extend(
+            assoc_const_bodies_of(db, ItemKind::ImplTrait(implementation))
+                .into_iter()
+                .map(AssocConstBody::owner),
+        );
     }
     // Inherent associated constants use the same declared expected type as
     // BodyAnalysisPass::run_on_module and check_anon_const_body.
     for &implementation in module.all_impls(db) {
-        for constant in implementation.assoc_consts(db) {
-            if let (Some(body), Some(expected)) = (constant.value_body(db), constant.ty(db)) {
-                owners.push(BodyOwner::AnonConstBody { body, expected });
-            }
-        }
+        owners.extend(
+            inherent_const_bodies(db, implementation)
+                .into_iter()
+                .map(AssocConstBody::owner),
+        );
     }
     for &trait_ in module.all_traits(db) {
-        for constant in trait_.assoc_consts(db) {
-            if let (Some(body), Some(expected)) = (constant.default_body(db), constant.ty(db)) {
-                owners.push(BodyOwner::AnonConstBody { body, expected });
-            }
-        }
+        owners.extend(
+            trait_default_const_bodies(db, trait_)
+                .into_iter()
+                .map(AssocConstBody::owner),
+        );
     }
     for &item in module.all_items(db) {
         owners.extend(BodyOwner::const_predicates_of(db, item));
@@ -1188,7 +1333,7 @@ pub(crate) fn module_body_owners<'db>(
             }
         }
         let typed = &infer_body(db, owner).1;
-        for (nested, expected) in
+        for (nested, expected, _) in
             const_requirements::expression_const_bodies(db, owner, body, typed)
         {
             let anon = BodyOwner::AnonConstBody {
@@ -1286,6 +1431,7 @@ pub(crate) fn checked_body_diags<'db>(
         BodyOwner::AnonConstBody { body, expected } => {
             check_anon_const_body(db, body, expected).0.clone()
         }
+        BodyOwner::InheritedConst { .. } => check_body(db, owner).0,
         BodyOwner::ContractInit { contract } => {
             contract::check_contract_init_body(db, contract).0.clone()
         }
@@ -1393,6 +1539,7 @@ fn infer_body_query<'db>(
                 BodyOwner::Func(func, mode) => typed_body_for_bodyless_func(db, func, mode),
                 BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
                 | BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }
                 | BodyOwner::Closure { .. } => TypedBody::empty(db),
@@ -1401,8 +1548,10 @@ fn infer_body_query<'db>(
     };
 
     checker.run();
-    let (mut diags, typed_body) = checker.finish();
-    diags.extend(check_unsafe_ops(db, owner, &typed_body));
+    let (mut diags, mut typed_body) = checker.finish();
+    let (unsafe_diags, discharged) = check_unsafe_ops(db, owner, &typed_body);
+    diags.extend(unsafe_diags);
+    typed_body.tables_mut().unsafe_ops = discharged;
     if let BodyOwner::Func(func, mode) = owner
         && func.is_const(db)
         && !func.is_extern(db)
@@ -1632,11 +1781,19 @@ fn const_body_ctfe_diags_with_context<'db>(
                     EvidenceList::none(db),
                 );
                 let semantic = SemanticInstance::new(db, key);
+                // A declared type that names a carrier through an associated
+                // type is the carrier, as its direct spelling is.
+                let declared = normalize_ty(
+                    db,
+                    expected,
+                    body.scope(),
+                    const_body_assumptions(db, body.scope()),
+                );
                 let has_meta_carrier =
-                    crate::core::meta::ty_contains_meta_carrier(db, expected).is_some();
+                    crate::core::meta::ty_contains_meta_carrier(db, declared).is_some();
                 let checked_metadata = has_meta_carrier
                     && crate::core::meta::issued_metadata_leaves(db, value)
-                    && crate::analysis::semantic::sem_const_ty(db, value) == expected
+                    && crate::analysis::semantic::sem_const_ty(db, value) == declared
                     && crate::analysis::semantic::consts::verify_sem_const_shape(db, value).is_ok();
                 // A completely verified compile-time token is a known constant;
                 // it is intentionally never reified into a runtime seal value.
@@ -1824,12 +1981,17 @@ fn typed_body_for_bodyless_func<'db>(
             BoundOwner::Body(BodyOwner::func_at(db, func, mode)),
             assumptions,
         ),
+        refused_bound: None,
+        instance_bound: None,
         assumptions,
         pat_ty: SecondaryMap::new(),
         expr_ty: SecondaryMap::new(),
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashMap::default(),
+        never_coercions: FxHashSet::default(),
+        cast_layers: FxHashMap::default(),
         unsafe_splits: FxHashSet::default(),
+        unsafe_ops: Vec::new(),
         product_args: FxHashSet::default(),
         value_calls: FxHashSet::default(),
         builtin_ops: FxHashMap::default(),
@@ -2147,6 +2309,7 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => {}
         }
@@ -2157,7 +2320,10 @@ impl<'db> TyChecker<'db> {
             BodyOwner::Func(func, _) => {
                 self.check_free_func_effect_list(func, func.effects(self.db))
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -2205,7 +2371,8 @@ impl<'db> TyChecker<'db> {
                 idx,
                 &key,
                 TraitSolveCx::new(self.db, func.scope(), Tier::All)
-                    .with_assumptions(self.env.assumptions()),
+                    .with_assumptions(self.env.assumptions())
+                    .with_choices(self.env.choices),
             ) {
                 self.push_diag(diag);
             } else if let Some(root_ty) = root_ty {
@@ -2260,7 +2427,10 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 EffectParamSite::Func(func, mode),
             ),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {
                 unreachable!()
             }
             BodyOwner::ContractInit { contract } => (
@@ -3618,6 +3788,12 @@ impl<'db> TyChecker<'db> {
                     input_ty: *input_ty,
                     abi_ty: *abi_ty,
                 },
+                RecvReadingFailure::BoundNotMet { pat, bound } => {
+                    BodyDiag::RecvArmReadBoundNotMet {
+                        primary: pat.span(self.body()).into(),
+                        bound: *bound,
+                    }
+                }
             };
             self.push_diag(diag);
         }
@@ -3818,13 +3994,22 @@ impl<'db> TyChecker<'db> {
         span: LazyTySpan<'db>,
         star_kind_required: bool,
     ) -> TyId<'db> {
-        let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
+        let ty = lower_hir_ty(
+            self.db,
+            hir_ty,
+            self.env.scope(),
+            self.env.written_assumptions(),
+        );
+        let ty = self.env.instantiate_scope_ty(ty);
 
-        // If lowering failed, try to produce precise diagnostics (e.g., path resolution errors)
-        if ty.has_invalid(self.db) {
-            let diags = collect_ty_lower_errors(
+        // The written type reports its own errors (path resolution, visibility,
+        // associated bindings), whether or not lowering produced an invalid type.
+        // A default checked for an implementation reports them where the trait
+        // wrote it: they do not depend on the implementation.
+        if !self.env.is_instantiated_for_implementation() {
+            let diags = collect_ty_lower_errors_by(
                 self.db,
-                self.env.scope(),
+                self.viewer(MemberSite::Current),
                 hir_ty,
                 span.clone(),
                 self.env.assumptions(),
@@ -3836,23 +4021,23 @@ impl<'db> TyChecker<'db> {
                 // Avoid cascading kind errors for already-invalid types
                 return TyId::invalid(self.db, InvalidCause::Other);
             }
-        }
 
-        // A qualified path resolves to a type that no longer mentions the
-        // types written inside it, so check those where they are written.
-        let mut wf_pending = Vec::new();
-        for diag in qualified_path_wf_diags_under_choices(
-            self.db,
-            self.env.scope(),
-            hir_ty,
-            span.clone(),
-            self.env.assumptions(),
-            self.env.solve_cx(),
-            &mut wf_pending,
-        ) {
-            self.push_diag(diag);
+            // A qualified path resolves to a type that no longer mentions the
+            // types written inside it, so check those where they are written.
+            let mut wf_pending = Vec::new();
+            for diag in qualified_path_wf_diags_under_choices(
+                self.db,
+                self.env.scope(),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+                self.env.solve_cx(),
+                &mut wf_pending,
+            ) {
+                self.push_diag(diag);
+            }
+            self.env.generation_demands.requests(self.db, wf_pending);
         }
-        self.env.generation_demands.requests(self.db, wf_pending);
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()).or_else(|| {
             normalization_limit_diag(
@@ -4592,6 +4777,14 @@ impl<'db> TyChecker<'db> {
     fn retype_expr_or_pat(&mut self, typeable: Typeable<'db>, ty: TyId<'db>) {
         match typeable {
             Typeable::Expr(expr, mut typed_expr) => {
+                if typed_expr
+                    .ty
+                    .fold_with(self.db, &mut self.table)
+                    .is_never(self.db)
+                    && !ty.is_never(self.db)
+                {
+                    self.env.set_never_coercion(expr, true);
+                }
                 typed_expr.ty = ty;
                 if typed_expr.borrow_provider.is_none() {
                     typed_expr.borrow_provider =
@@ -4698,8 +4891,10 @@ impl<'db> TyChecker<'db> {
         span: LazyPathSpan<'db>,
         site: DynLazySpan<'db>,
         lowering_cx: &LoweringContext<'db>,
+        member_site: MemberSite,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
         let scope = self.env.scope();
+        let viewer = self.viewer(member_site);
         let mut invisible = None;
         let mut applications = Vec::new();
         let mut observe_segment =
@@ -4709,7 +4904,7 @@ impl<'db> TyChecker<'db> {
                     return;
                 }
                 if !quoted_visibility
-                    .unwrap_or_else(|| reso.is_segment_visible_from(self.db, path, scope))
+                    .unwrap_or_else(|| reso.is_segment_visible_to(self.db, path, viewer))
                 {
                     invisible = Some((path, reso.name_span(self.db)));
                 }
@@ -4719,7 +4914,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             scope,
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
@@ -4751,8 +4946,8 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             span.clone(),
-            scope,
-            self.env.assumptions(),
+            viewer,
+            self.env.written_assumptions(),
             call,
         );
         if arg_diags.is_empty()
@@ -4767,7 +4962,7 @@ impl<'db> TyChecker<'db> {
             return Err(PathResError::new(PathResErrorKind::InvalidGenericArg, path));
         }
 
-        let res = res?;
+        let res = self.env.instantiate_scope_res(res?);
         self.env.register_path_applications(site, applications);
         Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }
@@ -4945,13 +5140,27 @@ pub enum ConstRef<'db> {
         use_: AssocConstUse<'db>,
         evidence: UseEvidence<'db>,
     },
-    InherentConst(InherentConstUse<'db>),
+    /// A constant of an inherent implementation. Its value is checked under
+    /// the implementation's bounds, so a use passes proofs of them, as a call
+    /// passes proofs of the bounds its callee declares.
+    InherentConst {
+        use_: InherentConstUse<'db>,
+        evidence: UseEvidence<'db>,
+    },
 }
 
 impl<'db> ConstRef<'db> {
     pub(super) fn qualify_evidence(&mut self, db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) {
-        if let Self::TraitConst { evidence, .. } = self {
+        if let Self::TraitConst { evidence, .. } | Self::InherentConst { evidence, .. } = self {
             evidence.qualify(db, owner);
+        }
+    }
+
+    /// An inherent constant use with no recorded evidence.
+    pub fn inherent(use_: InherentConstUse<'db>) -> Self {
+        Self::InherentConst {
+            use_,
+            evidence: UseEvidence::default(),
         }
     }
 
@@ -4962,7 +5171,12 @@ impl<'db> ConstRef<'db> {
     pub fn trait_const_body(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>, EvidenceList<'db>)> {
+    ) -> Option<(
+        BodyOwner<'db>,
+        TyId<'db>,
+        CompleteSubst<'db>,
+        EvidenceList<'db>,
+    )> {
         let ConstRef::TraitConst { use_, evidence } = self else {
             return None;
         };
@@ -4972,17 +5186,37 @@ impl<'db> ConstRef<'db> {
             use_.solve_cx(db),
             use_.inst(),
         )?;
-        let (body, ty, subst) = selected_assoc_const_body_template(db, resolved, use_.name())?;
+        let SelectedConstBody {
+            owner,
+            template: ty,
+            subst,
+        } = selected_assoc_const_body_template(db, resolved, use_.name())?;
+        let body = owner.body(db)?;
         let default = use_
             .inst()
             .def(db)
             .const_(db, use_.name())
             .and_then(|constant| constant.default_body(db));
-        // The trait's default receives the use's proofs; an implementation's
-        // value receives them from the selection's proofs of its conditions.
-        let received = match (evidence.bound_proofs(), evidence.dispatch_proof()) {
-            (Some(bound), _) if default == Some(body) => bound,
-            (_, Some(selection))
+        // The trait's default of a constant whose type is closed receives the
+        // use's proofs. An implementation's value, and a default checked for
+        // the implementation that inherits it (the implementation's own, whose
+        // text the trait wrote), receive them from the selection's proofs of
+        // the implementation's conditions.
+        let received = match (owner, evidence.bound_proofs(), evidence.dispatch_proof()) {
+            (BodyOwner::AnonConstBody { .. }, Some(bound), _) if default == Some(body) => bound,
+            (BodyOwner::InheritedConst { implementation, .. }, _, Some(selection))
+                if matches!(selection.data(db), Evidence::Impl { .. }) =>
+            {
+                inherited_const_bound_evidence(
+                    db,
+                    implementation,
+                    body,
+                    selection,
+                    GenericSubst::complete(db, subst.clone()),
+                    use_.solve_cx(db).assumptions(),
+                )
+            }
+            (_, _, Some(selection))
                 if default != Some(body) && matches!(selection.data(db), Evidence::Impl { .. }) =>
             {
                 impl_const_bound_evidence(
@@ -4995,7 +5229,7 @@ impl<'db> ConstRef<'db> {
             }
             _ => EvidenceList::none(db),
         };
-        Some((body, ty, subst, received))
+        Some((owner, ty, subst, received))
     }
 
     /// Proves, in the use's context, the bounds the trait's default value
@@ -5008,9 +5242,12 @@ impl<'db> ConstRef<'db> {
         db: &'db dyn HirAnalysisDb,
         choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
     ) -> (
-        Vec<TraitInstId<'db>>,
+        Vec<RefusedGoal<'db>>,
         Vec<crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>>,
     ) {
+        if let ConstRef::InherentConst { use_, evidence } = self {
+            return Self::record_inherent_bound_evidence(db, *use_, evidence, choices);
+        }
         let ConstRef::TraitConst { use_, evidence, .. } = self else {
             return Default::default();
         };
@@ -5023,6 +5260,15 @@ impl<'db> ConstRef<'db> {
         ) else {
             return Default::default();
         };
+        // A default whose declared type mentions a parameter of the trait is
+        // the implementation's own where it is read, and receives the
+        // implementation's proofs (`trait_const_body`).
+        if trait_
+            .const_(db, use_.name())
+            .is_some_and(|constant| default_checked_per_implementation(db, constant))
+        {
+            return Default::default();
+        }
         let declared = const_body_assumptions(db, body.scope());
         let signature = declared.extend_all_bounds(db);
         let (recorded, requests) = declared_bound_evidence_with_pending(
@@ -5042,14 +5288,63 @@ impl<'db> ConstRef<'db> {
                 BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
                 signature,
             ),
-            entries: recorded,
+            entries: recorded.proofs,
         });
-        let missing = if choices.is_some() {
-            recorded.missing_bound_goals(db, signature, &subst)
+        let refused = if choices.is_some() {
+            recorded.refused_goals(db, signature, &subst)
         } else {
             Vec::new()
         };
-        (missing, requests)
+        (refused, requests)
+    }
+}
+
+impl<'db> ConstRef<'db> {
+    /// Proves, in the use's context, the bounds the body of an inherent
+    /// constant declares, instantiated for the use, as a call records the
+    /// bounds of its callee. Returns the dictionaries lexical selection
+    /// refuses, and the generation requests the proofs stopped on.
+    fn record_inherent_bound_evidence(
+        db: &'db dyn HirAnalysisDb,
+        use_: InherentConstUse<'db>,
+        evidence: &mut UseEvidence<'db>,
+        choices: Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>>,
+    ) -> (
+        Vec<RefusedGoal<'db>>,
+        Vec<crate::analysis::ty::trait_resolution::generation::GenerationRequest<'db>>,
+    ) {
+        let (Some((body, impl_args)), Some(expected)) = (
+            inherent_const_body_and_impl_args(db, use_.impl_(), use_.receiver_ty(), use_.name()),
+            inherent_const_decl_ty(db, use_.impl_(), use_.name()),
+        ) else {
+            return Default::default();
+        };
+        let Ok(subst) = CompleteSubst::for_owner(db, use_.impl_().into(), impl_args) else {
+            return Default::default();
+        };
+        let declared = const_body_assumptions(db, body.scope());
+        let signature = declared.extend_all_bounds(db);
+        let (recorded, requests) = declared_bound_evidence_with_pending(
+            db,
+            declared,
+            signature,
+            &subst,
+            use_.solve_cx(db).with_choices(choices),
+        );
+        evidence.bounds = Some(BoundEvidence {
+            schema: BoundSchemaId::new(
+                db,
+                BoundOwner::Body(BodyOwner::AnonConstBody { body, expected }),
+                signature,
+            ),
+            entries: recorded.proofs,
+        });
+        let refused = if choices.is_some() {
+            recorded.refused_goals(db, signature, &subst)
+        } else {
+            Vec::new()
+        };
+        (refused, requests)
     }
 }
 
@@ -5064,7 +5359,10 @@ impl<'db> TyVisitable<'db> for ConstRef<'db> {
                 use_.visit_with(visitor);
                 evidence.visit_with(visitor);
             }
-            ConstRef::InherentConst(use_) => use_.visit_with(visitor),
+            ConstRef::InherentConst { use_, evidence } => {
+                use_.visit_with(visitor);
+                evidence.visit_with(visitor);
+            }
         }
     }
 }
@@ -5080,7 +5378,10 @@ impl<'db> TyFoldable<'db> for ConstRef<'db> {
                 use_: use_.fold_with(db, folder),
                 evidence: evidence.fold_with(db, folder),
             },
-            ConstRef::InherentConst(use_) => ConstRef::InherentConst(use_.fold_with(db, folder)),
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.fold_with(db, folder),
+                evidence: evidence.fold_with(db, folder),
+            },
         }
     }
 }
@@ -5126,11 +5427,13 @@ pub struct TypedBody<'db> {
     tables: Arc<TypedBodyTables<'db>>,
 }
 
-/// The field type of a transparent newtype, which a cast sees through: a
-/// one-element tuple, or a struct with one field visible from `scope`.
-pub(crate) fn transparent_newtype_field_ty<'db>(
+/// The field type of a one-field newtype: a one-element tuple or a struct
+/// with one field. Whether a cast may see through it depends on who wrote
+/// the cast, which only the type checker decides (`TyChecker::newtype_depth`),
+/// and records as the cast's `CastLayers`: lowering and the unsafe check read
+/// the layers and do not decide again.
+pub(crate) fn single_field_newtype_ty<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
     ty: TyId<'db>,
 ) -> Option<TyId<'db>> {
     if !ty.is_tuple(db) && !ty.is_struct(db) {
@@ -5139,20 +5442,25 @@ pub(crate) fn transparent_newtype_field_ty<'db>(
     let [field_ty] = ty.field_types(db)[..] else {
         return None;
     };
-    (!has_invisible_newtype_field(db, scope, ty)).then_some(field_ty)
+    Some(field_ty)
 }
 
-/// Whether `ty` is a single-field struct whose field `scope` cannot see.
-pub(crate) fn has_invisible_newtype_field<'db>(
+/// The newtype layers that a cast sees through: how many the cast peels off
+/// the type of its operand, and how many it builds around the leaf of its
+/// target type. The type checker decides them with the viewer of the cast.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(crate) struct CastLayers {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+}
+
+/// `ty` and the field types it peels to, `layers` of them at most.
+pub(crate) fn newtype_chain<'db>(
     db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
     ty: TyId<'db>,
-) -> bool {
-    let Some(AdtRef::Struct(s)) = ty.adt_def(db).map(|adt| adt.adt_ref(db)) else {
-        return false;
-    };
-    ty.field_types(db).len() == 1
-        && !is_scope_visible_from(db, ScopeId::Field(FieldParent::Struct(s), 0), scope)
+    layers: usize,
+) -> impl Iterator<Item = TyId<'db>> + 'db {
+    iter::successors(Some(ty), move |ty| single_field_newtype_ty(db, *ty)).take(layers + 1)
 }
 
 /// Calls generated by a checked state-entry occurrence. Associated types
@@ -5207,6 +5515,13 @@ mod typed_body_tables {
         /// `TypedBody::signature`.
         pub(super) signature: PredicateListId<'db>,
         pub(super) bound_schema: BoundSchemaId<'db>,
+        /// A closed goal the dictionaries an instance of the body received
+        /// refuse; see `instance_evidence`.
+        pub(super) refused_bound: Option<RefusedGoal<'db>>,
+        /// The proofs an instance of the body runs with, of the assumptions its
+        /// owner declares (`bind_evidence`). Empty for a body that is not an
+        /// instance, or whose instance receives none.
+        pub(super) instance_bound: Option<BoundEvidence<'db>>,
         pub(super) assumptions: PredicateListId<'db>,
         pub(super) pat_ty: SecondaryMap<PatId, Option<TyId<'db>>>,
         pub(super) expr_ty: SecondaryMap<ExprId, Option<ExprProp<'db>>>,
@@ -5214,9 +5529,18 @@ mod typed_body_tables {
         /// Index expressions naming an entry of a collection whose elements
         /// are places.
         pub(super) place_entries: FxHashMap<ExprId, PlaceEntryCalls<'db>>,
+        /// The expressions of type `!` whose recorded type is the type their
+        /// context expects.
+        pub(super) never_coercions: FxHashSet<ExprId>,
+        /// The newtype layers that each cast sees through, as the type checker
+        /// decided them with the viewer of the cast.
+        pub(super) cast_layers: FxHashMap<ExprId, CastLayers>,
         /// The tuples that are unsafe splits: an `unsafe` block's tail tuple
         /// of accesses, granted by one session.
         pub(super) unsafe_splits: FxHashSet<ExprId>,
+        /// The unsafe operations that an `unsafe` block or `unsafe fn` allows,
+        /// as the unsafe checker found them.
+        pub(super) unsafe_ops: Vec<UnsafeOpSite>,
         /// The tuples passed to product parameters, a part each.
         pub(super) product_args: FxHashSet<ExprId>,
         /// The calls `f(..)` of callable values: the callee is the receiver
@@ -5472,6 +5796,18 @@ impl<'db> SemanticExprLowering<'db> {
                 method: callable, ..
             } => callable,
         }
+    }
+
+    /// Every callable the expression records.
+    pub(super) fn callables(&self) -> impl Iterator<Item = &Callable<'db>> {
+        match self {
+            Self::SumShape { method, panic, .. } => [Some(method), panic.as_ref()],
+            Self::Call { callable }
+            | Self::CodeRegionIntrinsic { callable, .. }
+            | Self::ConstIntrinsic { callable, .. } => [Some(callable), None],
+        }
+        .into_iter()
+        .flatten()
     }
 
     /// Every callable the expression records.
@@ -5801,12 +6137,14 @@ impl<'db> TypedBody<'db> {
     }
 
     /// Replaces the assumptions the body's evidence names with `bound`'s
-    /// proofs of them: an instance's own.
+    /// proofs of them: an instance's own. `for_each_use_evidence` must walk
+    /// the same tables.
     pub(crate) fn bind_evidence(&mut self, db: &'db dyn HirAnalysisDb, bound: BoundEvidence<'db>) {
         if bound.entries.entries(db).is_empty() {
             return;
         }
         let tables = self.tables_mut();
+        tables.instance_bound = Some(bound);
         for callable in tables
             .semantic_expr_lowering
             .values_mut()
@@ -5831,8 +6169,48 @@ impl<'db> TypedBody<'db> {
             .chain(tables.pat_const_refs.values_mut())
             .flatten()
         {
-            if let ConstRef::TraitConst { evidence, .. } = const_ref {
+            if let ConstRef::TraitConst { evidence, .. }
+            | ConstRef::InherentConst { evidence, .. } = const_ref
+            {
                 evidence.bind(db, bound);
+            }
+        }
+    }
+
+    /// Visits every callable of the body that carries evidence, with the
+    /// expression it belongs to: the calls, indexing and loops. It walks the
+    /// tables `bind_evidence` writes, and the two must be kept in step.
+    pub(crate) fn for_each_callable(&self, mut visit: impl FnMut(ExprId, &Callable<'db>)) {
+        let tables = &self.tables;
+        for (expr, lowering) in tables.semantic_expr_lowering.iter() {
+            for callable in lowering.iter().flat_map(SemanticExprLowering::callables) {
+                visit(expr, callable);
+            }
+        }
+        for (&expr, calls) in &tables.place_entries {
+            for callable in std::iter::once(&calls.locate).chain(&calls.codec) {
+                visit(expr, callable);
+            }
+        }
+        for plan in tables.for_loop_plans.values().flatten() {
+            for call in &plan.calls {
+                visit(plan.base, &call.callable);
+            }
+        }
+    }
+
+    /// Visits the evidence of every use of the body, with the expression it
+    /// belongs to: the callables of `for_each_callable`, and the constants
+    /// the body reads. This walks the tables `bind_evidence` writes, and the
+    /// two must be kept in step.
+    pub(crate) fn for_each_use_evidence(&self, mut visit: impl FnMut(ExprId, &UseEvidence<'db>)) {
+        self.for_each_callable(|expr, callable| visit(expr, &callable.use_evidence()));
+        for (expr, const_ref) in self.tables.const_refs.iter() {
+            if let Some(
+                ConstRef::TraitConst { evidence, .. } | ConstRef::InherentConst { evidence, .. },
+            ) = const_ref
+            {
+                visit(expr, evidence);
             }
         }
     }
@@ -6097,6 +6475,20 @@ impl<'db> TypedBody<'db> {
         self.tables.expr_choices[expr]
     }
 
+    /// The choices in force at a position written in `expr`, the innermost
+    /// expression around it, or, for one in no expression, in `scope`. An
+    /// expression can hold more choices than the block around it: an operand
+    /// of a `with` list is under the operands before it.
+    pub(super) fn choices_at(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        expr: Option<ExprId>,
+        scope: ScopeId<'db>,
+    ) -> Option<crate::analysis::ty::trait_resolution::ChosenImpls<'db>> {
+        expr.and_then(|expr| self.expr_choices(expr))
+            .or_else(|| self.choices_in_scope(db, scope))
+    }
+
     pub(super) fn choices_in_scope(
         &self,
         db: &'db dyn HirAnalysisDb,
@@ -6142,6 +6534,25 @@ impl<'db> TypedBody<'db> {
         self.tables.signature
     }
 
+    /// A closed goal the dictionaries an instance of this body received refuse,
+    /// which rejects the instance.
+    pub(crate) fn refused_bound(&self) -> Option<RefusedGoal<'db>> {
+        self.tables.refused_bound
+    }
+
+    /// The proofs the instance this body belongs to runs with, of the
+    /// assumptions its owner declares: what `bind_evidence` bound into the
+    /// body. `None` when the body is no instance or the instance receives
+    /// none.
+    pub(crate) fn instance_bound_evidence(&self) -> Option<BoundEvidence<'db>> {
+        self.tables.instance_bound
+    }
+
+    pub(crate) fn with_refused_bound(mut self, refused: RefusedGoal<'db>) -> Self {
+        self.tables_mut().refused_bound = Some(refused);
+        self
+    }
+
     pub fn expr_ty(&self, db: &'db dyn HirAnalysisDb, expr: ExprId) -> TyId<'db> {
         self.expr_prop(db, expr).ty
     }
@@ -6173,6 +6584,23 @@ impl<'db> TypedBody<'db> {
 
     pub fn is_place_entry(&self, expr: ExprId) -> bool {
         self.tables.place_entries.contains_key(&expr)
+    }
+
+    /// Whether `expr` has type `!` and its recorded type, [`Self::expr_ty`],
+    /// is the type its context expects.
+    pub fn is_never_coerced(&self, expr: ExprId) -> bool {
+        self.tables.never_coercions.contains(&expr)
+    }
+
+    /// The newtype layers that the cast `expr` sees through. Lowering and the
+    /// unsafe check follow them, as the type checker decided them for the
+    /// writer of the cast.
+    pub(crate) fn cast_layers(&self, expr: ExprId) -> CastLayers {
+        self.tables
+            .cast_layers
+            .get(&expr)
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn builtin_op(&self, expr: ExprId) -> Option<BuiltinOp> {
@@ -6245,6 +6673,12 @@ impl<'db> TypedBody<'db> {
     /// from [`Self::const_refs`], which belong to expressions.
     pub fn pat_const_ref(&self, pat: PatId) -> Option<ConstRef<'db>> {
         self.tables.pat_const_refs[pat]
+    }
+
+    /// The unsafe operations of the body that an `unsafe` block or `unsafe fn`
+    /// allows. Build policy judges each by the package that wrote it.
+    pub fn discharged_unsafe_ops(&self) -> &[UnsafeOpSite] {
+        &self.tables.unsafe_ops
     }
 
     pub fn value_path_ref(&self, expr: ExprId) -> Option<ValuePathRef<'db>> {
@@ -7074,6 +7508,19 @@ impl<'db> TypedBody<'db> {
         seen: &mut FxHashSet<Func<'db>>,
         visited_locals: &mut FxHashSet<PatId>,
     ) -> Option<Vec<ReturnSource>> {
+        let projection = place
+            .projections
+            .iter()
+            .map(|projection| match projection {
+                // A value read through a raw pointer, or at a collection's
+                // entry, is not a part of the binding.
+                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
+                PlaceProjection::Field { index, .. } => Some(ReturnProjectionStep::Field(*index)),
+                PlaceProjection::Index { index_expr, .. } => {
+                    self.return_index_projection(db, body, *index_expr)
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
         let PlaceBase::Binding(binding) = place.base;
         let sources = match binding {
             LocalBinding::Param {
@@ -7123,22 +7570,6 @@ impl<'db> TypedBody<'db> {
                 ..
             } => return None,
         };
-        if place.has_entry() {
-            return None;
-        }
-        let projection = place
-            .projections
-            .iter()
-            .filter_map(|projection| match projection {
-                PlaceProjection::Deref { .. } | PlaceProjection::Entry { .. } => None,
-                PlaceProjection::Field { index, .. } => {
-                    Some(Some(ReturnProjectionStep::Field(*index)))
-                }
-                PlaceProjection::Index { index_expr, .. } => {
-                    Some(self.return_index_projection(db, body, *index_expr))
-                }
-            })
-            .collect::<Option<Vec<_>>>()?;
         project_return_sources(sources, &projection)
     }
 
@@ -7831,13 +8262,18 @@ impl<'db> TypedBody<'db> {
                 BoundOwner::Context,
                 PredicateListId::empty_list(db),
             ),
+            refused_bound: None,
+            instance_bound: None,
             signature: PredicateListId::empty_list(db),
             assumptions: PredicateListId::empty_list(db),
             pat_ty: SecondaryMap::new(),
             expr_ty: SecondaryMap::new(),
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashMap::default(),
+            never_coercions: FxHashSet::default(),
+            cast_layers: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
+            unsafe_ops: Vec::new(),
             product_args: FxHashSet::default(),
             value_calls: FxHashSet::default(),
             builtin_ops: FxHashMap::default(),
@@ -8132,6 +8568,8 @@ struct TyCheckerFinalizer<'db> {
     direct_call_callees: FxHashSet<ExprId>,
     /// Literals a cast or negation already checked against its type.
     range_checked_literals: FxHashSet<ExprId>,
+    /// Whether the body runs at compile time.
+    compile_time: bool,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -8173,6 +8611,28 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let prop = self.body.expr_prop(self.db, expr);
             let span = ctxt.span().unwrap();
             self.check_unknown(prop.ty, span.clone().into(), false);
+            // A type that inference settled after the expression was checked
+            // may be compile-time-only, as in `let x: Option<Code<Expr>> =
+            // Option::None`.
+            if !self.compile_time
+                && self.body.body() == Some(ctxt.body())
+                && let Some(meta) = crate::core::meta::ty_contains_meta_carrier(
+                    self.db,
+                    normalize_ty(self.db, prop.ty, ctxt.body().scope(), self.assumptions),
+                )
+            {
+                self.diags.push(
+                    BodyDiag::CompileTimePhase {
+                        primary: span.clone().into(),
+                        message: format!(
+                            "`{}` is compile-time-only in a runtime expression",
+                            meta.pretty_print(self.db)
+                        ),
+                        label: BodyDiag::RUNTIME_CONTEXT_LABEL,
+                    }
+                    .into(),
+                );
+            }
             // A string literal only gets an oversized `String<N>` type through
             // inference fallback; report it here instead of leaving an invalid
             // literal type for constant evaluation to trip over.
@@ -8357,6 +8817,7 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
 impl<'db> TyCheckerFinalizer<'db> {
     fn new(mut checker: TyChecker<'db>) -> Self {
         let assumptions = checker.env.assumptions();
+        let compile_time = checker.is_compile_time_body();
         checker.resolve_deferred();
         checker.check_access_captures();
         for (_, _, diag) in std::mem::take(&mut checker.missing_effects) {
@@ -8395,6 +8856,7 @@ impl<'db> TyCheckerFinalizer<'db> {
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
             range_checked_literals,
+            compile_time,
             diags: checker.diags,
         }
     }

@@ -1,0 +1,40 @@
+// A body with an error that calls itself at an ever-growing type, called
+// before a call that fails internally under a named choice.
+//
+// `boom` would fail verification because `gen<S>` under FakeMarker disagrees
+// with ordinary normalization (as in named_condition_outputs.fe), and admission
+// would then look for a disagreement in the instances `boom` calls. `deep`
+// has an unresolved name, so no instance limit is reported for it, and its
+// calls must not be followed: every instance of `deep` is a new key.
+//
+// Expected: only 8-0012 (undefined variable `missing_function`), and the run
+// ends. Without the `missing_function()` line the program reports only 16-0016
+// at `deep`.
+trait Marker {}
+trait Foo {
+    type Out
+    fn make() -> Self::Out
+}
+impl<T: Marker> Foo for T {
+    type Out = u256
+    fn make() -> u256 { 1 }
+}
+struct S {}
+impl Foo for S {
+    type Out = u8
+    fn make() -> u8 { 2 }
+}
+impl Marker for S as FakeMarker {}
+struct Wrap<T> {}
+
+fn deep<T>(n: u256) -> u256 {
+    missing_function()
+    if n == 0 { return 0 }
+    deep<Wrap<T>>(n: n - 1)
+}
+
+fn gen<T: Marker>() -> <T as Foo>::Out { <T as Foo>::make() }
+fn boom() -> u8 {
+    let _ = deep<u256>(n: 3)
+    with (FakeMarker) { gen<S>() }
+}

@@ -75,7 +75,7 @@ fn collect_return_type_actions<'db>(
     actions: &mut Vec<CodeAction>,
 ) {
     // Find functions at the cursor position
-    for &item in top_mod.all_items(db) {
+    for item in top_mod.items_in_file(db) {
         let ItemKind::Func(func) = item else {
             continue;
         };
@@ -212,5 +212,33 @@ mod tests {
             assert!(action.title.starts_with("Add return type:"));
             assert!(action.edit.is_some());
         }
+    }
+
+    /// A header in one file publishes a function that the provider writes, with
+    /// no return type, in another file. An edit for it would insert text at an
+    /// offset of the provider's file into the requesting file.
+    #[test]
+    fn no_return_type_edit_is_offered_for_a_published_function_of_another_file() {
+        let package = crate::test_utils::prepared_package("pub fn generated() { true }");
+        let file = package
+            .db
+            .workspace()
+            .get(&package.db, &package.alpha_url)
+            .expect("alpha is in the prepared view");
+        let top_mod = map_file_to_mod(&package.db, file);
+        let mut actions = Vec::new();
+        collect_return_type_actions(
+            &package.db,
+            top_mod,
+            package.cursor,
+            package.cursor,
+            &package.alpha_text,
+            &package.alpha_url,
+            &mut actions,
+        );
+        assert!(
+            actions.is_empty(),
+            "an edit was offered at the requesting file: {actions:?}"
+        );
     }
 }

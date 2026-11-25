@@ -6,7 +6,7 @@ input_file: tests/fixtures/cli_output/single_files/contract_entry_arm_second_mes
 === STDERR ===
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_arm_second_message_unreadable.fe
 
-error[16-0022]: the entry code of contract `C` cannot be generated
+error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_arm_second_message_unreadable.fe:31:1
    │
 31 │ W<Raw> { ref tag, v } -> u8 { tag }

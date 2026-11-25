@@ -1,6 +1,6 @@
 // `v`, which nothing trusts, wrote an `unsafe impl Pod` for its own type that
-// the trusted `t` can rely on. It has no function for a call to reach, so it is
-// refused where `v` declares it.
+// the trusted `t` relies on through the bound of `peek`. It has no function
+// for a call to reach, so it is refused at the call that relies on it.
 use t::peek
 use v::VType
 

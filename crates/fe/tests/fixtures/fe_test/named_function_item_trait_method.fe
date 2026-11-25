@@ -1,0 +1,36 @@
+// A trait method passed as a function item. Its callable
+// dictionary holds the proof of `Self: Pick`, made where it is passed
+// (supply_function_item_evidence records it as the dispatch).
+// Expected: every `go_*` 2, every `plain_*` 1.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+struct Wrap<T> {}
+impl<T: Pick> Pick for Wrap<T> { fn pick() -> u256 { T::pick() } }
+
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn via_qualified<T: Pick>() -> u256 { run(<T as Pick>::pick) }
+fn via_short<T: Pick>() -> u256 { run(T::pick) }
+
+fn go_concrete() -> u256 { with (Alt) { run(<u256 as Pick>::pick) } }
+fn go_wrapped() -> u256 { with (Alt) { run(<Wrap<u256> as Pick>::pick) } }
+fn go_qualified() -> u256 { with (Alt) { via_qualified<u256>() } }
+fn go_short() -> u256 { with (Alt) { via_short<u256>() } }
+fn go_direct() -> u256 { with (Alt) { <u256 as Pick>::pick() } }
+fn plain_concrete() -> u256 { run(<u256 as Pick>::pick) }
+fn plain_wrapped() -> u256 { run(<Wrap<u256> as Pick>::pick) }
+
+#[test]
+fn concrete() { assert(go_concrete() == 2) }
+#[test]
+fn wrapped() { assert(go_wrapped() == 2) }
+#[test]
+fn qualified() { assert(go_qualified() == 2) }
+#[test]
+fn short() { assert(go_short() == 2) }
+#[test]
+fn direct() { assert(go_direct() == 2) }
+#[test]
+fn plain() { assert(plain_concrete() == 1) }
+#[test]
+fn plain_wrap() { assert(plain_wrapped() == 1) }

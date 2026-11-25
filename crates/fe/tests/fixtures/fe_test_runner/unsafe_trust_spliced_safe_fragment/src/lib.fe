@@ -1,0 +1,9 @@
+use core::ptr
+struct S {}
+impl S with (t::GenSafe)
+
+#[test]
+fn spliced_safe_fragment() {
+    let p = ptr::alloc<u256>()
+    assert!(S {}.run_safe(p) == 5)
+}

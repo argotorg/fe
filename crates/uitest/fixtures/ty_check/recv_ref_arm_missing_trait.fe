@@ -1,0 +1,72 @@
+// An arm that reads fields in place locates each field it reads by the sizes
+// of the fields before it. A field before a read one that has no `AbiSize` is
+// reported at the field the arm reads, not later in the lowering of the
+// contract.
+mod Manual {
+    use std::abi::sol
+
+    // Has no size and no `Decode<Sol>`.
+    pub struct Odd {
+        pub n: u8,
+    }
+
+    pub struct G {
+        pub x: u8,
+        pub a: Odd,
+        pub b: u8,
+    }
+
+    impl std::abi::AbiFields for G {}
+
+    impl core::abi::AbiSize for G {
+        const HEAD_SIZE: u256 = 96
+        const IS_DYNAMIC: bool = false
+
+        fn payload_size(self) -> u256 {
+            96
+        }
+    }
+
+    impl core::abi::Encode<std::abi::Sol> for G {
+        fn encode(self, _ out: core::abi::AbiFrame) {}
+    }
+
+    impl core::abi::Decode<std::abi::Sol> for G {
+        fn decode_payload<D: core::abi::AbiDecoder<std::abi::Sol>, I: core::abi::ByteInput>(_ d: mut D, _ input: I) -> Self {
+            Self { x: 0, a: Odd { n: 0 }, b: 0 }
+        }
+    }
+
+    impl core::message::MsgVariant<std::abi::Sol> for G {
+        const SELECTOR: u32 = sol("g(uint8)")
+        type Return = u8
+    }
+}
+
+// The field `b` is read in place after `a`, which has no size.
+pub contract RefAfterUnsized {
+    recv Manual {
+        G { x: _, a: _, ref b } -> u8 {
+            b
+        }
+    }
+}
+
+// The field `b` is decoded after `a`, which has no size, in an arm that reads
+// `x` in place.
+pub contract DecodedAfterUnsized {
+    recv Manual {
+        G { ref x, a: _, b } -> u8 {
+            x + b
+        }
+    }
+}
+
+// The fields read are before `a`, so its size is not needed.
+pub contract ReadBeforeUnsized {
+    recv Manual {
+        G { ref x, a: _, b: _ } -> u8 {
+            x
+        }
+    }
+}

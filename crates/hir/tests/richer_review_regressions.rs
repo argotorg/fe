@@ -699,6 +699,96 @@ fn field_type_splices_preserve_compound_const_generic_expressions() {
     );
 }
 
+/// A provider that splices the type of the record's first field (`f_ty`) into
+/// the generated `items`. The record is declared by `declarations`.
+fn field_type_in_generated_items(declarations: &str, items: &str, record: &str) -> String {
+    let source = format!(
+        "{PRELUDE}
+        {declarations}
+
+        const fn make(_ r: Record) -> Code<Item> {{
+            let f = field(r, 0)
+            let f_ty = field_type(f)
+            quote {{
+                {items}
+            }}
+        }}"
+    );
+    let plan = request_with_input(&source, record, true).unwrap();
+    output_request(&source, plan)
+}
+
+#[test]
+fn a_field_type_spliced_in_a_generated_impl_for_the_record_takes_the_impl_parameters() {
+    // `impl ${r}` declares `T`, so `data: T` is the impl's `T`: `Wrap<u256>`
+    // returns a `u256` and `Wrap<bool>` returns a `bool`.
+    let diags = field_type_in_generated_items(
+        "pub struct Wrap<T> { pub data: T }",
+        "impl ${r} {
+                    pub fn get_data(own self) -> ${f_ty} { self.data }
+                }
+                pub fn use_int(_ w: own Wrap<u256>) -> u256 { w.get_data() }
+                pub fn use_bool(_ w: own Wrap<bool>) -> bool { w.get_data() }",
+        "Wrap",
+    );
+    assert!(diags.is_empty(), "{diags}");
+
+    let diags = field_type_in_generated_items(
+        "pub struct Wrap<T> { pub data: T }",
+        "impl ${r} {
+                    pub fn get_data(own self) -> ${f_ty} { self.data }
+                }
+                pub fn use_int(_ w: own Wrap<bool>) -> u256 { w.get_data() }",
+        "Wrap",
+    );
+    assert!(
+        !diags.is_empty(),
+        "a `bool` field is not a `u256` result, so the call is refused"
+    );
+}
+
+#[test]
+fn a_field_type_through_an_alias_that_ignores_its_parameter_is_spliced_in_a_generated_impl() {
+    // `Id<T>` is `u256` whatever `T` is.
+    let diags = field_type_in_generated_items(
+        "type Id<T> = u256
+        pub struct Boxed<T> { pub value: Id<T> }",
+        "impl ${r} {
+                    pub fn get_value(own self) -> ${f_ty} { self.value }
+                }
+                pub fn use_boxed(_ b: own Boxed<bool>) -> u256 { b.get_value() }",
+        "Boxed",
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn a_field_type_without_record_parameters_is_spliced_anywhere() {
+    // The first field is a `u256` at every argument of the record, so the
+    // free function needs no implementation to read it.
+    let diags = field_type_in_generated_items(
+        "pub struct Tagged<T> { pub count: u256, pub tag: T }",
+        "pub fn twice(_ x: ${f_ty}) -> u256 { x + x }
+                pub fn use_twice() -> u256 { twice(4) }",
+        "Tagged",
+    );
+    assert!(diags.is_empty(), "{diags}");
+}
+
+#[test]
+fn a_field_type_that_depends_on_record_parameters_is_refused_outside_an_impl() {
+    // In a free function nothing says what `T` stands for.
+    let diags = field_type_in_generated_items(
+        "pub struct Wrap<T> { pub data: T }",
+        "pub fn take(_ x: ${f_ty}) {}",
+        "Wrap",
+    );
+    assert!(
+        diags.contains("a field type that depends on its record's parameters"),
+        "{diags}"
+    );
+}
+
 #[test]
 fn mixed_item_and_expr_hole_quote_blocks_infer_and_lower_as_expr() {
     let source = format!(

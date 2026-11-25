@@ -1,0 +1,15 @@
+// Control for named_polyrec_named.fe: the same recursion without a choice.
+// Expected: 16-0016 (instantiation limit).
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+struct Wrap<T> {}
+impl<T: Pick> Pick for Wrap<T> { fn pick() -> u256 { T::pick() } }
+
+fn deep<T: Pick>(n: u256) -> u256 {
+    if n == 0 { return T::pick() }
+    deep<Wrap<T>>(n: n - 1)
+}
+fn go() -> u256 { deep<u256>(n: 3) }
+#[test]
+fn t() { assert(go() == 1) }

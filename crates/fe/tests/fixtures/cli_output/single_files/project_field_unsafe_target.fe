@@ -1,0 +1,47 @@
+use core::ops::{Field, Project, ProjectField}
+
+pub struct Rec { pub unsafe x: u256, pub y: u256 }
+
+pub struct Handle { base: u256 }
+impl Project for Handle { type Target = Rec }
+impl ProjectField<Field<Rec, u256, ()>> for Handle {
+    type Output = u256
+    fn project(mut? self) -> mut? u256 { mut? self.base }
+}
+
+// Writing the projected target's `unsafe` field needs `unsafe`.
+fn write_outside_unsafe(h: mut Handle) {
+    h.x = 5
+}
+
+fn write_inside_unsafe(h: mut Handle) {
+    unsafe { h.x = 5 }
+}
+
+// Reading is allowed.
+fn read(h: Handle) -> u256 {
+    let y = h.x
+    y
+}
+
+// The handle's own `unsafe` field is hidden outside its module and does not
+// stand for the projected target's safe field of the same name.
+mod hidden {
+    use core::ops::{Field, Project, ProjectField}
+
+    pub struct Safe { pub x: u256 }
+
+    pub struct Hidden { base: u256, unsafe x: u256 }
+    impl Hidden {
+        pub fn new() -> Hidden { unsafe { Hidden { base: 0, x: 0 } } }
+    }
+    impl Project for Hidden { type Target = Safe }
+    impl ProjectField<Field<Safe, u256, ()>> for Hidden {
+        type Output = u256
+        fn project(mut? self) -> mut? u256 { mut? self.base }
+    }
+}
+
+fn write_safe_target(h: mut hidden::Hidden) {
+    h.x = 5
+}

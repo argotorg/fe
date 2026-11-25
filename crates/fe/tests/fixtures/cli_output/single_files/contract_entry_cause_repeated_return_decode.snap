@@ -12,7 +12,7 @@ error[6-0003]: trait bound is not satisfied
 8 │     Get -> S2,
   │            ^^ `S2` doesn't implement `Decode<Sol>`
 
-error[16-0022]: the entry code of contract `R` cannot be generated
+error[16-0024]: the entry code of contract `R` cannot be generated
    ┌─ contract_entry_cause_repeated_return_decode.fe:8:12
    │
  8 │     Get -> S2,

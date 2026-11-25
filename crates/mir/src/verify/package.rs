@@ -156,9 +156,12 @@ fn verify_synthetic_function<'db>(
             RuntimeSyntheticSpec::TestSuiteRoot { dispatch } => {
                 verify_dispatch_root(body, &dispatch, DispatchDefault::RevertEmpty)
             }
-            RuntimeSyntheticSpec::ContractInitRoot { .. } => {
-                verify_has_terminator(body, |term| matches!(term, RTerminator::ReturnData { .. }))
-            }
+            RuntimeSyntheticSpec::ContractInitRoot { .. } => verify_has_terminator(body, |term| {
+                matches!(
+                    term,
+                    RTerminator::ReturnData { .. } | RTerminator::ReturnCode { .. }
+                )
+            }),
             RuntimeSyntheticSpec::ContractRecvAbi { plan } => {
                 // A recv wrapper is straight-line code: a nonpayable wrapper's
                 // entry block reverts when `callvalue != 0` and otherwise jumps

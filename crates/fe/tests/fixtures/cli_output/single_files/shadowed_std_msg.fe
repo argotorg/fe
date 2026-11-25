@@ -1,0 +1,12 @@
+// A module named `std` in the file does not stand for the library in the
+// code that `msg` generates.
+mod std {
+    pub mod derive {
+        pub struct StructAbiEncode {}
+    }
+}
+
+msg M {
+    #[selector = 1]
+    Run { a: u256 } -> u256,
+}

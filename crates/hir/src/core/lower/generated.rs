@@ -2,7 +2,7 @@
 //! emitted source string. Provider evaluation has completed before this query.
 use super::FileLowerCtxt;
 use crate::hir_def::{Const, Func, Impl, ImplTrait, ItemKind, QuotedPathOrigin, TopLevelMod};
-use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
+use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue, file_generation};
 use parser::ast::{self, prelude::*};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::SalsaValue)]
@@ -40,18 +40,11 @@ impl<'db> ActiveQuoteFrame<'db> {
 pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
     let db = ctxt.db();
     let top_mod = ctxt.top_mod();
-    let Some(url) = top_mod.file(db).url(db) else {
+    let Some(generation) = file_generation(db, top_mod.file(db)) else {
         return;
     };
-    let plans = db
-        .generation_inputs()
-        .functions(db)
-        .iter()
-        .filter(|plan| plan.target_file == url)
-        .cloned()
-        .collect::<Vec<_>>();
     let root = super::top_mod_ast(db, top_mod);
-    for plan in plans {
+    for plan in &generation.functions {
         let quote = root
             .syntax()
             .descendants()
@@ -62,7 +55,7 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
             .expect("checked frozen quote retains valid bounded syntax")
             .into_iter()
             .map(|hole| hole.syntax().text_range())
-            .zip(plan.holes.into_iter().map(FrozenHoleValue::Scalar))
+            .zip(plan.holes.iter().cloned().map(FrozenHoleValue::Scalar))
             .collect();
         let open_names = quote
             .open_list()
@@ -121,25 +114,10 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
             .set_quoted_item_origin(generated.into(), producer);
     }
 
-    append_module_output(ctxt);
-}
-
-/// Lower the outputs that join the file's root module after its authored
-/// items: the named implementations of scoped derives, and the frozen item
-/// code of requests that name no header.
-pub(super) fn append_module_output<'db>(ctxt: &mut FileLowerCtxt<'db>) {
-    let db = ctxt.db();
-    let Some(url) = ctxt.top_mod().file(db).url(db) else {
-        return;
-    };
-    let requests = db
-        .generation_inputs()
-        .requests(db)
-        .iter()
-        .filter(|request| request.target_file == url && request.request_impl.is_none())
-        .cloned()
-        .collect::<Vec<_>>();
-    for request in requests {
+    // Outputs that join the file's root module after its authored items: the
+    // named implementations of scoped derives, and the frozen item code of
+    // requests that name no header.
+    for request in &generation.items {
         if let Some(scoped) = &request.scoped_impl {
             lower_scoped_derive(ctxt, scoped, &request.code);
         } else {

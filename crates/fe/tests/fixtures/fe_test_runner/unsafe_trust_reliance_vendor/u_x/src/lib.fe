@@ -1,0 +1,8 @@
+pub struct X {}
+unsafe impl t::PodM for X { fn tag(self) -> u256 { 0 } }
+pub struct K2 {}
+unsafe impl t::HasK2 for K2 { fn m(self) {} }
+pub struct G {}
+unsafe impl<M> t::PodG<M> for G { fn tag(self) -> u256 { 0 } }
+pub struct Y {}
+unsafe impl t::Checked for Y { fn a(self) {} }

@@ -550,7 +550,7 @@ pub(crate) fn instantiate_adt_field_source_for_concrete_demand<'db>(
     )
 }
 
-fn instantiate_adt_field_shape_in_mode<'db>(
+pub(crate) fn instantiate_adt_field_shape_in_mode<'db>(
     db: &'db dyn HirAnalysisDb,
     adt: AdtDef<'db>,
     variant_idx: usize,

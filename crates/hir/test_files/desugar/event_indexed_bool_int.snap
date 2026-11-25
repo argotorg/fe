@@ -17,8 +17,15 @@ impl std::evm::Event for Flags {
 
     #[inline(always)]
     fn emit<L: Log>(own self, _ log: mut L) {
-        let head = 0 as u256 + abi_field_head_size<u256>()
-        let total = head + 0 as u256 + dynamic_payload_size<u256>(self.value)
+        var size = DataSize { head: 0, payload: 0 }
+        {
+            ()
+            ()
+            size.add(self.value)
+            ()
+        }
+        let head = size.head
+        let total = head + size.payload
         let buffer = MemBuffer::new(allocation_len(total))
         let out = unsafe {
             AbiFrame::from_raw_parts(ptr: buffer.ptr(), len: total)
@@ -26,7 +33,9 @@ impl std::evm::Event for Flags {
         var writer = RecordWriter<Sol>::new(out, head_size: head, fields: 1 as usize)
         {
             ()
-            push_record_field(mut writer, self.value)
+            ()
+            writer.push(self.value)
+            ()
         }
         let data = buffer.span()
         log.log3(data: data, topic0: Self::TOPIC0, topic1: self.ok.as_topic(), topic2: self.delta.as_topic())
