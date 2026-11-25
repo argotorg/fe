@@ -20,7 +20,10 @@ use super::{
     EarlyNameQueryId, ExpectedPathKind, NameDomain, Tier, authored_first,
     diagnostics::PathResDiag,
     is_scope_visible_from,
-    method_selection::{MethodCandidate, MethodSelectionError, select_method_candidate_in},
+    method_selection::{
+        ImplementorCheck, MethodCandidate, MethodSelectionError, confirm_implementor,
+        select_method_candidate_in,
+    },
     name_resolver::{NameRes, NameResBucket, NameResKind, NameResolutionError},
     resolve_query, resolve_query_in,
     traits_in_scope::traits_available_for_selection,
@@ -2642,14 +2645,37 @@ fn select_assoc_const_candidate<'db>(
         // the goal it answers is solved under the choices where the use is
         // checked. A named implementation is not among the ordinary
         // implementations of its type, so without this `Self::SIDES` written in
-        // the implementation, by its provider or by hand, names nothing.
+        // the implementation, by its provider or by hand, names nothing. Its
+        // conditions are confirmed as method selection confirms them
+        // (`confirm_implementor`): one that is proved not to hold for the
+        // receiver is not a candidate.
         let chosen = choices
             .map(|choices| choices.items(db).clone())
             .unwrap_or_default();
+        let solve_cx = TraitSolveCx::new(db, scope, tier)
+            .with_assumptions(assumptions)
+            .with_choices(choices);
         for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
             let implementation = choice.implementation();
             let declared = implementation.trait_(db);
             if declared.def(db).const_(db, name).is_none() {
+                continue;
+            }
+            let mut table = UnificationTable::new(db);
+            let receiver_identity = receiver.canonical().extract_identity(&mut table);
+            let opened = choice.instantiate(&mut table);
+            if matches!(
+                confirm_implementor(
+                    db,
+                    solve_cx,
+                    &mut table,
+                    receiver_identity,
+                    opened,
+                    // A constant read owes no generation of its own.
+                    &mut Vec::new(),
+                ),
+                ImplementorCheck::Rejected | ImplementorCheck::Unsatisfied
+            ) {
                 continue;
             }
             let snapshot = cx.snapshot();

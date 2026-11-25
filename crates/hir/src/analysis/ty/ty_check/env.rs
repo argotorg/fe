@@ -366,6 +366,17 @@ impl<'db> TyCheckEnv<'db> {
             }
         };
 
+        // The implementation whose body this is opens itself when it is named. The
+        // default a trait gives a constant is the body of the implementation that
+        // inherits it, as if that implementation had written the same text, so it
+        // is opened for that default too.
+        let choices_owner = match owner {
+            BodyOwner::InheritedConst { implementation, .. } => {
+                Some(ItemKind::ImplTrait(implementation))
+            }
+            _ => owner_scope.parent_item(db),
+        };
+
         let mut env = Self {
             db,
             owner,
@@ -382,7 +393,7 @@ impl<'db> TyCheckEnv<'db> {
             closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
-            choices: match owner_scope.parent_item(db) {
+            choices: match choices_owner {
                 Some(ItemKind::ImplTrait(implementation))
                     if implementation.selection_name(db).is_some() =>
                 {
@@ -840,6 +851,13 @@ impl<'db> TyCheckEnv<'db> {
         site: DynLazySpan<'db>,
         applications: impl IntoIterator<Item = TyId<'db>>,
     ) {
+        // An application a path passes through is a type the checker takes from
+        // its scope, so in a default checked for an implementation it is the
+        // implementation's (`instantiate_scope_ty`).
+        let applications: Vec<_> = applications
+            .into_iter()
+            .map(|application| self.instantiate_scope_ty(application))
+            .collect();
         self.path_applications.extend(
             applications
                 .into_iter()
@@ -2061,6 +2079,10 @@ impl<'db> TyCheckEnv<'db> {
             let leaks = |ty: TyId<'db>| mentions_param_of(db, ty, inherited.trait_scope);
             if self.expr_ty.values().flatten().any(|prop| leaks(prop.ty))
                 || self.pat_ty.values().flatten().any(|ty| leaks(*ty))
+                || self
+                    .path_applications
+                    .iter()
+                    .any(|(_, application)| leaks(*application))
             {
                 diags.push(
                     super::super::diagnostics::BodyDiag::CompileTimePhase {

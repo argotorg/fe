@@ -1,0 +1,23 @@
+// A default reads another constant of the trait, `Self::A1`, which one
+// implementation overrides and another inherits; a generic implementation
+// inherits both.
+trait Tr {
+    type X
+    const A1: Self::X = 3
+    const A2: (Self::X, u256) = (Self::A1, 1)
+}
+struct S {}
+struct R {}
+struct W<T> {}
+impl Tr for S {
+    type X = u256
+    const A1: u256 = 10
+}
+impl Tr for R { type X = u256 }
+impl<T> Tr for W<T> { type X = u256 }
+fn get<U: Tr<X = u256>>() -> u256 { U::A2.0 }
+#[test]
+fn t() {
+    assert(S::A2.0 == 10 && R::A2.0 == 3 && <W<u8> as Tr>::A2.0 == 3)
+    assert(get<S>() == 10 && get<R>() == 3 && get<W<u8>>() == 3)
+}

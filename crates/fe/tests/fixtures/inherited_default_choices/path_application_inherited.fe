@@ -1,0 +1,15 @@
+// A path in an inherited default passes through an application whose const
+// requirement depends on the implementation (`Bounded<{ Self::N }>` with
+// `N = 0` violates `N > 0`). Refused as it is where the text is written in the
+// implementation (`path_application_written.fe`).
+struct Bounded<const N: u256> where N > 0 {}
+impl<const N: u256> Bounded<N> { const fn one() -> u256 { 1 } }
+trait Tr {
+    type X
+    const N: u256
+    const K: Self::X = Bounded<{ Self::N }>::one()
+}
+struct A {}
+impl Tr for A { type X = u256  const N: u256 = 0 }
+#[test]
+fn t() { assert(A::K == 1) }
