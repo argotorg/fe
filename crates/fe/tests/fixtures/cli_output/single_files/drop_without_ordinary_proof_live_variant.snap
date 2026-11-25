@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/drop_without_ordinary_proof_live_variant.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/drop_without_ordinary_proof_live_variant.fe
+
+error[16-0021]: `Drop` without an ordinary proof in `fn pick`
+   ┌─ drop_without_ordinary_proof_live_variant.fe:12:24
+   │
+10 │ fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::Yes(Ring { t }) }
+   │                                     -- `Ring<Bell>` is destroyed here
+11 │ #[test]
+12 │ fn t() { with (Loud) { pick(Bell {}) } }
+   │                        ^^^^^^^^^^^^^ this call reaches `pick`, which destroys `Ring<Bell>`; its `Drop` implementation needs `Bell: Chime`, which no ordinary implementation proves (only one that a `with` chose does); a drop does not read a `with`
+
+
+=== EXIT CODE: 1 ===

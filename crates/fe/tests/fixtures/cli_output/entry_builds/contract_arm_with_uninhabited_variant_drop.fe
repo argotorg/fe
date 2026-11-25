@@ -1,0 +1,18 @@
+// A recv arm that reads a field by reference calls a function whose local enum has an uninhabited variant: the contract checks and builds.
+use core::ops::Drop
+pub trait Chime { fn ring(self) }
+pub struct Bell {}
+pub impl Chime for Bell as Loud { fn ring(self) { assert(false) } }
+pub struct Ring<T: Chime> { t: T }
+impl<T: Chime> Drop for Ring<T> { fn drop(own self) { self.t.ring() } }
+enum Void {}
+enum Maybe<T: Chime> { No, Yes(Void, Ring<T>) }
+fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::No }
+msg M {
+ #[selector = 19]
+ Probe { n: u8 } -> u8,
+}
+pub contract Factory {
+ recv M { Probe { ref n } -> u8 { with (Loud) { pick(Bell {}) }
+ n } }
+}

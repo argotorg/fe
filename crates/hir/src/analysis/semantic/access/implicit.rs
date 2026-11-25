@@ -103,11 +103,22 @@ pub(super) fn drop_callees<'db>(
     };
     let own_self = drops_own_self(db, instance, body, target);
     for part in elaboration.parts(statement) {
-        let part_ty = part
-            .path
-            .iter()
-            .fold(ty, |ty, step| walk.part_ty(ty, *step));
-        walk.destroy(part_ty, own_self && part.path.is_empty());
+        let mut part_ty = ty;
+        let mut possible = true;
+        for step in &part.path {
+            // A part below a variant that cannot be constructed is never
+            // destroyed.
+            if let DropStep::Variant { variant, .. } = step
+                && walk.variant_uninhabited(part_ty, *variant)
+            {
+                possible = false;
+                break;
+            }
+            part_ty = walk.part_ty(part_ty, *step);
+        }
+        if possible {
+            walk.destroy(part_ty, own_self && part.path.is_empty());
+        }
     }
     DropCallees {
         keys: walk.callees,
@@ -169,6 +180,29 @@ struct DropWalk<'db> {
 }
 
 impl<'db> DropWalk<'db> {
+    /// Whether no value of `ty` can exist in the body's instance: the
+    /// predicate that runtime lowering asks before it destroys a value
+    /// (`TyId::is_uninhabited_in`), with the scope and assumptions of the
+    /// instance.
+    fn uninhabited(&self, ty: TyId<'db>) -> bool {
+        ty.is_uninhabited_in(
+            self.db,
+            Some(self.instance.key(self.db).owner(self.db).scope()),
+            self.instance.assumptions(self.db),
+        )
+    }
+
+    /// Whether `variant` of the enum type `ty` cannot be constructed, as
+    /// runtime lowering asks before it destroys the fields of a variant.
+    fn variant_uninhabited(&self, ty: TyId<'db>, variant: u16) -> bool {
+        ty.is_enum_variant_uninhabited_in(
+            self.db,
+            usize::from(variant),
+            Some(self.instance.key(self.db).owner(self.db).scope()),
+            self.instance.assumptions(self.db),
+        )
+    }
+
     /// The type at `step` from a value of `ty`.
     fn part_ty(&self, ty: TyId<'db>, step: DropStep) -> TyId<'db> {
         match step {
@@ -191,7 +225,10 @@ impl<'db> DropWalk<'db> {
     /// `drop`, whose fields are destroyed without calling it again.
     fn destroy(&mut self, ty: TyId<'db>, field_wise: bool) {
         let db = self.db;
-        if (!field_wise && !self.seen.insert(ty)) || !ty_has_drop_glue(db, ty) {
+        if (!field_wise && !self.seen.insert(ty))
+            || !ty_has_drop_glue(db, ty)
+            || self.uninhabited(ty)
+        {
             return;
         }
         let adt = ty.adt_def(db);
@@ -219,6 +256,9 @@ impl<'db> DropWalk<'db> {
             && matches!(adt.adt_ref(db), AdtRef::Enum(_))
         {
             for variant in 0..adt.fields(db).len() as u16 {
+                if self.variant_uninhabited(ty, variant) {
+                    continue;
+                }
                 for field in
                     self.instance
                         .normalized_enum_variant_field_tys(db, ty, VariantIndex(variant))
