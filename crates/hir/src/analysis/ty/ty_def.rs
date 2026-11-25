@@ -2045,8 +2045,9 @@ pub enum InvalidCause<'db> {
     /// than the normalizer allows.
     TypeNormalizationLimit,
 
-    /// The type of a record's field spliced where no derive header requests
-    /// that record, so nothing says what the record's parameters stand for.
+    /// The type of a record's field that depends on the record's parameters,
+    /// spliced outside an implementation for the record, so nothing says what
+    /// the parameters stand for.
     FieldSpliceOutsideHeader,
 
     // TraitConstraintNotSat(PredicateId),
