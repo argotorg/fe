@@ -3875,6 +3875,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::StringLiteralTypeNeeded(span) => primary_diag(
+                Severity::Error,
+                "type must be known",
+                "the type of this string literal is needed here; annotate it as `String<N>` or `DynString`",
+                span.resolve(db),
+                error_code,
+            ),
+
             Self::TypeSizeOverflow { primary, ty } => primary_diag(
                 severity,
                 "type is too large",

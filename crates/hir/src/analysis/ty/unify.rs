@@ -13,8 +13,8 @@ use super::{
     fold::{TyFoldable, TyFolder},
     trait_def::{ImplementorId, TraitInstId, TraitRefId},
     ty_def::{
-        ApplicableTyProp, ClosureTy, Kind, MAX_INLINE_STRING_BYTES, TyBase, TyData, TyId, TyVar,
-        TyVarSort, inference_keys,
+        ApplicableTyProp, ClosureTy, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyBase, TyData,
+        TyId, TyVar, TyVarSort, inference_keys,
     },
 };
 use crate::analysis::{
@@ -759,6 +759,35 @@ impl UnifyValue for InferenceValue<'_> {
         match (v1, v2) {
             (InferenceValue::Unbound(k1, sort1), InferenceValue::Unbound(k2, sort2)) => {
                 assert!(k1.does_match(k2));
+                // Two string literals merge to one that holds both: the longer
+                // length, and a `DynString` fallback if either has it. A literal
+                // can be a `DynString` by default with a short length (one that
+                // begins with a zero byte), so the order of the sorts alone
+                // does not give this.
+                if let (
+                    TyVarSort::String {
+                        min_len: len1,
+                        fallback: fallback1,
+                    },
+                    TyVarSort::String {
+                        min_len: len2,
+                        fallback: fallback2,
+                    },
+                ) = (sort1, sort2)
+                {
+                    let fallback = if *fallback1 == StringFallback::Dynamic
+                        || *fallback2 == StringFallback::Dynamic
+                    {
+                        StringFallback::Dynamic
+                    } else {
+                        StringFallback::Fixed
+                    };
+                    let sort = TyVarSort::String {
+                        min_len: *len1.max(len2),
+                        fallback,
+                    };
+                    return Ok(InferenceValue::Unbound(k1.clone(), sort));
+                }
                 if sort1 < sort2 {
                     Ok(InferenceValue::Unbound(k2.clone(), *sort2))
                 } else {

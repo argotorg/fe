@@ -784,6 +784,9 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+    /// An operation needs the type of a string literal that its context has not
+    /// decided: see `waits_on_open_string_literal`.
+    StringLiteralTypeNeeded(DynLazySpan<'db>),
     TypeSizeOverflow {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
@@ -1579,6 +1582,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
+            Self::StringLiteralTypeNeeded(..) => 14,
             Self::TypeSizeOverflow { .. } => 88,
             Self::NoStorageLayout { .. } => 128,
             Self::InvalidCast { .. } => 55,

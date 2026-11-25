@@ -138,10 +138,11 @@ use crate::analysis::ty::{
     },
 };
 use crate::analysis::{
-    HirAnalysisDb,
+    HirAnalysisDb, Spanned,
     name_resolution::{
         ExpectedPathKind, PathRes, PathResError, PathResErrorKind, diagnostics::PathResDiag,
-        resolve_path, resolve_path_with_observer_and_minter,
+        method_selection::MethodSelectionError, resolve_path,
+        resolve_path_with_observer_and_minter,
     },
     ty::{
         ty_def::{TyFlags, inference_keys},
@@ -2655,6 +2656,20 @@ impl<'db> TyChecker<'db> {
                             method_name: pending.method_name,
                             traits: viable.into_iter().map(|candidate| candidate.inst).collect(),
                         });
+                    } else if viable.is_empty()
+                        && self.diags.is_empty()
+                        && self.env.callable_expr(pending.expr).is_none()
+                    {
+                        // No candidate fits and no callee was registered: report it,
+                        // as a body without a diagnostic is lowered, and its call
+                        // has no plan.
+                        let diag = expr::body_diag_from_method_selection_err(
+                            db,
+                            MethodSelectionError::NotFound,
+                            Spanned::new(recv_ty, parts.0.span(body).into()),
+                            Spanned::new(pending.method_name, pending.span.clone()),
+                        );
+                        self.push_diag(diag);
                     }
                 }
                 env::DeferredTask::LiteralReceiver(pending) => {
@@ -2692,12 +2707,18 @@ impl<'db> TyChecker<'db> {
         let mut progressed = true;
         while closure.is_none_or(|def| self.env.has_pending_method_in(def)) {
             if !progressed {
-                if fallback || closure.is_some() {
+                if closure.is_some() {
                     break;
                 }
-                // A literal that only `DynString` satisfies the bounds of is
-                // that type before any literal takes its default.
-                if !self.settle_literals_by_bounds() {
+                if fallback {
+                    // Nothing else resolves: a literal a method call on it waits
+                    // for takes its default, and the call completes.
+                    if !self.settle_literal_receivers_by_default() {
+                        break;
+                    }
+                } else if !self.settle_literals_by_bounds() {
+                    // A literal that only `DynString` satisfies the bounds of is
+                    // that type before any literal takes its default.
                     fallback = true;
                 }
             }
@@ -2769,7 +2790,7 @@ impl<'db> TyChecker<'db> {
                         self.env.register_pending_literal_receiver(pending);
                     }
                     env::DeferredTask::LiteralReceiver(pending) => {
-                        if self.resolve_literal_receiver(&pending, fallback) {
+                        if self.resolve_literal_receiver(&pending) {
                             progressed = true;
                         } else {
                             self.env.register_pending_literal_receiver(pending);
@@ -2957,11 +2978,11 @@ impl<'db> TyChecker<'db> {
     }
 
     /// Binds to `DynString` each open string literal that a pending trait
-    /// bound rules out as an inline `String` and no pending bound rules out as
-    /// a `DynString`, before any literal takes its default. Each literal is
-    /// judged against the same state and the bindings follow, so the result
-    /// does not depend on the order the bounds were registered in. Returns
-    /// whether any literal was bound.
+    /// bound or retained type equality rules out as an inline `String` and
+    /// none rules out as a `DynString`, before any literal takes its default.
+    /// Each literal is judged against the same state and the bindings follow,
+    /// so the result does not depend on the order the tasks were registered
+    /// in. Returns whether any literal was bound.
     fn settle_literals_by_bounds(&mut self) -> bool {
         let db = self.db;
         let goals: Vec<_> = self
@@ -2971,17 +2992,33 @@ impl<'db> TyChecker<'db> {
             .map(|goal| self.normalize_trait_goal(goal))
             .filter(|goal| !collect_flags(db, *goal).contains(TyFlags::HAS_INVALID))
             .collect();
+        let mut equalities = Vec::new();
+        for mut equality in self.env.pending_type_equalities() {
+            equality.actual = self.normalize_ty(equality.actual);
+            equality.expected = self.normalize_ty(equality.expected);
+            equalities.push(equality);
+        }
         let mut literals = std::collections::BTreeMap::new();
-        for goal in &goals {
-            for key in inference_keys(db, goal) {
+        let mut collect = |this: &mut Self, keys: Vec<InferenceKey<'db>>| {
+            for key in keys {
                 if let Some(TyVarSort::String {
                     min_len,
                     fallback: StringFallback::Fixed,
-                }) = self.table.unbound_sort(key)
+                }) = this.table.unbound_sort(key)
                 {
                     literals.insert(key, min_len);
                 }
             }
+        };
+        for goal in &goals {
+            collect(self, inference_keys(db, goal).into_iter().collect());
+        }
+        for equality in &equalities {
+            let keys = inference_keys(db, &equality.actual)
+                .into_iter()
+                .chain(inference_keys(db, &equality.expected))
+                .collect();
+            collect(self, keys);
         }
         let Some(dyn_ty) = resolve_lib_type_path(db, self.env.scope(), "core::abi::DynString")
         else {
@@ -2994,14 +3031,24 @@ impl<'db> TyChecker<'db> {
                 fallback: StringFallback::Fixed,
             };
             let literal = TyId::ty_var(db, sort, Kind::Star, key);
-            let mentioning: Vec<_> = goals
+            let goals_of: Vec<_> = goals
                 .iter()
                 .copied()
                 .filter(|goal| inference_keys(db, goal).contains(&key))
                 .collect();
+            let equalities_of: Vec<_> = equalities
+                .iter()
+                .filter(|equality| {
+                    inference_keys(db, &equality.actual).contains(&key)
+                        || inference_keys(db, &equality.expected).contains(&key)
+                })
+                .cloned()
+                .collect();
             let inline_ty = TyId::string_with_len(db, min_len);
-            if self.goals_unsatisfiable_with(literal, inline_ty, &mentioning) == Some(true)
-                && self.goals_unsatisfiable_with(literal, dyn_ty, &mentioning) == Some(false)
+            if self.constraints_unsatisfiable_with(literal, inline_ty, &goals_of, &equalities_of)
+                == Some(true)
+                && self.constraints_unsatisfiable_with(literal, dyn_ty, &goals_of, &equalities_of)
+                    == Some(false)
             {
                 dyn_literals.push(literal);
             }
@@ -3012,30 +3059,70 @@ impl<'db> TyChecker<'db> {
         !dyn_literals.is_empty()
     }
 
-    /// Whether some of `goals` is unsatisfiable when `literal` is `ty`, or
-    /// `None` if `literal` cannot be `ty`.
-    fn goals_unsatisfiable_with(
+    /// Whether some of `goals` is unsatisfiable, or some of `equalities`
+    /// cannot hold, when `literal` is `ty`; or `None` if `literal` cannot be
+    /// `ty`. An equality that still waits on inference, such as a projection
+    /// of another open literal, is not decided.
+    fn constraints_unsatisfiable_with(
         &mut self,
         literal: TyId<'db>,
         ty: TyId<'db>,
         goals: &[TraitInstId<'db>],
+        equalities: &[env::TypeEquality<'db>],
     ) -> Option<bool> {
         let db = self.db;
         let solve_cx =
             TraitSolveCx::new(db, self.env.scope()).with_assumptions(self.env.assumptions());
         let snapshot = self.snapshot_state();
         let unsatisfiable = self.table.unify(literal, ty).ok().map(|()| {
-            goals.iter().any(|&goal| {
+            let goal_unsat = goals.iter().any(|&goal| {
                 let goal = self.normalize_trait_goal(goal);
                 let query = CanonicalGoalQuery::new(db, goal, self.env.assumptions());
                 matches!(
                     is_goal_query_satisfiable(db, solve_cx, &query),
                     GoalSatisfiability::UnSat(_)
                 )
-            })
+            });
+            goal_unsat
+                || equalities.iter().any(|equality| {
+                    let inner = self.snapshot_state();
+                    let actual = self.normalize_ty(equality.actual);
+                    let expected = self.normalize_ty(equality.expected);
+                    let violated = !depends_on_type_inference(db, actual)
+                        && !depends_on_type_inference(db, expected)
+                        && self.table.unify(actual, expected).is_err();
+                    self.rollback_state(inner);
+                    violated
+                })
         });
         self.rollback_state(snapshot);
         unsatisfiable
+    }
+
+    /// Binds each open string literal that a method call on it waits for to
+    /// its default type, all against the same state. Returns whether any was
+    /// bound. It runs when nothing else resolves, so a literal that anything
+    /// else decides is not given its default here.
+    fn settle_literal_receivers_by_default(&mut self) -> bool {
+        let db = self.db;
+        let scope = self.env.scope();
+        let mut defaults = Vec::new();
+        for ty in self.env.pending_literal_receiver_tys() {
+            let ty = ty.fold_with(db, &mut self.table);
+            if let TyData::TyVar(var) = ty.data(db)
+                && let TyVarSort::String { min_len, fallback } = var.sort
+            {
+                defaults.push((
+                    ty,
+                    env::string_literal_default_ty(db, scope, min_len, fallback),
+                ));
+            }
+        }
+        let mut bound = false;
+        for (literal, default) in defaults {
+            bound |= self.table.unify(literal, default).is_ok();
+        }
+        bound
     }
 
     /// Whether each open string literal among `operands`, as unified so far,
@@ -3374,9 +3461,12 @@ impl<'db> TyChecker<'db> {
         }
 
         // A literal whose context leaves its type open is an inline
-        // `String<len>` while it fits in one word, else a `DynString`.
+        // `String<len>` while an inline string holds it faithfully: it fits in
+        // one word and does not begin with a zero byte, which the inline
+        // string's length drops. Otherwise it is a `DynString`.
         let len_bytes = string_id.len_bytes(self.db);
-        let fallback = if len_bytes > MAX_INLINE_STRING_BYTES {
+        let begins_with_zero_byte = string_id.data(self.db).as_bytes().first() == Some(&0);
+        let fallback = if len_bytes > MAX_INLINE_STRING_BYTES || begins_with_zero_byte {
             StringFallback::Dynamic
         } else {
             StringFallback::Fixed
