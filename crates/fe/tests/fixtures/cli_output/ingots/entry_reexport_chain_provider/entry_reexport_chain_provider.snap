@@ -1,0 +1,6 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+
+=== EXIT CODE: 0 ===

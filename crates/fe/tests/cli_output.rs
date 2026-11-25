@@ -467,20 +467,48 @@ fn test_cli_entry_plan_with_dependency_codec_checks_and_builds() {
 
 // A blanket implementation over a trait that sits in a private module of the
 // dependency but that the dependency re-exports publicly: the consumer can
-// implement it through the alias, so the cause names it (`Local: Deep`), and
-// the contract builds once the implementation is written.
+// implement it through the alias, so the cause names it by the alias
+// (`Local: PublicDeep`, not the private `Deep`), and the contract builds once
+// the implementation is written.
 #[test]
 fn test_cli_entry_cause_names_a_trait_the_dependency_re_exports() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
     let bad = root.join("ingots/entry_reexport_consumer");
     let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
     assert_eq!(exit, 1, "{output}");
-    assert!(output.contains("Local: Deep"), "{output}");
+    assert!(output.contains("Local: PublicDeep"), "{output}");
+    assert!(!output.contains("Local: Deep"), "{output}");
     check_and_build_succeed(
         root.join("build_ingots/entry_reexport_fixed_consumer")
             .to_str()
             .unwrap(),
     );
+}
+
+// The same, where the re-export is made by another dependency than the one
+// that defines the trait: the consumer reaches the trait through its direct
+// dependency, so the cause names the alias that the consumer can write.
+#[test]
+fn test_cli_entry_cause_names_a_trait_a_direct_dependency_re_exports() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
+    let bad = root.join("ingots/entry_reexport_chain_consumer");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("Local: PublicDeep"), "{output}");
+    assert!(!output.contains("Local: Deep"), "{output}");
+}
+
+// A trait that only a dependency of a dependency re-exports cannot be named by
+// the consumer, which would have to add that ingot to its own dependencies:
+// the cause stops at the trait that the consumer can name.
+#[test]
+fn test_cli_entry_cause_stops_at_a_trait_no_direct_dependency_re_exports() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
+    let bad = root.join("ingots/entry_reexport_far_consumer");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("Local: Codec2"), "{output}");
+    assert!(!output.contains("Deep"), "{output}");
 }
 
 // The bound of a dependency's codec that the consumer leaves unmet is named

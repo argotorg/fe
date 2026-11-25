@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[16-0024]: the entry code of contract `C` cannot be generated
+   ┌─ src/lib.fe:29:10
+   │
+29 │     G -> Out<Local>,
+   │          ^^^^^^^^^^ the dispatcher cannot encode this return type: `Out<Local>: Encode<Sol>` is not satisfied, because `Local: Codec2` is not satisfied
+   ·
+34 │         G -> Out<Local> { Out { v: 1 } }
+   │         - returned by this arm
+
+
+=== EXIT CODE: 1 ===

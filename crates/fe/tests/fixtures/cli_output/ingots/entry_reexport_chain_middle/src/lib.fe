@@ -1,0 +1,7 @@
+// `Codec2` is implemented for every type that implements `PublicDeep`, which
+// this ingot re-exports, so a dependent of this ingot can name it.
+pub use entry_reexport_chain_provider::PublicDeep
+
+pub trait Codec2 {}
+
+impl<T: PublicDeep> Codec2 for T {}

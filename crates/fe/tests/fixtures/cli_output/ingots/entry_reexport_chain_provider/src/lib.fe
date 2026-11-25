@@ -1,0 +1,6 @@
+// `Deep` sits in a private module and is re-exported as `PublicDeep`.
+mod inner {
+    pub trait Deep {}
+}
+
+pub use inner::Deep as PublicDeep

@@ -7,7 +7,7 @@ error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ src/lib.fe:18:10
    │
 18 │     G -> Out<Local>,
-   │          ^^^^^^^^^^ the dispatcher cannot encode this return type: `Out<Local>: Encode<Sol>` is not satisfied, because `Local: Deep` is not satisfied
+   │          ^^^^^^^^^^ the dispatcher cannot encode this return type: `Out<Local>: Encode<Sol>` is not satisfied, because `Local: PublicDeep` is not satisfied
    ·
 22 │         G -> Out<Local> { Out { v: 1 } }
    │         - returned by this arm

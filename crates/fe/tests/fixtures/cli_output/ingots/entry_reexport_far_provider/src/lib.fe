@@ -1,0 +1,7 @@
+// `Deep` sits in a private module and is re-exported, so a dependent of this
+// ingot can name it. A dependent of that dependent cannot.
+mod inner {
+    pub trait Deep {}
+}
+
+pub use inner::Deep

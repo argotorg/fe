@@ -953,22 +953,37 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
     )
 }
 
-/// Whether code at `from` can name `trait_` through a `use` of another module:
-/// a module of the ingot of `trait_` that `from` can reach, with every module
-/// around it, imports the trait by a name or a glob, and the `use` is visible
-/// from `from`. A trait that sits in a private module can be public by such a
-/// re-export.
-fn is_reexported_to<'db>(
+/// Whether `trait_` can be named by a path from `from`: its own module and
+/// every module around it are visible there.
+fn is_trait_path_visible<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
     from: ScopeId<'db>,
 ) -> bool {
+    std::iter::successors(Some(trait_.scope()), |scope| scope.parent(db))
+        .all(|scope| is_scope_visible_from(db, scope, from))
+}
+
+/// The names under which code at `from` can write `trait_` through a `use` of
+/// another module, in order: a module of an ingot that `from` depends on
+/// directly, which it can reach with every module around it, imports the trait
+/// by a name or a glob, and the `use` is visible from `from`. A trait that
+/// sits in a private module can be public by such a re-export, under a name of
+/// the `use`, which need not be its own. An ingot that only a dependency
+/// depends on is not reachable: the consumer would have to add it to its own
+/// dependencies.
+fn reexported_names<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> Vec<&'db str> {
     use crate::analysis::name_resolution::{NameDerivation, NameDomain, items_in_scope};
 
-    let ingot = trait_.scope().ingot(db);
-    ingot
-        .all_modules(db)
+    let mut names: Vec<_> = from
+        .ingot(db)
+        .resolved_external_ingots(db)
         .iter()
+        .flat_map(|(_, ingot)| ingot.all_modules(db).iter())
         .flat_map(|top_mod| {
             std::iter::once(top_mod.scope())
                 .chain(top_mod.all_mods(db).iter().map(|mod_| mod_.scope()))
@@ -977,10 +992,10 @@ fn is_reexported_to<'db>(
             std::iter::successors(Some(*scope), |scope| scope.parent(db))
                 .all(|scope| is_scope_visible_from(db, scope, from))
         })
-        .any(|scope| {
+        .flat_map(|scope| {
             items_in_scope(db, scope, NameDomain::TYPE)
-                .values()
-                .any(|res| {
+                .iter()
+                .filter(move |(_, res)| {
                     res.trait_() == Some(trait_)
                         && matches!(
                             res.derivation,
@@ -988,7 +1003,27 @@ fn is_reexported_to<'db>(
                         )
                         && res.is_visible(db, from)
                 })
+                .map(|(name, _)| name.as_str())
         })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The name that code at `from` writes for `trait_` where it cannot name its
+/// definition by a path: the first name that a visible re-export gives it
+/// (`reexported_names`). `None` where `from` is in the ingot of the trait, or
+/// can name its definition, or cannot reach a re-export.
+pub(crate) fn reexported_name<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> Option<&'db str> {
+    if trait_.scope().ingot(db) == from.ingot(db) || is_trait_path_visible(db, trait_, from) {
+        return None;
+    }
+    reexported_names(db, trait_, from).first().copied()
 }
 
 /// The constraint that stops the one implementation that could prove `goal`:
@@ -997,8 +1032,9 @@ fn is_reexported_to<'db>(
 /// Implementations for a type constructor are considered before blanket ones.
 /// A blanket implementation with an unmet constraint of a trait that no code
 /// of the origin ingot can name (another ingot's, private to it or in a
-/// private module) is not considered: no code of the origin ingot can satisfy
-/// it, so it is no cause to name. `None` when no implementation matches, or
+/// private module, which no ingot that the origin ingot depends on directly
+/// re-exports publicly) is not considered: no code of the origin ingot can
+/// satisfy it, so it is no cause to name. `None` when no implementation matches, or
 /// when several do.
 pub(crate) fn blocking_constraint<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -1013,11 +1049,10 @@ pub(crate) fn blocking_constraint<'db>(
     }
     let origin_scope = solve_cx.origin_scope(db);
     let sealed = |constraint: &TraitInstId<'db>| {
-        let scope = constraint.def(db).scope();
-        scope.ingot(db) != ingot
-            && !std::iter::successors(Some(scope), |scope| scope.parent(db))
-                .all(|scope| is_scope_visible_from(db, scope, origin_scope))
-            && !is_reexported_to(db, constraint.def(db), origin_scope)
+        let trait_ = constraint.def(db);
+        trait_.scope().ingot(db) != ingot
+            && !is_trait_path_visible(db, trait_, origin_scope)
+            && reexported_names(db, trait_, origin_scope).is_empty()
     };
     let (mut nominal, mut blanket) = (Vec::new(), Vec::new());
     for impl_ in env.impls_for_trait(db, goal.def(db)) {
@@ -2615,8 +2650,29 @@ impl<'db> TraitInstId<'db> {
     }
 
     pub fn pretty_print(self, db: &dyn HirAnalysisDb, as_pred: bool) -> String {
+        self.pretty_print_named(db, as_pred, None)
+    }
+
+    /// `pretty_print` for a reader at `from`: where `from` cannot name the
+    /// trait by its path but a re-export gives it a name, the trait prints
+    /// under the name that the reader can write (`reexported_name`).
+    pub fn pretty_print_from(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        as_pred: bool,
+        from: ScopeId<'db>,
+    ) -> String {
+        self.pretty_print_named(db, as_pred, reexported_name(db, self.def(db), from))
+    }
+
+    fn pretty_print_named(
+        self,
+        db: &dyn HirAnalysisDb,
+        as_pred: bool,
+        name: Option<&str>,
+    ) -> String {
         if as_pred {
-            let inst = self.pretty_print(db, false);
+            let inst = self.pretty_print_named(db, false, name);
             let self_ty = self.self_ty(db);
             format!("{}: {}", self_ty.pretty_print(db), inst)
         } else if let Some(callable) = CallableTrait::of(db, self.def(db))
@@ -2643,12 +2699,12 @@ impl<'db> TraitInstId<'db> {
             format!("{name}({}){ret}", params.join(", "))
         } else {
             let mut s = self.mode(db).prefix().to_string();
-            s.push_str(
+            s.push_str(name.unwrap_or_else(|| {
                 self.def(db)
                     .name(db)
                     .to_opt()
-                    .map_or("<unknown>", |n| n.data(db).as_str()),
-            );
+                    .map_or("<unknown>", |n| n.data(db).as_str())
+            }));
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.
