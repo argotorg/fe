@@ -1,0 +1,8 @@
+// `Codec2` is implemented for every type that implements `Deep`, which is
+// declared in a private module and re-exported as `PublicDeep`: code of another
+// ingot can implement it through the alias.
+pub trait Codec2 {}
+mod inner { pub trait Deep {} }
+impl<T: inner::Deep> Codec2 for T {}
+
+pub use inner::Deep as PublicDeep

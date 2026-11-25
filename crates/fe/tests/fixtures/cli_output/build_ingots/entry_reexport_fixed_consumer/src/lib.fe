@@ -1,0 +1,26 @@
+// As entry_reexport_consumer, with the implementation through the alias: the contract builds.
+use entry_reexport_provider::Codec2
+use entry_reexport_provider::PublicDeep
+pub struct Local {}
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use std::abi::Sol
+pub struct Out<T> { pub v: u256 }
+impl<T> AbiSize for Out<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T> Decode<Sol> for Out<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ i: I) -> Self { Out { v: 1 } }
+}
+impl<T: Codec2> Encode<Sol> for Out<T> { fn encode(self, _ f: AbiFrame) {} }
+msg M {
+    #[selector = 1]
+    G -> Out<Local>,
+}
+pub contract C {
+    recv M {
+        G -> Out<Local> { Out { v: 1 } }
+    }
+}
+
+impl PublicDeep for Local {}
