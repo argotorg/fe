@@ -56,7 +56,6 @@ use crate::{
         },
     },
     hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
-    span::HirOrigin,
 };
 
 use self::{
@@ -429,23 +428,15 @@ fn collect_semantic_access_with_blocked<'db>(
         // The initializer of a constant that an implementation or a trait holds
         // is a body like a module constant's. It is checked where it is
         // written, whether or not anything reads it, by the enumeration that
-        // the type checker's own pass over these bodies uses. Implementations
-        // and traits that the compiler generates (`#[event]`, `#[error]`,
-        // `#[abi]`) are the compiler's: the type checker reports no body
-        // errors for them either, and a read of one is followed as before.
-        let written = match item {
-            ItemKind::ImplTrait(impl_trait) => matches!(impl_trait.origin(db), HirOrigin::Raw(_)),
-            ItemKind::Trait(trait_) => matches!(trait_.origin(db), HirOrigin::Raw(_)),
-            _ => true,
-        };
-        if written {
-            owners.extend(
-                assoc_const_bodies_of(db, *item)
-                    .into_iter()
-                    .filter(|constant| !constant.expected.has_invalid(db))
-                    .map(AssocConstBody::owner),
-            );
-        }
+        // the type checker's own pass over these bodies uses. The constants of
+        // implementations and traits that the compiler generates (`#[event]`,
+        // `#[error]`, `#[abi]`) are roots like written ones.
+        owners.extend(
+            assoc_const_bodies_of(db, *item)
+                .into_iter()
+                .filter(|constant| !constant.expected.has_invalid(db))
+                .map(AssocConstBody::owner),
+        );
         match item {
             ItemKind::Func(func) => owners.extend(BodyOwner::func_bodies(db, *func)),
             ItemKind::Const(const_) => owners.push(BodyOwner::Const(*const_)),
@@ -525,6 +516,7 @@ fn collect_semantic_access_with_blocked<'db>(
     }
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
+    let mut seen_inherited_sites = FxHashSet::default();
     let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
     for (mut pending, judge) in [(trusted, trust.as_ref()), (untrusted, None)] {
@@ -601,7 +593,25 @@ fn collect_semantic_access_with_blocked<'db>(
                 }
                 SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
                 SemanticAccessCheckResult::Err(diag) => {
-                    if seen_diags.insert(*diag) {
+                    // The body of a default is walked once for each
+                    // implementation that inherits it, and its text is one:
+                    // an error in it is reported once, where the trait wrote
+                    // it.
+                    let inherited_site = {
+                        let diag = diag.diag(db);
+                        match &diag.primary.span {
+                            SemanticDiagnosticSpan::Origin {
+                                owner: owner @ BodyOwner::InheritedConst { .. },
+                                origin,
+                            } => owner.body(db).map(|body| {
+                                (diag.kind, body, *origin, diag.primary.message.clone())
+                            }),
+                            _ => None,
+                        }
+                    };
+                    if seen_diags.insert(*diag)
+                        && inherited_site.is_none_or(|site| seen_inherited_sites.insert(site))
+                    {
                         diags.push(Box::new(*diag));
                     }
                 }

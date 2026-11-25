@@ -37,6 +37,26 @@ impl<'db> ProbedMethod<'db> {
     }
 }
 
+impl<'db> TyVisitable<'db> for ProbedMethod<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, visitor: &mut V) {
+        self.bound.visit_with(visitor);
+        self.query.visit_with(visitor);
+    }
+}
+
+/// Folds the candidate and the query it answers over the same types: a
+/// receiver whose type is changed (an implementation's types standing for a
+/// trait's parameters) probes the same method.
+impl<'db> TyFoldable<'db> for ProbedMethod<'db> {
+    fn super_fold_with<F: TyFolder<'db>>(self, db: &'db dyn HirAnalysisDb, folder: &mut F) -> Self {
+        Self {
+            def: self.def,
+            bound: self.bound.fold_with(db, folder),
+            query: self.query.fold_with(db, folder),
+        }
+    }
+}
+
 /// Canonicalize the receiver and its environment together: predicates may
 /// contain inference variables not present in the receiver itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]

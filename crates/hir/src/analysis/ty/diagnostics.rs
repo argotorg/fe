@@ -624,6 +624,18 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         reason: &'static str,
     },
+    /// The default value of a trait's constant, inherited by an
+    /// implementation, does not check as if the implementation had written it.
+    InheritedConstDefault {
+        /// The trait reference of the implementation.
+        primary: DynLazySpan<'db>,
+        const_name: IdentId<'db>,
+        /// Each associated type of `Self` that the constant's declared type
+        /// mentions, with its value in the implementation.
+        assoc_types: Vec<(IdentId<'db>, TyId<'db>)>,
+        /// The diagnostic of the check for the implementation.
+        inner: Box<FuncBodyDiag<'db>>,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -1842,6 +1854,7 @@ impl<'db> BodyDiag<'db> {
             Self::QuotedOpenNameUnbound { .. } => 140,
             Self::QuoteKindMismatch { .. } => 164,
             Self::QuoteSpliceMismatch { .. } => 165,
+            Self::InheritedConstDefault { .. } => 167,
         }
     }
 }

@@ -1,0 +1,11 @@
+// `A` inherits the default of `dep::Narrow::NEG` and gives `X = u256`, so the
+// default does not type-check for `A`. Expected: refused at this
+// implementation, with `dep`'s default as a secondary label.
+struct A {}
+impl dep::Narrow for A {
+    type X = u256
+}
+#[test]
+fn unrelated() {
+    assert!(true)
+}

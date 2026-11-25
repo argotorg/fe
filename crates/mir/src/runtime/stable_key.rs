@@ -106,6 +106,15 @@ fn body_owner_identity_in_mode<'db>(
         BodyOwner::AnonConstBody { body, expected } => {
             anon_const_body_identity_in_mode(db, body, expected, render_mode)
         }
+        // The default of a trait's constant, as one implementation inherits it.
+        BodyOwner::InheritedConst {
+            implementation,
+            body,
+        } => format!(
+            "inherited_const${}$const${}",
+            item_identity(db, ItemKind::ImplTrait(implementation)),
+            assoc_const_name(db, body).unwrap_or_default()
+        ),
         BodyOwner::ContractInit { contract } => {
             format!("contract_init${}", item_identity(db, contract.into()))
         }

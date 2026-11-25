@@ -22,7 +22,7 @@ use crate::{
         ty_check::{BodyOwner, ConstRef},
     },
     hir_def::{
-        Body, Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
+        Contract, Func, GenericParamOwner, HirIngot, IdentId, ImplTrait, ModeMarker, Trait,
         scope_graph::ScopeId,
     },
 };
@@ -1078,15 +1078,29 @@ fn impls_for_ty_in_tier<'db>(
         .collect()
 }
 
-/// Returns the selected body, its declared template type, and the checked
-/// substitution over the body's owner. Explicit impl bodies use impl
-/// arguments; inherited defaults use trait arguments.
-pub fn assoc_const_body_template_for_trait_inst<'db>(
+/// The body that gives a constant its value for a selected implementation.
+pub(crate) struct SelectedConstBody<'db> {
+    /// The owner that checks the body: an implementation's own value, the
+    /// trait's default, or the trait's default checked for the implementation
+    /// that inherits it (`BodyOwner::InheritedConst`).
+    pub(crate) owner: BodyOwner<'db>,
+    /// The type the owner checks the body against.
+    pub(crate) template: TyId<'db>,
+    /// The checked substitution over the owner's generic parameters.
+    pub(crate) subst: CompleteSubst<'db>,
+}
+
+/// Returns the selected body's owner, its declared template type, and the
+/// checked substitution over the owner. Explicit impl bodies use impl
+/// arguments; an inherited default whose declared type mentions a parameter of
+/// the trait is the implementation's own, checked for it, and uses impl
+/// arguments too; any other inherited default uses trait arguments.
+pub(crate) fn assoc_const_body_template_for_trait_inst<'db>(
     db: &'db dyn HirAnalysisDb,
     solve_cx: TraitSolveCx<'db>,
     inst: TraitInstId<'db>,
     const_name: IdentId<'db>,
-) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
+) -> Option<SelectedConstBody<'db>> {
     let resolved = match resolve_trait_impl_instance(db, solve_cx, inst) {
         Selection::Unique(resolved) => resolved,
         Selection::Ambiguous(_ambiguous) => return None,
@@ -1099,23 +1113,27 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
     db: &'db dyn HirAnalysisDb,
     resolved: ResolvedImplInstance<'db>,
     const_name: IdentId<'db>,
-) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>)> {
+) -> Option<SelectedConstBody<'db>> {
     let explicit = match resolved.selected().origin(db) {
         ImplementorOrigin::Hir(impl_trait) => impl_trait
             .assoc_consts(db)
             .into_iter()
             .find(|constant| constant.name(db) == Some(const_name))
             .and_then(|constant| {
-                Some((
-                    constant.value_body(db)?,
-                    constant.ty(db)?,
-                    CompleteSubst::for_owner(
+                let template = constant.ty(db)?;
+                Some(SelectedConstBody {
+                    owner: BodyOwner::AnonConstBody {
+                        body: constant.value_body(db)?,
+                        expected: template,
+                    },
+                    template,
+                    subst: CompleteSubst::for_owner(
                         db,
                         impl_trait.into(),
                         resolved.impl_args(db).to_vec(),
                     )
                     .ok()?,
-                ))
+                })
             }),
         ImplementorOrigin::VirtualContract(_)
         | ImplementorOrigin::Callable
@@ -1131,11 +1149,37 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
         let inst = resolved.trait_inst();
         let trait_ = inst.def(db);
         let constant = trait_.const_(db, const_name)?;
-        Some((
-            constant.default_body(db)?,
-            constant.ty(db)?,
-            CompleteSubst::for_owner(db, trait_.into(), inst.args(db).to_vec()).ok()?,
-        ))
+        let body = constant.default_body(db)?;
+        let declared = constant.ty(db)?;
+        // A default whose declared type mentions a parameter of the trait is
+        // checked for each implementation that inherits it, which then holds
+        // it as its own value: a read sees the body checked for it.
+        if let ImplementorOrigin::Hir(impl_trait) = resolved.selected().origin(db)
+            && super::ty_check::default_checked_per_implementation(db, constant)
+            && let Some(setup) = super::ty_check::inherited_const_setup(db, impl_trait, body)
+        {
+            return Some(SelectedConstBody {
+                owner: BodyOwner::InheritedConst {
+                    implementation: impl_trait,
+                    body,
+                },
+                template: setup.expected,
+                subst: CompleteSubst::for_owner(
+                    db,
+                    impl_trait.into(),
+                    resolved.impl_args(db).to_vec(),
+                )
+                .ok()?,
+            });
+        }
+        Some(SelectedConstBody {
+            owner: BodyOwner::AnonConstBody {
+                body,
+                expected: declared,
+            },
+            template: declared,
+            subst: CompleteSubst::for_owner(db, trait_.into(), inst.args(db).to_vec()).ok()?,
+        })
     })
 }
 
@@ -1555,7 +1599,6 @@ fn canonical_overlap_const_body<'db>(
     const_ty: super::const_ty::ConstTyId<'db>,
 ) -> Option<CanonicalOverlapConstBody<'db>> {
     let super::const_ty::ConstTyData::UnEvaluated {
-        body,
         ty,
         template_ty,
         capture,
@@ -1565,10 +1608,9 @@ fn canonical_overlap_const_body<'db>(
         return None;
     };
     let expected = (*ty)?;
-    let owner = super::ty_check::BodyOwner::AnonConstBody {
-        body: *body,
-        expected: template_ty.unwrap_or(expected),
-    };
+    let owner = const_ty
+        .data(db)
+        .unevaluated_owner(template_ty.unwrap_or(expected))?;
     let key = crate::analysis::semantic::SemanticInstanceKey::of(
         db,
         owner,

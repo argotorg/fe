@@ -507,19 +507,22 @@ fn declared_sol_compat_abi_type<'db>(
     let sol_compat = resolve_lib_trait_path(db, scope, "std::abi::SolCompat")?;
     let inst = TraitInstId::new_simple(db, sol_compat, vec![ty]);
     let sol_type_name = IdentId::new(db, "SOL_TYPE".to_string());
-    let (body, template_ty, subst) =
-        assoc_const_body_template_for_trait_inst(db, solve_cx, inst, sol_type_name)?;
-    let expected = normalize_ty(
-        db,
-        template_ty,
-        body.scope(),
-        PredicateListId::empty_list(db),
-    );
-    let EvalOutcome::Ready(value) = eval_body_owner_const(
-        db,
-        BodyOwner::AnonConstBody { body, expected },
-        GenericSubst::complete(db, subst),
-    ) else {
+    let selected = assoc_const_body_template_for_trait_inst(db, solve_cx, inst, sol_type_name)?;
+    let owner = match selected.owner {
+        BodyOwner::AnonConstBody { body, .. } => BodyOwner::AnonConstBody {
+            body,
+            expected: normalize_ty(
+                db,
+                selected.template,
+                body.scope(),
+                PredicateListId::empty_list(db),
+            ),
+        },
+        owner => owner,
+    };
+    let EvalOutcome::Ready(value) =
+        eval_body_owner_const(db, owner, GenericSubst::complete(db, selected.subst))
+    else {
         return None;
     };
 

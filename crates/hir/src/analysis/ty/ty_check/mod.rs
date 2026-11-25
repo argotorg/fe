@@ -13,6 +13,8 @@ mod contract;
 mod effect_env;
 pub(crate) mod env;
 mod expr;
+mod inherited_const;
+pub(crate) use inherited_const::{default_checked_per_implementation, inherited_const_setup};
 mod owner;
 mod pat;
 mod path;
@@ -104,11 +106,12 @@ use super::{
     effects::{EffectKeyKind, ResolvedEffectKey, resolve_effect_key, rows::RowPath},
     evidence::{
         BoundEvidence, BoundOwner, BoundSchemaId, Evidence, EvidenceList, RefusedGoal, UseEvidence,
-        declared_bound_evidence_with_pending, impl_const_bound_evidence, instantiated_selection,
+        declared_bound_evidence_with_pending, impl_const_bound_evidence,
+        inherited_const_bound_evidence, instantiated_selection,
     },
     generic_defaults::{GenericDefault, default_assumptions, generic_default},
     instantiate_trait_self,
-    trait_def::{TraitInstId, selected_assoc_const_body_template},
+    trait_def::{SelectedConstBody, TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
         ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCompletion, TraitSolveCx,
         WellFormedness, check_trait_inst_wf_without_self, check_ty_wf,
@@ -290,14 +293,26 @@ pub(crate) struct AssocConstBody<'db> {
     pub(crate) name: Option<crate::hir_def::IdentId<'db>>,
     pub(crate) body: Body<'db>,
     pub(crate) expected: TyId<'db>,
+    owner: BodyOwner<'db>,
 }
 
 impl<'db> AssocConstBody<'db> {
-    pub(crate) fn owner(self) -> BodyOwner<'db> {
-        BodyOwner::AnonConstBody {
-            body: self.body,
-            expected: self.expected,
+    /// A body that its position checks against `expected`.
+    fn anonymous(
+        name: Option<crate::hir_def::IdentId<'db>>,
+        body: Body<'db>,
+        expected: TyId<'db>,
+    ) -> Self {
+        Self {
+            name,
+            body,
+            expected,
+            owner: BodyOwner::AnonConstBody { body, expected },
         }
+    }
+
+    pub(crate) fn owner(self) -> BodyOwner<'db> {
+        self.owner
     }
 }
 
@@ -324,11 +339,7 @@ pub(crate) fn impl_trait_const_bodies<'db>(
                 .and_then(|declared| declared.ty_binder(db))
                 .map(|binder| binder.instantiate(db, trait_args))
                 .or_else(|| constant.ty(db))?;
-            Some(AssocConstBody {
-                name: constant.name(db),
-                body,
-                expected,
-            })
+            Some(AssocConstBody::anonymous(constant.name(db), body, expected))
         })
         .collect()
 }
@@ -342,11 +353,11 @@ pub(crate) fn inherent_const_bodies<'db>(
     implementation
         .assoc_consts(db)
         .filter_map(|constant| {
-            Some(AssocConstBody {
-                name: constant.name(db),
-                body: constant.value_body(db)?,
-                expected: constant.ty(db)?,
-            })
+            Some(AssocConstBody::anonymous(
+                constant.name(db),
+                constant.value_body(db)?,
+                constant.ty(db)?,
+            ))
         })
         .collect()
 }
@@ -360,10 +371,30 @@ pub(crate) fn trait_default_const_bodies<'db>(
     trait_
         .assoc_consts(db)
         .filter_map(|constant| {
+            Some(AssocConstBody::anonymous(
+                constant.name(db),
+                constant.default_body(db)?,
+                constant.ty(db)?,
+            ))
+        })
+        .collect()
+}
+
+/// The defaults that `implementation` inherits whose declared type mentions a
+/// parameter of the trait, each as the body checked for `implementation`.
+pub(crate) fn inherited_assoc_const_bodies<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementation: ImplTrait<'db>,
+) -> Vec<AssocConstBody<'db>> {
+    inherited_const::inherited_const_bodies(db, implementation)
+        .into_iter()
+        .filter_map(|inherited| {
+            let setup = inherited_const_setup(db, implementation, inherited.body)?;
             Some(AssocConstBody {
-                name: constant.name(db),
-                body: constant.default_body(db)?,
-                expected: constant.ty(db)?,
+                name: Some(inherited.name),
+                body: inherited.body,
+                expected: setup.expected,
+                owner: inherited.owner(implementation),
             })
         })
         .collect()
@@ -371,15 +402,32 @@ pub(crate) fn trait_default_const_bodies<'db>(
 
 /// The constant bodies that `item` holds as an associated-constant owner: the
 /// one list that the type checker's passes over these bodies, opening
-/// retention and the semantic access walk share.
+/// retention and the semantic access walk share. An implementation holds, after
+/// the values it writes, each default it inherits that is checked for it
+/// (`inherited_assoc_const_bodies`). A trait's default whose declared type
+/// mentions a parameter is held only when its own check has no diagnostics at
+/// all: a deferred mismatch is found through the implementations' bodies, which
+/// have no invalid type in them.
 pub(crate) fn assoc_const_bodies_of<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
 ) -> Vec<AssocConstBody<'db>> {
     match item {
-        ItemKind::ImplTrait(impl_trait) => impl_trait_const_bodies(db, impl_trait),
+        ItemKind::ImplTrait(impl_trait) => {
+            let mut bodies = impl_trait_const_bodies(db, impl_trait);
+            bodies.extend(inherited_assoc_const_bodies(db, impl_trait));
+            bodies
+        }
         ItemKind::Impl(implementation) => inherent_const_bodies(db, implementation),
-        ItemKind::Trait(trait_) => trait_default_const_bodies(db, trait_),
+        ItemKind::Trait(trait_) => trait_default_const_bodies(db, trait_)
+            .into_iter()
+            .filter(|constant| {
+                !(constant.expected.has_param(db) && !constant.expected.has_invalid(db))
+                    || check_anon_const_body(db, constant.body, constant.expected)
+                        .0
+                        .is_empty()
+            })
+            .collect(),
         _ => Vec::new(),
     }
 }
@@ -395,19 +443,20 @@ pub fn check_impl_trait_const_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     impl_trait: ImplTrait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    let generated_origin = match impl_trait.origin(db) {
-        crate::span::HirOrigin::Raw(_) => None,
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Event(_)) => {
-            Some("generated `#[event]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::Error(_)) => {
-            Some("generated `#[error]` implementation")
-        }
-        crate::span::HirOrigin::Desugared(crate::span::DesugaredOrigin::AbiStruct(_)) => {
-            Some("generated `#[abi]` implementation")
-        }
-        _ => return Vec::new(),
+    // A written implementation is checked and reports. A generated one is
+    // checked for the constants it holds but reports no body errors, except
+    // that a `msg` item is not checked at all.
+    let origin = impl_trait.origin(db);
+    let generated_origin = match origin.generated() {
+        None if matches!(origin, crate::span::HirOrigin::Raw(_)) => None,
+        Some(generated) => match generated.const_diag_label() {
+            Some(label) => Some((generated, label)),
+            None => return Vec::new(),
+        },
+        None => return Vec::new(),
     };
+    let reports_body_errors =
+        generated_origin.is_none_or(|(generated, _)| generated.reports_body_errors());
     let policy = if generated_origin.is_some() {
         ConstUsePolicy::RequireValue
     } else {
@@ -421,17 +470,18 @@ pub fn check_impl_trait_const_bodies<'db>(
         name,
         body,
         expected: expected_ty,
+        ..
     } in impl_trait_const_bodies(db, impl_trait)
     {
         if expected_ty.has_invalid(db) {
             continue;
         }
         let body_diags = &check_anon_const_body(db, body, expected_ty).0;
-        if generated_origin.is_none() {
+        if reports_body_errors {
             diags.extend(body_diags.iter().cloned());
         }
         if body_diags.is_empty() {
-            let context = generated_origin.map(|origin| ConstDiagContext {
+            let context = generated_origin.map(|(_, origin)| ConstDiagContext {
                 const_name: name.map_or_else(
                     || "<associated const>".to_string(),
                     |name| name.data(db).clone(),
@@ -454,6 +504,11 @@ pub fn check_impl_trait_const_bodies<'db>(
             );
         }
     }
+    // The defaults the implementation inherits whose declared type mentions a
+    // parameter of the trait are checked as the implementation's own.
+    if reports_body_errors {
+        diags.extend(inherited_const::check_inherited_defaults(db, impl_trait));
+    }
     diags
 }
 
@@ -466,7 +521,7 @@ pub fn check_trait_const_default_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
     trait_: Trait<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
-    if !matches!(trait_.origin(db), crate::span::HirOrigin::Raw(_)) {
+    if trait_.origin(db).generated().is_some() {
         return Vec::new();
     }
 
@@ -1215,7 +1270,7 @@ pub(crate) fn module_body_owners<'db>(
     }
     for &implementation in module.all_impl_traits(db) {
         owners.extend(
-            impl_trait_const_bodies(db, implementation)
+            assoc_const_bodies_of(db, ItemKind::ImplTrait(implementation))
                 .into_iter()
                 .map(AssocConstBody::owner),
         );
@@ -1374,6 +1429,7 @@ pub(crate) fn checked_body_diags<'db>(
         BodyOwner::AnonConstBody { body, expected } => {
             check_anon_const_body(db, body, expected).0.clone()
         }
+        BodyOwner::InheritedConst { .. } => check_body(db, owner).0,
         BodyOwner::ContractInit { contract } => {
             contract::check_contract_init_body(db, contract).0.clone()
         }
@@ -1481,6 +1537,7 @@ fn infer_body_query<'db>(
                 BodyOwner::Func(func, mode) => typed_body_for_bodyless_func(db, func, mode),
                 BodyOwner::Const(_)
                 | BodyOwner::AnonConstBody { .. }
+                | BodyOwner::InheritedConst { .. }
                 | BodyOwner::ContractInit { .. }
                 | BodyOwner::ContractRecvArm { .. }
                 | BodyOwner::Closure { .. } => TypedBody::empty(db),
@@ -1490,27 +1547,6 @@ fn infer_body_query<'db>(
 
     checker.run();
     let (mut diags, mut typed_body) = checker.finish();
-    // A constant whose declared type mentions a parameter, as a trait's
-    // default declared `Self::X` does, is checked once against the rigid
-    // parameter. If the only thing that fails is the coercion of its tail to
-    // that parameter, the result of the checked body is invalid, though the
-    // tail has a type of its own (`const NEG: Self::X = -3 as i8`). The body
-    // is then checked again for the type of its tail, and a use of the
-    // constant compares that type with the declared one it instantiates.
-    if let BodyOwner::AnonConstBody { expected, .. } = owner
-        && expected.has_param(db)
-        && !expected.has_invalid(db)
-        && typed_body.result_ty().has_invalid(db)
-        && !diags.is_empty()
-        && diags
-            .iter()
-            .all(|diag| diag_depends_on_param_instantiation(db, diag))
-        && let Ok(mut retry) = TyChecker::new(db, owner)
-    {
-        retry.tail_own_ty = true;
-        retry.run();
-        (diags, typed_body) = retry.finish();
-    }
     let (unsafe_diags, discharged) = check_unsafe_ops(db, owner, &typed_body);
     diags.extend(unsafe_diags);
     typed_body.tables_mut().unsafe_ops = discharged;
@@ -1951,7 +1987,6 @@ fn typed_body_for_bodyless_func<'db>(
         yield_shapes: SecondaryMap::new(),
         place_entries: FxHashMap::default(),
         never_coercions: FxHashSet::default(),
-        tail_depends_on_instantiation: false,
         cast_layers: FxHashMap::default(),
         unsafe_splits: FxHashSet::default(),
         unsafe_ops: Vec::new(),
@@ -2047,10 +2082,6 @@ pub struct TyChecker<'db> {
     /// What the arithmetic operators written in the body do on overflow, by
     /// its arithmetic mode. They wrap in unchecked code.
     overflow: Overflow,
-    /// Whether the body is checked for the type of its own tail, which is
-    /// then coerced to the declared type apart from the expression
-    /// (`check_tail_for_its_own_type`).
-    tail_own_ty: bool,
 }
 
 pub(crate) struct TyCheckerSnapshot<'db> {
@@ -2204,8 +2235,6 @@ impl<'db> TyChecker<'db> {
         let root_expr = self.env.body().expr(self.db);
         if self.explicit_yields && self.projection_shape.is_some() {
             self.check_expr(root_expr, TyId::unit(self.db));
-        } else if self.tail_own_ty {
-            self.check_tail_for_its_own_type(root_expr);
         } else {
             self.check_expr(root_expr, self.expected);
             if let Some(shape) = self.projection_shape.clone() {
@@ -2219,20 +2248,6 @@ impl<'db> TyChecker<'db> {
         self.check_access_uses();
         self.check_marked_bindings();
         self.report_initializer_markers();
-    }
-
-    /// Checks the body for the type of its own tail and coerces that type to
-    /// the declared one apart from the expression, so that the tail keeps its
-    /// type, which the checked body records as its result. The coercion
-    /// reports the mismatch that it reports for any expression. A use of the
-    /// constant compares the tail's type with the declared type that it
-    /// instantiates (`ConstRef::default_tail_mismatch`).
-    fn check_tail_for_its_own_type(&mut self, root_expr: ExprId) {
-        let tail = self.check_expr_unknown(root_expr).ty;
-        let span = root_expr.span(self.body()).into();
-        let expected = self.expected;
-        self.equate_ty(tail, expected, span);
-        self.env.mark_tail_depends_on_instantiation();
     }
 
     /// A closure may capture an access only of a `Copy` value, which it
@@ -2292,6 +2307,7 @@ impl<'db> TyChecker<'db> {
             }
             BodyOwner::Const(_)
             | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
             | BodyOwner::ContractRecvArm { .. }
             | BodyOwner::Closure { .. } => {}
         }
@@ -2302,7 +2318,10 @@ impl<'db> TyChecker<'db> {
             BodyOwner::Func(func, _) => {
                 self.check_free_func_effect_list(func, func.effects(self.db))
             }
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {}
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {}
             owner @ BodyOwner::ContractInit { contract } => {
                 self.check_contract_scoped_effect_list(owner, contract, owner.effects(self.db));
             }
@@ -2406,7 +2425,10 @@ impl<'db> TyChecker<'db> {
                 EffectParamOwner::Func(func),
                 EffectParamSite::Func(func, mode),
             ),
-            BodyOwner::Const(_) | BodyOwner::AnonConstBody { .. } | BodyOwner::Closure { .. } => {
+            BodyOwner::Const(_)
+            | BodyOwner::AnonConstBody { .. }
+            | BodyOwner::InheritedConst { .. }
+            | BodyOwner::Closure { .. } => {
                 unreachable!()
             }
             BodyOwner::ContractInit { contract } => (
@@ -3727,7 +3749,6 @@ impl<'db> TyChecker<'db> {
             split_reads: Vec::new(),
             diags: Vec::new(),
             final_pass: false,
-            tail_own_ty: false,
             overflow: env.owner().scope().arithmetic_mode(db).into(),
             env,
         }
@@ -3971,40 +3992,50 @@ impl<'db> TyChecker<'db> {
         span: LazyTySpan<'db>,
         star_kind_required: bool,
     ) -> TyId<'db> {
-        let ty = lower_hir_ty(self.db, hir_ty, self.env.scope(), self.env.assumptions());
+        let ty = lower_hir_ty(
+            self.db,
+            hir_ty,
+            self.env.scope(),
+            self.env.written_assumptions(),
+        );
+        let ty = self.env.instantiate_scope_ty(ty);
 
         // The written type reports its own errors (path resolution, visibility,
         // associated bindings), whether or not lowering produced an invalid type.
-        let diags = collect_ty_lower_errors_by(
-            self.db,
-            self.viewer(MemberSite::Current),
-            hir_ty,
-            span.clone(),
-            self.env.assumptions(),
-        );
-        if !diags.is_empty() {
-            for d in diags {
-                self.push_diag(d);
+        // A default checked for an implementation reports them where the trait
+        // wrote it: they do not depend on the implementation.
+        if !self.env.is_instantiated_for_implementation() {
+            let diags = collect_ty_lower_errors_by(
+                self.db,
+                self.viewer(MemberSite::Current),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+            );
+            if !diags.is_empty() {
+                for d in diags {
+                    self.push_diag(d);
+                }
+                // Avoid cascading kind errors for already-invalid types
+                return TyId::invalid(self.db, InvalidCause::Other);
             }
-            // Avoid cascading kind errors for already-invalid types
-            return TyId::invalid(self.db, InvalidCause::Other);
-        }
 
-        // A qualified path resolves to a type that no longer mentions the
-        // types written inside it, so check those where they are written.
-        let mut wf_pending = Vec::new();
-        for diag in qualified_path_wf_diags_under_choices(
-            self.db,
-            self.env.scope(),
-            hir_ty,
-            span.clone(),
-            self.env.assumptions(),
-            self.env.solve_cx(),
-            &mut wf_pending,
-        ) {
-            self.push_diag(diag);
+            // A qualified path resolves to a type that no longer mentions the
+            // types written inside it, so check those where they are written.
+            let mut wf_pending = Vec::new();
+            for diag in qualified_path_wf_diags_under_choices(
+                self.db,
+                self.env.scope(),
+                hir_ty,
+                span.clone(),
+                self.env.assumptions(),
+                self.env.solve_cx(),
+                &mut wf_pending,
+            ) {
+                self.push_diag(diag);
+            }
+            self.env.generation_demands.requests(self.db, wf_pending);
         }
-        self.env.generation_demands.requests(self.db, wf_pending);
 
         if let Some(diag) = ty.emit_diag(self.db, span.clone().into()).or_else(|| {
             normalization_limit_diag(
@@ -4881,7 +4912,7 @@ impl<'db> TyChecker<'db> {
             self.db,
             path,
             scope,
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
@@ -4914,7 +4945,7 @@ impl<'db> TyChecker<'db> {
             path,
             span.clone(),
             viewer,
-            self.env.assumptions(),
+            self.env.written_assumptions(),
             call,
         );
         if arg_diags.is_empty()
@@ -4929,7 +4960,7 @@ impl<'db> TyChecker<'db> {
             return Err(PathResError::new(PathResErrorKind::InvalidGenericArg, path));
         }
 
-        let res = res?;
+        let res = self.env.instantiate_scope_res(res?);
         self.env.register_path_applications(site, applications);
         Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }
@@ -5138,7 +5169,12 @@ impl<'db> ConstRef<'db> {
     pub fn trait_const_body(
         self,
         db: &'db dyn HirAnalysisDb,
-    ) -> Option<(Body<'db>, TyId<'db>, CompleteSubst<'db>, EvidenceList<'db>)> {
+    ) -> Option<(
+        BodyOwner<'db>,
+        TyId<'db>,
+        CompleteSubst<'db>,
+        EvidenceList<'db>,
+    )> {
         let ConstRef::TraitConst { use_, evidence } = self else {
             return None;
         };
@@ -5148,17 +5184,37 @@ impl<'db> ConstRef<'db> {
             use_.solve_cx(db),
             use_.inst(),
         )?;
-        let (body, ty, subst) = selected_assoc_const_body_template(db, resolved, use_.name())?;
+        let SelectedConstBody {
+            owner,
+            template: ty,
+            subst,
+        } = selected_assoc_const_body_template(db, resolved, use_.name())?;
+        let body = owner.body(db)?;
         let default = use_
             .inst()
             .def(db)
             .const_(db, use_.name())
             .and_then(|constant| constant.default_body(db));
-        // The trait's default receives the use's proofs; an implementation's
-        // value receives them from the selection's proofs of its conditions.
-        let received = match (evidence.bound_proofs(), evidence.dispatch_proof()) {
-            (Some(bound), _) if default == Some(body) => bound,
-            (_, Some(selection))
+        // The trait's default of a constant whose type is closed receives the
+        // use's proofs. An implementation's value, and a default checked for
+        // the implementation that inherits it (the implementation's own, whose
+        // text the trait wrote), receive them from the selection's proofs of
+        // the implementation's conditions.
+        let received = match (owner, evidence.bound_proofs(), evidence.dispatch_proof()) {
+            (BodyOwner::AnonConstBody { .. }, Some(bound), _) if default == Some(body) => bound,
+            (BodyOwner::InheritedConst { implementation, .. }, _, Some(selection))
+                if matches!(selection.data(db), Evidence::Impl { .. }) =>
+            {
+                inherited_const_bound_evidence(
+                    db,
+                    implementation,
+                    body,
+                    selection,
+                    GenericSubst::complete(db, subst.clone()),
+                    use_.solve_cx(db).assumptions(),
+                )
+            }
+            (_, _, Some(selection))
                 if default != Some(body) && matches!(selection.data(db), Evidence::Impl { .. }) =>
             {
                 impl_const_bound_evidence(
@@ -5171,59 +5227,7 @@ impl<'db> ConstRef<'db> {
             }
             _ => EvidenceList::none(db),
         };
-        Some((body, ty, subst, received))
-    }
-
-    /// For a use that reads the trait's default value of a constant whose
-    /// declared type mentions a parameter (`const NEG: Self::X = -3 as i8`):
-    /// the declared type instantiated for the use and the type of the default
-    /// instantiated the same way, if the two differ. The default is checked
-    /// once against the rigid parameter, so its checked body keeps the type of
-    /// its tail (`TypedBody::tail_depends_on_instantiation`), and the use is
-    /// where that type meets the declared type that it instantiates. A type
-    /// that still depends on a parameter or on inference is decided where the
-    /// use is instantiated.
-    pub(super) fn default_tail_mismatch(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> Option<(TyId<'db>, TyId<'db>)> {
-        let ConstRef::TraitConst { use_, .. } = self else {
-            return None;
-        };
-        let (body, declared, subst, _) = self.trait_const_body(db)?;
-        let default = use_
-            .inst()
-            .def(db)
-            .const_(db, use_.name())
-            .and_then(|constant| constant.default_body(db))?;
-        if body != default {
-            return None;
-        }
-        let typed = &infer_body(
-            db,
-            BodyOwner::AnonConstBody {
-                body,
-                expected: declared,
-            },
-        )
-        .1;
-        if !typed.tail_depends_on_instantiation() {
-            return None;
-        }
-        let instantiate = |ty: TyId<'db>| {
-            let ty = super::subst::substitute_complete(db, ty, &subst).ok()?;
-            Some(normalize_ty(
-                db,
-                ty,
-                use_.origin_scope(),
-                use_.assumptions(),
-            ))
-        };
-        let declared = instantiate(declared)?;
-        let given = instantiate(typed.result_ty())?;
-        let undecided = |ty: TyId<'db>| ty.has_param(db) || ty.has_var(db) || ty.has_invalid(db);
-        (declared != given && !undecided(declared) && !undecided(given))
-            .then_some((declared, given))
+        Some((owner, ty, subst, received))
     }
 
     /// Proves, in the use's context, the bounds the trait's default value
@@ -5254,6 +5258,15 @@ impl<'db> ConstRef<'db> {
         ) else {
             return Default::default();
         };
+        // A default whose declared type mentions a parameter of the trait is
+        // the implementation's own where it is read, and receives the
+        // implementation's proofs (`trait_const_body`).
+        if trait_
+            .const_(db, use_.name())
+            .is_some_and(|constant| default_checked_per_implementation(db, constant))
+        {
+            return Default::default();
+        }
         let declared = const_body_assumptions(db, body.scope());
         let signature = declared.extend_all_bounds(db);
         let (recorded, requests) = declared_bound_evidence_with_pending(
@@ -5517,11 +5530,6 @@ mod typed_body_tables {
         /// The expressions of type `!` whose recorded type is the type their
         /// context expects.
         pub(super) never_coercions: FxHashSet<ExprId>,
-        /// Whether the body is a constant whose declared type mentions a
-        /// parameter and whose result type is the type of its tail, not the
-        /// declared one: a use checks the tail against the declared type
-        /// instantiated for it (`ConstRef::default_tail_mismatch`).
-        pub(super) tail_depends_on_instantiation: bool,
         /// The newtype layers that each cast sees through, as the type checker
         /// decided them with the viewer of the cast.
         pub(super) cast_layers: FxHashMap<ExprId, CastLayers>,
@@ -6580,13 +6588,6 @@ impl<'db> TypedBody<'db> {
     /// is the type its context expects.
     pub fn is_never_coerced(&self, expr: ExprId) -> bool {
         self.tables.never_coercions.contains(&expr)
-    }
-
-    /// Whether this is a constant body whose declared type mentions a
-    /// parameter, so that [`Self::result_ty`] is the type of its tail and a
-    /// use compares it with the declared type instantiated for the use.
-    pub fn tail_depends_on_instantiation(&self) -> bool {
-        self.tables.tail_depends_on_instantiation
     }
 
     /// The newtype layers that the cast `expr` sees through. Lowering and the
@@ -8268,7 +8269,6 @@ impl<'db> TypedBody<'db> {
             yield_shapes: SecondaryMap::new(),
             place_entries: FxHashMap::default(),
             never_coercions: FxHashSet::default(),
-            tail_depends_on_instantiation: false,
             cast_layers: FxHashMap::default(),
             unsafe_splits: FxHashSet::default(),
             unsafe_ops: Vec::new(),
