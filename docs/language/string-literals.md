@@ -37,6 +37,12 @@ An operator's operand takes the type the operator's impl needs, on either side:
 in `"x" == s`, the literal is a `String<N>` when `s` is one and a `DynString`
 when `s` is one. When impls for both types fit, the default above decides.
 
+A method call on a literal follows the same rule. When only one of the two
+string types has the method, the literal is that type; when both have it, the
+context decides as above, and otherwise the default: `"ab".len()` uses
+`String<2>`. Whether the function a literal is passed to is `const` does not
+change its type.
+
 ```fe
 let short = "hello"                 // String<5>
 let long = "a literal longer than 31 bytes of text"   // DynString
