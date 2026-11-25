@@ -1,0 +1,52 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_unevaluated_paths.fe
+---
+error[8-0004]: expected unit variant
+   ┌─ const_arg_unevaluated_paths.fe:17:26
+   │
+17 │ fn type_length(_ a: [u8; m::Ty]) {}
+   │                          ^^^^^
+   │                          │
+   │                          expected unit variant here, but found struct
+   │                          Consider using `Ty {  }` instead
+
+error[8-0004]: expected unit variant
+   ┌─ const_arg_unevaluated_paths.fe:19:35
+   │
+19 │ fn braced_type_length(_ a: [u8; { m::Ty }]) {}
+   │                                   ^^^^^
+   │                                   │
+   │                                   expected unit variant here, but found struct
+   │                                   Consider using `Ty {  }` instead
+
+error[8-0030]: value is expected
+   ┌─ const_arg_unevaluated_paths.fe:13:28
+   │
+13 │ fn module_length(_ a: [u8; m::n]) {}
+   │                            ^^^^ `mod` cannot be used as a value
+
+error[8-0030]: value is expected
+   ┌─ const_arg_unevaluated_paths.fe:15:37
+   │
+15 │ fn braced_module_length(_ a: [u8; { m::n }]) {}
+   │                                     ^^^^ `mod` cannot be used as a value
+
+error[8-0030]: value is expected
+   ┌─ const_arg_unevaluated_paths.fe:21:27
+   │
+21 │ fn trait_length(_ a: [u8; m::Tr]) {}
+   │                           ^^^^^ `trait` cannot be used as a value
+
+error[8-0030]: value is expected
+   ┌─ const_arg_unevaluated_paths.fe:23:36
+   │
+23 │ fn braced_trait_length(_ a: [u8; { m::Tr }]) {}
+   │                                    ^^^^^ `trait` cannot be used as a value
+
+error[8-0030]: value is expected
+   ┌─ const_arg_unevaluated_paths.fe:25:29
+   │
+25 │ fn module_arg(_ h: Holder<{ m::n }>) {}
+   │                             ^^^^ `mod` cannot be used as a value

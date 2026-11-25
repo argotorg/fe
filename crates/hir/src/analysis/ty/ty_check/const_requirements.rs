@@ -13,7 +13,7 @@ use crate::analysis::name_resolution::{
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::trait_resolution::{constraint::collect_constraints, mentions_ty};
 use crate::analysis::ty::{
-    const_ty::{ConstBodyLowering, LoweringContext},
+    const_ty::{ConstBodyLowering, ConstTyData, LoweringContext},
     subst::substitute_complete,
     ty_error::diag_from_invalid_cause,
     ty_lower::{
@@ -982,11 +982,13 @@ fn anon_const_position_check<'db>(
     // The type reports a failure only if the constant lowers to an invalid
     // one whose error renders, never one of name resolution, of a path's
     // segments or of its generic arguments; the parser reports a parse error.
-    // A constant that lowers to a valid one although its body failed was read
-    // without inference: a lone path as what it names, an integer expression
-    // evaluated directly, either retyped to `expected`, and the type checks
-    // what it read. Then the body's other diagnostics are the type's or
-    // false.
+    // A constant that lowers to a valid, evaluated one although its body
+    // failed was read without inference: a lone path as what it names, an
+    // integer expression evaluated directly, either retyped to `expected`,
+    // and the type checks what it read. Then the body's other diagnostics
+    // are the type's or false. A qualified path that names no constant is
+    // left unevaluated for its uses to check, and nothing has validated the
+    // body: then they are all the position's.
     let position = body.scope().parent(db).unwrap_or(body.scope());
     let lowered = lower_opt_const_body(
         db,
@@ -996,10 +998,11 @@ fn anon_const_position_check<'db>(
         &LoweringContext::new(),
     )
     .evaluate(db, Some(expected));
-    let owns_all = lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
-        !matches!(cause, InvalidCause::ParseError)
-            && diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_none()
-    });
+    let owns_all = matches!(lowered.data(db), ConstTyData::UnEvaluated { .. })
+        || lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
+            !matches!(cause, InvalidCause::ParseError)
+                && diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_none()
+        });
     let diags = diags
         .iter()
         .filter(|diag| {
