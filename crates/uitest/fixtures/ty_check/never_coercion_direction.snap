@@ -3,6 +3,42 @@ source: crates/uitest/tests/ty_check.rs
 expression: diags
 input_file: fixtures/ty_check/never_coercion_direction.fe
 ---
+error[6-0003]: trait bound is not satisfied
+   ┌─ never_coercion_direction.fe:24:13
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+24 │     let x = zero()
+   │             ^^^^ `!` doesn't implement `Default`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ never_coercion_direction.fe:67:37
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+67 │     let x = if c { panic() } else { zero() }
+   │                                     ^^^^ `!` doesn't implement `Default`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ never_coercion_direction.fe:78:37
+   │
+ 2 │ fn zero<T: Default>() -> T {
+   │            ------- required by this bound on `zero`
+   ·
+78 │     let y = if c { panic() } else { zero() }
+   │                                     ^^^^ `!` doesn't implement `Default`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ never_coercion_direction.fe:105:39
+    │
+  2 │ fn zero<T: Default>() -> T {
+    │            ------- required by this bound on `zero`
+    ·
+105 │     let _w = if c { return 1 } else { zero() }
+    │                                       ^^^^ `!` doesn't implement `Default`
+
 error[8-0000]: type mismatch
    ┌─ never_coercion_direction.fe:18:17
    │
@@ -50,54 +86,6 @@ error[8-0000]: type mismatch
     │
 100 │     take(w)
     │          ^ expected `u64`, but `bool` is given
-
-error[8-0027]: ambiguous trait implementation
-   ┌─ never_coercion_direction.fe:24:13
-   │
- 2 │ fn zero<T: Default>() -> T {
-   │            ------- required by this bound on `zero`
-   ·
-24 │     let x = zero()
-   │             ^^^^
-   │             │
-   │             multiple implementations are found
-   │             candidate: Default
-
-error[8-0027]: ambiguous trait implementation
-   ┌─ never_coercion_direction.fe:67:37
-   │
- 2 │ fn zero<T: Default>() -> T {
-   │            ------- required by this bound on `zero`
-   ·
-67 │     let x = if c { panic() } else { zero() }
-   │                                     ^^^^
-   │                                     │
-   │                                     multiple implementations are found
-   │                                     candidate: Default
-
-error[8-0027]: ambiguous trait implementation
-   ┌─ never_coercion_direction.fe:78:37
-   │
- 2 │ fn zero<T: Default>() -> T {
-   │            ------- required by this bound on `zero`
-   ·
-78 │     let y = if c { panic() } else { zero() }
-   │                                     ^^^^
-   │                                     │
-   │                                     multiple implementations are found
-   │                                     candidate: Default
-
-error[8-0027]: ambiguous trait implementation
-    ┌─ never_coercion_direction.fe:105:39
-    │
-  2 │ fn zero<T: Default>() -> T {
-    │            ------- required by this bound on `zero`
-    ·
-105 │     let _w = if c { return 1 } else { zero() }
-    │                                       ^^^^
-    │                                       │
-    │                                       multiple implementations are found
-    │                                       candidate: Default
 
 error[8-0031]: type annotation is needed
    ┌─ never_coercion_direction.fe:48:9

@@ -370,6 +370,12 @@ impl<'db> ScopeId<'db> {
 
     pub fn name_span(self, db: &'db dyn HirDb) -> Option<DynLazySpan<'db>> {
         match self {
+            // A trait implementation is named, if at all, by its selection
+            // name.
+            ScopeId::Item(ItemKind::ImplTrait(impl_trait)) => impl_trait
+                .selection_name(db)
+                .map(|_| impl_trait.span().selection_name().into()),
+
             ScopeId::Item(item) => item.name_span(),
 
             ScopeId::Variant(v) => Some(v.span().name().into()),
@@ -531,6 +537,8 @@ pub enum EdgeKind<'db> {
     /// An edge to a value. The value is either a function or a
     /// constant.
     Value(ValueEdge<'db>),
+    /// An edge to a named implementation, by its name.
+    Impl(ImplEdge<'db>),
     /// An edge to a field definition scope.
     Field(FieldEdge<'db>),
     /// An edge to a enum variant definition scope.
@@ -570,6 +578,10 @@ impl<'db> EdgeKind<'db> {
 
     pub fn value(ident: IdentId<'db>) -> Self {
         EdgeKind::Value(ident.into())
+    }
+
+    pub fn impl_(ident: IdentId<'db>) -> Self {
+        EdgeKind::Impl(ident.into())
     }
 
     pub fn field(ident: IdentId<'db>) -> Self {
@@ -632,6 +644,11 @@ pub struct TraitTypeEdge<'db>(pub IdentId<'db>);
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
 )]
 pub struct ValueEdge<'db>(pub IdentId<'db>);
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,
+)]
+pub struct ImplEdge<'db>(pub IdentId<'db>);
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::From, SalsaValue,

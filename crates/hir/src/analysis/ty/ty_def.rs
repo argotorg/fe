@@ -276,6 +276,17 @@ impl<'db> TyId<'db> {
         self.flags(db).contains(TyFlags::HAS_PROJECTION)
     }
 
+    /// Whether this type is the value or carrier of a shape, which reduces
+    /// once the shape is known (`normalize`). The bare constructor is a type
+    /// function; only its applications are queries.
+    pub(crate) fn is_shape_projection(self, db: &dyn HirAnalysisDb) -> bool {
+        matches!(self.data(db), TyData::TyApp(..))
+            && matches!(
+                self.base_ty(db).data(db),
+                TyData::TyBase(TyBase::Shape(ShapeCon::Value | ShapeCon::Carrier))
+            )
+    }
+
     #[salsa::tracked]
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         self.pretty_print_with_mode(db, TypePrintMode::Concrete)
@@ -1619,7 +1630,7 @@ pub struct ClosureTy<'db> {
     /// Generic arguments of the item whose body defines the closure. The
     /// closure's semantic instances substitute the parent's typed-body
     /// template with these.
-    pub parent_args: Vec<TyId<'db>>,
+    pub context: ClosureContext<'db>,
     /// Environment field types, one per captured binding, in capture order.
     pub captures: Vec<TyId<'db>>,
     /// The parameters' shapes: each an owned value, a view or `mut`
@@ -1632,7 +1643,26 @@ pub struct ClosureTy<'db> {
     pub effects: Vec<RowComponent<'db>>,
 }
 
+/// Type arguments and dictionaries captured from the enclosing declaration.
+/// This contains no semantic instance key, including for recursive closures.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
+pub struct ClosureContext<'db> {
+    pub args: Vec<TyId<'db>>,
+    pub evidence: Option<super::evidence::BoundEvidence<'db>>,
+}
+
 impl<'db> ClosureTy<'db> {
+    pub fn parent_args(self, db: &'db dyn HirAnalysisDb) -> &'db Vec<TyId<'db>> {
+        &self.context(db).args
+    }
+
+    pub fn bound_evidence(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<super::evidence::BoundEvidence<'db>> {
+        self.context(db).evidence
+    }
+
     pub fn pretty_print(self, db: &'db dyn HirAnalysisDb) -> String {
         let params = self
             .params(db)
@@ -3111,7 +3141,9 @@ pub(crate) fn ty_flags<'db>(db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyFlag
 
     let mut collector = Collector {
         db,
-        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_)) {
+        flags: if matches!(ty.data(db), TyData::AssocTy(_) | TyData::QualifiedTy(_))
+            || ty.is_shape_projection(db)
+        {
             TyFlags::HAS_PROJECTION
         } else {
             TyFlags::empty()
@@ -3152,5 +3184,30 @@ mod tests {
             Some(Vec::new())
         );
         assert_eq!(u256.as_params_shape(&db), None);
+    }
+
+    #[test]
+    fn shape_projections_carry_the_projection_flag() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("shape_projection_flags.fe".into(), "fn sample() {}");
+        let (top_mod, _) = db.top_mod(file);
+        let scope = ScopeId::from_item(ItemKind::TopMod(top_mod));
+        let name = IdentId::new(&db, "S".to_string());
+        let shape = TyParam::implicit_param(name, 0, Kind::Shape, scope).ty(&db);
+        for con in [ShapeCon::Value, ShapeCon::Carrier] {
+            let projection = TyId::shape_part(&db, con, shape);
+            assert!(
+                projection.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?} of an opaque shape is a projection that normalization rewrites"
+            );
+            assert!(projection.has_projection(&db));
+        }
+        for con in [ShapeCon::Owned, ShapeCon::Access(BorrowKind::Ref)] {
+            let part = TyId::shape_part(&db, con, TyId::u256(&db));
+            assert!(
+                !part.flags(&db).contains(TyFlags::HAS_PROJECTION),
+                "{con:?}"
+            );
+        }
     }
 }

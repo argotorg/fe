@@ -74,7 +74,8 @@ use crate::analysis::ty::{
     trait_def::TraitInstId,
     trait_lower::{complete_impl_trait, lower_impl_trait},
     trait_resolution::{
-        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
+        ChosenImpl, GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx,
+        is_goal_satisfiable,
     },
     ty_check::callable::{
         Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
@@ -841,7 +842,10 @@ impl<'db> TyChecker<'db> {
         let closure = ClosureTy::new(
             self.db,
             def,
-            parent_args,
+            super::super::ty_def::ClosureContext {
+                args: parent_args,
+                evidence: None,
+            },
             info.captures
                 .iter()
                 .map(|capture| capture.ty)
@@ -1230,8 +1234,7 @@ impl<'db> TyChecker<'db> {
         let mut args = vec![ty];
         args.extend(self.fresh_tys_n(trait_def.params(self.db).len() - 1));
         let goal = TraitInstId::new_simple(self.db, trait_def, args);
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let implemented = !matches!(
             is_goal_satisfiable(self.db, solve_cx, goal),
             GoalSatisfiability::UnSat(_) | GoalSatisfiability::ContainsInvalid
@@ -1709,7 +1712,45 @@ impl<'db> TyChecker<'db> {
                 // An entry of a collection whose elements are places is a
                 // place, mutable through a mutable base, like an array element.
                 self.check_expr(rhs_expr, key_ty);
-                self.env.record_place_entry(expr);
+                let trait_def =
+                    resolve_core_trait(self.db, self.env.scope(), &["ops", "StateIndex"])
+                        .expect("StateIndex was resolved for this entry");
+                let func = trait_def.method_defs(self.db)[&IdentId::new(self.db, "locate")];
+                let goal = TraitInstId::new_simple(self.db, trait_def, vec![base_ty]);
+                let callable = Callable::from_item(
+                    self.db,
+                    CallableDef::Func(func),
+                    vec![base_ty],
+                    Some(goal),
+                );
+                let lanes = goal
+                    .trait_ref(self.db)
+                    .project_assoc_ty(self.db, IdentId::new(self.db, "Lanes"))
+                    .expect("StateIndex declares Lanes");
+                let codec_ty = self.normalize_ty(lanes);
+                let codec_trait =
+                    resolve_core_trait(self.db, self.env.scope(), &["ops", "LaneCodec"])
+                        .expect("core declares LaneCodec");
+                let codec_goal =
+                    TraitInstId::new_simple(self.db, codec_trait, vec![codec_ty, output_ty]);
+                let codec = ["get", "set"].map(|name| {
+                    let method = codec_trait.method_defs(self.db)[&IdentId::new(self.db, name)];
+                    Callable::from_item(
+                        self.db,
+                        CallableDef::Func(method),
+                        vec![codec_ty, output_ty],
+                        Some(codec_goal),
+                    )
+                });
+                self.env.record_place_entry(
+                    expr,
+                    super::PlaceEntryCalls {
+                        locate: callable,
+                        codec,
+                        codec_choice_failed: false,
+                        codec_choices: None,
+                    },
+                );
                 return ExprProp::new(output_ty, lhs.is_mut);
             }
         }
@@ -1946,12 +1987,381 @@ impl<'db> TyChecker<'db> {
         expected: TyId<'db>,
         result_discarded: bool,
     ) -> ExprProp<'db> {
+        use crate::analysis::name_resolution::path_resolver::{ImplNameRes, resolve_impl_name};
+
         self.env.effect_env_mut().push_frame();
         // The keys this `with` provides, each with its binding's span.
         let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
+        let outer_choices = self.env.choices;
+        let mut ambiguous_opening = false;
+        // The implementations this `with` lists, each with its operand's span.
+        let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
+        // The conditions of each opening of this list, with the opening's
+        // position in the list's choices and its operand's span.
+        let mut opening_conditions: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> =
+            Vec::new();
+        let mut providers = Vec::new();
 
         for binding in bindings {
+            let named = if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(path)) = binding.value.data(self.db, self.body())
+                && let Some(path) = path.to_opt()
+            {
+                match resolve_impl_name(self.db, path, self.env.scope()) {
+                    ImplNameRes::Found(implementation) => {
+                        // A bare value and a named implementation are separate
+                        // meanings, not a priority between namespaces. Resolve
+                        // the ordinary expression name without checking or
+                        // evaluating the value before selecting either one.
+                        if let Some(name) = path.as_ident(self.db) {
+                            let span = binding.value.span(self.body()).into();
+                            let resolved = resolve_ident_expr(
+                                self.db,
+                                &self.env,
+                                path,
+                                span,
+                                &LoweringContext::new(),
+                            );
+                            let value_span = match resolved {
+                                ResolvedPathInBody::Binding(value) => {
+                                    Some(value.def_span(&self.env))
+                                }
+                                ResolvedPathInBody::Reso(value) => self
+                                    .is_with_operand_value(&value)
+                                    .then(|| value.name_span(self.db))
+                                    .flatten(),
+                                ResolvedPathInBody::Diag(diagnostic) => {
+                                    ambiguous_opening = true;
+                                    self.push_diag(diagnostic);
+                                    self.env.named_impl_operands.insert(binding.value);
+                                    self.env.type_expr(
+                                        binding.value,
+                                        ExprProp::new(TyId::unit(self.db), false),
+                                    );
+                                    continue;
+                                }
+                                ResolvedPathInBody::NewBinding(_) | ResolvedPathInBody::Invalid => {
+                                    None
+                                }
+                            };
+                            if let Some(value_span) = value_span {
+                                ambiguous_opening = true;
+                                self.push_diag(PathResDiag::Ambiguous(
+                                    binding.value.span(self.body()).into(),
+                                    name,
+                                    vec![
+                                        (implementation.span().into(), false),
+                                        (value_span, false),
+                                    ],
+                                ));
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
+                        } else if let Ok(value) = crate::analysis::name_resolution::resolve_path(
+                            self.db,
+                            path,
+                            self.env.scope(),
+                            self.env.assumptions(),
+                            true,
+                        ) && self.is_with_operand_value(&value)
+                            && value.is_visible_from(self.db, self.env.scope())
+                        {
+                            ambiguous_opening = true;
+                            // A qualified path is classified like a bare name:
+                            // a value of the same path is a second meaning,
+                            // and neither is chosen silently.
+                            let name = path
+                                .ident(self.db)
+                                .to_opt()
+                                .expect("implementation path identifier");
+                            let mut candidates = vec![(implementation.span().into(), false)];
+                            candidates.extend(value.name_span(self.db).map(|span| (span, false)));
+                            self.push_diag(PathResDiag::Ambiguous(
+                                binding.value.span(self.body()).into(),
+                                name,
+                                candidates,
+                            ));
+                            self.env.named_impl_operands.insert(binding.value);
+                            self.env.type_expr(
+                                binding.value,
+                                ExprProp::new(TyId::unit(self.db), false),
+                            );
+                            continue;
+                        }
+                        Some((path, implementation))
+                    }
+                    // An implementation whose name is not visible here is not
+                    // one of the operand's meanings: a value of the same name
+                    // that is visible here is checked as any other operand.
+                    ImplNameRes::NotVisible { .. }
+                        if self.with_operand_names_value(path, binding.value) =>
+                    {
+                        None
+                    }
+                    ImplNameRes::NotVisible { name, definition } => {
+                        self.push_diag(PathResDiag::Invisible(
+                            self.with_operand_name_span(path, binding.value),
+                            name,
+                            definition,
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    ImplNameRes::Ambiguous(candidates) => {
+                        ambiguous_opening = true;
+                        // An ambiguous implementation name cannot become an
+                        // effect operand merely because selection failed.
+                        self.push_diag(PathResDiag::Ambiguous(
+                            self.with_operand_name_span(path, binding.value),
+                            path.ident(self.db)
+                                .to_opt()
+                                .expect("implementation path identifier"),
+                            candidates,
+                        ));
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    // A bare name that is neither an implementation nor a
+                    // value is reported once, as a `with` operand.
+                    ImplNameRes::NotFound
+                        if path.as_ident(self.db).is_some()
+                            && matches!(
+                                resolve_ident_expr(
+                                    self.db,
+                                    &self.env,
+                                    path,
+                                    binding.value.span(self.body()).into(),
+                                    &LoweringContext::new(),
+                                ),
+                                ResolvedPathInBody::NewBinding(_)
+                            ) =>
+                    {
+                        self.push_diag(BodyDiag::UnknownWithOperand {
+                            primary: binding.value.span(self.body()).into(),
+                            name: path.as_ident(self.db).expect("an identifier path"),
+                        });
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    ImplNameRes::NotFound => None,
+                }
+            } else {
+                None
+            };
+            if let Some((path, implementation)) = named
+                && let Some(implementation) =
+                    super::super::trait_lower::lower_impl_trait(self.db, implementation)
+            {
+                let written_args = path.generic_args(self.db);
+                let choice = if written_args.is_empty(self.db) {
+                    super::super::trait_resolution::ChosenImpls::push(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                    )
+                } else {
+                    let args = super::super::ty_lower::lower_generic_arg_list(
+                        self.db,
+                        written_args,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        &LoweringContext::new(),
+                    );
+                    let owner = implementation.hir_impl_trait(self.db);
+                    let inherited = crate::hir_def::GenericParamOwner::from(owner)
+                        .parent(self.db)
+                        .map(|parent| {
+                            super::super::ty_lower::collect_generic_params(self.db, parent)
+                                .params(self.db)
+                                .to_vec()
+                        })
+                        .unwrap_or_default();
+                    let written = args.len();
+                    let args =
+                        match super::super::ty_lower::collect_generic_params(self.db, owner.into())
+                            .complete_args(
+                            self.db,
+                            &inherited,
+                            &args,
+                            super::super::generic_defaults::DefaultApplication::StructuralMetadata(
+                                &LoweringContext::new(),
+                            ),
+                        ) {
+                            Ok(args) => args,
+                            Err(error) => {
+                                if let Some(diag) = super::super::ty_error::emit_invalid_ty_error(
+                                    self.db,
+                                    TyId::invalid(self.db, error.cause),
+                                    binding.value.span(self.body()).into(),
+                                ) {
+                                    self.push_diag(diag);
+                                }
+                                self.env.named_impl_operands.insert(binding.value);
+                                self.env.type_expr(
+                                    binding.value,
+                                    ExprProp::new(TyId::unit(self.db), false),
+                                );
+                                continue;
+                            }
+                        };
+                    let expected = implementation.params(self.db).len() - inherited.len();
+                    if args.len() != expected {
+                        // Completion refuses too many arguments, so these are
+                        // too few, and no choice can stand for the operand:
+                        // the block's meaning is left open.
+                        ambiguous_opening = true;
+                        self.push_diag(BodyDiag::TooFewWithGenericArgs {
+                            primary: binding.value.span(self.body()).into(),
+                            def_span: owner.span().selection_name().into(),
+                            given: written,
+                            expected,
+                        });
+                        self.env.named_impl_operands.insert(binding.value);
+                        self.env
+                            .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                        continue;
+                    }
+                    let args = inherited.into_iter().chain(args).collect::<Vec<_>>();
+                    let applied = super::super::binder::Binder::bind(owner.into(), implementation)
+                        .instantiate(self.db, &args);
+                    super::super::trait_resolution::ChosenImpls::push_applied(
+                        self.db,
+                        self.env.choices,
+                        implementation,
+                        applied,
+                    )
+                };
+                let entry = *choice
+                    .items(self.db)
+                    .last()
+                    .expect("a pushed choice is the last item");
+                let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+                if let Some((first, goal, possible)) =
+                    earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
+                {
+                    self.push_diag(BodyDiag::DuplicateWithChoice {
+                        primary: span,
+                        first,
+                        goal,
+                        possible,
+                    });
+                    self.env.named_impl_operands.insert(binding.value);
+                    self.env
+                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    continue;
+                }
+                listed.push((entry, span));
+                self.env.choices = Some(choice);
+                self.env.named_impl_operands.insert(binding.value);
+                // A named impl is a compile-time operand, with no runtime value.
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
+            if binding.key_path.is_none()
+                && let Partial::Present(Expr::Path(Partial::Present(path))) =
+                    binding.value.data(self.db, self.body())
+                && path.len(self.db) == 1
+                && matches!(
+                    path.kind(self.db),
+                    crate::hir_def::PathKind::QualifiedType { .. }
+                )
+                && let Ok(crate::analysis::name_resolution::PathRes::Ty(ty)) =
+                    crate::analysis::name_resolution::resolve_path(
+                        self.db,
+                        *path,
+                        self.env.scope(),
+                        self.env.assumptions(),
+                        false,
+                    )
+                && let TyData::QualifiedTy(goal) = ty.data(self.db)
+            {
+                match super::super::trait_def::resolve_ordinary_trait_impl_instance(
+                    self.db,
+                    self.env.solve_cx(),
+                    *goal,
+                ) {
+                    super::super::trait_resolution::Selection::Unique(resolved) => {
+                        let choice = super::super::trait_resolution::ChosenImpls::push_applied(
+                            self.db,
+                            self.env.choices,
+                            resolved.selected(),
+                            resolved.instantiated(),
+                        );
+                        let entry = *choice
+                            .items(self.db)
+                            .last()
+                            .expect("a pushed choice is the last item");
+                        let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
+                        if let Some((first, goal, possible)) =
+                            earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
+                        {
+                            self.push_diag(BodyDiag::DuplicateWithChoice {
+                                primary: span,
+                                first,
+                                goal,
+                                possible,
+                            });
+                        } else {
+                            // The opened implementation's conditions are proved
+                            // once the whole list is read (below the loop).
+                            let mode = Some(if goal.is_mut(self.db) {
+                                BorrowKind::Mut
+                            } else {
+                                BorrowKind::Ref
+                            });
+                            let conditions = resolved
+                                .instantiated_constraints(self.db)
+                                .list(self.db)
+                                .iter()
+                                .map(|&condition| condition.at_mode(self.db, mode))
+                                .collect::<Vec<_>>();
+                            opening_conditions.push((
+                                choice.items(self.db).len() - 1,
+                                conditions,
+                                span.clone(),
+                            ));
+                            listed.push((entry, span));
+                            self.env.choices = Some(choice);
+                        }
+                    }
+                    super::super::trait_resolution::Selection::Ambiguous(_)
+                    | super::super::trait_resolution::Selection::NotFound => {
+                        self.push_diag(TyDiagCollection::from(
+                            TraitConstraintDiag::TraitBoundNotSat {
+                                span: binding.value.span(self.body()).into(),
+                                primary_goal: *goal,
+                                unsat_subgoal: None,
+                                required_by: None,
+                            },
+                        ));
+                    }
+                }
+                self.env.named_impl_operands.insert(binding.value);
+                self.env
+                    .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                continue;
+            }
+            providers.push((binding, self.env.choices));
+        }
+
+        // Provider expressions retain the choices preceding them in source
+        // order. Their witnesses are checked under the complete frame.
+        let choices = self.env.choices;
+        for (binding, operand_choices) in providers {
+            self.env.choices = operand_choices;
             let value_prop = self.check_expr_unknown(binding.value);
+            self.env.choices = choices;
             // A provider confers authority over its place for the body; it
             // opens no access.
             self.consume_access(binding.value);
@@ -2026,13 +2436,111 @@ impl<'db> TyChecker<'db> {
             }
         }
 
+        // An opened implementation's conditions are proved in the frame this
+        // `with` builds, without the opening itself: the enclosing choices and
+        // every other operand of the list, whatever their order. An opening
+        // whose conditions can never hold is refused whether or not the block
+        // uses it.
+        if let Some(list_choices) = self.env.choices {
+            for (index, conditions, span) in opening_conditions {
+                let mut items = list_choices.items(self.db).clone();
+                items.remove(index);
+                let context = (!items.is_empty())
+                    .then(|| super::super::trait_resolution::ChosenImpls::new(self.db, items));
+                for goal in conditions {
+                    self.env.register_trait_obligation(TraitObligation {
+                        choices: context,
+                        goal,
+                        origin: TraitObligationOrigin::GenericConfirmation,
+                        span: span.clone(),
+                    });
+                }
+            }
+        }
+
+        if ambiguous_opening {
+            // An operand with two meanings, or with arguments that name no
+            // implementation, leaves the block's meaning open: its body is
+            // not checked, so that it reports nothing the operand would have
+            // provided.
+            self.env.effect_env_mut().pop_frame();
+            self.env.choices = outer_choices;
+            return ExprProp::invalid(self.db);
+        }
+
         let result = if result_discarded {
             self.check_expr_with_discarded_result(body_expr, expected)
         } else {
             self.check_expr(body_expr, expected)
         };
         self.env.effect_env_mut().pop_frame();
+        self.env.choices = outer_choices;
         result
+    }
+
+    /// Whether `value`, what a path names, is a value that a `with` operand
+    /// can provide, rather than a type, trait, module or record variant.
+    fn is_with_operand_value(&self, value: &PathRes<'db>) -> bool {
+        match value {
+            PathRes::Ty(ty) | PathRes::TyAlias(_, ty)
+                if ty.const_ty_ty(self.db).is_none()
+                    && (!matches!(value, PathRes::Ty(_))
+                        || ty.tuple_struct_ctor_ty(self.db).is_none()) =>
+            {
+                false
+            }
+            PathRes::Trait(_) | PathRes::Mod(_) => false,
+            PathRes::EnumVariant(variant)
+                if matches!(variant.kind(self.db), VariantKind::Record(_)) =>
+            {
+                false
+            }
+            _ => true,
+        }
+    }
+
+    /// The span of the last segment of the `with` operand `operand`, written
+    /// as the path `path`: the name a diagnostic about the operand points at.
+    fn with_operand_name_span(&self, path: PathId<'db>, operand: ExprId) -> DynLazySpan<'db> {
+        operand
+            .span(self.body())
+            .into_path_expr()
+            .path()
+            .segment(path.segment_index(self.db))
+            .ident()
+            .into()
+    }
+
+    /// Whether the `with` operand `operand`, written as `path`, names a value
+    /// visible here: a local binding or a value item.
+    fn with_operand_names_value(&self, path: PathId<'db>, operand: ExprId) -> bool {
+        if path.as_ident(self.db).is_some() {
+            match resolve_ident_expr(
+                self.db,
+                &self.env,
+                path,
+                operand.span(self.body()).into(),
+                &LoweringContext::new(),
+            ) {
+                ResolvedPathInBody::Binding(_) => true,
+                ResolvedPathInBody::Reso(value) => self.is_with_operand_value(&value),
+                ResolvedPathInBody::Diag(_)
+                | ResolvedPathInBody::NewBinding(_)
+                | ResolvedPathInBody::Invalid => false,
+            }
+        } else {
+            matches!(
+                crate::analysis::name_resolution::resolve_path(
+                    self.db,
+                    path,
+                    self.env.scope(),
+                    self.env.assumptions(),
+                    true,
+                ),
+                Ok(value) if self.is_with_operand_value(&value)
+                    && value.is_visible_from(self.db, self.env.scope())
+            )
+        }
     }
 
     fn check_call(&mut self, expr: ExprId, expr_data: &Expr<'db>) -> ExprProp<'db> {
@@ -2115,6 +2623,7 @@ impl<'db> TyChecker<'db> {
             &canonical,
             self.env.scope(),
             self.env.assumptions(),
+            self.env.choices,
         ) {
             Ok(candidate) => candidate,
             Err(MethodSelectionError::AmbiguousTraitMethod(ambiguous)) => {
@@ -2198,6 +2707,7 @@ impl<'db> TyChecker<'db> {
                     &Canonicalized::new(self.db, field_ty),
                     self.env.scope(),
                     self.env.assumptions(),
+                    self.env.choices,
                 ),
                 Err(MethodSelectionError::NotFound | MethodSelectionError::ReceiverTypeMustBeKnown)
             )
@@ -2230,6 +2740,7 @@ impl<'db> TyChecker<'db> {
                 let inst = canonical.extract_solution(&mut self.table, cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
                 self.env.register_trait_obligation(TraitObligation {
+                    choices: self.env.choices,
                     goal: inst,
                     origin: TraitObligationOrigin::GenericConfirmation,
                     span,
@@ -2492,7 +3003,7 @@ impl<'db> TyChecker<'db> {
             let settled = arg.fold_with(self.db, &mut Prober::new(&mut self.table, scope));
             self.table.unify(arg, settled).ok();
         }
-        self.env.enter_call_site(&pending.site);
+        let enclosing_choices = self.env.enter_call_site(&pending.site);
         match pending.target {
             PendingEffectsTarget::Call(expr) => {
                 for mut callable in callables {
@@ -2519,7 +3030,7 @@ impl<'db> TyChecker<'db> {
                 }
             }
         }
-        self.env.leave_call_site();
+        self.env.leave_call_site(enclosing_choices);
         true
     }
 
@@ -2777,12 +3288,7 @@ impl<'db> TyChecker<'db> {
                 // A row of an instance no implementation satisfies is the
                 // unsatisfied bound's error, reported once.
                 None if matches!(
-                    is_goal_satisfiable(
-                        self.db,
-                        TraitSolveCx::new(self.db, self.env.scope())
-                            .with_assumptions(self.env.assumptions()),
-                        row.inst,
-                    ),
+                    is_goal_satisfiable(self.db, self.env.solve_cx(), row.inst),
                     GoalSatisfiability::UnSat(_)
                 ) => {}
                 None => self.push_diag(match self.env.late_closure() {
@@ -3196,12 +3702,10 @@ impl<'db> TyChecker<'db> {
         assumptions: PredicateListId<'db>,
         trait_goal: TraitInstId<'db>,
     ) -> GoalSatisfiability<'db> {
-        let solve_cx = TraitSolveCx::new(self.db, scope).with_assumptions(assumptions);
-        let query = crate::analysis::ty::trait_resolution::CanonicalGoalQuery::new(
-            self.db,
-            trait_goal,
-            assumptions,
-        );
+        let solve_cx = TraitSolveCx::new(self.db, scope)
+            .with_assumptions(assumptions)
+            .with_choices(self.env.choices);
+        let query = solve_cx.query(self.db, trait_goal);
         crate::analysis::ty::trait_resolution::is_goal_query_satisfiable(self.db, solve_cx, &query)
     }
 
@@ -3596,6 +4100,7 @@ impl<'db> TyChecker<'db> {
 
         let receiver_tys = self.receiver_candidates(receiver_prop.ty);
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
 
         let mut selected_receiver_ty = receiver_tys[0];
         let mut canonical_r_ty = Canonicalized::new(self.db, selected_receiver_ty);
@@ -3605,6 +4110,7 @@ impl<'db> TyChecker<'db> {
             method_name,
             self.env.scope(),
             method_assumptions,
+            method_choices,
             None,
         );
         if matches!(
@@ -3619,6 +4125,7 @@ impl<'db> TyChecker<'db> {
                     method_name,
                     self.env.scope(),
                     method_assumptions,
+                    method_choices,
                     None,
                 );
 
@@ -3829,7 +4336,7 @@ impl<'db> TyChecker<'db> {
         let idx = path.segment_index(self.db);
         let generic_args = path.generic_args(self.db);
         let generic_args_span = path_span.clone().segment(idx).generic_args();
-        let lowering_cx = LoweringContext::new();
+        let lowering_cx = LoweringContext::new().with_choices(self.env.choices);
         let unify_generic_args = |tc: &mut Self, callable: &mut Callable<'db>| {
             callable.unify_generic_args(tc, generic_args, generic_args_span.clone())
         };
@@ -4088,6 +4595,7 @@ impl<'db> TyChecker<'db> {
                             };
                             if matches!(candidate, MethodCandidate::NeedsConfirmation(_)) {
                                 self.env.register_trait_obligation(TraitObligation {
+                                    choices: self.env.choices,
                                     goal: inst,
                                     origin: TraitObligationOrigin::GenericConfirmation,
                                     span: path_expr_span.clone().into(),
@@ -4189,6 +4697,7 @@ impl<'db> TyChecker<'db> {
                     };
 
                     self.env.register_trait_obligation(TraitObligation {
+                        choices: self.env.choices,
                         goal: inst,
                         origin: TraitObligationOrigin::GenericConfirmation,
                         span: path_expr_span.clone().into(),
@@ -4230,12 +4739,8 @@ impl<'db> TyChecker<'db> {
                     );
 
                     if !super::trait_const_goal_has_foreign_params(self.db, inst, self.env.scope())
-                        && let GoalSatisfiability::UnSat(_) = is_goal_satisfiable(
-                            self.db,
-                            TraitSolveCx::new(self.db, self.env.scope())
-                                .with_assumptions(self.env.assumptions()),
-                            inst,
-                        )
+                        && let GoalSatisfiability::UnSat(_) =
+                            is_goal_satisfiable(self.db, self.env.solve_cx(), inst)
                     {
                         self.push_diag(TyDiagCollection::from(
                             TraitConstraintDiag::TraitBoundNotSat {
@@ -4257,8 +4762,7 @@ impl<'db> TyChecker<'db> {
                                 inst,
                                 name,
                             ),
-                            evidence: None,
-                            bound_evidence: None,
+                            evidence: Default::default(),
                         },
                     );
                     // Look up the associated const's declared type in the trait and
@@ -4287,7 +4791,7 @@ impl<'db> TyChecker<'db> {
                     ) {
                         self.env.register_const_ref(
                             expr,
-                            ConstRef::InherentConst(InherentConstUse::new(
+                            ConstRef::inherent(InherentConstUse::new(
                                 self.env.scope(),
                                 self.env.assumptions(),
                                 impl_,
@@ -4992,6 +5496,7 @@ impl<'db> TyChecker<'db> {
         };
 
         let method_assumptions = self.env.assumptions();
+        let method_choices = self.env.choices;
         let mut checked_rhs_ty = None;
 
         let (method, inst) = if let Some(rhs_expr) = rhs_expr {
@@ -5020,6 +5525,7 @@ impl<'db> TyChecker<'db> {
                     op.trait_method(self.db),
                     self.env.scope(),
                     method_assumptions,
+                    method_choices,
                     trait_def,
                 ) {
                     Ok(methods) => candidates.extend(
@@ -5117,6 +5623,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, candidate.cand.inst);
                     if candidate.needs_confirmation {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5161,6 +5668,7 @@ impl<'db> TyChecker<'db> {
                 op.trait_method(self.db),
                 self.env.scope(),
                 method_assumptions,
+                method_choices,
                 Some(trait_def),
             );
             if matches!(
@@ -5175,6 +5683,7 @@ impl<'db> TyChecker<'db> {
                         op.trait_method(self.db),
                         self.env.scope(),
                         method_assumptions,
+                        method_choices,
                         Some(trait_def),
                     );
                     if fallback.is_ok() || !matches!(fallback, Err(MethodSelectionError::NotFound))
@@ -5196,6 +5705,7 @@ impl<'db> TyChecker<'db> {
                     let inst = c_lhs_ty.extract_solution(&mut self.table, cand.inst);
                     if matches!(res, MethodCandidate::NeedsConfirmation(_)) {
                         self.env.register_trait_obligation(TraitObligation {
+                            choices: self.env.choices,
                             goal: inst,
                             origin: TraitObligationOrigin::GenericConfirmation,
                             span: expr.span(self.body()).into(),
@@ -5527,6 +6037,20 @@ impl<'db> TyChecker<'db> {
     }
 }
 
+/// An earlier operand of this list whose header overlaps `entry`, with the
+/// overlap goal and whether some projections remain unknown.
+fn earlier_answer<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
+    entry: ChosenImpl<'db>,
+) -> Option<(DynLazySpan<'db>, TraitInstId<'db>, bool)> {
+    listed.iter().find_map(|(earlier, span)| {
+        crate::analysis::ty::trait_resolution::common_choice_goal(db, solve_cx, *earlier, entry)
+            .map(|(goal, possible)| (span.clone(), goal, possible))
+    })
+}
+
 fn reify_unresolved_pattern_slots<'db, T>(
     db: &'db dyn HirAnalysisDb,
     value: T,
@@ -5609,10 +6133,11 @@ fn resolve_ident_expr<'db>(
     let ident = path.ident(db).unwrap();
 
     let resolve_bucket = |bucket: &NameResBucket<'db>, scope| {
-        // First, surface any ambiguity/conflict in the bucket as a dedicated
-        // name-resolution diagnostic instead of silently degrading to
-        // "undefined variable".
-        for (_, err) in bucket.errors() {
+        // Surface ambiguity or conflict in an expression's name domains.
+        for (domain, err) in bucket.errors() {
+            if !domain.intersects(NameDomain::VALUE | NameDomain::TYPE) {
+                continue;
+            }
             match err {
                 NameResolutionError::Ambiguous(cands) => {
                     let mut cand_spans = Vec::new();

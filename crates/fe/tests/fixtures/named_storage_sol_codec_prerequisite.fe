@@ -1,0 +1,51 @@
+use std::evm::{Evm, Wei, SolArray, SolPacked}
+
+trait Gate {
+    fn code(_ value: u8) -> u8
+}
+trait Missing {}
+impl Gate for u8 {
+    fn code(_ value: u8) -> u8 { value }
+}
+impl<T: Missing> Gate for T as Encoded {
+    fn code(_ value: u8) -> u8 { value ^ 1 }
+}
+
+struct Elem<T> {
+    value: u8,
+}
+
+impl<T: Gate> SolPacked for Elem<T> {
+    const BITS: u256 = 8
+    fn from_packed(_ word: u256) -> Self {
+        Elem { value: T::code(word.downcast_truncate()) }
+    }
+    fn to_packed(own self) -> u256 { T::code(self.value) as u256 }
+}
+
+fn write<T>(array: mut SolArray<Elem<T>>) {
+    with (Encoded<T>) { array[0] = Elem { value: 7 } }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u8,
+}
+
+pub contract C {
+    mut array: SolArray<Elem<u8>>
+    recv M {
+        Run -> u8 uses (mut array) {
+            array.push(Elem { value: 0 })
+            write(array: mut array)
+            array[0].value
+        }
+    }
+}
+
+#[test]
+fn deferred_codec_uses_the_chosen_packing() uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u8 = evm.call(addr: c, gas: 400000, value: Wei::zero(), message: M::Run {})
+    assert!(raw == 6)
+}

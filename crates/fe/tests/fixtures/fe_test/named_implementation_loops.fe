@@ -1,0 +1,253 @@
+// Loops, iterator adapters and generic helpers inside `with` blocks, and the
+// bounds that traits declare on associated types under a choice.
+use core::iter::{Collection, Driver, Producer}
+use core::marker::Copy
+use core::ptr::MemVec
+
+struct Item {}
+impl Copy for Item {}
+trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+impl Price for Item as Wholesale { fn price(self) -> u256 { 70 } }
+
+// Squares below n; the named implementation gives cubes.
+struct Seq { n: usize }
+impl Collection for Seq {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c
+        yield ref v }
+}
+impl Collection for Seq as Cubes {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c * c
+        yield ref v }
+}
+
+fn total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E {
+    var sum: usize = 0
+    for x in xs { sum += x }
+    sum
+}
+
+// A helper that names the concrete `Item` and declares no `Price` bound keeps
+// the ordinary implementation: only declared bounds receive a choice.
+fn total_price<C: Collection<Item = Item>>(_ xs: C) -> u256 uses C::E {
+    xs.fold(0, |acc, x| acc + x.price())
+}
+
+// A helper that declares the bound receives the choice.
+fn total_bounded<C: Collection<Item = T>, T: Price>(_ xs: C) -> u256 uses C::E {
+    xs.fold(0, |acc, x| acc + x.price())
+}
+
+// A method of a named implementation starts inside its own choice.
+trait Score { fn score(self) -> u256 }
+impl Score for Item { fn score(self) -> u256 { 0 } }
+impl Score for Item as Summed {
+    fn score(self) -> u256 {
+        let xs: [u256; 3] = [1, 2, 3]
+        var s: u256 = 0
+        for x in xs { s += x }
+        s
+    }
+}
+
+// The bound of an associated type, satisfied through an implementation's
+// condition and read by a default method.
+struct Wrap<T> { t: T }
+trait Cur {
+    type Cursor: Price
+    fn cursor(own self) -> Self::Cursor
+    fn cprice(own self) -> u256 { self.cursor().price() }
+}
+impl<T: Price> Cur for Wrap<T> { type Cursor = T
+    fn cursor(own self) -> T { self.t } }
+fn relay<T: Price>(_ w: own Wrap<T>) -> u256 { w.cprice() }
+
+// A concrete associated type: its bound is proved where the implementation
+// is declared, as an implied supertrait dictionary is.
+struct Holder {}
+impl Cur for Holder { type Cursor = Item
+    fn cursor(own self) -> Item { Item {} } }
+
+#[test]
+fn array_loop() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (Wholesale) { for x in xs { sum += x } }
+    assert!(sum == 6)
+}
+
+#[test]
+fn range_loop() {
+    var sum: usize = 0
+    with (Wholesale) { for i in 0..4 { sum += i } }
+    assert!(sum == 6)
+}
+
+#[test]
+fn memvec_loop() {
+    var v: MemVec<u256> = MemVec::new()
+    v.push(1)
+    v.push(2)
+    var s: u256 = 0
+    with (Wholesale) { for x in v { s += x } }
+    assert!(s == 3)
+}
+
+#[test]
+fn user_collection_loop() {
+    var sum: usize = 0
+    with (Cubes) {
+        let s = Seq { n: 4 }
+        for x in s { sum += x }
+    }
+    assert!(sum == 0 + 1 + 8 + 27)
+    assert!(total(Seq { n: 4 }) == 14)
+    assert!(with (Cubes) { total(Seq { n: 4 }) } == 36)
+}
+
+#[test]
+fn adapters() {
+    let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+    assert!(with (Wholesale) { xs.fold(0, |acc, x| acc + x.price()) } == 210)
+    assert!(with (Wholesale) { xs.count(|x| x.price() < 80) } == 3)
+    var n: u256 = 0
+    with (Wholesale) { for x in xs.map(|x| x.price()) { n += x } }
+    assert!(n == 210)
+    var m: u256 = 0
+    with (Wholesale) { for x in xs { m += x.price() } }
+    assert!(m == 210)
+}
+
+#[test]
+fn generic_helper_with_concrete_collection() {
+    let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+    assert!(total_price(xs) == 300)
+    assert!(with (Wholesale) { total_price(xs) } == 300)
+    assert!(total_bounded(xs) == 300)
+    assert!(with (Wholesale) { total_bounded(xs) } == 210)
+}
+
+#[test]
+fn named_implementation_method_with_a_loop() {
+    assert!(Item {}.score() == 0)
+    assert!(with (Summed) { Item {}.score() } == 6)
+}
+
+#[test]
+fn associated_type_bound_through_a_condition() {
+    assert!(relay(Wrap { t: Item {} }) == 100)
+    assert!(with (Wholesale) { Wrap { t: Item {} }.cprice() } == 70)
+    assert!(with (Wholesale) { relay(Wrap { t: Item {} }) } == 70)
+}
+
+#[test]
+fn concrete_associated_type_bound_keeps_its_declaration_proof() {
+    assert!(Holder {}.cprice() == 100)
+    assert!(with (Wholesale) { Holder {}.cprice() } == 100)
+}
+
+// A producer and a driver whose base type holds an array length, in a loop
+// chosen, opened and ordinary.
+struct Prod {}
+impl Copy for Prod {}
+impl Producer for Prod {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    type Out = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn produce(mut self, _ base: [u256; 3], _ s: usize) -> u256 { base[s] }
+}
+impl Producer for Prod as TenfoldProducer {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    type Out = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn produce(mut self, _ base: [u256; 3], _ s: usize) -> u256 { base[s] * 10 }
+}
+
+struct Drv {}
+impl Copy for Drv {}
+impl Driver for Drv {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    shape Step = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn at(self, _ base: [u256; 3], _ s: usize) -> Self::Step<ref> { base[s] }
+}
+impl Driver for Drv as TenfoldDriver {
+    uses E = ()
+    type Base = [u256; 3]
+    type State = usize
+    shape Step = u256
+    fn start(self, _ base: [u256; 3]) -> usize { 0 }
+    fn has(self, _ base: [u256; 3], _ s: usize) -> bool { s < 3 }
+    fn next(self, _ base: [u256; 3], _ s: usize) -> usize { s + 1 }
+    fn at(self, _ base: [u256; 3], _ s: usize) -> Self::Step<ref> { base[s] * 10 }
+}
+
+#[test]
+fn producer_over_an_array_ordinary() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    for x in xs.by(Prod {}) { sum += x }
+    assert!(sum == 6)
+}
+
+#[test]
+fn producer_over_an_array_chosen() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (TenfoldProducer) { for x in xs.by(Prod {}) { sum += x } }
+    assert!(sum == 60)
+}
+
+#[test]
+fn producer_over_an_array_opened() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (<Prod as Producer>) { for x in xs.by(Prod {}) { sum += x } }
+    assert!(sum == 6)
+}
+
+#[test]
+fn driver_over_an_array_ordinary() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    for x in xs.by(Drv {}) { sum += x }
+    assert!(sum == 6)
+}
+
+#[test]
+fn driver_over_an_array_chosen() {
+    let xs: [u256; 3] = [1, 2, 3]
+    var sum: u256 = 0
+    with (TenfoldDriver) { for x in xs.by(Drv {}) { sum += x } }
+    assert!(sum == 60)
+}
+
+#[test]
+fn a_method_of_a_chosen_producer_over_an_array() {
+    let xs: [u256; 3] = [1, 2, 3]
+    let s: usize = 1
+    assert!(Prod {}.produce(xs, s) == 2)
+    assert!(with (TenfoldProducer) { Prod {}.produce(xs, s) } == 20)
+}

@@ -69,3 +69,29 @@ fn test_with_shorthand_preserves_content() {
         "formatter deleted with-param content! got:\n{result}"
     );
 }
+
+#[test]
+fn named_impl_alias_survives_formatting_and_reparsing() {
+    use parser::{
+        RecoveryMode, SyntaxNode,
+        ast::{ImplTrait, prelude::AstNode},
+        parse_source_file,
+    };
+    let config = crate::Config::default();
+    for source in [
+        "impl<T> Produce for Wrapper<T> as Alt where T: Bound{type Output=u64}",
+        "impl // kept\nProduce for Wrapper as Alt {}",
+        "impl Produce for Wrapper // kept\nas Alt {}",
+        "impl Produce for Wrapper as // kept\nAlt {}",
+    ] {
+        let formatted = crate::format_str(source, &config)
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+        assert_eq!(formatted.contains("// kept"), source.contains("// kept"));
+        let (green, errors) = parse_source_file(&formatted, RecoveryMode::Recover);
+        assert!(errors.is_empty(), "{formatted}\n{errors:?}");
+        let root = SyntaxNode::new_root(green);
+        let item = root.descendants().find_map(ImplTrait::cast).unwrap();
+        assert_eq!(item.selection_name().unwrap().text(), "Alt");
+        assert_eq!(crate::format_str(&formatted, &config).unwrap(), formatted);
+    }
+}

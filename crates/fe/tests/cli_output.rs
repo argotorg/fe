@@ -3823,6 +3823,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "code_struct_field_offsets",
     "coin",
     "composed_abi_decoder",
+    "concrete_component_entry_codec",
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",
@@ -3899,6 +3900,12 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "multicall",
     "mut_self_storage_receiver_regression",
     "mutex_lock_slot_no_transient_collision",
+    "named_storage_codecs",
+    "named_storage_deferred_codec",
+    "named_storage_entry_codec_identity",
+    "named_storage_evidence",
+    "named_storage_local_generic_choice",
+    "named_storage_local_generic_codec",
     "nested_index_assignment",
     "never_returning_recv_returns",
     "newtype_casts",
@@ -5693,4 +5700,715 @@ fn test_cli_build_payable_return_abi() {
         deposit["outputs"],
         serde_json::json!([{"name": "", "type": "uint256"}])
     );
+}
+
+#[test]
+fn named_storage_preserves_dispatch_at_both_optimization_levels() {
+    for fixture in [
+        "named_storage_evidence.fe",
+        "named_storage_codecs.fe",
+        "named_storage_deferred_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        for level in ["0", "1"] {
+            let (output, exit) = run_fe_main(&[
+                "test",
+                "--backend",
+                "sonatina",
+                "--jobs",
+                "1",
+                "-O",
+                level,
+                path.to_str().unwrap(),
+            ]);
+            assert_eq!(exit, 0, "{fixture} at O{level}: {output}");
+        }
+    }
+}
+
+// A program that names no implementation is unaffected by the checks that read
+// implied bounds from dictionaries. A message field of a recursive type has no
+// `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
+// `Node: AbiSize` from; the instance stays admitted, as it was before those
+// checks. The refusal where a named implementation is involved is covered by
+// `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
+// `fe-hir`.
+#[test]
+fn named_checks_leave_recursive_message_fields_without_choices_alone() {
+    for fixture in [
+        "named_checks_recursive_field_without_choice.fe",
+        "named_checks_phantom_field_without_choice.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(!output.contains("16-0019"), "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn named_storage_aliases_do_not_assume_distinct_dictionaries_are_disjoint() {
+    let source = include_str!("fixtures/named_storage_alias.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("alias.fe");
+    for (choice, should_pass) in [("<Words as StateIndex>", true), ("Shifted", false)] {
+        fs::write(
+            &path,
+            source.replace("with (Shifted)", &format!("with ({choice})")),
+        )
+        .unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "ordinary distinct keys: {output}");
+        } else {
+            assert_ne!(
+                exit, 0,
+                "different dictionaries may select the same location"
+            );
+            assert!(
+                output.contains("16-0001") && output.contains("access conflict"),
+                "{output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn named_storage_failed_codec_proofs_do_not_fall_back_to_ordinary() {
+    let source = include_str!("fixtures/named_storage_codec_failure.fe");
+    let prerequisite = include_str!("fixtures/named_storage_codec_prerequisite.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("codec.fe");
+    for (name, source, should_pass) in [
+        ("failed packed choice", source.to_string(), false),
+        (
+            "satisfied choice",
+            format!("{source}\nimpl Missing for Arg {{}}\n"),
+            true,
+        ),
+        (
+            "unused whole-slot codec",
+            source.replace("BITS: u256 = 32", "BITS: u256 = 256"),
+            true,
+        ),
+    ] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        if should_pass {
+            assert_eq!(exit, 0, "{name}: {output}");
+        } else {
+            assert_ne!(exit, 0, "failed chosen codec must not select ordinarily");
+            assert!(
+                output.contains("16-0008") && output.contains("implementation choices"),
+                "{output}"
+            );
+        }
+    }
+    for (choice, encoded) in [
+        ("Broken", "7"),
+        ("Chosen<T>, Broken", "6"),
+        ("Chosen, Broken", "6"),
+    ] {
+        let selected = prerequisite.replace("with (Broken)", &format!("with ({choice})"));
+        fs::write(&path, &selected).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "failed prerequisite for {choice}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{output}"
+        );
+
+        let runtime = selected.replace("raw == 7", &format!("raw == {encoded}"));
+        fs::write(&path, format!("{runtime}\nimpl Missing for u8 {{}}\n")).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "execute the satisfied specialization for {choice}: {output}"
+        );
+        assert!(output.contains("1 passed; 0 failed"), "{output}");
+    }
+}
+
+#[test]
+fn named_storage_keeps_choices_in_deferred_codec_proofs() {
+    let direct = include_str!("fixtures/named_storage_codec_failure.fe");
+    let erased = direct
+        .replace(
+            "fn read_bound",
+            "fn fill<T>(counters: mut Counters<Codec>) {\n    with (Encoded<T>) { counters[1] = 6 }\n}\nfn read_bound",
+        )
+        .replace(
+            "with (Encoded<Arg>) { counters[1] = 6 }",
+            "fill<Arg>(counters: mut counters)",
+        )
+        .replace("with (Encoded<Arg>) { counters[1] }", "raw");
+    let runtime = r#"
+impl Missing for Arg {}
+
+#[test]
+fn deferred_argument_selects_the_codec() uses (evm: mut std::evm::Evm) {
+    let c = evm.create2<C>(value: std::evm::Wei::zero(), args: (), salt: 0)
+    let values: (u32, u32, u32) = evm.call(
+        addr: c, gas: 400000, value: std::evm::Wei::zero(), message: M::Exercise {},
+    )
+    assert!(values.0 == 5 && values.2 == 17)
+}
+"#;
+    let sol = include_str!("fixtures/named_storage_sol_codec_prerequisite.fe");
+    let temp = tempdir().unwrap();
+    for (name, source, satisfied, bits) in [
+        (
+            "erased_argument",
+            erased.as_str(),
+            format!("{erased}{runtime}"),
+            "32",
+        ),
+        (
+            "solidity_prerequisite",
+            sol,
+            format!("{sol}\nimpl Missing for u8 {{}}\n"),
+            "8",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(
+            output.contains("16-0008") && output.contains("implementation choices"),
+            "{name}: {output}"
+        );
+
+        fs::write(&path, satisfied).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("1 passed; 0 failed"), "{name}: {output}");
+
+        let whole_slot = source.replace(&format!("BITS: u256 = {bits}"), "BITS: u256 = 256");
+        fs::write(&path, whole_slot).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}, unused whole-slot codec: {output}");
+    }
+}
+
+#[test]
+fn named_storage_late_codec_uses_declared_bound_evidence() {
+    let source = include_str!("fixtures/named_storage_codec_bound_evidence.fe");
+    let repeated = source.replace("SolPacked for Elem<u8, T>", "SolPacked for Elem<T, T>");
+    let applied = include_str!("fixtures/named_storage_codec_applied_choice.fe");
+    let stronger = include_str!("fixtures/named_storage_codec_stronger_bound.fe");
+    let projected = include_str!("fixtures/named_storage_codec_projected_bound.fe");
+    let projected_stronger = projected
+        .replace("trait Gate {", "trait Gate {\n    type Tag")
+        .replace("trait Missing {}\n", "")
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("impl Gate for u8 {", "impl Gate for u8 {\n    type Tag = u8")
+        .replace(
+            "impl<T: Missing> Gate for T as Encoded {",
+            "impl Gate for u8 as Encoded {\n    type Tag = u8",
+        )
+        .replace("Encoded<u8>", "Encoded")
+        .replace(
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate",
+            "fn write<K, T: HasItem>(array: mut SolArray<Elem<K, T>>) where T::Item: Gate<Tag = u8>",
+        );
+    let blanket = stronger
+        .replace("impl Gate for u8 {", "impl<T> Gate for T {")
+        .replace(".1 == 6", ".1 == 7");
+    let blanket_known_key = blanket.replace(
+        "fn write<K, T: Gate<Tag = u8>>(array: mut SolArray<Elem<K, T>>)",
+        "fn write<T: Gate<Tag = u8>>(array: mut SolArray<Elem<u8, T>>)",
+    );
+    let temp = tempdir().unwrap();
+    for (name, source, expected) in [
+        ("distinct", source, "2 passed; 0 failed"),
+        ("repeated", repeated.as_str(), "2 passed; 0 failed"),
+        ("applied", applied, "1 passed; 0 failed"),
+        ("stronger_bound", stronger, "2 passed; 0 failed"),
+        ("projected_bound", projected, "2 passed; 0 failed"),
+        (
+            "stronger_projected_bound",
+            projected_stronger.as_str(),
+            "2 passed; 0 failed",
+        ),
+        ("blanket_impl", blanket.as_str(), "2 passed; 0 failed"),
+        (
+            "blanket_impl_known_key",
+            blanket_known_key.as_str(),
+            "2 passed; 0 failed",
+        ),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains(expected), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_storage_deferred_lexical_choices_keep_their_source_parameters() {
+    let source = include_str!("fixtures/named_storage_codec_lexical_origin.fe");
+    let matching = source
+        .replace("Encoded<A>", "Encoded<T>")
+        .replace("raw == 7", "raw == 6");
+    let unrelated_failure = source
+        .replace("impl Missing for u8 {}\n", "")
+        .replace("A: Missing", "A")
+        .replace("T: Gate + Missing", "T: Gate");
+    let temp = tempdir().unwrap();
+    for (name, source) in [
+        ("unrelated_choice", source),
+        ("matching_choice", matching.as_str()),
+        ("unrelated_failed_choice", unrelated_failure.as_str()),
+    ] {
+        let path = temp.path().join(format!("{name}.fe"));
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["test", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{name}: {output}");
+        assert!(output.contains("2 passed; 0 failed"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_storage_qualified_clearable_opening_checks_aggregate_fields() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("clearable_opening.fe");
+    let source = r#"
+use core::marker::Clearable
+struct Protected { unsafe invariant: u8 }
+fn open() { with (<(Protected,) as Clearable>) {} }
+"#;
+    fs::write(&path, source.replace("(Protected,)", "(u8,)")).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+
+    fs::write(&path, source).unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(
+        output.contains("Protected") && output.contains("Clearable"),
+        "{output}"
+    );
+}
+
+#[test]
+fn named_storage_unrelated_choices_keep_generic_sol_codec_deferral() {
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic_codec.fe");
+    fs::write(
+        &path,
+        r#"
+use std::evm::SolArray
+trait Marker {}
+struct Item {}
+impl Marker for Item as Unrelated {}
+fn fill<T>(array: mut SolArray<T>, value: own T) {
+    with (Unrelated) { array[0] = value }
+}
+pub fn root(array: mut SolArray<u8>) { fill(array: mut array, value: 1) }
+"#,
+    )
+    .unwrap();
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_eq!(
+        exit, 0,
+        "unrelated choice must not turn a deferred codec into a failed choice: {output}"
+    );
+}
+
+#[test]
+fn named_storage_opaque_generic_codec_ignores_unrelated_choices() {
+    let source = include_str!("fixtures/named_storage_generic_codec.fe");
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("generic.fe");
+    for source in [source.to_string(), source.replace("with (Unrelated)", "")] {
+        fs::write(&path, source).unwrap();
+        let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+        assert_eq!(
+            exit, 0,
+            "unrelated choice cannot reject ordinary generic codec: {output}"
+        );
+    }
+}
+
+#[test]
+fn named_output_possible_overlap_is_refused() {
+    // The named header and the ordinary one overlap where `T::Out` is `u8`,
+    // and give different `Result` types there.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/named_output_possible_overlap.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+    assert!(output.contains("may overlap"), "{output}");
+
+    // The same shape with equal outputs is accepted and runs the named one.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_output_possible_overlap_agree.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+const OUTPUT_AGREEMENT_A: &str = r#"pub trait Marker {}
+pub trait Foo {
+    type Out
+    fn make() -> Self::Out
+}
+impl<T: Marker> Foo for T {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+pub impl<T: Marker> Foo for T as NamedInA {
+    type Out = u8
+    fn make() -> u8 { 2 }
+}
+"#;
+
+fn write_output_agreement_ingots(root: &Path, b_source: &str) {
+    for (path, content) in [
+        ("a/fe.toml", "[ingot]\nname = \"a\"\nversion = \"0.1.0\"\n"),
+        ("a/src/lib.fe", OUTPUT_AGREEMENT_A),
+        (
+            "b/fe.toml",
+            "[ingot]\nname = \"b\"\nversion = \"0.1.0\"\n\n[dependencies]\na = { path = \"../a\" }\n",
+        ),
+        ("b/src/lib.fe", b_source),
+    ] {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).expect("create dir");
+        fs::write(path, content).expect("write fixture");
+    }
+}
+
+#[test]
+fn named_output_agreement_across_ingots() {
+    // An ordinary implementation in a downstream ingot gives `S` other
+    // outputs than the upstream named implementation a use chooses.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = (u256, u256)
+    fn make() -> (u256, u256) { (1, 2) }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> (u256, u256) { with (NamedInA, FakeMarker) { call<S>() } }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["check", b.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("call<S>()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the use is accepted and runs the named implementation.
+    let temp = tempdir().expect("tempdir");
+    write_output_agreement_ingots(
+        temp.path(),
+        r#"use a::{Foo, Marker, NamedInA}
+
+struct S {}
+impl Foo for S {
+    type Out = u8
+    fn make() -> u8 { 1 }
+}
+impl Marker for S as FakeMarker {}
+
+fn call<T: Foo>() -> T::Out { T::make() }
+fn boom() -> u8 { with (NamedInA, FakeMarker) { call<S>() } }
+
+#[test]
+fn t() { assert(boom() == 2) }
+"#,
+    );
+    let b = temp.path().join("b");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", b.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_condition_cannot_change_ordinary_outputs() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    // An ordinary blanket implementation whose condition holds only through a
+    // choice, beside an ordinary implementation with other outputs.
+    let path = fixtures.join("named_condition_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn gen"), "{output}");
+    assert!(output.contains("<T as Foo>::make()"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+    assert!(
+        output.contains("`S: Foo` is answered here by `impl<T: Marker> Foo for T`"),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+
+    // No ordinary implementation defines the outputs at the goal.
+    let path = fixtures.join("named_condition_no_ordinary_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains("no ordinary implementation defines its associated outputs"),
+        "{output}"
+    );
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // The same in a generic body whose instance picks the choice.
+    let path = fixtures.join("named_condition_generic_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(output.contains("fn g"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+
+    // With equal outputs the blanket implementation runs.
+    let temp = tempdir().unwrap();
+    let path = temp.path().join("agree.fe");
+    // The fixture is read as checked out, so its line endings depend on the
+    // platform. Each replaced fragment stays within one line, and each must
+    // match exactly once, so a fragment that no longer matches fails here
+    // instead of leaving the fixture unchanged.
+    let mut agreeing = fs::read_to_string(fixtures.join("named_condition_outputs.fe")).unwrap();
+    for (from, to) in [
+        ("type Out = u8", "type Out = u256"),
+        ("fn make() -> u8 { 2 }", "fn make() -> u256 { 2 }"),
+        ("fn boom() -> u8", "fn boom() -> u256"),
+        ("assert(boom() == 2)", "assert(boom() == 1)"),
+    ] {
+        assert_eq!(agreeing.matches(from).count(), 1, "`{from}` in {agreeing}");
+        agreeing = agreeing.replace(from, to);
+    }
+    fs::write(&path, agreeing).unwrap();
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_entry_codec_identity() {
+    // Two reads of one entry of a generic collection, one under a codec
+    // choice and one without, run their own codecs. Two reads under the same
+    // choice share a dispatch.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/fe_test/named_storage_entry_codec_identity.fe");
+    let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
+fn named_storage_local_generic_choice() {
+    // A named implementation declared inside a generic function applies, with
+    // the function's own arguments, to a codec proof that completes at the
+    // instance. The control has a header that matches at check time.
+    for fixture in [
+        "named_storage_local_generic_choice.fe",
+        "named_storage_local_generic_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn concrete_component_runtime() {
+    // A goal on a concrete type that the dictionary of a pinned bound holds
+    // reads that dictionary: in a function, an implementation's method, a
+    // closure and a function item. A named implementation with a generic
+    // condition opens in a function whose bound pins the condition's
+    // associated type. A `for` loop and the call it sits beside read one
+    // iteration, and an indexing read and a call read one lane codec.
+    for fixture in [
+        "concrete_component_call_bound.fe",
+        "concrete_component_impl_method.fe",
+        "concrete_component_pinned_named_condition.fe",
+        "concrete_component_closure_item.fe",
+        "concrete_component_loop_plan.fe",
+        "concrete_component_entry_codec.fe",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+    }
+}
+
+#[test]
+fn named_function_item_and_spliced_row_forms() {
+    // A function item passed to a callable bound runs with the proofs of its
+    // bounds made where it is passed, in the forms of a trait method, a
+    // method with its own bound, a function with an effect passed under
+    // several providers, and a relay through a generic body. A spliced row
+    // supplies its components in the forms of two components, a direct effect
+    // before the row, a supertrait of the key trait and two generic bodies.
+    for (fixture, passed) in [
+        ("named_function_item_trait_method.fe", 7),
+        ("named_function_item_forms.fe", 6),
+        ("named_function_item_providers.fe", 1),
+        ("named_function_item_method_bound.fe", 3),
+        ("named_function_item_relay_by_choice.fe", 3),
+        ("named_function_item_relay_named_only.fe", 3),
+        ("named_spliced_row_forms.fe", 7),
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/fe_test")
+            .join(fixture);
+        let (output, exit) = run_fe_main(&["test", "--jobs", "1", path.to_str().unwrap()]);
+        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert!(
+            output.contains(&format!("test result: ok. {passed} passed; 0 failed")),
+            "{fixture}: {output}"
+        );
+    }
+}
+
+#[test]
+fn test_cli_check_overlap_sees_the_checking_ingots_implementations() {
+    // Two implementations of a foreign trait overlap through an implementation
+    // of a foreign bound that the checking ingot declares, which the trait's
+    // own ingot cannot see.
+    let conflicting = fe_test_runner_fixture_dir("overlap_foreign_trait");
+    let (output, exit_code) = run_fe_main(&["check", conflicting.to_str().expect("utf8")]);
+    assert_ne!(exit_code, 0, "{output}");
+    assert!(
+        output.contains("conflicting trait implementations"),
+        "{output}"
+    );
+
+    // Where one of them names a type the bound does not cover, they stay disjoint.
+    let disjoint = fe_test_runner_fixture_dir("overlap_foreign_trait_disjoint");
+    let (output, exit_code) = run_fe_main(&["check", disjoint.to_str().expect("utf8")]);
+    assert_eq!(exit_code, 0, "{output}");
+}
+
+/// Runs `fe` and fails the test, killing the process, if it has not finished
+/// within `limit`. A compiler that does not stop is the failure under test.
+fn run_fe_main_within(args: &[&str], limit: std::time::Duration) -> (String, i32) {
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    let dir = tempdir().expect("tempdir");
+    let stdout = fs::File::create(dir.path().join("stdout")).expect("stdout file");
+    let stderr = fs::File::create(dir.path().join("stderr")).expect("stderr file");
+    let mut child = Command::new(fe_binary())
+        .args(args)
+        .env("NO_COLOR", "1")
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to spawn fe {args:?}"));
+    let start = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait for fe") {
+            break Some(status);
+        }
+        if start.elapsed() > limit {
+            child.kill().expect("kill fe");
+            child.wait().expect("reap fe");
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let read = |name: &str| {
+        normalize_output(&String::from_utf8_lossy(
+            &fs::read(dir.path().join(name)).expect("read output"),
+        ))
+    };
+    let output = format!("{}{}", read("stdout"), read("stderr"));
+    let Some(status) = status else {
+        panic!("fe {args:?} did not finish within {limit:?}: {output}");
+    };
+    (output, status.code().unwrap_or(-1))
+}
+
+#[test]
+fn named_polymorphic_recursion_reaches_the_instance_limit() {
+    // The recursive call's dictionary holds a named implementation, and every
+    // instance of `deep` is new. The instance limit ends the chain, as it does
+    // for the same recursion without a choice or with the choice inside the
+    // body.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    for name in [
+        "named_polyrec_control.fe",
+        "named_polyrec_local_choice.fe",
+        "named_polyrec_named.fe",
+    ] {
+        let path = fixtures.join(name);
+        let (output, exit) = run_fe_main_within(
+            &["check", path.to_str().unwrap()],
+            std::time::Duration::from_secs(120),
+        );
+        assert_ne!(exit, 0, "{name}: {output}");
+        assert!(output.contains("16-0016"), "{name}: {output}");
+    }
+}
+
+#[test]
+fn named_condition_answered_goal_needs_ordinary_outputs() {
+    // A goal with outputs, answered only through a choice, is refused even
+    // where the program reads no output: no ordinary implementation defines
+    // the outputs the type checker would assume for it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_unused_outputs.fe");
+    let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("16-0020"), "{output}");
+    assert!(
+        output.contains(
+            "`S: Foo` is answered here by `impl<T: Marker> Foo for T`, but no ordinary implementation defines its associated outputs at `S: Foo`"
+        ),
+        "{output}"
+    );
+    assert!(!output.contains("Foo<Out"), "{output}");
+    assert!(!output.contains("16-0004"), "{output}");
+}
+
+#[test]
+fn named_constant_computed_under_its_own_choice() {
+    // The constant of a named implementation runs a method of the same
+    // implementation under `with`. Checking the constant checks the
+    // computation, which uses the implementation again.
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let limit = std::time::Duration::from_secs(120);
+    let path = fixtures.join("named_const_cycle.fe");
+    let (output, exit) =
+        run_fe_main_within(&["test", "--jobs", "1", path.to_str().unwrap()], limit);
+    assert_eq!(exit, 0, "{output}");
+
+    let path = fixtures.join("named_const_cycle_disagree.fe");
+    let (output, exit) = run_fe_main_within(&["check", path.to_str().unwrap()], limit);
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("5-0005"), "{output}");
+}
+
+#[test]
+fn named_output_walk_does_not_follow_a_body_with_errors() {
+    // `boom` fails internally because `gen<S>` under a named choice disagrees
+    // with ordinary normalization, so admission looks for a disagreement in the
+    // instances `boom` calls. The body of `deep` has an unresolved name, and
+    // its calls are not followed: `deep` calls itself at an ever-growing type,
+    // and no instance limit is reported for a body with errors.
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/named_walk_blocked_body.fe");
+    let (output, exit) = run_fe_main_within(
+        &["check", path.to_str().unwrap()],
+        std::time::Duration::from_secs(120),
+    );
+    assert_ne!(exit, 0, "{output}");
+    assert!(output.contains("8-0012"), "{output}");
+    assert!(!output.contains("16-"), "{output}");
 }

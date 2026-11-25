@@ -620,8 +620,7 @@ impl<'db> TyChecker<'db> {
 
     /// The base `ty` drives if it is a driver or a producer.
     fn driver_base(&mut self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let base = IdentId::new(self.db, "Base".to_string());
         let projection = ["Driver", "Producer"].into_iter().find_map(|name| {
             let trait_def = resolve_core_trait(self.db, self.env.scope(), &["iter", name])?;
@@ -649,8 +648,7 @@ impl<'db> TyChecker<'db> {
     fn chain_base(&mut self, expr: ExprId, ty: TyId<'db>) -> Option<(ExprId, TyId<'db>)> {
         let traits = ["Driver", "Producer"]
             .map(|name| resolve_core_trait(self.db, self.env.scope(), &["iter", name]));
-        let solve_cx =
-            TraitSolveCx::new(self.db, self.env.scope()).with_assumptions(self.env.assumptions());
+        let solve_cx = self.env.solve_cx();
         let base = AssocBinding::of(IdentId::new(self.db, "Base".to_string()));
         let mut receiver = expr;
         while let Partial::Present(Expr::MethodCall(next, ..)) = receiver.data(self.db, self.body())
@@ -727,6 +725,7 @@ impl<'db> TyChecker<'db> {
                 |(driver, _)| driver.span(self.body()).into(),
             );
             self.env.register_trait_obligation(TraitObligation {
+                choices: self.env.choices,
                 goal: inst.mut_goal(self.db),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,
@@ -791,6 +790,7 @@ impl<'db> TyChecker<'db> {
             IdentId::new(self.db, method.to_string()),
             self.env.scope(),
             self.env.assumptions(),
+            self.env.choices,
             Some(trait_def),
         ) {
             Ok(MethodCandidate::TraitMethod(cand)) => (cand, false),
@@ -825,6 +825,7 @@ impl<'db> TyChecker<'db> {
         }
         if confirm || base_ty.is_some() {
             self.env.register_trait_obligation(TraitObligation {
+                choices: self.env.choices,
                 goal: goal.fold_with(self.db, &mut self.table),
                 origin: TraitObligationOrigin::GenericConfirmation,
                 span,

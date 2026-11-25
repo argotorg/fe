@@ -1,0 +1,22 @@
+// As named_function_item_relay_by_choice.fe, but
+// the bound trait has only a named implementation at u256.
+// Expected: go_item 2, go_closure 2, go_direct 2.
+trait Pick { fn pick() -> u256 }
+impl Pick for u8 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+
+fn helper<T: Pick>() -> u256 { T::pick() }
+fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+fn via<T: Pick>() -> u256 { run(helper<T>) }
+fn via_closure<T: Pick>() -> u256 { run(|| helper<T>()) }
+fn via_direct<T: Pick>() -> u256 { helper<T>() }
+
+fn go_item() -> u256 { with (Alt) { via<u256>() } }
+fn go_closure() -> u256 { with (Alt) { via_closure<u256>() } }
+fn go_direct() -> u256 { with (Alt) { via_direct<u256>() } }
+#[test]
+fn item() { assert(go_item() == 2) }
+#[test]
+fn closure() { assert(go_closure() == 2) }
+#[test]
+fn direct() { assert(go_direct() == 2) }

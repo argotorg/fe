@@ -1,13 +1,14 @@
 use camino::Utf8PathBuf;
 use fe_hir::analysis::semantic::{
-    SemanticInstance, identity_semantic_instance_key, root_semantic_instance_key,
-    typed_body_template,
+    GenericSubst, SemConstScalar, SemConstValue, SemanticInstance, eval_body_owner_const,
+    identity_semantic_instance_key, root_semantic_instance_key, typed_body_template,
 };
 use fe_hir::analysis::ty::evidence::{Evidence, EvidenceId};
 use fe_hir::analysis::ty::trait_resolution::{PredicateListId, TraitSolveCx};
 use fe_hir::analysis::ty::ty_check::{BodyOwner, Callable, ConstRef, TypedBody, check_func_body};
 use fe_hir::hir_def::{Expr, Func, ItemKind, Partial, TopLevelMod};
 use fe_hir::test_db::HirAnalysisTestDb;
+use num_traits::ToPrimitive;
 
 const SOURCE: &str = r#"
 struct Wrap<T> {
@@ -142,7 +143,7 @@ fn assumption<'db>(
     let Evidence::Assumption(index) = evidence.data(db) else {
         panic!("expected an assumption: {:?}", evidence.data(db));
     };
-    typed_body.assumptions().list(db)[*index as usize].pretty_print(db, true)
+    typed_body.assumptions().list(db)[index.index as usize].pretty_print(db, true)
 }
 
 /// The proofs of an implementation's conditions.
@@ -205,23 +206,16 @@ fn grow_call_bodies<'db>(db: &'db HirAnalysisTestDb, func: Func<'db>) -> (Option
 /// nothing is assumed, and where the body's assumptions are.
 fn k_use_bodies(db: &HirAnalysisTestDb, func: Func<'_>) -> (bool, bool) {
     let typed_body = check_func_body(db, func).1.clone();
-    let Some(ConstRef::TraitConst {
-        use_,
-        evidence,
-        bound_evidence,
-    }) = typed_body.const_refs().next()
-    else {
+    let Some(ConstRef::TraitConst { use_, evidence }) = typed_body.const_refs().next() else {
         panic!("missing trait constant use");
     };
     let without_assumptions = ConstRef::TraitConst {
         use_: use_.with_env(func.scope(), PredicateListId::empty_list(db)),
         evidence,
-        bound_evidence,
     };
     let with_assumptions = ConstRef::TraitConst {
         use_: use_.with_env(func.scope(), typed_body.assumptions()),
         evidence,
-        bound_evidence,
     };
     (
         without_assumptions.trait_const_body(db).is_some(),
@@ -459,6 +453,7 @@ fn an_instance_proves_the_bounds_its_arguments_close() {
                 Evidence::Impl { .. } if evidence.is_closed(&db) => "closed implementation",
                 Evidence::Impl { .. } => "implementation",
                 Evidence::Assumption(_) => "assumption",
+                Evidence::DeferredSolCodec { .. } => "deferred codec",
             }
         })
         .collect();
@@ -509,4 +504,631 @@ fn a_generic_instance_dispatches_through_the_bound_its_caller_proved() {
         )
         .expect("the bound answers the call");
     assert_eq!(method.body(), None);
+}
+
+#[test]
+fn bound_slots_are_owned_and_foreign_slot_zero_cannot_bind() {
+    use fe_hir::analysis::ty::evidence::{BoundEvidence, BoundOwner, BoundSchemaId, EvidenceList};
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(Utf8PathBuf::from("bound_slot_ownership.fe"), SOURCE);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = func(&db, module, "bound");
+    let (body, call) = method_call(&db, owner);
+    let proof = call.evidence().unwrap();
+    let Evidence::Assumption(slot) = proof.data(&db) else {
+        panic!("bound proof")
+    };
+    assert_eq!(
+        slot.schema.owner(&db),
+        BoundOwner::Body(BodyOwner::func(&db, owner))
+    );
+    assert_eq!(slot.schema, body.bound_schema());
+    assert_eq!(slot.index, 0);
+
+    let other_owner = BodyOwner::func(&db, func(&db, module, "relay"));
+    let adapter = BoundSchemaId::new(
+        &db,
+        BoundOwner::MethodBasis {
+            body: owner,
+            nominal: func(&db, module, "relay"),
+            mode: None,
+        },
+        slot.schema.slots(&db),
+    );
+    let adapter_leaf = EvidenceId::new(&db, Evidence::Assumption(adapter.slot(&db, 0).unwrap()));
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: adapter,
+                entries: EvidenceList::of(&db, vec![Some(adapter_leaf)]),
+            }
+        ),
+        proof,
+        "an adapter basis is not the body's signature"
+    );
+    // Deliberately identical goals and index, with a different declaration owner.
+    let foreign = BoundSchemaId::new(&db, BoundOwner::Body(other_owner), slot.schema.slots(&db));
+    let foreign_leaf = EvidenceId::new(&db, Evidence::Assumption(foreign.slot(&db, 0).unwrap()));
+    let entries = EvidenceList::of(&db, vec![Some(foreign_leaf)]);
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: foreign,
+                entries
+            }
+        ),
+        proof
+    );
+    assert_eq!(
+        proof.bind(
+            &db,
+            BoundEvidence {
+                schema: slot.schema,
+                entries
+            }
+        ),
+        foreign_leaf
+    );
+}
+
+#[test]
+fn a_schema_view_may_extend_a_prefix_but_cannot_reorder_it() {
+    use fe_hir::analysis::ty::evidence::{BoundEvidence, BoundOwner, BoundSchemaId, EvidenceList};
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone(Utf8PathBuf::from("bound_slot_prefix.fe"), SOURCE);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    let owner = BodyOwner::func(&db, func(&db, module, "pair"));
+    let (body, _) = method_call(&db, func(&db, module, "bound"));
+    let pair = &check_func_body(&db, func(&db, module, "pair")).1;
+    let goals = pair.bound_schema().slots(&db).list(&db);
+    assert_eq!(goals.len(), 2);
+    let prefix = BoundSchemaId::new(
+        &db,
+        BoundOwner::Body(owner),
+        PredicateListId::new(&db, vec![goals[0]]),
+    );
+    let leaf = EvidenceId::new(&db, Evidence::Assumption(prefix.slot(&db, 0).unwrap()));
+    let replacement = EvidenceId::new(
+        &db,
+        Evidence::Assumption(body.bound_schema().slot(&db, 0).unwrap()),
+    );
+    let entries = EvidenceList::of(&db, vec![Some(replacement)]);
+    assert_eq!(
+        leaf.bind(
+            &db,
+            BoundEvidence {
+                schema: pair.bound_schema(),
+                entries
+            }
+        ),
+        replacement
+    );
+    let reordered = BoundSchemaId::new(
+        &db,
+        BoundOwner::Body(owner),
+        PredicateListId::new(&db, vec![goals[1], goals[0]]),
+    );
+    assert_eq!(
+        leaf.bind(
+            &db,
+            BoundEvidence {
+                schema: reordered,
+                entries
+            }
+        ),
+        leaf
+    );
+}
+
+fn diagnostics(source: &str) -> Vec<String> {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("evidence_regressions.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diagnostic| diagnostic.to_complete(&db).error_code.to_string())
+        .collect()
+}
+
+#[test]
+fn mut_trait_call_under_choice_retains_progressed_obligation() {
+    let source = r#"
+struct Inner { pub val: u256 }
+struct Item { pub inner: Inner }
+trait Dummy {}
+
+trait Sub {
+    fn sub(mut? self) -> mut? Self
+}
+
+impl Sub for bool {
+    fn sub(self) -> ref Self { ref self }
+}
+
+impl<C> Sub for (u256, C) {
+    fn sub(mut? self) -> mut? Self { mut? self }
+}
+
+impl Sub for (u256, u256) as ChosenRefOnly {
+    fn sub(self) -> ref Self { ref self }
+}
+
+trait Access<A, B> {
+    fn get(mut? self, _ a: A, _ b: B) -> mut? Inner
+}
+
+impl<A: Dummy, B: mut? Sub> Access<A, B> for Item {
+    fn get(mut? self, _ a: A, _ b: B) -> mut? Inner { mut? self.inner }
+}
+
+fn make<T>() -> T { todo() }
+
+pub fn mutate_non_mut(var item: own Item) uses (d: Dummy) {
+    with (ChosenRefOnly) {
+        let b = make()
+        item.get(d, b).val = 1
+        let _: (u256, u256) = b
+    }
+}
+"#;
+    let codes = diagnostics(source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+#[test]
+fn written_type_and_alias_with_internal_choice_are_refused() {
+    for snippet in [
+        "type Sneaky = Array<{ with (Discount) { Item::value() } }>",
+        "pub fn bypass_local() { let x: Array<{ with (Discount) { Item::value() } }> = Array {}\n let y: Array<70> = x }",
+        "pub fn bypass_expr() { let x = Array<{ with (Discount) { Item::value() } }> {}\n let y: Array<70> = x }",
+    ] {
+        let source = format!(
+            r#"
+struct Item {{}}
+trait Pick {{
+    const fn value() -> u256
+}}
+impl Pick for Item {{
+    const fn value() -> u256 {{ 100 }}
+}}
+impl Pick for Item as Discount {{
+    const fn value() -> u256 {{ 70 }}
+}}
+struct Array<const N: u256> {{}}
+{snippet}
+"#
+        );
+        let codes = diagnostics(&source);
+        assert!(
+            codes.contains(&"8-0138".to_string()),
+            "{snippet}: {codes:?}"
+        );
+    }
+
+    let ordinary_control = r#"
+struct Item {}
+struct Other {}
+struct Box<T> { value: T }
+trait Pick {
+    const fn value() -> u256
+}
+impl<T> Pick for Box<T> {
+    const fn value() -> u256 { 100 }
+}
+impl Pick for Box<Item> as DiscountBox {
+    const fn value() -> u256 { 70 }
+}
+const fn bound<T: Pick>() -> u256 { T::value() }
+struct Array<const N: u256> {}
+type BoxedOther = Array<{ with (DiscountBox) { bound<Box<Other>>() } }>
+pub fn use_other() {
+    let x: BoxedOther = Array {}
+    let y: Array<{ with (DiscountBox) { bound<Box<Other>>() } }> = x
+}
+"#;
+    assert!(diagnostics(ordinary_control).is_empty());
+    let chosen_box = ordinary_control.replace("Box<Other>", "Box<Item>");
+    let codes = diagnostics(&chosen_box);
+    assert!(codes.contains(&"8-0138".to_string()), "{codes:?}");
+}
+
+#[test]
+fn qualified_ordinary_with_operand_uses_surrounding_assumptions_and_choices() {
+    let source = r#"
+struct Item {}
+struct Box<T> { pub value: T }
+
+trait Pick {
+    const fn value() -> u256
+}
+
+impl Pick for Item {
+    const fn value() -> u256 { 100 }
+}
+
+impl Pick for Item as Discount {
+    const fn value() -> u256 { 70 }
+}
+
+trait Total {
+    const fn total() -> u256
+}
+
+impl<T: Pick> Total for Box<T> {
+    const fn total() -> u256 { T::value() }
+}
+
+impl<T: Pick> Total for Box<T> as Markup {
+    const fn total() -> u256 {
+        with (<Box<T> as Total>) { Box<T>::total() + 1 }
+    }
+}
+
+pub const fn chosen_markup() -> u256 {
+    with (Markup) { Box<Item>::total() }
+}
+
+pub const fn chosen_discount_markup() -> u256 {
+    with (Discount, Markup) { Box<Item>::total() }
+}
+
+pub const fn generic_escape<T: Pick>() -> u256 {
+    with (Markup) {
+        with (<Box<T> as Total>) { Box<T>::total() }
+    }
+}
+
+pub const fn run_generic_escape() -> u256 {
+    generic_escape<Item>()
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("qualified_ordinary_with.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [
+        ("chosen_markup", 101usize),
+        ("chosen_discount_markup", 71usize),
+        ("run_generic_escape", 100usize),
+    ] {
+        let owner = BodyOwner::func(&db, func(&db, module, name));
+        let evaluated =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let value = evaluated.into_ready().expect("const evaluation succeeded");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar int");
+        };
+        assert_eq!(value.to_usize(), Some(expected), "{name}");
+    }
+
+    let missing_ordinary = r#"
+struct Item {}
+trait Pick {
+    const fn value() -> u256
+}
+impl Pick for Item as Only {
+    const fn value() -> u256 { 23 }
+}
+pub const fn bad_named_only() -> u256 {
+    with (<Item as Pick>) { Item::value() }
+}
+"#;
+    let codes = diagnostics(missing_ordinary);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0030".to_string()), "{codes:?}");
+
+    let assumption_only = r#"
+trait Pick {
+    const fn value() -> u256
+}
+pub const fn bad_assumption<T: Pick>() -> u256 {
+    with (<T as Pick>) { T::value() }
+}
+"#;
+    let codes = diagnostics(assumption_only);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0030".to_string()), "{codes:?}");
+}
+
+#[test]
+fn qualified_ordinary_with_operand_refuses_conditions_that_cannot_hold() {
+    // The header `Box<T>: Total` matches, but its condition `T: Pick` holds
+    // neither for `Other` nor for an unbounded `T`. The opening is refused
+    // even though the block does not use it.
+    let prelude = r#"
+struct Item {}
+struct Other {}
+struct Box<T> { pub value: T }
+
+trait Pick {
+    const fn value() -> u256
+}
+impl Pick for Item {
+    const fn value() -> u256 { 100 }
+}
+
+trait Total {
+    const fn total() -> u256
+}
+impl<T: Pick> Total for Box<T> {
+    const fn total() -> u256 { T::value() }
+}
+"#;
+    for opening in [
+        "pub const fn opened_unused() -> u256 { with (<Box<Other> as Total>) { 1 } }",
+        "pub const fn opened<T>() -> u256 { with (<Box<T> as Total>) { 1 } }",
+    ] {
+        let codes = diagnostics(&format!("{prelude}{opening}\n"));
+        assert!(
+            codes.contains(&"6-0003".to_string()),
+            "{opening}: {codes:?}"
+        );
+        assert!(
+            !codes.contains(&"8-0030".to_string()),
+            "{opening}: {codes:?}"
+        );
+    }
+    // A condition that the surrounding bounds prove still opens.
+    let bounded = format!(
+        "{prelude}pub const fn opened<T: Pick>() -> u256 {{ with (<Box<T> as Total>) {{ 1 }} }}\n"
+    );
+    assert!(
+        diagnostics(&bounded).is_empty(),
+        "{:?}",
+        diagnostics(&bounded)
+    );
+}
+
+#[test]
+fn assoc_const_path_uses_chosen_impls_and_non_param_assumptions() {
+    let source = r#"
+trait Pick {
+    const fn value() -> u256
+}
+
+trait Count {
+    const N: u256
+}
+
+struct Item {}
+struct Box<T> {
+    pub value: T
+}
+
+impl Pick for Item as Only {
+    const fn value() -> u256 { 7 }
+}
+
+impl<T: Pick> Count for Box<T> {
+    const N: u256 = 23
+}
+
+pub const fn qualified() -> u256 {
+    with (Only) { <Box<Item> as Count>::N }
+}
+
+pub const fn unqualified() -> u256 {
+    with (Only) { Box<Item>::N }
+}
+
+trait Step {
+    const STEP: u256
+    const NEXT: u256
+}
+
+impl<T: Pick> Step for Box<T> {
+    const STEP: u256 = Box<T>::N
+    const NEXT: u256 = Self::STEP + 1
+}
+
+pub const fn read_step() -> u256 {
+    with (Only) { Box<Item>::NEXT }
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("assoc_const_chosen_impls.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [
+        ("qualified", 23usize),
+        ("unqualified", 23usize),
+        ("read_step", 24usize),
+    ] {
+        let owner = BodyOwner::func(&db, func(&db, module, name));
+        let evaluated =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let value = evaluated.into_ready().expect("const evaluation succeeded");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar int");
+        };
+        assert_eq!(value.to_usize(), Some(expected), "{name}");
+    }
+}
+
+#[test]
+fn trait_const_pattern_uses_chosen_evidence_and_refuses_conflict() {
+    let source = r#"
+trait Price {
+    const fn value() -> u256
+}
+
+trait Priced {
+    const N: u256
+}
+
+struct Item {}
+struct Box<T> {
+    pub value: T
+}
+
+impl Price for Item as Discount {
+    const fn value() -> u256 { 7 }
+}
+
+impl<T: Price> Priced for Box<T> {
+    const N: u256 = 7
+}
+
+pub const fn matched_qualified() -> u256 {
+    let x: u256 = 7
+    with (Discount) {
+        match x {
+            <Box<Item> as Priced>::N => 1
+            _ => 0
+        }
+    }
+}
+
+pub const fn matched_unqualified() -> u256 {
+    let x: u256 = 7
+    with (Discount) {
+        match x {
+            Box<Item>::N => 1
+            _ => 0
+        }
+    }
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("trait_const_pattern_choice.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    db.assert_no_diags(module);
+    for (name, expected) in [
+        ("matched_qualified", 1usize),
+        ("matched_unqualified", 1usize),
+    ] {
+        let owner = BodyOwner::func(&db, func(&db, module, name));
+        let evaluated =
+            eval_body_owner_const(&db, owner, GenericSubst::for_body_owner(&db, owner, vec![]));
+        let value = evaluated.into_ready().expect("const evaluation succeeded");
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(&db)
+        else {
+            panic!("expected scalar int");
+        };
+        assert_eq!(value.to_usize(), Some(expected), "{name}");
+    }
+
+    let conflict_source = r#"
+trait Base {
+    const N: u256
+}
+trait Left: Base {}
+trait Right: Base {}
+trait Join: Left + Right {
+    const M: u256 = Self::N
+}
+struct Item {}
+impl Base for Item {
+    const N: u256 = 1
+}
+impl Base for Item as LeftBase {
+    const N: u256 = 1
+}
+impl Base for Item as RightBase {
+    const N: u256 = 1
+}
+impl Left for Item as LeftImpl {}
+impl Right for Item as RightImpl {}
+impl Join for Item {}
+pub fn check(x: u256) -> u256 {
+    with (LeftBase, LeftImpl, RightBase, RightImpl) {
+        match x {
+            Item::M => 1
+            _ => 0
+        }
+    }
+}
+"#;
+    let codes = diagnostics(conflict_source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(codes.contains(&"8-0160".to_string()), "{codes:?}");
+
+    // One list may not hold two implementations for the same goal, so the
+    // same conflict is written with one list for each side.
+    let nested_source = conflict_source.replace(
+        "    with (LeftBase, LeftImpl, RightBase, RightImpl) {\n        match x {\n            Item::M => 1\n            _ => 0\n        }\n    }",
+        "    with (LeftBase, LeftImpl) {\n        with (RightBase, RightImpl) {\n            match x {\n                Item::M => 1\n                _ => 0\n            }\n        }\n    }",
+    );
+    assert_ne!(
+        nested_source, conflict_source,
+        "the nested form must replace the list"
+    );
+    let codes = diagnostics(&nested_source);
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+    assert!(!codes.contains(&"8-0160".to_string()), "{codes:?}");
+}
+
+#[test]
+fn named_impl_deferred_assoc_const_referencing_trait_const_is_accepted() {
+    let source = r#"
+struct Box<T> { pub value: T }
+trait HasLen {
+    const LEN: u256
+}
+trait Size {
+    const CAP: u256
+    const fn size() -> u256
+}
+impl<T: HasLen> Size for Box<T> {
+    const CAP: u256 = {
+        let _: u256 = 0
+        T::LEN
+    }
+    const fn size() -> u256 { 100 }
+}
+impl<T: HasLen> Size for Box<T> as Named {
+    const CAP: u256 = {
+        let _: u256 = 0
+        T::LEN
+    }
+    const fn size() -> u256 { 70 }
+}
+"#;
+    assert!(diagnostics(source).is_empty(), "{:?}", diagnostics(source));
+
+    let mismatch_source = r#"
+struct Box<T> { pub value: T }
+trait HasLen {
+    const LEN: u256
+}
+trait Size {
+    const CAP: u256
+    const fn size() -> u256
+}
+impl<T: HasLen> Size for Box<T> {
+    const CAP: u256 = {
+        let _: u256 = 0
+        T::LEN
+    }
+    const fn size() -> u256 { 100 }
+}
+impl<T: HasLen> Size for Box<T> as Named {
+    const CAP: u256 = {
+        let _: u256 = 0
+        T::LEN + 1
+    }
+    const fn size() -> u256 { 70 }
+}
+"#;
+    let codes = diagnostics(mismatch_source);
+    assert!(codes.contains(&"5-0005".to_string()), "{codes:?}");
 }

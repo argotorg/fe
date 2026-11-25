@@ -7,8 +7,8 @@ use crate::{
     span::DynLazySpan,
 };
 
-use crate::hir_def::CallableDef;
 use crate::hir_def::params::{FuncParam, FuncParamMode};
+use crate::hir_def::{CallableDef, ItemKind};
 use common::indexmap::IndexMap;
 use cranelift_entity::{PrimaryMap, SecondaryMap};
 use num_bigint::BigInt;
@@ -42,14 +42,15 @@ use crate::analysis::{
             model::EffectRequirementDecl,
             rows::{RowComponent, RowComponentRequirement, expand_rows},
         },
-        evidence::prove,
+        evidence::{BoundOwner, BoundSchemaId, Refusal, RefusedGoal, prove_outcome},
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{
-            PredicateListId, TraitSolveCx, constraint::collect_func_effect_provider_constraints,
+            ChosenImpls, PredicateListId, TraitSolveCx,
+            constraint::collect_func_effect_provider_constraints,
         },
         ty_def::{
             BorrowKind, ClosureDef, ClosureTy, InvalidCause, StringFallback, TyData, TyId,
@@ -154,6 +155,9 @@ pub(crate) struct TyCheckEnv<'db> {
     resolved_field_index: SecondaryMap<ExprId, Option<u16>>,
 
     deferred: Vec<DeferredTask<'db>>,
+    pub(super) choices: Option<super::super::trait_resolution::ChosenImpls<'db>>,
+    expr_choices: SecondaryMap<ExprId, Option<super::super::trait_resolution::ChosenImpls<'db>>>,
+    stmt_choices: SecondaryMap<StmtId, Option<super::super::trait_resolution::ChosenImpls<'db>>>,
 
     effect_env: keyed_effect_env::EffectEnv<'db>,
     effect_bounds: ThinVec<TraitInstId<'db>>,
@@ -222,7 +226,7 @@ pub(crate) struct TyCheckEnv<'db> {
     inspected_places: FxHashSet<ExprId>,
     /// Index expressions naming an entry of a collection whose elements are
     /// places (`core::ops::StateIndex`).
-    place_entries: FxHashSet<ExprId>,
+    place_entries: FxHashMap<ExprId, super::PlaceEntryCalls<'db>>,
     /// The expressions of type `!` typed as their context's type.
     never_coercions: FxHashSet<ExprId>,
     /// The tuples that are unsafe splits (`check_unsafe_split`).
@@ -237,6 +241,7 @@ pub(crate) struct TyCheckEnv<'db> {
     /// (`x = x.wrapping_add(y)`) rather than call an `*Assign` method.
     operator_assigns: FxHashSet<ExprId>,
     covered_providers: FxHashSet<ExprId>,
+    pub(super) named_impl_operands: FxHashSet<ExprId>,
     /// The part of a projection's return shape each yield site grants.
     yield_shapes: SecondaryMap<ExprId, Option<Shape<'db>>>,
 
@@ -330,6 +335,38 @@ impl<'db> TyCheckEnv<'db> {
             closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
+            choices: match owner_scope.parent_item(db) {
+                Some(ItemKind::ImplTrait(implementation))
+                    if implementation.selection_name(db).is_some() =>
+                {
+                    super::super::trait_lower::lower_impl_trait(db, implementation).map(
+                        |implementation| {
+                            let owner = implementation.hir_impl_trait(db);
+                            let mut args = implementation.params(db).clone();
+                            if let Some(parent) =
+                                crate::hir_def::GenericParamOwner::from(owner).parent(db)
+                            {
+                                let inherited =
+                                    super::super::ty_lower::collect_generic_params(db, parent)
+                                        .params(db);
+                                args[..inherited.len()].copy_from_slice(inherited);
+                            }
+                            let applied =
+                                super::super::binder::Binder::bind(owner.into(), implementation)
+                                    .instantiate(db, &args);
+                            super::super::trait_resolution::ChosenImpls::push_applied(
+                                db,
+                                None,
+                                implementation,
+                                applied,
+                            )
+                        },
+                    )
+                }
+                _ => None,
+            },
+            expr_choices: SecondaryMap::new(),
+            stmt_choices: SecondaryMap::new(),
             effect_env: keyed_effect_env::EffectEnv::new(),
             effect_bounds: ThinVec::new(),
             base_assumptions,
@@ -361,7 +398,7 @@ impl<'db> TyCheckEnv<'db> {
             consumed_accesses: FxHashSet::default(),
             matched_places: FxHashSet::default(),
             inspected_places: FxHashSet::default(),
-            place_entries: FxHashSet::default(),
+            place_entries: FxHashMap::default(),
             never_coercions: FxHashSet::default(),
             unsafe_splits: FxHashSet::default(),
             product_args: FxHashSet::default(),
@@ -369,6 +406,7 @@ impl<'db> TyCheckEnv<'db> {
             builtin_ops: FxHashMap::default(),
             operator_assigns: FxHashSet::default(),
             covered_providers: FxHashSet::default(),
+            named_impl_operands: FxHashSet::default(),
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
@@ -666,7 +704,7 @@ impl<'db> TyCheckEnv<'db> {
             expr,
             |expr| self.typed_expr(expr).and_then(|p| p.binding),
             |expr| self.typed_expr_ty(expr),
-            |expr| self.place_entries.contains(&expr),
+            |expr| self.place_entries.contains_key(&expr),
         )
     }
 
@@ -746,6 +784,7 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn register_for_loop_plan(&mut self, stmt: StmtId, plan: ForLoopPlan<'db>) {
+        self.stmt_choices[stmt] = self.choices;
         if self.for_loop_plans[stmt].replace(plan).is_some() {
             panic!("for loop seq is already registered for the given stmt")
         }
@@ -851,10 +890,17 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
+    /// The facts in scope: the bounds the owner declares. An implementation
+    /// opened by `with` is a candidate for goals, in `solve_cx`, and asserts
+    /// nothing here.
     pub(crate) fn assumptions(&self) -> PredicateListId<'db> {
-        // Return the assumptions we computed in new, which includes
-        // both generic bounds (if any) AND the effect parameter bounds.
         self.assumptions
+    }
+
+    pub(super) fn solve_cx(&self) -> TraitSolveCx<'db> {
+        TraitSolveCx::new(self.db, self.scope())
+            .with_assumptions(self.assumptions())
+            .with_choices(self.choices)
     }
 
     pub(crate) fn base_assumptions(&self) -> PredicateListId<'db> {
@@ -990,8 +1036,12 @@ impl<'db> TyCheckEnv<'db> {
         self.matched_places.contains(&expr)
     }
 
-    pub(super) fn record_place_entry(&mut self, expr: ExprId) {
-        self.place_entries.insert(expr);
+    pub(super) fn record_place_entry(
+        &mut self,
+        expr: ExprId,
+        callable: super::PlaceEntryCalls<'db>,
+    ) {
+        self.place_entries.insert(expr, callable);
     }
 
     /// Records whether `expr`, of type `!`, is typed as its context's type;
@@ -1316,6 +1366,7 @@ impl<'db> TyCheckEnv<'db> {
     pub(super) fn call_site(&self) -> CallSite<'db> {
         CallSite {
             frames: self.effect_env.with_frames(),
+            choices: self.choices,
             closure: self.closure_stack.last().map(|active| active.def),
         }
     }
@@ -1324,7 +1375,8 @@ impl<'db> TyCheckEnv<'db> {
     /// `leave_call_site`: under its `with` blocks, in its closure's body. A
     /// closure already checked gives its finished environment, whose row is
     /// fixed.
-    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) {
+    pub(super) fn enter_call_site(&mut self, site: &CallSite<'db>) -> Option<ChosenImpls<'db>> {
+        let enclosing_choices = std::mem::replace(&mut self.choices, site.choices);
         debug_assert!(
             site.closure.is_some() || self.closure_stack.is_empty(),
             "a call outside closures resolves after them"
@@ -1343,9 +1395,11 @@ impl<'db> TyCheckEnv<'db> {
             self.late_closure = Some((def, enclosing));
         }
         self.effect_env.reopen_with_frames(site.frames.clone());
+        enclosing_choices
     }
 
-    pub(super) fn leave_call_site(&mut self) {
+    pub(super) fn leave_call_site(&mut self, enclosing_choices: Option<ChosenImpls<'db>>) {
+        self.choices = enclosing_choices;
         self.effect_env.close_with_frames();
         if let Some((def, enclosing)) = self.late_closure.take() {
             let env = std::mem::replace(&mut self.effect_env, enclosing);
@@ -1443,6 +1497,9 @@ impl<'db> TyCheckEnv<'db> {
     }
 
     pub(super) fn enter_expr(&mut self, expr: ExprId) {
+        if self.choices.is_some() {
+            self.expr_choices[expr] = self.choices;
+        }
         self.expr_stack.push(expr);
     }
 
@@ -1631,7 +1688,11 @@ impl<'db> TyCheckEnv<'db> {
     /// expression types, and callables, all of which have been folded with
     /// the unification table.
     ///
-    pub(super) fn finish(mut self, table: &mut UnificationTable<'db>) -> TypedBody<'db> {
+    pub(super) fn finish(
+        mut self,
+        table: &mut UnificationTable<'db>,
+        diags: &mut Vec<super::super::diagnostics::FuncBodyDiag<'db>>,
+    ) -> TypedBody<'db> {
         let mut prober = Prober {
             table,
             scope: self.scope(),
@@ -1686,29 +1747,180 @@ impl<'db> TyCheckEnv<'db> {
             .values_mut()
             .flatten()
             .for_each(|plan| *plan = plan.clone().fold_with(self.db, &mut prober));
+        let failed_proof = |goal: TraitInstId<'db>, span: DynLazySpan<'db>| {
+            super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::TraitBoundNotSat {
+                        span,
+                        primary_goal: goal,
+                        unsat_subgoal: None,
+                        required_by: None,
+                    },
+                ),
+            )
+        };
+        let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
+        {
+            Refusal::Differs { a, .. } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
+                        span,
+                        primary_goal: refused.goal,
+                        root: a,
+                    },
+                ),
+            ),
+            Refusal::ConditionsDiffer { a, b } => super::super::diagnostics::FuncBodyDiag::from(
+                super::super::diagnostics::TyDiagCollection::from(
+                    super::super::diagnostics::TraitConstraintDiag::ConditionsDiffer {
+                        span,
+                        primary_goal: refused.goal,
+                        a,
+                        b,
+                    },
+                ),
+            ),
+            Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
+                failed_proof(refused.goal, span)
+            }
+        };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.
         let solve_cx = TraitSolveCx::new(self.db, prober.scope).with_assumptions(assumptions);
-        for callable in self
-            .semantic_expr_lowering
-            .values_mut()
-            .flatten()
-            .flat_map(SemanticExprLowering::callables_mut)
-        {
-            callable.record_evidence(self.db, solve_cx);
-            callable.record_bound_evidence(self.db, solve_cx);
+        for (&expr, calls) in &mut self.place_entries {
+            let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
+            let mut codec_choice_failed = false;
+            let mut codec_deferred = false;
+            for (index, callable) in calls.iter_mut().enumerate() {
+                *callable = callable.clone().fold_with(self.db, &mut prober);
+                let outcome = callable.record_evidence(self.db, solve_cx);
+                if index > 0 {
+                    use super::super::evidence::ProofOutcome;
+                    match outcome {
+                        ProofOutcome::Deferred => codec_deferred = true,
+                        ProofOutcome::Proven(proof) if proof.has_deferred(self.db) => {
+                            codec_deferred = true;
+                        }
+                        ProofOutcome::Unavailable if let Some(choices) = solve_cx.choices() => {
+                            // An explicit header can already win while a
+                            // prerequisite still depends on an argument of
+                            // the entry or the applied lexical choice.
+                            if super::codec_proof_is_parametric(self.db, callable, choices) {
+                                codec_deferred = true;
+                            } else {
+                                codec_choice_failed = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // A storage entry's calls pass no effect arguments.
+                callable.record_bound_evidence(self.db, solve_cx, &[]);
+                callable.qualify_evidence(self.db, self.owner);
+            }
+            calls.codec_choice_failed = codec_choice_failed;
+            if codec_deferred {
+                calls.codec_choices = solve_cx
+                    .choices()
+                    .map(|choices| choices.fold_with(self.db, &mut prober));
+            }
+            if let Some(goal) = calls.locate.trait_inst()
+                && calls.locate.evidence().is_none()
+                && !super::super::visitor::collect_flags(self.db, goal).intersects(
+                    super::super::ty_def::TyFlags::HAS_VAR
+                        | super::super::ty_def::TyFlags::HAS_INVALID,
+                )
+            {
+                diags.push(failed_proof(goal, expr.span(self.body).into()));
+            }
         }
-        for plan in self.for_loop_plans.values_mut().flatten() {
+        for (expr, lowering) in self.semantic_expr_lowering.iter_mut() {
+            let Some(lowering) = lowering else {
+                continue;
+            };
+            let solve_cx = solve_cx.with_choices(self.expr_choices[expr]);
+            // A call's effect arguments give the providers of its callee's
+            // row components.
+            let effect_args: Vec<_> = match lowering {
+                SemanticExprLowering::Call { .. } => self.call_effect_args[expr]
+                    .iter()
+                    .flatten()
+                    .map(|arg| arg.clone().fold_with(self.db, &mut prober))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            for callable in lowering.callables_mut() {
+                callable.record_evidence(self.db, solve_cx);
+                let refused = callable.record_bound_evidence(self.db, solve_cx, &effect_args);
+                callable.qualify_evidence(self.db, self.owner);
+
+                if solve_cx.choices().is_some() {
+                    for refused in refused {
+                        diags.push(refused_proof(refused, expr.span(self.body).into()));
+                    }
+                }
+                if solve_cx.choices().is_some()
+                    && callable.evidence().is_none()
+                    && let Some(goal) = callable.trait_inst()
+                    && !super::super::visitor::collect_flags(self.db, goal).intersects(
+                        super::super::ty_def::TyFlags::HAS_VAR
+                            | super::super::ty_def::TyFlags::HAS_INVALID,
+                    )
+                {
+                    diags.push(failed_proof(goal, expr.span(self.body).into()));
+                }
+            }
+        }
+        for (stmt, plan) in self.for_loop_plans.iter_mut() {
+            let Some(plan) = plan else {
+                continue;
+            };
+            let solve_cx = solve_cx.with_choices(self.stmt_choices[stmt]);
             for call in &mut plan.calls {
                 call.callable.record_evidence(self.db, solve_cx);
-                call.callable.record_bound_evidence(self.db, solve_cx);
+                let effect_args: Vec<_> = call
+                    .effect_args
+                    .iter()
+                    .map(|arg| arg.clone().fold_with(self.db, &mut prober))
+                    .collect();
+                let refused = call
+                    .callable
+                    .record_bound_evidence(self.db, solve_cx, &effect_args);
+                call.callable.qualify_evidence(self.db, self.owner);
+
+                if solve_cx.choices().is_some() {
+                    for refused in refused {
+                        diags.push(refused_proof(refused, stmt.span(self.body).into()));
+                    }
+                }
+                if solve_cx.choices().is_some()
+                    && call.callable.evidence().is_none()
+                    && let Some(goal) = call.callable.trait_inst()
+                {
+                    diags.push(failed_proof(goal, stmt.span(self.body).into()));
+                }
             }
         }
-        for const_ref in self.const_refs.values_mut().flatten() {
+        for (expr, const_ref) in self.const_refs.iter_mut() {
+            let Some(const_ref) = const_ref else {
+                continue;
+            };
+            let choices = self.expr_choices[expr];
             if let ConstRef::TraitConst { use_, evidence, .. } = const_ref {
-                *evidence = prove(self.db, use_.solve_cx(self.db), use_.inst());
+                let outcome = prove_outcome(
+                    self.db,
+                    use_.solve_cx(self.db).with_choices(choices),
+                    use_.inst(),
+                );
+                evidence.record_dispatch(use_.inst(), outcome.evidence());
+                if choices.is_some() && evidence.dispatch_proof().is_none() {
+                    diags.push(failed_proof(use_.inst(), expr.span(self.body).into()));
+                }
             }
-            const_ref.record_bound_evidence(self.db);
+            for refused in const_ref.record_bound_evidence(self.db, choices) {
+                diags.push(refused_proof(refused, expr.span(self.body).into()));
+            }
+            const_ref.qualify_evidence(self.db, self.owner);
         }
         self.closure_infos
             .values_mut()
@@ -1731,7 +1943,7 @@ impl<'db> TyCheckEnv<'db> {
                         |prop| prop.ty,
                     )
                 },
-                |expr| self.place_entries.contains(&expr),
+                |expr| self.place_entries.contains_key(&expr),
             ) {
                 let place_id = expr_places.push(place);
                 expr_place[expr] = place_id.into();
@@ -1746,6 +1958,8 @@ impl<'db> TyCheckEnv<'db> {
             body: Some(self.body),
             result_ty,
             signature,
+            bound_schema: BoundSchemaId::new(self.db, BoundOwner::Body(self.owner), assumptions),
+            refused_bound: None,
             assumptions,
             pat_ty: self.pat_ty,
             expr_ty: self.expr_ty,
@@ -1760,6 +1974,8 @@ impl<'db> TyCheckEnv<'db> {
             matched_places: self.matched_places,
             inspected_places: self.inspected_places,
             covered_providers: self.covered_providers,
+            named_impl_operands: self.named_impl_operands,
+            expr_choices: self.expr_choices,
             const_refs: self.const_refs,
             value_path_refs: self.value_path_refs,
             semantic_expr_lowering: self.semantic_expr_lowering,
@@ -2686,6 +2902,7 @@ pub(super) enum PendingEffectsTarget {
 #[derive(Debug, Clone)]
 pub(super) struct CallSite<'db> {
     frames: Vec<keyed_effect_env::EffectFrame<'db>>,
+    pub choices: Option<ChosenImpls<'db>>,
     pub closure: Option<ClosureDef<'db>>,
 }
 
@@ -2734,6 +2951,7 @@ pub(super) struct TraitObligation<'db> {
     pub goal: TraitInstId<'db>,
     pub origin: TraitObligationOrigin<'db>,
     pub span: DynLazySpan<'db>,
+    pub choices: Option<super::super::trait_resolution::ChosenImpls<'db>>,
 }
 
 impl<'db> TyCheckEnv<'db> {}

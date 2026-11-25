@@ -1,0 +1,6 @@
+[ingot]
+name = "projected_binding_app"
+version = "0.1.0"
+
+[dependencies]
+projected_binding_dep = "../projected_binding_dep"

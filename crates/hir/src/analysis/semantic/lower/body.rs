@@ -8,7 +8,7 @@ use rustc_hash::FxHashMap;
 use crate::{
     analysis::semantic::instance::{
         CallSiteLowering, ForLoopCallSites, SemanticInstance, provisional_semantic_callee_key,
-        resolve_semantic_const_ref, semantic_callee_key_with_effect_providers,
+        resolve_semantic_const_ref_with_policy, semantic_callee_key_with_effect_providers,
     },
     analysis::{
         HirAnalysisDb,
@@ -1627,23 +1627,24 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
         // use was checked under, once substituted, may hold only by the bounds
         // of the context the instance was made for.
         let const_ref = match const_ref {
-            ConstRef::TraitConst {
-                use_,
-                evidence,
-                bound_evidence,
-            } => ConstRef::TraitConst {
+            ConstRef::TraitConst { use_, evidence } => ConstRef::TraitConst {
                 use_: use_.with_env(use_.origin_scope(), self.assumptions),
                 evidence,
-                bound_evidence,
             },
-            ConstRef::InherentConst(use_) => {
-                ConstRef::InherentConst(use_.with_env(use_.origin_scope(), self.assumptions))
-            }
+            ConstRef::InherentConst { use_, evidence } => ConstRef::InherentConst {
+                use_: use_.with_env(use_.origin_scope(), self.assumptions),
+                evidence,
+            },
             ConstRef::Const(_) => const_ref,
         };
-        if let Some(const_ref) =
-            resolve_semantic_const_ref(self.db, const_ref, ty, SemOrigin::Expr(expr))
-        {
+        let policy = self.instance.key(self.db).evidence_policy(self.db);
+        if let Some(const_ref) = resolve_semantic_const_ref_with_policy(
+            self.db,
+            const_ref,
+            ty,
+            SemOrigin::Expr(expr),
+            policy,
+        ) {
             return self.emit_expr_with_origin(
                 SemOrigin::Expr(expr),
                 ty,
@@ -1657,7 +1658,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             ConstRef::TraitConst { use_: assoc, .. } => {
                 const_ty_or_abstract_from_assoc_const_use(self.db, assoc, ty)
             }
-            ConstRef::InherentConst(use_) => {
+            ConstRef::InherentConst { use_, .. } => {
                 const_ty_or_abstract_from_inherent_const_use(self.db, use_, ty)
             }
             ConstRef::Const(_) => None,

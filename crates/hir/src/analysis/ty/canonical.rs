@@ -216,6 +216,18 @@ where
     pub(super) value: T,
 }
 
+impl<'db> Solution<super::trait_def::TraitInstId<'db>> {
+    /// This solution with each constant in it evaluated
+    /// (`trait_def::consts_evaluated`), so that two solutions that differ only
+    /// in how a constant is written compare equal, as unification compares
+    /// them.
+    pub(crate) fn consts_evaluated(self, db: &'db dyn HirAnalysisDb) -> Self {
+        Self {
+            value: super::trait_def::consts_evaluated(db, self.value),
+        }
+    }
+}
+
 /// A struct that helps in converting types to their canonical form.
 /// It maintains a mapping from original type variables to canonical variables.
 #[derive(Default)]

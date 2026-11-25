@@ -1,0 +1,17 @@
+// Polymorphic recursion whose dictionary contains a named implementation.
+// Every instance of `deep` is a new key, so the recursion ends only at the
+// instance limit. Expected: 16-0016 (instantiation limit), as for
+// named_polyrec_control.fe, without running on.
+trait Pick { fn pick() -> u256 }
+impl Pick for u256 { fn pick() -> u256 { 1 } }
+impl Pick for u256 as Alt { fn pick() -> u256 { 2 } }
+struct Wrap<T> {}
+impl<T: Pick> Pick for Wrap<T> { fn pick() -> u256 { T::pick() } }
+
+fn deep<T: Pick>(n: u256) -> u256 {
+    if n == 0 { return T::pick() }
+    deep<Wrap<T>>(n: n - 1)
+}
+fn go() -> u256 { with (Alt) { deep<u256>(n: 3) } }
+#[test]
+fn t() { assert(go() == 2) }

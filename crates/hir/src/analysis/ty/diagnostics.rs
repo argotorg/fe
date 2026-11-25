@@ -573,6 +573,10 @@ pub enum MarkerPosition {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum BodyDiag<'db> {
+    ChosenTypeRead {
+        primary: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+    },
     TypeMismatch {
         span: DynLazySpan<'db>,
         expected: TyId<'db>,
@@ -774,6 +778,20 @@ pub enum BodyDiag<'db> {
         primary: DynLazySpan<'db>,
         first: DynLazySpan<'db>,
         key: PathId<'db>,
+    },
+
+    /// Two implementation operands of one `with` can answer the same goal.
+    DuplicateWithChoice {
+        primary: DynLazySpan<'db>,
+        first: DynLazySpan<'db>,
+        goal: TraitInstId<'db>,
+        possible: bool,
+    },
+
+    /// A bare `with` operand that names no implementation and no value.
+    UnknownWithOperand {
+        primary: DynLazySpan<'db>,
+        name: IdentId<'db>,
     },
 
     ReturnedTypeMismatch {
@@ -1207,6 +1225,16 @@ pub enum BodyDiag<'db> {
         expected: usize,
     },
 
+    /// Fewer generic arguments naming an implementation in `with` than it
+    /// has parameters without a default. Unlike a call, the operand has no
+    /// arguments left to infer.
+    TooFewWithGenericArgs {
+        primary: DynLazySpan<'db>,
+        def_span: DynLazySpan<'db>,
+        given: usize,
+        expected: usize,
+    },
+
     CallArgNumMismatch {
         primary: DynLazySpan<'db>,
         def_span: DynLazySpan<'db>,
@@ -1563,7 +1591,7 @@ impl<'db> BodyDiag<'db> {
             Self::RecordFieldNotFound { .. } => 9,
             Self::ExplicitLabelExpectedInRecord { .. } => 10,
             Self::MissingRecordFields { .. } => 11,
-            Self::UndefinedVariable(..) => 12,
+            Self::UndefinedVariable(..) | Self::UnknownWithOperand { .. } => 12,
             Self::InvalidEffectKey { .. } => 51,
             Self::ContractRootEffectTraitNotImplemented { .. } => 53,
             Self::ContractRootEffectTypeNotZeroSized { .. } => 54,
@@ -1576,6 +1604,7 @@ impl<'db> BodyDiag<'db> {
             Self::WithEffectTraitUnsatisfied { .. } => 75,
             Self::WithEffectTypeUnsatisfied { .. } => 76,
             Self::DuplicateWithKey { .. } => 159,
+            Self::DuplicateWithChoice { .. } => 160,
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
@@ -1671,6 +1700,7 @@ impl<'db> BodyDiag<'db> {
             Self::VariadicArgLabel(_) => 160,
             Self::InvalidVariadicArg { .. } => 161,
             Self::ImmutableContractEffectMutBinding { .. } => 162,
+            Self::TooFewWithGenericArgs { .. } => 163,
             Self::UnusedMustUse { .. } => 82,
             Self::DuplicatedBinding { .. } => 32,
             Self::NotAMethod { .. } => 33,
@@ -1696,12 +1726,58 @@ impl<'db> BodyDiag<'db> {
             Self::ConstFnEffectfulCall { .. } => 63,
             Self::UnsafeDerefRequiresUnsafe { .. } => 96,
             Self::UnsafeCallRequiresUnsafe { .. } => 97,
+            Self::ChosenTypeRead { .. } => 138,
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub enum TraitLowerDiag<'db> {
+    NamedOutputsNeedOrdinary {
+        primary: ImplTrait<'db>,
+    },
+    /// A named implementation that no use can choose (see
+    /// `trait_def::unchoosable_named_trait`).
+    UnchoosableNamedImplementation {
+        primary: ImplTrait<'db>,
+        name: IdentId<'db>,
+        reason: crate::analysis::ty::trait_def::UnchoosableReason,
+    },
+    NamedAssociatedConstMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        /// The headers only may overlap (an unresolved associated type or
+        /// constant keeps them from being proved disjoint).
+        possible: bool,
+        name: IdentId<'db>,
+    },
+    NamedAssociatedTypeMismatch {
+        primary: ImplTrait<'db>,
+        possible: bool,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// Named implementations of a slot with no ordinary implementation
+    /// agree on its associated types.
+    NamedAssociatedTypeDisagreement {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        possible: bool,
+        name: IdentId<'db>,
+        expected: TyId<'db>,
+        given: TyId<'db>,
+    },
+    /// A named implementation gives a slot's associated effect row as
+    /// the slot's ordinary implementation does, or, with none, as each
+    /// other named implementation does.
+    NamedAssociatedRowMismatch {
+        primary: ImplTrait<'db>,
+        with: ImplTrait<'db>,
+        ordinary: bool,
+        possible: bool,
+        name: IdentId<'db>,
+    },
     ConflictTraitImpl {
         primary: ImplTrait<'db>,
         conflict_with: ImplTrait<'db>,
@@ -1732,7 +1808,13 @@ impl TraitLowerDiag<'_> {
             Self::CyclicSuperTraits { .. } => 2,
             Self::CyclicTraitRef(_) => 3,
             Self::UnsafeLocalBoundBlanketImpl(_) => 4,
-            Self::AccessItemDefault { .. } => 5,
+            Self::AccessItemDefault { .. }
+            | Self::NamedAssociatedTypeMismatch { .. }
+            | Self::NamedAssociatedTypeDisagreement { .. }
+            | Self::NamedAssociatedRowMismatch { .. }
+            | Self::NamedAssociatedConstMismatch { .. }
+            | Self::UnchoosableNamedImplementation { .. }
+            | Self::NamedOutputsNeedOrdinary { .. } => 5,
             Self::ImplHeaderAssocTypeBinding { .. } => 6,
         }
     }
@@ -1757,6 +1839,23 @@ pub enum TraitConstraintDiag<'db> {
         actual: TyId<'db>,
     },
 
+    /// The goal is implemented, but the implementation chosen at this use is not
+    /// the one the dictionary of `root` holds for it.
+    ImplementationDiffers {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        root: TraitInstId<'db>,
+    },
+
+    /// The goal is implemented, but two conditions of the implementation chosen
+    /// for the bound hold it from different dictionaries.
+    ConditionsDiffer {
+        span: DynLazySpan<'db>,
+        primary_goal: TraitInstId<'db>,
+        a: TraitInstId<'db>,
+        b: TraitInstId<'db>,
+    },
+
     TraitBoundNotSat {
         span: DynLazySpan<'db>,
         primary_goal: TraitInstId<'db>,
@@ -1777,7 +1876,9 @@ impl TraitConstraintDiag<'_> {
             Self::KindMismatch { .. } => 0,
             Self::TraitArgNumMismatch { .. } => 1,
             Self::TraitArgKindMismatch { .. } => 2,
-            Self::TraitBoundNotSat { .. } => 3,
+            Self::TraitBoundNotSat { .. }
+            | Self::ImplementationDiffers { .. }
+            | Self::ConditionsDiffer { .. } => 3,
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,

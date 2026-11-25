@@ -1,0 +1,22 @@
+// A named implementation whose condition is generic, opened in a function whose
+// bound pins the condition's associated type, is accepted, as it is for an
+// unpinned bound.
+struct Item {}
+trait Pick { fn val() -> u256 }
+impl Pick for Item { fn val() -> u256 { 100 } }
+struct Wrap<T> {}
+trait Holder { type V: Pick }
+impl<T: Pick> Holder for Wrap<T> { type V = T }
+struct Slot<T> {}
+trait Outer { fn ov() -> u256 }
+impl<T: Holder> Outer for Slot<T> { fn ov() -> u256 { 1 } }
+impl<T: Holder> Outer for Slot<T> as NamedOuter { fn ov() -> u256 { <T::V as Pick>::val() } }
+fn read<B: Outer>() -> u256 { B::ov() }
+fn relay<X: Holder<V = Item>>() -> u256 { with (NamedOuter) { read<Slot<X>>() } }
+fn relay_generic<X: Holder>() -> u256 { with (NamedOuter) { read<Slot<X>>() } }
+fn top() -> u256 { relay<Wrap<Item>>() }
+fn top_generic() -> u256 { relay_generic<Wrap<Item>>() }
+#[test]
+fn pinned() { assert(top() == 100) }
+#[test]
+fn unpinned() { assert(top_generic() == 100) }

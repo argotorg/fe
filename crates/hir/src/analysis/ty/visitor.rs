@@ -121,6 +121,9 @@ where
     V: TyVisitor<'db> + ?Sized,
 {
     closure.parent_args(visitor.db()).visit_with(visitor);
+    if let Some(bound) = closure.bound_evidence(visitor.db()) {
+        bound.entries.visit_with(visitor);
+    }
     closure.captures(visitor.db()).visit_with(visitor);
     closure.params(visitor.db()).visit_with(visitor);
     closure.ret_ty(visitor.db()).visit_with(visitor);
@@ -347,6 +350,9 @@ impl<'db> TyVisitable<'db> for TraitSolverQuery<'db> {
     {
         self.goal.visit_with(visitor);
         self.assumptions.visit_with(visitor);
+        if let Some(choices) = self.choices {
+            choices.items(visitor.db()).visit_with(visitor);
+        }
     }
 }
 
@@ -357,6 +363,9 @@ impl<'db> TyVisitable<'db> for TraitGoalSolution<'db> {
     {
         self.inst.visit_with(visitor);
         self.implementor.visit_with(visitor);
+        if let Some(chosen) = self.chosen {
+            chosen.visit_with(visitor);
+        }
     }
 }
 

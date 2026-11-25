@@ -540,6 +540,17 @@ impl super::WhereClauseOwner for ImplTrait {}
 impl super::AttrListOwner for ImplTrait {}
 impl super::ItemModifierOwner for ImplTrait {}
 impl ImplTrait {
+    /// A named alternative introduced by `as Name` after the subject type.
+    pub fn selection_name(&self) -> Option<SyntaxToken> {
+        let mut tokens = self
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .filter(|token| !token.kind().is_trivia() && token.kind() != SK::Newline);
+        tokens.find(|token| token.kind() == SK::AsKw)?;
+        tokens.next().filter(|token| token.kind() == SK::Ident)
+    }
+
     /// Returns the trait of the impl.
     /// `Foo` in `impl<T> Foo for Bar<T> { .. }`
     pub fn trait_ref(&self) -> Option<TraitRef> {

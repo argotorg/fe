@@ -1,0 +1,13 @@
+// A bound with a pinned associated type implies a bound on a sibling
+// associated type. The function is called from another ingot, which holds the
+// implementation.
+pub trait Show { type K
+    fn s() -> u256 }
+pub trait Tr { type K
+    type A: Show<K = Self::K>
+    fn t() -> u256 }
+pub fn f<T: Tr<K = u8>>() -> u256 { T::t() }
+pub trait Top { fn top() -> u256 }
+pub trait L: Top {}
+pub trait R: Top {}
+pub fn g<T: L + R>() -> u256 { T::top() }

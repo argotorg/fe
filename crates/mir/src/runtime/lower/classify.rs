@@ -829,7 +829,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
         let path = place.path.as_slice();
         let index = path
             .iter()
-            .rposition(|projection| matches!(projection, NDataProjection::Entry(_)))?;
+            .rposition(|projection| matches!(projection, NDataProjection::Entry(..)))?;
         Some((|| {
             let collection_ty = self
                 .body
@@ -861,7 +861,7 @@ impl<'a, 'db> BodyEnv<'a, 'db> {
                 NDataProjection::VariantField { variant, field } => {
                     project_variant_field_place_class(self.db, current, *variant, *field)
                 }
-                NDataProjection::Entry(_) => {
+                NDataProjection::Entry(..) => {
                     unreachable!("a place is classified from its last entry")
                 }
             };
@@ -3063,7 +3063,10 @@ fn caller(_ x: Slot<7>) { <bool as Has>::take(x) }
                     ..
                 } = &mut statement.kind
                 {
-                    *callee = SemanticCalleeRef { key: callee_key };
+                    *callee = SemanticCalleeRef {
+                        key: callee_key,
+                        pending_selection: None,
+                    };
                     replaced = true;
                 }
             }

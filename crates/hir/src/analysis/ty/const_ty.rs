@@ -128,6 +128,7 @@ pub(crate) struct LoweringContext<'db> {
     /// The impl whose associated type this lowering lowers: there `Self::A`
     /// is the impl's own binding of `A`.
     impl_assoc_type: Option<ImplTrait<'db>>,
+    choices: Option<super::trait_resolution::ChosenImpls<'db>>,
     /// Every path segment this lowering resolved, in resolution order, when
     /// the caller asked for them (`recording_resolutions`).
     resolutions: Option<std::cell::RefCell<Vec<(PathId<'db>, PathRes<'db>)>>>,
@@ -152,6 +153,7 @@ impl<'db> LoweringContext<'db> {
         Self {
             const_bodies,
             impl_assoc_type: None,
+            choices: None,
             resolutions: None,
             recording_paused: std::cell::Cell::new(false),
         }
@@ -165,6 +167,18 @@ impl<'db> LoweringContext<'db> {
 
     pub(crate) fn impl_assoc_type(&self) -> Option<ImplTrait<'db>> {
         self.impl_assoc_type
+    }
+
+    pub(crate) fn with_choices(
+        mut self,
+        choices: Option<super::trait_resolution::ChosenImpls<'db>>,
+    ) -> Self {
+        self.choices = choices;
+        self
+    }
+
+    pub(crate) fn choices(&self) -> Option<super::trait_resolution::ChosenImpls<'db>> {
+        self.choices
     }
 
     /// Makes this lowering keep every path segment it resolves, with the
@@ -2479,7 +2493,7 @@ pub(crate) fn const_body_resolution_reenters<'db>(
                         }
                     })
                 }
-                ConstRef::InherentConst(use_) => {
+                ConstRef::InherentConst { use_, .. } => {
                     let use_ = if let Some(subst) = capture.complete(db) {
                         InherentConstUse::new(
                             use_.origin_scope(),

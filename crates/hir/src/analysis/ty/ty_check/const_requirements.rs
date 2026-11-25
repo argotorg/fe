@@ -132,7 +132,9 @@ impl<'db> PredicateKeyBuilder<'_, 'db> {
                             self.instantiate(reference.inst())?,
                             reference.name(),
                         ),
-                        Some(ConstRef::InherentConst(reference)) => PredicateTerm::InherentConst(
+                        Some(ConstRef::InherentConst {
+                            use_: reference, ..
+                        }) => PredicateTerm::InherentConst(
                             reference.impl_(),
                             self.instantiate(reference.receiver_ty())?,
                             reference.name(),
@@ -611,10 +613,115 @@ pub(super) fn check_body_requirements<'db>(
         if !checker.carries(expr) {
             entered.push(checker.check_expr(expr, data));
         }
+        if matches!(
+            typed.record_init_lowering(expr),
+            Some(RecordInitLowering::Struct)
+        ) && let Some(Expr::RecordInit(Partial::Present(path), _)) = data.borrowed().to_opt()
+        {
+            let hir_ty = crate::hir_def::TypeId::new(db, TypeKind::Path(Partial::Present(*path)));
+            let deferred = super::super::ty_lower::lower_hir_ty_deferred(
+                db,
+                hir_ty,
+                body.scope(),
+                typed.assumptions(),
+            );
+            let cx = TraitSolveCx::new(db, body.scope())
+                .with_assumptions(typed.assumptions())
+                .with_choices(typed.expr_choices(expr));
+            if let Some(goal) = type_choice_read(db, deferred, cx) {
+                checker.check.diags.push(
+                    BodyDiag::ChosenTypeRead {
+                        primary: expr.span(body).into(),
+                        goal,
+                    }
+                    .into(),
+                );
+            }
+        }
     }
     let mut check = checker.check_inferred_types(&entered);
-    for (nested, expected) in expression_const_bodies(db, owner, body, typed) {
+    for entry in if typed.has_chosen_impls() {
+        written_types(db, body.into())
+    } else {
+        &[]
+    } {
+        if let WrittenEntry::ConstBodies(bodies, expr) = entry {
+            for &(nested, expected) in bodies {
+                if let Some(choices) = typed.choices_at(db, *expr, nested.scope()) {
+                    let cx = TraitSolveCx::new(db, nested.scope())
+                        .with_assumptions(typed.assumptions())
+                        .with_choices(Some(choices));
+                    let ty = TyId::const_ty(
+                        db,
+                        crate::analysis::ty::const_ty::ConstTyId::from_body(
+                            db,
+                            nested,
+                            Some(expected),
+                            None,
+                        ),
+                    );
+                    if let Some(goal) = type_choice_read(db, ty, cx) {
+                        check.diags.push(
+                            BodyDiag::ChosenTypeRead {
+                                primary: nested.expr(db).span(nested).into(),
+                                goal,
+                            }
+                            .into(),
+                        );
+                    }
+                }
+            }
+        }
+        if let WrittenEntry::Type(written) = entry
+            && let Some(choices) = typed.choices_at(db, written.expr, written.scope)
+        {
+            let deferred = super::super::ty_lower::lower_hir_ty_deferred(
+                db,
+                written.syntax,
+                written.scope,
+                typed.assumptions(),
+            );
+            let cx = TraitSolveCx::new(db, written.scope)
+                .with_assumptions(typed.assumptions())
+                .with_choices(Some(choices));
+            if let Some(goal) = type_choice_read(db, deferred, cx) {
+                check.diags.push(
+                    BodyDiag::ChosenTypeRead {
+                        primary: written.span.clone(),
+                        goal,
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+    for (nested, expected, expr) in expression_const_bodies(db, owner, body, typed) {
         check.extend(anon_const_position_check(db, nested, expected));
+        if typed.has_chosen_impls()
+            && let Some(choices) = typed.choices_at(db, expr, nested.scope())
+        {
+            let cx = TraitSolveCx::new(db, nested.scope())
+                .with_assumptions(typed.assumptions())
+                .with_choices(Some(choices));
+            let ty = TyId::const_ty(
+                db,
+                crate::analysis::ty::const_ty::ConstTyId::from_body(
+                    db,
+                    nested,
+                    Some(expected),
+                    None,
+                ),
+            );
+            if let Some(goal) = type_choice_read(db, ty, cx) {
+                check.diags.push(
+                    BodyDiag::ChosenTypeRead {
+                        primary: nested.expr(db).span(nested).into(),
+                        goal,
+                    }
+                    .into(),
+                );
+            }
+        }
     }
     check
 }
@@ -964,7 +1071,24 @@ fn anon_const_position_check<'db>(
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
     if diags_allow_evaluation(db, diags) {
-        return check_body_requirements(db, owner, typed);
+        let mut check = check_body_requirements(db, owner, typed);
+        if typed.has_chosen_impls() {
+            let cx = TraitSolveCx::new(db, body.scope()).with_assumptions(typed.assumptions());
+            let ty = TyId::const_ty(
+                db,
+                crate::analysis::ty::const_ty::ConstTyId::from_body(db, body, Some(expected), None),
+            );
+            if let Some(goal) = type_choice_read(db, ty, cx) {
+                check.diags.push(
+                    BodyDiag::ChosenTypeRead {
+                        primary: body.expr(db).span(body).into(),
+                        goal,
+                    }
+                    .into(),
+                );
+            }
+        }
+        return check;
     }
     // A lone path to a constant is read as that constant, not checked as a
     // body, so its failures are reported where the constant is.
@@ -1161,7 +1285,7 @@ fn expression_const_bodies<'db>(
     owner: BodyOwner<'db>,
     body: Body<'db>,
     typed: &TypedBody<'db>,
-) -> Vec<(Body<'db>, TyId<'db>)> {
+) -> Vec<(Body<'db>, TyId<'db>, Option<ExprId>)> {
     let checked_const_ty = |ty: TyId<'db>| match ty.data(db) {
         TyData::ConstTy(const_ty) if !ty.has_invalid(db) => Some(const_ty.ty(db)),
         _ => None,
@@ -1186,7 +1310,8 @@ fn expression_const_bodies<'db>(
         };
         let definition = match expr.data(db, body).borrowed().to_opt()? {
             Expr::Path(Partial::Present(path)) => {
-                let lowering_cx = LoweringContext::deferred();
+                let lowering_cx =
+                    LoweringContext::deferred().with_choices(typed.expr_choices(expr));
                 match resolve_path_with_minter(
                     db,
                     *path,
@@ -1218,6 +1343,7 @@ fn expression_const_bodies<'db>(
                         *name,
                         body.scope(),
                         typed.assumptions(),
+                        typed.expr_choices(expr),
                         None,
                     )
                     .ok()?,
@@ -1281,7 +1407,9 @@ fn expression_const_bodies<'db>(
         segment_const_args(db, path, &lowering_cx.into_resolutions())
     };
 
-    let mut found: Vec<(Body<'db>, TyId<'db>)> = Vec::new();
+    // Each body with the expression it is written in, whose choices it is
+    // under; a pattern has none of its own.
+    let mut found: Vec<(Body<'db>, TyId<'db>, Option<ExprId>)> = Vec::new();
     for (expr, data) in body.exprs(db).iter() {
         let entries = match data.borrowed().to_opt() {
             Some(Expr::ArrayRep(_, len)) => {
@@ -1298,7 +1426,11 @@ fn expression_const_bodies<'db>(
             Some(Expr::MethodCall(_, _, args, _)) => explicit_args(expr, *args),
             _ => Vec::new(),
         };
-        found.extend(entries);
+        found.extend(
+            entries
+                .into_iter()
+                .map(|(body, expected)| (body, expected, Some(expr))),
+        );
     }
     // A recv arm's variant path is resolved as the arm resolves it, which
     // finds no path when the arm's block doesn't resolve its msg.
@@ -1320,7 +1452,11 @@ fn expression_const_bodies<'db>(
             && pat_id == arm_pat
         {
             if let Some(lookup) = lookup {
-                found.extend(segment_args(lookup.path, scope, false));
+                found.extend(
+                    segment_args(lookup.path, scope, false)
+                        .into_iter()
+                        .map(|(body, expected)| (body, expected, None)),
+                );
             }
             continue;
         }
@@ -1330,12 +1466,16 @@ fn expression_const_bodies<'db>(
             | Pat::Record(Partial::Present(path), _),
         ) = pat.borrowed().to_opt()
         {
-            found.extend(segment_args(*path, body.scope(), true));
+            found.extend(
+                segment_args(*path, body.scope(), true)
+                    .into_iter()
+                    .map(|(body, expected)| (body, expected, None)),
+            );
         }
     }
     // A body appears in one position, but two lookups can both find it.
     let mut seen = FxHashSet::default();
-    found.retain(|(body, _)| seen.insert(*body));
+    found.retain(|(body, _, _)| seen.insert(*body));
     found
 }
 
@@ -1396,7 +1536,9 @@ fn const_ref_headers<'db>(
     match typed.expr_const_ref(expr)? {
         ConstRef::Const(_) => None,
         ConstRef::TraitConst { use_, .. } => Some(use_.inst().args(db).to_vec()),
-        ConstRef::InherentConst(reference) => Some(vec![reference.receiver_ty()]),
+        ConstRef::InherentConst {
+            use_: reference, ..
+        } => Some(vec![reference.receiver_ty()]),
     }
 }
 
@@ -1725,13 +1867,14 @@ pub(crate) fn check_declared_type_requirements<'db>(
 enum WrittenEntry<'db> {
     /// Anonymous constants written in a type or trait reference, each with
     /// the type its position checks it against.
-    ConstBodies(Vec<(Body<'db>, TyId<'db>)>),
+    ConstBodies(Vec<(Body<'db>, TyId<'db>)>, Option<ExprId>),
     /// A written type, listed after the types nested in it.
     Type(WrittenType<'db>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 struct WrittenType<'db> {
+    syntax: crate::hir_def::TypeId<'db>,
     span: DynLazySpan<'db>,
     scope: ScopeId<'db>,
     /// Its lowering, unless that is invalid.
@@ -1743,6 +1886,9 @@ struct WrittenType<'db> {
     dropped: bool,
     /// The index of the first entry nested in this type.
     nested_from: usize,
+    /// The innermost expression of the body it is written in, if any: the
+    /// choices in force there are those of that expression.
+    expr: Option<ExprId>,
 }
 
 #[salsa::interned]
@@ -1789,6 +1935,8 @@ fn written_types_query<'db>(
         /// the alias drops it, and how deep the walk is inside one dropped.
         alias_args: Option<(GenericArgListId<'db>, Vec<bool>)>,
         dropped_depth: usize,
+        /// The expressions enclosing the position being walked.
+        exprs: Vec<ExprId>,
     }
     impl<'db> Visitor<'db> for Collector<'db> {
         // Nested items and bodies are their own regions.
@@ -1833,7 +1981,10 @@ fn written_types_query<'db>(
                 let bodies =
                     trait_ref_const_args(self.db, path, scope, assumptions_at(self.db, scope));
                 if !bodies.is_empty() {
-                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                    self.entries.push(WrittenEntry::ConstBodies(
+                        bodies,
+                        self.exprs.last().copied(),
+                    ));
                 }
             }
             walk_trait_ref(self, ctxt, trait_ref);
@@ -1895,7 +2046,9 @@ fn written_types_query<'db>(
                     });
                 }
             }
+            self.exprs.push(expr);
             walk_expr(self, ctxt, expr);
+            self.exprs.pop();
         }
     }
     impl<'db> Collector<'db> {
@@ -1936,10 +2089,14 @@ fn written_types_query<'db>(
             };
             let in_default = self.defaults.contains(&hir_ty);
             self.default_depth += usize::from(in_default);
+            let nested_from = self.entries.len();
             if self.default_depth == 0 {
                 let bodies = written_const_args(db, hir_ty, scope, assumptions);
                 if !bodies.is_empty() {
-                    self.entries.push(WrittenEntry::ConstBodies(bodies));
+                    self.entries.push(WrittenEntry::ConstBodies(
+                        bodies,
+                        self.exprs.last().copied(),
+                    ));
                 }
             }
             let alias_args = match hir_ty.data(db) {
@@ -1960,17 +2117,18 @@ fn written_types_query<'db>(
                 _ => None,
             };
             let enclosing_alias_args = std::mem::replace(&mut self.alias_args, alias_args);
-            let nested_from = self.entries.len();
             walk_nested(self);
             self.alias_args = enclosing_alias_args;
             if let Some(span) = span {
                 self.entries.push(WrittenEntry::Type(WrittenType {
+                    syntax: hir_ty,
                     span,
                     scope,
                     lowered: (!ty.has_invalid(db)).then_some(ty),
                     applications,
                     dropped: self.dropped_depth > 0,
                     nested_from,
+                    expr: self.exprs.last().copied(),
                 }));
             }
             self.default_depth -= usize::from(in_default);
@@ -1985,6 +2143,7 @@ fn written_types_query<'db>(
         default_depth: 0,
         alias_args: None,
         dropped_depth: 0,
+        exprs: Vec::new(),
     };
     collector.visit_item(&mut VisitorCtxt::with_item(db, root), root);
     collector.entries
@@ -2014,6 +2173,8 @@ fn written_type_check_query<'db>(
     let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
     // Whether each entry reported itself ill-formed.
     let mut ill_formed: Vec<bool> = Vec::with_capacity(entries.len());
+    // Whether each entry reported a chosen implementation read.
+    let mut choice_reported: Vec<bool> = Vec::with_capacity(entries.len());
     for entry in entries {
         // A type in an argument its alias drops is checked for its bounds
         // here, where it is written, once for the innermost one that fails.
@@ -2042,12 +2203,17 @@ fn written_type_check_query<'db>(
             }
             _ => false,
         });
-        let report = match entry {
-            WrittenEntry::ConstBodies(bodies) => {
+        let (report, reported_choice) = match entry {
+            WrittenEntry::ConstBodies(bodies, _) => {
+                let mut has_choice_diag = false;
                 for &(body, expected) in bodies {
-                    diags.extend(anon_const_position_check(db, body, expected).diags);
+                    let body_diags = anon_const_position_check(db, body, expected).diags;
+                    has_choice_diag |= body_diags.iter().any(|diag| {
+                        matches!(diag, FuncBodyDiag::Body(BodyDiag::ChosenTypeRead { .. }))
+                    });
+                    diags.extend(body_diags);
                 }
-                None
+                (None, has_choice_diag)
             }
             WrittenEntry::Type(written) => {
                 let nested: FxHashSet<_> = reported[written.nested_from..]
@@ -2063,7 +2229,7 @@ fn written_type_check_query<'db>(
                             check_path_application(db, application, written.scope, &nested)
                         })
                     });
-                unmet.map(|unmet| {
+                let report = unmet.map(|unmet| {
                     diags.push(unmet_requirement_diag(
                         written.span.clone(),
                         unmet.predicate,
@@ -2071,10 +2237,36 @@ fn written_type_check_query<'db>(
                         None,
                     ));
                     unmet.ty
-                })
+                });
+                let reported_choice = if !choice_reported[written.nested_from..].contains(&true) {
+                    let assumptions = assumptions_at(db, written.scope);
+                    let deferred = super::super::ty_lower::lower_hir_ty_deferred(
+                        db,
+                        written.syntax,
+                        written.scope,
+                        assumptions,
+                    );
+                    let cx = TraitSolveCx::new(db, written.scope).with_assumptions(assumptions);
+                    if let Some(goal) = type_choice_read(db, deferred, cx) {
+                        diags.push(
+                            BodyDiag::ChosenTypeRead {
+                                primary: written.span.clone(),
+                                goal,
+                            }
+                            .into(),
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                (report, reported_choice)
             }
         };
         reported.push(report);
+        choice_reported.push(reported_choice);
     }
     diags
 }
@@ -2193,4 +2385,171 @@ fn written_const_args<'db>(
         }
         _ => Vec::new(),
     }
+}
+
+/// Until type normalization consumes evidence, a written type cannot request
+/// a lexical dictionary. Deferred type constants retain the checked uses and
+/// substitutions needed here, including aliases, without evaluating source.
+fn type_choice_read<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    cx: TraitSolveCx<'db>,
+) -> Option<TraitInstId<'db>> {
+    use crate::analysis::ty::{
+        const_ty::{ConstCaptureEnv, ConstTyData, ConstTyId},
+        evidence::{ProofOutcome, prove_outcome},
+        visitor::{TyVisitable, TyVisitor, walk_const_ty},
+    };
+    struct Reads<'db> {
+        db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
+        found: Option<TraitInstId<'db>>,
+        seen: FxHashSet<ConstTyId<'db>>,
+    }
+    impl<'db> Reads<'db> {
+        fn goal_in(
+            &mut self,
+            cx: TraitSolveCx<'db>,
+            goal: TraitInstId<'db>,
+            prove: impl FnOnce(&'db dyn HirAnalysisDb) -> ProofOutcome<'db>,
+        ) {
+            let db = self.db;
+            if self.found.is_none()
+                && cx.choices().is_some()
+                && prove(db).reads_named_choice(db, cx, goal)
+            {
+                self.found = Some(goal);
+            }
+        }
+        fn body(&mut self, body: Body<'db>, expected: TyId<'db>, capture: &ConstCaptureEnv<'db>) {
+            let typed = &infer_body(self.db, BodyOwner::AnonConstBody { body, expected }).1;
+            if self.cx.choices().is_none() && !typed.has_chosen_impls() {
+                return;
+            }
+            for expr in body.exprs(self.db).keys() {
+                let choices = match (self.cx.choices(), typed.expr_choices(expr)) {
+                    (None, choices) | (choices, None) => choices,
+                    (Some(outer), Some(inner)) => {
+                        let mut items = outer.items(self.db).clone();
+                        items.extend(inner.items(self.db).iter().copied());
+                        Some(crate::analysis::ty::trait_resolution::ChosenImpls::new(
+                            self.db, items,
+                        ))
+                    }
+                };
+                if choices.is_none() {
+                    continue;
+                }
+                let cx = self.cx.with_choices(choices);
+                if let Some(callable) = typed.callable_expr(expr) {
+                    let mut callable = capture.specialize(self.db, callable.clone());
+                    if let Some(goal) = callable.trait_inst() {
+                        self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                    }
+                    let effect_args = capture.specialize(
+                        self.db,
+                        typed.call_effect_args(expr).unwrap_or(&[]).to_vec(),
+                    );
+                    callable.record_bound_evidence(self.db, cx, &effect_args);
+                    if let (CallableDef::Func(func), Some(proofs)) =
+                        (callable.callable_def(), callable.bound_evidence())
+                        && let Ok(subst) = CompleteSubst::for_owner(
+                            self.db,
+                            func.into(),
+                            callable.generic_args().to_vec(),
+                        )
+                    {
+                        for (index, &bound) in func_signature(self.db, func, None)
+                            .list(self.db)
+                            .iter()
+                            .enumerate()
+                        {
+                            if let Ok(goal) = substitute_complete(self.db, bound, &subst) {
+                                self.goal_in(cx, goal, |db| {
+                                    proofs
+                                        .get(db, index)
+                                        .map_or(ProofOutcome::Unavailable, ProofOutcome::Proven)
+                                });
+                            }
+                        }
+                    }
+                }
+                if let Some(reference) = typed.expr_const_ref(expr)
+                    && let ConstRef::TraitConst { use_, .. } =
+                        capture.specialize(self.db, reference)
+                {
+                    let goal = use_.inst();
+                    self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                }
+                // An inherent constant's value is checked under its
+                // implementation's bounds, which the use proves.
+                if let Some(reference) = typed.expr_const_ref(expr)
+                    && let ConstRef::InherentConst { use_, .. } =
+                        capture.specialize(self.db, reference)
+                    && let Some((const_body, impl_args)) =
+                        crate::analysis::ty::const_ty::inherent_const_body_and_impl_args(
+                            self.db,
+                            use_.impl_(),
+                            use_.receiver_ty(),
+                            use_.name(),
+                        )
+                    && let Ok(subst) =
+                        CompleteSubst::for_owner(self.db, use_.impl_().into(), impl_args)
+                {
+                    let bounds = crate::analysis::ty::const_ty::const_body_assumptions(
+                        self.db,
+                        const_body.scope(),
+                    )
+                    .extend_all_bounds(self.db);
+                    for &bound in bounds.list(self.db) {
+                        if let Ok(goal) = substitute_complete(self.db, bound, &subst) {
+                            self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    impl<'db> TyVisitor<'db> for Reads<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_const_ty(&mut self, value: &ConstTyId<'db>) {
+            if self.found.is_some() || !self.seen.insert(*value) {
+                return;
+            }
+            match value.data(self.db) {
+                ConstTyData::UnEvaluated {
+                    body,
+                    ty,
+                    template_ty,
+                    capture,
+                    ..
+                } => {
+                    if let Some(expected) = template_ty.or(*ty) {
+                        self.body(*body, expected, capture);
+                    }
+                }
+                ConstTyData::Abstract(expr, _) => {
+                    if let crate::analysis::ty::const_expr::ConstExpr::TraitConst(use_) =
+                        expr.data(self.db)
+                    {
+                        let goal = use_.inst();
+                        let cx = self.cx;
+                        self.goal_in(cx, goal, |db| prove_outcome(db, cx, goal));
+                    }
+                }
+                _ => {}
+            }
+            walk_const_ty(self, value);
+        }
+    }
+    let mut reads = Reads {
+        db,
+        cx,
+        found: None,
+        seen: FxHashSet::default(),
+    };
+    ty.visit_with(&mut reads);
+    reads.found
 }

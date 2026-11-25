@@ -1,0 +1,20 @@
+// A pinned associated-type binding on a bound of a generic function, called
+// from a contract message handler.
+struct X {}
+struct Y {}
+trait Show { type K }
+trait Tr { type K
+    type A: Show<K = Self::K> }
+impl Show for Y { type K = u8 }
+impl Tr for X { type K = u8
+    type A = Y }
+fn f<T: Tr<K = u8>>() -> u256 { 3 }
+msg M {
+    #[selector = 1]
+    Go -> u256,
+}
+pub contract C {
+    recv M {
+        Go -> u256 { f<X>() }
+    }
+}

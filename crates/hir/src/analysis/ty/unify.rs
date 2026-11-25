@@ -60,6 +60,13 @@ impl<'db, U> UnificationStore<'db> for U where
 {
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TypeComparison {
+    Expression,
+    Header,
+    Overlap,
+}
+
 #[derive(Clone)]
 pub struct UnificationTableBase<'db, U>
 where
@@ -67,6 +74,7 @@ where
 {
     pub db: &'db dyn HirAnalysisDb,
     table: ena::unify::UnificationTable<U>,
+    comparison: TypeComparison,
 }
 
 impl<'db, U> UnificationTableBase<'db, U>
@@ -77,6 +85,7 @@ where
         Self {
             db,
             table: ena::unify::UnificationTable::new(),
+            comparison: TypeComparison::Expression,
         }
     }
 
@@ -116,6 +125,35 @@ where
                 Err(err)
             }
         }
+    }
+
+    /// Compare trait header arguments while retaining ordinary variable binding.
+    /// Header equality neither coerces the never type nor infers the receiver
+    /// of an unresolved projection from equality of its output.
+    pub(super) fn unify_header<T: Unifiable<'db>>(&mut self, lhs: T, rhs: T) -> UnificationResult {
+        self.unify_with_comparison(lhs, rhs, TypeComparison::Header)
+    }
+
+    /// Search for a common trait application during ordinary impl candidate lookup or coherence.
+    /// Equating receivers of identical projections can witness an overlap.
+    pub(super) fn unify_for_overlap<T: Unifiable<'db>>(
+        &mut self,
+        lhs: T,
+        rhs: T,
+    ) -> UnificationResult {
+        self.unify_with_comparison(lhs, rhs, TypeComparison::Overlap)
+    }
+
+    fn unify_with_comparison<T: Unifiable<'db>>(
+        &mut self,
+        lhs: T,
+        rhs: T,
+        comparison: TypeComparison,
+    ) -> UnificationResult {
+        let previous = std::mem::replace(&mut self.comparison, comparison);
+        let result = self.unify(lhs, rhs);
+        self.comparison = previous;
+        result
     }
 
     /// Returns `Ok()` if the two types were unified, otherwise returns an
@@ -171,7 +209,14 @@ where
                 let (params1, params2) = (closure1.params(db), closure2.params(db));
                 let (lhs, rhs) = (components(*closure1), components(*closure2));
                 let (lhs_row, rhs_row) = (closure1.effects(db), closure2.effects(db));
+                // Closures that carry dictionaries are one type only when the
+                // dictionaries are equal.
+                let evidence_differs = matches!(
+                    (closure1.bound_evidence(db), closure2.bound_evidence(db)),
+                    (Some(lhs), Some(rhs)) if lhs != rhs
+                );
                 if closure1.def(db) != closure2.def(db)
+                    || evidence_differs
                     || params1.len() != params2.len()
                     || !params1
                         .iter()
@@ -213,10 +258,15 @@ where
                 }
             }
 
-            (TyData::Invalid(_), _)
-            | (_, TyData::Invalid(_))
-            | (TyData::Never, _)
-            | (_, TyData::Never) => Ok(()),
+            (TyData::Invalid(_), _) | (_, TyData::Invalid(_)) | (TyData::Never, TyData::Never) => {
+                Ok(())
+            }
+
+            (TyData::Never, _) | (_, TyData::Never)
+                if self.comparison == TypeComparison::Expression =>
+            {
+                Ok(())
+            }
 
             (TyData::ConstTy(const_ty1), TyData::ConstTy(const_ty2)) => {
                 let const_ty1 = match normalize_const_tys_for_comparison(
@@ -284,7 +334,10 @@ where
             (TyData::AssocTy(a1), TyData::AssocTy(a2)) => {
                 if a1 == a2 {
                     Ok(())
-                } else if a1.name == a2.name && a1.mode == a2.mode {
+                } else if self.comparison != TypeComparison::Header
+                    && a1.name == a2.name
+                    && a1.mode == a2.mode
+                {
                     self.unify(a1.trait_, a2.trait_)
                 } else {
                     Err(UnificationError::TypeMismatch)
@@ -489,14 +542,23 @@ where
     where
         T: TyFoldable<'db>,
     {
+        self.freshen_with_origins(value).0
+    }
+
+    pub(super) fn freshen_with_origins<T>(
+        &mut self,
+        value: T,
+    ) -> (T, FxHashMap<TyId<'db>, TyId<'db>>)
+    where
+        T: TyFoldable<'db>,
+    {
         let db = self.db;
-        value.fold_with(
-            db,
-            &mut FreshVarFolder {
-                table: self,
-                params: FxHashMap::default(),
-            },
-        )
+        let mut folder = FreshVarFolder {
+            table: self,
+            params: FxHashMap::default(),
+        };
+        let fresh = value.fold_with(db, &mut folder);
+        (fresh, folder.params)
     }
 
     pub fn instantiate_to_term(&mut self, mut ty: TyId<'db>) -> TyId<'db> {

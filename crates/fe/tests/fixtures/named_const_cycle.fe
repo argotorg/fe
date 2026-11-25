@@ -1,0 +1,23 @@
+// A named implementation's constant is computed by a const fn that runs a
+// method of the same named implementation under `with`. Comparing the constant
+// evaluates calc(), and admitting calc() checks its use of Big, which compares
+// the constant again. Expected: accepted (calc() is 2 + 1, equal to the
+// ordinary N = 3), and the test passes.
+struct Item {}
+trait Size {
+    const N: u256
+    const fn id() -> u256
+}
+impl Size for Item {
+    const N: u256 = 3
+    const fn id() -> u256 { 1 }
+}
+impl Size for Item as Big {
+    const N: u256 = calc()
+    const fn id() -> u256 { 2 }
+}
+const fn calc() -> u256 { with (Big) { <Item as Size>::id() } + 1 }
+
+fn read() -> u256 { with (Big) { <Item as Size>::N * 10 + <Item as Size>::id() } }
+#[test]
+fn t() { assert(read() == 32) }

@@ -30,7 +30,9 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            evidence::{EvidenceList, instance_evidence},
+            evidence::{
+                EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
+            },
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -43,9 +45,13 @@ use crate::{
             },
             shape::Shape,
             subst::substitute_complete,
-            trait_def::{MethodArgMapError, TraitInstId},
+            trait_def::{
+                ImplementorId, ImplementorOrigin, MethodArgMapError, NamedOutputMismatch,
+                ResolvedImplInstance, TraitInstId,
+            },
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
+                COMPONENT_DEPTH_LIMIT, GoalSatisfiability, PredicateListId, TraitSolveCx,
+                is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
@@ -56,7 +62,7 @@ use crate::{
             ty_def::{BorrowKind, InvalidCause, TyData, TyId},
             ty_is_snapshot,
             ty_lower::{ParamSchemaId, SubstError},
-            visitor::{TyVisitable, TyVisitor, collect_flags},
+            visitor::{TyVisitable, TyVisitor},
         },
     },
     hir_def::{
@@ -76,12 +82,21 @@ use thin_vec::ThinVec;
 
 use super::{
     EffectProviderSubst, GenericSubst, ImplEnv,
-    const_ref::{body_effect, is_ground, root_impl_env},
+    const_ref::{body_effect, root_impl_env},
     instantiate_typed_body, provisional_semantic_callee_key,
     semantic_callee_key_with_effect_providers, typed_body_template,
 };
 
-#[salsa::interned]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, SalsaValue)]
+pub(crate) enum InstanceEvidencePolicy {
+    #[default]
+    ReconstructOrdinary,
+    /// An output comparison runs with the two selections even when their
+    /// arguments still contain rigid parameters.
+    PreserveSelection,
+}
+
+#[salsa::interned(constructor = intern)]
 #[derive(Debug)]
 pub struct SemanticInstanceKey<'db> {
     #[returns(copy)]
@@ -97,15 +112,37 @@ pub struct SemanticInstanceKey<'db> {
     /// where the body needs it.
     #[returns(copy)]
     pub evidence: EvidenceList<'db>,
+    #[returns(copy)]
+    preserve_selection: bool,
 }
 
 impl<'db> SemanticInstanceKey<'db> {
+    pub fn new(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        subst: GenericSubst<'db>,
+        effect_providers: EffectProviderSubst<'db>,
+        impl_env: ImplEnv<'db>,
+        evidence: EvidenceList<'db>,
+    ) -> Self {
+        Self::intern(
+            db,
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            evidence,
+            false,
+        )
+    }
+
     /// The key for `owner`'s instance with `subst`, given the proofs a use
-    /// supplies of the assumptions its body is checked under. One with
-    /// closed arguments carries none: its instance proves every assumption
-    /// itself (`instance_evidence`), so the keys for one body and
-    /// substitution are the same however they are made, and a key never
-    /// holds a proof whose types can hold the key.
+    /// supplies of the assumptions its body is checked under. A key retains
+    /// only non-ordinary proof trees, with remaining assumptions named only by
+    /// owner and position. Ordinary assumptions can be reconstructed by
+    /// `instance_evidence`, and a key never holds a proof whose types can hold
+    /// the key: an assumption's list can hold a constant computed by the key.
+    /// Chosen dictionaries must survive specialization to concrete types.
     pub fn of(
         db: &'db dyn HirAnalysisDb,
         owner: BodyOwner<'db>,
@@ -114,12 +151,58 @@ impl<'db> SemanticInstanceKey<'db> {
         impl_env: ImplEnv<'db>,
         supplied: EvidenceList<'db>,
     ) -> Self {
-        let evidence = if is_ground(collect_flags(db, subst.generic_args(db))) {
-            EvidenceList::none(db)
+        Self::with_evidence_policy(
+            db,
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            supplied,
+            InstanceEvidencePolicy::ReconstructOrdinary,
+        )
+    }
+
+    pub(crate) fn with_evidence_policy(
+        db: &'db dyn HirAnalysisDb,
+        owner: BodyOwner<'db>,
+        subst: GenericSubst<'db>,
+        effect_providers: EffectProviderSubst<'db>,
+        impl_env: ImplEnv<'db>,
+        supplied: EvidenceList<'db>,
+        policy: InstanceEvidencePolicy,
+    ) -> Self {
+        let evidence = match policy {
+            InstanceEvidencePolicy::ReconstructOrdinary => EvidenceList::of(
+                db,
+                supplied
+                    .entries(db)
+                    .iter()
+                    .map(|entry| {
+                        entry.filter(|proof| proof.has_named_impl(db) || proof.has_deferred(db))
+                    })
+                    .collect(),
+            )
+            .with_rows(db, supplied.rows(db).clone()),
+            InstanceEvidencePolicy::PreserveSelection => supplied,
+        }
+        .nominal(db);
+        Self::intern(
+            db,
+            owner,
+            subst,
+            effect_providers,
+            impl_env,
+            evidence,
+            policy == InstanceEvidencePolicy::PreserveSelection,
+        )
+    }
+
+    pub(crate) fn evidence_policy(self, db: &'db dyn HirAnalysisDb) -> InstanceEvidencePolicy {
+        if self.preserve_selection(db) {
+            InstanceEvidencePolicy::PreserveSelection
         } else {
-            supplied
-        };
-        Self::new(db, owner, subst, effect_providers, impl_env, evidence)
+            InstanceEvidencePolicy::ReconstructOrdinary
+        }
     }
 
     /// This key instantiated with its data parameters naming places in
@@ -133,13 +216,14 @@ impl<'db> SemanticInstanceKey<'db> {
             return self;
         }
         let providers = self.effect_providers(db).providers(db).clone();
-        Self::new(
+        Self::intern(
             db,
             self.owner(db),
             self.subst(db),
             EffectProviderSubst::new(db, providers, param_spaces),
             self.impl_env(db),
             self.evidence(db),
+            self.preserve_selection(db),
         )
     }
 
@@ -361,34 +445,164 @@ pub fn instantiated_typed_body<'db>(
         let (scope, assumptions) = (env.normalization_scope(db), env.assumptions(db));
         body = body.with_known_params(db, |shape| normalize_ty(db, shape, scope, assumptions));
     }
+    let raw_goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let row_owner = match key.owner(db) {
+        BodyOwner::Closure { def, .. } => Some((def.body.scope(), Some(def.expr))),
+        BodyOwner::Func(func, _) => func.body(db).map(|body| (body.scope(), None)),
+        _ => None,
+    };
+    // This declaration-side expansion cannot call key.typed_body(): that would
+    // make dictionary transport depend on the result it is constructing.
+    let row_paths = if let Some(site) = effect_param_site(key.owner(db)) {
+        let requirements = EffectEnvView::new(site)
+            .requirements(db)
+            .into_iter()
+            .map(|requirement| {
+                let key_ty = key
+                    .subst(db)
+                    .mapping(db)
+                    .as_ref()
+                    .and_then(|subst| substitute_complete(db, requirement.key.clone(), subst).ok())
+                    .unwrap_or_else(|| requirement.key.clone());
+                EffectRequirement {
+                    key: key_ty,
+                    ..requirement
+                }
+            })
+            .collect::<Vec<_>>();
+        expand_rows(db, &requirements, key.owner(db).scope(), body.assumptions())
+    } else {
+        RowExpansion::default()
+    };
+    if let Some(owner) = row_owner {
+        body = body.fold_with(
+            db,
+            &mut RowProviderSubst {
+                owner,
+                providers: key.effect_providers(db).providers(db),
+            },
+        );
+    }
+    let goals = if matches!(key.owner(db), BodyOwner::Closure { .. }) {
+        body.assumptions()
+    } else {
+        body.signature()
+    };
+    let mut entries = key.evidence(db).entries(db).clone();
+    entries.resize(goals.list(db).len(), None);
+    for (index, &raw_goal) in raw_goals.list(db).iter().enumerate() {
+        let TyData::TyParam(param) = raw_goal.self_ty(db).data(db) else {
+            continue;
+        };
+        if param.row_effect_provider_of() != row_owner || row_owner.is_none() {
+            continue;
+        }
+        let path = row_paths
+            .components
+            .iter()
+            .find(|component| component.requirement.binding_idx as usize == param.idx)
+            .map(|component| component.path.clone())
+            .or_else(|| {
+                matches!(key.owner(db), BodyOwner::Closure { .. })
+                    .then(|| crate::analysis::ty::effects::rows::RowPath::entry(param.idx as u32))
+            });
+        let Some(row) = path.and_then(|path| {
+            key.evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == path)
+        }) else {
+            continue;
+        };
+        let goal = goals.list(db)[index];
+        entries[index] = row.proof.and_then(|proof| {
+            if row.goal == goal {
+                Some(proof)
+            } else {
+                crate::analysis::ty::evidence::implied_bound_evidence(
+                    db,
+                    proof,
+                    row.goal,
+                    goal,
+                    key.impl_env(db).normalization_scope(db),
+                    body.assumptions(),
+                )
+                .proof()
+            }
+        });
+    }
+    let supplied = EvidenceList::of(db, entries).with_rows(db, key.evidence(db).rows(db).clone());
     let evidence = instance_evidence(
         db,
-        body.signature(),
-        key.evidence(db),
+        goals,
+        body.bound_schema().basis_slots(db),
+        supplied,
         TraitSolveCx::new(db, key.impl_env(db).normalization_scope(db)),
     );
-    body.bind_evidence(db, evidence);
-    // A body's row provider parameters are the providers its call binds.
-    let owner = match key.owner(db) {
-        BodyOwner::Closure { def, .. } => (def.body.scope(), Some(def.expr)),
-        BodyOwner::Func(func, mode)
-            if let Some(func_body) = func.body(db)
-                && func
-                    .effect_requirements(db, mode)
-                    .iter()
-                    .any(|requirement| requirement.key.key_row().is_some()) =>
-        {
-            (func_body.scope(), None)
-        }
-        _ => return body,
+    let bound = crate::analysis::ty::evidence::BoundEvidence {
+        schema: body.bound_schema(),
+        entries: evidence.proofs,
     };
-    body.fold_with(
-        db,
-        &mut RowProviderSubst {
-            owner,
-            providers: key.effect_providers(db).providers(db),
-        },
-    )
+    body.bind_evidence(db, bound);
+    if let Some(goal) = evidence.refused {
+        body = body.with_refused_bound(goal);
+    }
+    // A component reference the instance's dictionaries did not resolve
+    // names no dictionary: the instance is refused, not given a value.
+    if body.refused_bound().is_none() {
+        let mut unresolved = None;
+        body.for_each_use_evidence(|_, evidence| {
+            unresolved = unresolved.or_else(|| evidence.unresolved_component(db));
+        });
+        if let Some(goal) = unresolved {
+            body = body.with_refused_bound(goal);
+        }
+    }
+    if let Some(defining_body) = body.body() {
+        body = body.fold_with(
+            db,
+            &mut CaptureClosureEvidence {
+                defining_body,
+                bound: bound.nominal(db),
+            },
+        );
+    }
+    body
+}
+
+struct CaptureClosureEvidence<'db> {
+    defining_body: crate::hir_def::Body<'db>,
+    bound: crate::analysis::ty::evidence::BoundEvidence<'db>,
+}
+
+impl<'db> TyFolder<'db> for CaptureClosureEvidence<'db> {
+    fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+        let ty = ty.super_fold_with(db, self);
+        let Some(closure) = ty.as_closure(db).filter(|closure| {
+            closure.def(db).body == self.defining_body && closure.bound_evidence(db).is_none()
+        }) else {
+            return ty;
+        };
+        TyId::closure(
+            db,
+            crate::analysis::ty::ty_def::ClosureTy::new(
+                db,
+                closure.def(db),
+                crate::analysis::ty::ty_def::ClosureContext {
+                    args: closure.parent_args(db).clone(),
+                    evidence: Some(self.bound),
+                },
+                closure.captures(db).clone(),
+                closure.params(db).clone(),
+                closure.ret_ty(db),
+                closure.effects(db).clone(),
+            ),
+        )
+    }
 }
 
 struct RowProviderSubst<'a, 'db> {
@@ -432,10 +646,11 @@ fn provisional_call_sites<'db>(
     );
 
     for (expr, _) in body.exprs(db).iter() {
-        let Some(callable) = typed_body
+        let callable = typed_body
             .semantic_expr_lowering(expr)
             .and_then(SemanticExprLowering::called)
-        else {
+            .or_else(|| typed_body.place_entry_callable(expr));
+        let Some(callable) = callable else {
             continue;
         };
         if regions.expr(expr) != region {
@@ -505,6 +720,10 @@ fn provisional_for_loop_call_sites<'db>(
 /// row the call forwards passes as the components the instance expands it
 /// to, each from the caller's component at the same place in the caller's
 /// own row. What stays abstract carries nothing and is dropped.
+///
+/// A forwarded component also passes the caller's row evidence, at the
+/// callee's path. When there is any, the third result is `callable` with
+/// that evidence supplied, and the call's key is made from it.
 fn instance_effect_args<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -513,12 +732,14 @@ fn instance_effect_args<'db>(
 ) -> (
     Vec<CallEffectArg<'db>>,
     Vec<EffectProviderSpecialization<'db>>,
+    Option<Callable<'db>>,
 ) {
     let mut providers = callable.effect_providers().to_vec();
     let mut expanded = Vec::with_capacity(args.len());
+    let mut supplied: Option<Callable<'db>> = None;
     // Only a function has effects.
     let CallableDef::Func(func) = callable.callable_def() else {
-        return (expanded, providers);
+        return (expanded, providers, supplied);
     };
     let key = instance.key(db);
     let callee_rows = LazyCell::new(|| {
@@ -581,6 +802,22 @@ fn instance_effect_args<'db>(
             else {
                 continue;
             };
+            if let Some(row) = key
+                .evidence(db)
+                .rows(db)
+                .iter()
+                .find(|row| row.path == caller.path)
+            {
+                supplied
+                    .get_or_insert_with(|| callable.clone())
+                    .supply_row_evidence(
+                        db,
+                        crate::analysis::ty::evidence::RowEvidence {
+                            path: callee.path.clone(),
+                            ..row.clone()
+                        },
+                    );
+            }
             let slot = caller.requirement.binding_idx;
             let binding = LocalBinding::EffectParam {
                 site: caller.requirement.binding_site,
@@ -617,7 +854,39 @@ fn instance_effect_args<'db>(
             });
         }
     }
-    (expanded, providers)
+    (expanded, providers, supplied)
+}
+
+/// The callee of a call site. A trait call whose implementation the caller's
+/// context does not select, such as a call through a bound on a type
+/// parameter, names the trait's declaration or default body; each instance
+/// selects its own implementation, so the reference records the self type
+/// that selects it.
+fn callee_ref<'db>(
+    db: &'db dyn HirAnalysisDb,
+    callable: &Callable<'db>,
+    key: SemanticInstanceKey<'db>,
+    concrete_dispatch: bool,
+) -> SemanticCalleeRef<'db> {
+    let pending_selection = (!concrete_dispatch).then(|| {
+        // Only a trait call lacks a known body, and the self type is
+        // normalized as the key's evidence is.
+        let env = key.impl_env(db);
+        let self_ty = callable
+            .trait_inst()
+            .expect("a callee without a known body is a trait call")
+            .self_ty(db);
+        normalize_ty(
+            db,
+            self_ty,
+            env.normalization_scope(db),
+            env.assumptions(db),
+        )
+    });
+    SemanticCalleeRef {
+        key,
+        pending_selection,
+    }
 }
 
 /// Plans a call before provider refinement. The first argument-mapping
@@ -632,8 +901,9 @@ fn provisional_call_site<'db>(
     origin: SemOrigin<'db>,
     diagnostic: &mut Option<SemanticDiagnosticId<'db>>,
 ) -> CallSiteLowering<'db> {
-    let (nominal_effect_args, effect_providers) =
+    let (nominal_effect_args, effect_providers, supplied) =
         instance_effect_args(db, instance, callable, nominal_effect_args);
+    let callable = supplied.as_ref().unwrap_or(callable);
     let mut report = |error| {
         diagnostic.get_or_insert_with(|| method_arg_map_diagnostic(db, instance, error, origin));
     };
@@ -659,7 +929,7 @@ fn provisional_call_site<'db>(
         });
     let (callee, effect_pairs, provider_pairs, drops_receiver) = match callee {
         Some(plan) => (
-            Some(SemanticCalleeRef { key: plan.key }),
+            Some(callee_ref(db, callable, plan.key, plan.concrete_dispatch)),
             plan.effect_pairs,
             plan.provider_pairs,
             plan.drops_receiver,
@@ -673,6 +943,217 @@ fn provisional_call_site<'db>(
         provider_pairs: provider_pairs.into(),
         drops_receiver,
     }
+}
+
+/// The first use in the body of `instance` whose outputs disagree with
+/// ordinary normalization. It is also asked from `callee_output_disagreement`,
+/// where an instance can reach itself again through a constant that is
+/// computed under its own choice, so a cycle starts from no disagreement.
+#[salsa::tracked(returns(copy), cycle_initial = output_agreement_cycle_initial)]
+fn output_agreement_diagnostic_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    let scope = instance.normalization_scope(db);
+    let typed = instance.key(db).typed_body(db);
+    let mut found = None;
+    typed.for_each_use_evidence(|expr, evidence| {
+        if found.is_some() {
+            return;
+        }
+        let rows = evidence
+            .bounds
+            .iter()
+            .flat_map(|bounds| bounds.entries.rows(db).iter().filter_map(|row| row.proof));
+        let proofs = evidence
+            .dispatch_proof()
+            .into_iter()
+            .chain(
+                evidence
+                    .bounds
+                    .iter()
+                    .flat_map(|bounds| bounds.entries.entries(db).iter().flatten().copied()),
+            )
+            .chain(rows);
+        found = proofs
+            .filter_map(|proof| proof_output_mismatch(db, scope, proof))
+            .next()
+            .map(|(own, mismatch)| {
+                output_disagreement_diagnostic(db, instance, expr, own, mismatch)
+            });
+    });
+    found
+}
+
+fn output_agreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
+}
+
+/// The first disagreement with ordinary normalization (see
+/// `output_agreement_diagnostic_query`) in an instance that `instance` calls,
+/// directly or through other calls. Only instances within the instance limits
+/// are followed, and the calls of a body with lowering issues are not
+/// (`walk_may_follow_calls`), so the walk ends for recursion that grows its
+/// generic arguments.
+///
+/// Inside a call cycle, which of several real disagreements is reported can
+/// depend on the order in which the queries are asked. A later fix is to take
+/// the one with the smallest source position.
+#[salsa::tracked(returns(copy), cycle_initial = callee_output_disagreement_cycle_initial)]
+fn callee_output_disagreement_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    instance_calls(db, instance)
+        .into_iter()
+        .map(|(_, callee)| SemanticInstance::new(db, callee.key))
+        .filter(|&callee| callee != instance && instance_limit_violation(db, callee).is_none())
+        .find_map(|callee| {
+            output_agreement_diagnostic_query(db, callee).or_else(|| {
+                walk_may_follow_calls(db, callee)
+                    .then(|| callee_output_disagreement_query(db, callee))
+                    .flatten()
+            })
+        })
+}
+
+fn callee_output_disagreement_cycle_initial<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _instance: SemanticInstance<'db>,
+) -> Option<SemanticDiagnosticId<'db>> {
+    None
+}
+
+/// The header of an implementation as written, `impl<T: Marker> Foo for T`:
+/// its parameters with the bounds on them, then the other bounds in a `where`
+/// clause. The trait is printed without the associated types the
+/// implementation defines.
+fn implementation_header<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    let params = implementor.params(db);
+    let bounds = implementor.constraints(db).list(db);
+    let generics = params
+        .iter()
+        .map(|&param| {
+            let name = param.pretty_print(db).to_string();
+            let own = bounds
+                .iter()
+                .filter(|bound| bound.self_ty(db) == param)
+                .map(|bound| bound.pretty_print(db, false))
+                .collect::<Vec<_>>();
+            if own.is_empty() {
+                name
+            } else {
+                format!("{name}: {}", own.join(" + "))
+            }
+        })
+        .collect::<Vec<_>>();
+    let generics = if generics.is_empty() {
+        String::new()
+    } else {
+        format!("<{}>", generics.join(", "))
+    };
+    let others = bounds
+        .iter()
+        .filter(|bound| !params.contains(&bound.self_ty(db)))
+        .map(|bound| bound.pretty_print(db, true))
+        .collect::<Vec<_>>();
+    let clause = if others.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", others.join(", "))
+    };
+    let header = implementor.trait_(db).without_assoc_bindings(db);
+    format!(
+        "impl{generics} {} for {}{clause}",
+        header.pretty_print(db, false),
+        header.self_ty(db).pretty_print(db)
+    )
+}
+
+/// How an implementation is named in a message: its name, or its header.
+fn implementation_label<'db>(
+    db: &'db dyn HirAnalysisDb,
+    implementor: ImplementorId<'db>,
+) -> String {
+    match implementor.origin(db) {
+        ImplementorOrigin::Hir(implementation) => match implementation.selection_name(db) {
+            Some(name) => format!("`{}`", name.data(db)),
+            None => format!("`{}`", implementation_header(db, implementor)),
+        },
+        _ => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
+    }
+}
+
+fn output_disagreement_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+    expr: ExprId,
+    own: ResolvedImplInstance<'db>,
+    mismatch: NamedOutputMismatch<'db>,
+) -> SemanticDiagnosticId<'db> {
+    let goal = own
+        .trait_inst()
+        .without_assoc_bindings(db)
+        .pretty_print(db, true);
+    let answers = implementation_label(db, own.selected());
+    let with_label = |with: crate::hir_def::ImplTrait<'db>| {
+        crate::analysis::ty::trait_lower::lower_impl_trait(db, with)
+            .map(|implementor| implementation_label(db, implementor))
+            .unwrap_or_else(|| "its implementation".to_string())
+    };
+    let message = match mismatch {
+        NamedOutputMismatch::NoOrdinaryOutputs => format!(
+            "`{goal}` is answered here by {answers}, but no ordinary implementation defines its associated outputs at `{goal}`"
+        ),
+        NamedOutputMismatch::AssocType {
+            with,
+            name,
+            expected,
+            given,
+            ..
+        } => format!(
+            "`{goal}` is answered here by {answers}, whose `{}` is `{}`, but ordinary normalization of `{goal}` gives `{}` (from {})",
+            name.data(db),
+            given.pretty_print(db),
+            expected.pretty_print(db),
+            with_label(with)
+        ),
+        NamedOutputMismatch::AssocConst { with, name, .. } => format!(
+            "`{goal}` is answered here by {answers}, whose constant `{}` differs from the one ordinary normalization of `{goal}` gives (from {})",
+            name.data(db),
+            with_label(with)
+        ),
+        NamedOutputMismatch::Row { with, name, .. } => format!(
+            "`{goal}` is answered here by {answers}, whose effect row `{}` differs from the one ordinary normalization of `{goal}` gives (from {})",
+            name.data(db),
+            with_label(with)
+        ),
+    };
+    let owner = instance.key(db).owner(db);
+    let mut diagnostic = SemanticDiagnostic::new(
+        instance,
+        SemanticDiagnosticKind::ChoiceOutputDisagreement,
+        message,
+        SemanticDiagnosticSpan::Origin {
+            owner,
+            origin: SemOrigin::Expr(expr),
+        },
+    );
+    if let ImplementorOrigin::Hir(implementation) = own.selected().origin(db) {
+        diagnostic.push_secondary(
+            "the implementation that answers here".to_string(),
+            SemanticDiagnosticSpan::ImplTrait(implementation),
+        );
+    }
+    SemanticDiagnosticId::new(db, diagnostic)
 }
 
 fn provisional_call_site_diagnostic<'db>(
@@ -785,10 +1266,11 @@ fn finalize_call_sites<'db>(
         let Some(site) = call_sites.get_mut(expr.index()).and_then(Option::as_mut) else {
             continue;
         };
-        let Some(callable) = typed_body
+        let callable = typed_body
             .semantic_expr_lowering(expr)
             .and_then(SemanticExprLowering::called)
-        else {
+            .or_else(|| typed_body.place_entry_callable(expr));
+        let Some(callable) = callable else {
             continue;
         };
         finalize_call_site(
@@ -1012,8 +1494,9 @@ fn finalize_call_site<'db>(
     origin: SemOrigin<'db>,
     same_assumptions: bool,
 ) -> Result<(), SemanticDiagnosticId<'db>> {
-    let (nominal_effect_args, effect_providers) =
+    let (nominal_effect_args, effect_providers, supplied) =
         instance_effect_args(db, instance, callable, nominal_effect_args);
+    let callable = supplied.as_ref().unwrap_or(callable);
     // A plain call without provider refinements or effect providers, under the
     // provisional assumptions, resolves exactly as its provisional plan did:
     // the provider resolution modes differ only for providers and for selected
@@ -1097,9 +1580,12 @@ fn replan_call_site<'db>(
         site.effect_pairs = callee.effect_pairs.into_boxed_slice();
         site.provider_pairs = callee.provider_pairs.into_boxed_slice();
         site.drops_receiver = callee.drops_receiver;
-        site.callee = Some(SemanticCalleeRef {
-            key: callee.key.with_param_spaces(db, param_spaces),
-        });
+        site.callee = Some(callee_ref(
+            db,
+            callable,
+            callee.key.with_param_spaces(db, param_spaces),
+            callee.concrete_dispatch,
+        ));
     } else {
         site.callee = None;
         site.drops_receiver = false;
@@ -1517,6 +2003,133 @@ impl<'db> SemanticInstance<'db> {
         )
     }
 
+    /// The first use in this instance's body whose proof answers a concrete
+    /// goal through an implementation whose outputs differ from those
+    /// ordinary normalization gives the goal (see
+    /// `concrete_goal_output_mismatch`). The type checker reasons about the
+    /// outputs of such a goal as ordinary normalization gives them, so a use
+    /// that disagrees cannot be lowered. It is checked once per instance,
+    /// before the body is lowered.
+    pub(crate) fn output_agreement_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        output_agreement_diagnostic_query(db, self)
+    }
+
+    /// The first disagreement with ordinary normalization in an instance this
+    /// one calls, directly or through other calls. A body is checked against the
+    /// outputs of its callees as ordinary normalization gives them, so a callee
+    /// that disagrees can make the body fail verification. Admission asks for it
+    /// only after such a failure.
+    pub(crate) fn callee_output_disagreement(
+        self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        callee_output_disagreement_query(db, self)
+    }
+
+    /// The disagreement in `proof`, a proof this instance's body completed
+    /// after admission, as a diagnostic at `expr`.
+    fn proof_output_diagnostic(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+        proof: EvidenceId<'db>,
+    ) -> Option<SemanticDiagnosticId<'db>> {
+        let (own, mismatch) = proof_output_mismatch(db, self.normalization_scope(db), proof)?;
+        Some(output_disagreement_diagnostic(
+            db, self, expr, own, mismatch,
+        ))
+    }
+
+    /// Codec calls belonging to one checked entry. A codec is only required
+    /// after the ordinary associated layout says this entry is packed. The
+    /// callable may defer an obligation that becomes closed on substitution;
+    /// the shared callee finalizer owns that obligation, as for written calls.
+    #[salsa::tracked(returns(copy))]
+    pub fn entry_codec_callees(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        expr: ExprId,
+    ) -> Result<[SemanticInstanceKey<'db>; 2], SemanticDiagnosticId<'db>> {
+        let calls = self
+            .key(db)
+            .typed_body(db)
+            .place_entry_calls(expr)
+            .ok_or_else(|| {
+                method_arg_map_diagnostic(
+                    db,
+                    self,
+                    MethodArgMapError::MissingBody,
+                    SemOrigin::Expr(expr),
+                )
+            })?;
+        let failed_choice = || {
+            let goal = calls.codec[0]
+                .trait_inst()
+                .expect("a checked codec has its trait goal");
+            SemanticDiagnosticId::new(
+                db,
+                SemanticDiagnostic::new(
+                    self,
+                    SemanticDiagnosticKind::StorageViolation,
+                    format!(
+                        "trait bound `{}` is not satisfied under the implementation choices at this indexing operation",
+                        goal.pretty_print(db, true)
+                    ),
+                    SemanticDiagnosticSpan::Origin {
+                        owner: self.key(db).owner(db),
+                        origin: SemOrigin::Expr(expr),
+                    },
+                ),
+            )
+        };
+        if calls.codec_choice_failed {
+            return Err(failed_choice());
+        }
+        let call_error = |error| method_arg_map_diagnostic(db, self, error, SemOrigin::Expr(expr));
+        let one = |callable: &Callable<'db>| {
+            let mut callable = callable.clone();
+            if callable.evidence().is_none() {
+                // Specialization supplies concrete arguments for the
+                // deferred proof. Its lexical choices still apply.
+                let outcome = callable.record_evidence(
+                    db,
+                    TraitSolveCx::new(db, self.normalization_scope(db))
+                        .with_assumptions(self.assumptions(db))
+                        .with_choices(calls.codec_choices),
+                );
+                if outcome.evidence().is_none() && calls.codec_choices.is_some() {
+                    return Err(failed_choice());
+                }
+            }
+            if calls.codec_choices.is_some()
+                && callable.has_deferred_evidence(db)
+                && callable.complete_deferred_evidence(db).is_none()
+            {
+                return Err(failed_choice());
+            }
+            // The proof was completed here, after admission checked the
+            // body's use evidence.
+            if calls.codec_choices.is_some()
+                && let Some(proof) = callable.evidence()
+                && let Some(diagnostic) = self.proof_output_diagnostic(db, expr, proof)
+            {
+                return Err(diagnostic);
+            }
+            let callee =
+                semantic_callee_key_with_effect_providers(db, self.key(db), &callable, &[], &[])
+                    .map_err(call_error)?
+                    .ok_or_else(|| call_error(MethodArgMapError::MissingBody))?;
+            if !callee.concrete_dispatch {
+                return Err(call_error(MethodArgMapError::MissingBody));
+            }
+            Ok(callee.key)
+        };
+        Ok([one(&calls.codec[0])?, one(&calls.codec[1])?])
+    }
+
     /// How `ty` packs its elements into lanes when its elements are places
     /// (`core::ops::StateIndex`), in this instance.
     #[salsa::tracked(returns(copy))]
@@ -1748,6 +2361,40 @@ impl<'db> SemanticInstance<'db> {
         db: &'db dyn HirAnalysisDb,
     ) -> Result<(), SemanticBodyAdmissionError<'db>> {
         let typed_body = self.key(db).typed_body(db);
+        if let Some(refused) = typed_body.refused_bound() {
+            let goal = refused.goal.pretty_print(db, true);
+            let message = match refused.reason {
+                Refusal::Differs { a, b } | Refusal::ConditionsDiffer { a, b } => format!(
+                    "`{goal}`: `{}` and `{}` supply different implementations",
+                    a.pretty_print(db, true),
+                    b.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: Some(root) } => format!(
+                    "`{goal}`: the dictionary of `{}` has no such component",
+                    root.pretty_print(db, true)
+                ),
+                Refusal::NoComponent { root: None } => {
+                    format!("`{goal}`: no dictionary supplies it")
+                }
+                Refusal::TooDeep { root } => format!(
+                    "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
+                    root.pretty_print(db, true)
+                ),
+            };
+            return Err(SemanticBodyAdmissionError::InvalidConcreteType(
+                SemanticDiagnosticId::new(
+                    db,
+                    SemanticDiagnostic::new(
+                        self,
+                        SemanticDiagnosticKind::ConflictingDictionaries,
+                        message,
+                        SemanticDiagnosticSpan::ItemName {
+                            owner: self.key(db).owner(db),
+                        },
+                    ),
+                ),
+            ));
+        }
         let causes = typed_body.smir_lowering_issues(db).into_boxed_slice();
         if causes.iter().copied().any(SmirLoweringIssue::is_incomplete) {
             return Err(SemanticBodyAdmissionError::IncompleteLoweringPlan(causes));
@@ -1759,7 +2406,18 @@ impl<'db> SemanticInstance<'db> {
         }
 
         if let Some(body) = typed_body.body() {
+            let regions = closure_regions(db, body);
+            let region = self.key(db).owner(db).closure_region();
             for (expr, _) in body.exprs(db).iter() {
+                if regions.expr(expr) == region
+                    && let Some(calls) = typed_body.place_entry_calls(expr)
+                    && !calls.deferred_codec_is_parametric(db)
+                    && let Some(goal) = calls.locate.trait_inst()
+                    && self.state_index_lanes(db, goal.self_ty(db)).is_some()
+                    && let Err(error) = self.entry_codec_callees(db, expr)
+                {
+                    return Err(SemanticBodyAdmissionError::CallSiteFinalization(error));
+                }
                 let Some(SemanticExprLowering::ConstIntrinsic { callable, kind }) =
                     typed_body.semantic_expr_lowering(expr)
                 else {
@@ -2000,6 +2658,19 @@ fn unencodable_call_panic<'db>(
     .then_some(ty)
 }
 
+/// Whether a walk over the calls of instances may follow the calls of
+/// `instance`. A body with lowering issues has no instance limit to end a
+/// chain of calls, and an instance past the instance limits is rejected as
+/// itself, so neither has its calls followed.
+fn walk_may_follow_calls<'db>(db: &'db dyn HirAnalysisDb, instance: SemanticInstance<'db>) -> bool {
+    instance
+        .key(db)
+        .typed_body(db)
+        .smir_lowering_issues(db)
+        .is_empty()
+        && instance_limit_violation(db, instance).is_none()
+}
+
 /// The type `instance`, or any instance it calls, panics with that can't be
 /// revert data. An instance past the instance limits is rejected as itself,
 /// and its calls need not end, so this does not follow them.
@@ -2008,13 +2679,7 @@ fn unencodable_panic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
 ) -> Option<TyId<'db>> {
-    if !instance
-        .key(db)
-        .typed_body(db)
-        .smir_lowering_issues(db)
-        .is_empty()
-        || instance_limit_violation(db, instance).is_some()
-    {
+    if !walk_may_follow_calls(db, instance) {
         return None;
     }
     instance_calls(db, instance)
@@ -3100,12 +3765,13 @@ mod tests {
             assert!(callable.effect_providers().is_empty());
             let site = provisional.sites[expr.index()].as_ref().unwrap();
             let mut replanned = site.clone();
-            let (effect_args, effect_providers) = instance_effect_args(
+            let (effect_args, effect_providers, supplied) = instance_effect_args(
                 db,
                 instance,
                 callable,
                 typed_body.call_effect_args(expr).unwrap_or(&[]),
             );
+            let callable = supplied.as_ref().unwrap_or(callable);
             replan_call_site(
                 db,
                 instance,
