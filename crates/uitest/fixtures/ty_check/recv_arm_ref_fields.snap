@@ -38,10 +38,10 @@ error[16-0024]: the entry code of contract `NotFieldwise` cannot be generated
    ┌─ recv_arm_ref_fields.fe:77:9
    │
 77 │         Hand { ref v } -> u256 {
-   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Hand: AbiFields` is not satisfied
 
 error[16-0024]: the entry code of contract `NotPart` cannot be generated
    ┌─ recv_arm_ref_fields.fe:86:9
    │
 86 │         V { ref p } -> u256 {
-   │         ^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Plain: Part<CallData, Sol>` is not satisfied

@@ -2185,7 +2185,23 @@ impl<'db> RecvArmView<'db> {
                 )?,
             });
         }
-        let Some(input_ty) = reading.input_ty.filter(|_| reading.failures.is_empty()) else {
+        // The failures of the reading are reported at their fields by the
+        // arm's type check; the plan names the same unmet traits, so that the
+        // entry code is refused whether or not that check ran.
+        if !reading.failures.is_empty() {
+            return Err(EntryPlanError::NoInstance(
+                reading
+                    .failures
+                    .iter()
+                    .map(|failure| UnmetGoal {
+                        arg: None,
+                        goal: failure.unmet_goal(db),
+                        cause: None,
+                    })
+                    .collect(),
+            ));
+        }
+        let Some(input_ty) = reading.input_ty else {
             return Err(EntryPlanError::Failed(
                 "recv arm reads in place but its reads are not valid".to_string(),
             ));
@@ -2296,6 +2312,29 @@ pub enum RecvReadingFailure<'db> {
     /// implemented: the size of the message or of a field, or the copy of the
     /// input; reported at the field the read is for.
     BoundNotMet { pat: PatId, bound: TraitInstId<'db> },
+}
+
+impl<'db> RecvReadingFailure<'db> {
+    /// The goal that is not satisfied, as the entry plan names it.
+    fn unmet_goal(&self, db: &'db dyn HirAnalysisDb) -> String {
+        match self {
+            Self::NotFieldwise { variant_ty, .. } => {
+                format!("{}: AbiFields", variant_ty.pretty_print(db))
+            }
+            Self::FieldNotPart {
+                field_ty,
+                input_ty,
+                abi_ty,
+                ..
+            } => format!(
+                "{}: Part<{}, {}>",
+                field_ty.pretty_print(db),
+                input_ty.pretty_print(db),
+                abi_ty.pretty_print(db)
+            ),
+            Self::BoundNotMet { bound, .. } => bound.pretty_print(db, true),
+        }
+    }
 }
 
 /// The instances the dispatcher of a recv arm runs to read the message.

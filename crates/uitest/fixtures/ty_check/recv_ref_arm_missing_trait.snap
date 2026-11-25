@@ -23,10 +23,10 @@ error[16-0024]: the entry code of contract `RefAfterUnsized` cannot be generated
    ┌─ recv_ref_arm_missing_trait.fe:49:9
    │
 49 │         G { x: _, a: _, ref b } -> u8 {
-   │         ^^^^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Odd: AbiSize` is not satisfied
 
 error[16-0024]: the entry code of contract `DecodedAfterUnsized` cannot be generated
    ┌─ recv_ref_arm_missing_trait.fe:59:9
    │
 59 │         G { ref x, a: _, b } -> u8 {
-   │         ^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Odd: AbiSize` is not satisfied

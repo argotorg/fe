@@ -18,7 +18,7 @@ error[16-0024]: the entry code of contract `C` cannot be generated
    ┌─ contract_entry_arm_tuple_field_unreadable.fe:21:9
    │
 21 │         M { x, ref y } -> u8 { y }
-   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: recv arm reads in place but its reads are not valid
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8): AbiSize` is not satisfied
 
 
 === EXIT CODE: 1 ===
