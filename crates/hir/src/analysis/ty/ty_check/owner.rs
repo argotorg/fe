@@ -232,6 +232,38 @@ impl<'db> BodyOwner<'db> {
                 .is_some_and(|owner| owner.where_clause(db).const_predicates(db).contains(&body))
     }
 
+    /// Whether this owner is a `where` condition on a function. A condition on
+    /// a struct, an enum, an implementation or a trait is a fact about a type
+    /// and is never evaluated under a choice.
+    pub fn is_func_const_predicate(self, db: &'db dyn HirAnalysisDb) -> bool {
+        self.is_const_predicate(db)
+            && matches!(
+                self,
+                Self::AnonConstBody { body, .. }
+                    if matches!(body.scope().parent_item(db), Some(ItemKind::Func(_)))
+            )
+    }
+
+    /// Whether this owner is the initializer of an associated constant, of an
+    /// inherent or trait implementation, or the default in a trait.
+    pub fn is_assoc_const_initializer(self, db: &'db dyn HirAnalysisDb) -> bool {
+        let Self::AnonConstBody { body, .. } = self else {
+            return false;
+        };
+        match body.scope().parent_item(db) {
+            Some(ItemKind::Impl(owner)) => owner
+                .assoc_consts(db)
+                .any(|constant| constant.value_body(db) == Some(body)),
+            Some(ItemKind::ImplTrait(owner)) => owner
+                .assoc_consts(db)
+                .any(|constant| constant.value_body(db) == Some(body)),
+            Some(ItemKind::Trait(owner)) => owner
+                .assoc_consts(db)
+                .any(|constant| constant.default_body(db) == Some(body)),
+            _ => false,
+        }
+    }
+
     /// The `where` clause conditions `item` declares, as body owners.
     pub fn const_predicates_of(
         db: &'db dyn HirAnalysisDb,

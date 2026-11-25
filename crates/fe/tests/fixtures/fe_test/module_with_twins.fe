@@ -1,0 +1,96 @@
+// Module-level `with` means a `with` block around each written body of the
+// module (P2 rule 1). Each row is written twice: in a module that declares
+// the choice (`framed`) and in a module whose bodies each open a block
+// (`blocked`). Both must give the stated value. The unframed control gives the
+// ordinary value.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+pub impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub fn helper<T: Show>() -> u256 { T::show() }
+pub fn run<F: Fn() -> u256>(_ f: F) -> u256 uses (F::E) { f() }
+
+pub struct Item {}
+pub trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub impl Price for Item as W { fn price(self) -> u256 { 70 } }
+
+pub struct Box<T> { pub v: T }
+pub trait Pick { fn pick(self) -> u256 }
+pub impl<T> Pick for Box<T> as Alt { fn pick(self) -> u256 { 7 } }
+
+pub trait HasN { const N: u256 }
+pub trait CPick { const fn value() -> u256 }
+impl CPick for Item { const fn value() -> u256 { 100 } }
+pub impl CPick for Item as Discount { const fn value() -> u256 { 70 } }
+pub struct Wrapper<T> {}
+impl<T: CPick> Wrapper<T> { pub const X: u256 = T::value() }
+
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+pub struct WW<T> {}
+impl<T: Show> Tr for WW<T> { type A = T
+    fn via() -> u256 { T::show() } }
+
+pub mod framed {
+    use super::*
+    with (Loud, W, Alt, Discount)
+    pub fn m1() -> u256 { Foo::show() * 1000 + helper<Foo>() }
+    pub fn m2() -> u256 { Item {}.price() }
+    pub fn m2b() -> u256 {
+        let b = Box<Item> { v: Item {} }
+        b.pick()
+    }
+    pub fn m5() -> u256 { run(helper<Foo>) }
+    pub fn m6() -> u256 {
+        let c = || Foo::show()
+        c()
+    }
+    pub struct Bar {}
+    impl HasN for Bar { const N: u256 = <Item as CPick>::value() }
+    pub fn m8() -> u256 { Wrapper<Item>::X }
+    pub const K: u256 = <Item as CPick>::value()
+    pub fn caller<B: Tr<A = Foo>>() -> u256 { Foo::show() }
+}
+pub mod opened {
+    use super::*
+    with (<Foo as Show>)
+    pub fn m16() -> u256 { helper<Foo>() }
+}
+pub mod blocked {
+    use super::*
+    pub fn m1() -> u256 { with (Loud, W, Alt, Discount) { Foo::show() * 1000 + helper<Foo>() } }
+    pub fn m2() -> u256 { with (Loud, W, Alt, Discount) { Item {}.price() } }
+    pub fn m2b() -> u256 { with (Loud, W, Alt, Discount) {
+        let b = Box<Item> { v: Item {} }
+        b.pick()
+    } }
+    pub fn m5() -> u256 { with (Loud, W, Alt, Discount) { run(helper<Foo>) } }
+    pub fn m6() -> u256 { with (Loud, W, Alt, Discount) {
+        let c = || Foo::show()
+        c()
+    } }
+    pub struct Bar {}
+    impl HasN for Bar { const N: u256 = with (Loud, W, Alt, Discount) { <Item as CPick>::value() } }
+    pub fn m8() -> u256 { with (Loud, W, Alt, Discount) { Wrapper<Item>::X } }
+    pub const K: u256 = with (Loud, W, Alt, Discount) { <Item as CPick>::value() }
+    pub fn caller<B: Tr<A = Foo>>() -> u256 { with (Loud, W, Alt, Discount) { Foo::show() } }
+    pub fn m16() -> u256 { with (<Foo as Show>) { helper<Foo>() } }
+}
+fn unframed() -> u256 { Foo::show() * 1000 + helper<Foo>() }
+fn same(_ a: u256, _ b: u256, _ expected: u256) -> bool { a == b && b == expected }
+
+#[test]
+fn twins() {
+    assert(unframed() == 100100)
+    assert(same(framed::m1(), blocked::m1(), 70070))
+    assert(same(framed::m2(), blocked::m2(), 70))
+    assert(same(framed::m2b(), blocked::m2b(), 7))
+    assert(same(framed::m5(), blocked::m5(), 70))
+    assert(same(framed::m6(), blocked::m6(), 70))
+    assert(same(<framed::Bar as HasN>::N, <blocked::Bar as HasN>::N, 70))
+    assert(same(framed::m8(), blocked::m8(), 70))
+    assert(same(framed::K, blocked::K, 70))
+    assert(same(framed::caller<WW<Foo>>(), blocked::caller<WW<Foo>>(), 70))
+    assert(same(opened::m16(), blocked::m16(), 100))
+}

@@ -20,15 +20,16 @@ use crate::{
             },
             trait_def::TraitInstId,
             trait_resolution::{
-                ChosenImpl, ChosenImpls, PredicateListId, TraitSolveCx, goal_holds,
+                ChoiceEntry, ChosenImpl, ChosenImpls, PredicateListId, TraitSolveCx, goal_holds,
             },
             ty_def::TyId,
         },
     },
-    hir_def::{ItemKind, PathId, scope_graph::ScopeId},
+    hir_def::{ItemKind, PathId, Trait, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
 
+use super::BodyOwner;
 use super::with_operand::{
     BareName, OperandMeaning, OperandSite, OperandValues, classify_with_operand, earlier_answer,
     opening_contexts,
@@ -273,5 +274,71 @@ fn module_choices_cycle_initial<'db>(
         diags: vec![FuncBodyDiag::Ty(
             TyLowerDiag::TypeLoweringCycle(span).into(),
         )],
+    }
+}
+
+/// The module that `scope` is in: `scope` itself for a module.
+pub(crate) fn module_of<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> ScopeId<'db> {
+    match scope {
+        ScopeId::Item(ItemKind::Mod(_) | ItemKind::TopMod(_)) => scope,
+        _ => scope
+            .parent_module(db)
+            .expect("every scope is inside a module"),
+    }
+}
+
+/// The choices that a check or generated call at this scope starts from: the
+/// frame of the module that holds it.
+pub(crate) fn scope_choices<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+) -> Option<ChosenImpls<'db>> {
+    module_choices(db, module_of(db, scope)).choices
+}
+
+/// Whether `frame` has an entry that could answer a goal of `trait_`: an
+/// implementation of it, or a provider that may offer it.
+pub(crate) fn frame_may_answer<'db>(
+    db: &'db dyn HirAnalysisDb,
+    frame: Option<ChosenImpls<'db>>,
+    trait_: Trait<'db>,
+) -> bool {
+    frame.is_some_and(|frame| {
+        frame.items(db).iter().any(|entry| match entry {
+            ChoiceEntry::Impl(choice) => choice.implementation().trait_(db).def(db) == trait_,
+            ChoiceEntry::Provider(opening) => opening.may_offer(db, trait_),
+        })
+    })
+}
+
+/// The frame a body starts with: the frame of the module that writes it. An
+/// anonymous constant starts with it when it is a value of its module: a
+/// static assertion's condition, the initializer of an associated constant (a
+/// trait's default included), the value of a constant, or a `where` condition
+/// on a function. The default of a trait's constant belongs to the module of
+/// the trait. One written inside a type (a const argument, an array length, a
+/// parameter default) or in the `where` clause of a type, an implementation or
+/// a trait is a part of the type, which is never decided by a choice.
+pub(crate) fn body_frame<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+) -> Option<ChosenImpls<'db>> {
+    match owner {
+        BodyOwner::AnonConstBody { body, .. } => {
+            let value_of_module = matches!(
+                body.scope().parent_item(db),
+                Some(ItemKind::StaticAssert(_))
+            ) || owner.is_assoc_const_initializer(db)
+                || owner.is_func_const_predicate(db)
+                || matches!(
+                    body.scope().parent_item(db),
+                    Some(ItemKind::Const(constant)) if constant.body(db).to_opt() == Some(body)
+                );
+            value_of_module
+                .then(|| scope_choices(db, body.scope()))
+                .flatten()
+        }
+        BodyOwner::InheritedConst { body, .. } => scope_choices(db, body.scope()),
+        _ => scope_choices(db, owner.scope()),
     }
 }

@@ -378,8 +378,7 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
 }
 
 /// Reports the diagnostics of every module's `with` declaration. The frame of
-/// a module is built by `ty_check::module_with`; this pass also keeps the
-/// refusal of the declaration until the frame reaches the bodies of its module.
+/// a module is built by `ty_check::module_with`.
 pub struct ModuleWithAnalysisPass {}
 
 impl ModuleAnalysisPass for ModuleWithAnalysisPass {
@@ -388,7 +387,7 @@ impl ModuleAnalysisPass for ModuleWithAnalysisPass {
         db: &'db dyn HirAnalysisDb,
         top_mod: TopLevelMod<'db>,
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
-        let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = std::iter::once(top_mod.scope())
+        std::iter::once(top_mod.scope())
             .chain(top_mod.all_mods(db).iter().map(|module| module.scope()))
             .flat_map(|module| {
                 ty_check::module_with::module_choices(db, module)
@@ -396,14 +395,7 @@ impl ModuleAnalysisPass for ModuleWithAnalysisPass {
                     .iter()
             })
             .map(|diag| diag.to_voucher())
-            .collect();
-        diags.extend(top_mod.all_items(db).iter().filter_map(|item| match item {
-            ItemKind::With(with) => Some(Box::new(BodyDiag::ModuleWithUnavailable {
-                primary: with.span().into(),
-            }) as _),
-            _ => None,
-        }));
-        diags
+            .collect()
     }
 }
 

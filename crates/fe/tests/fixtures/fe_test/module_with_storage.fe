@@ -1,0 +1,69 @@
+// A module's `with` chooses the lane codec of a storage entry read in its
+// bodies, as a block does: two reads of one entry in a framed module share one
+// dispatch.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex}
+use std::evm::{Address, Call, Evm, Wei}
+
+struct Codec {}
+impl LaneCodec<u32> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        ((word >> offset) & 0xffffffff).downcast_truncate()
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        (word & !(0xffffffff << offset)) | ((value as u256) << offset)
+    }
+}
+impl LaneCodec<u32> for Codec as Encoded {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> u32 {
+        with (<Codec as LaneCodec<u32>>) { Codec::get(word, offset: offset) + 1 }
+    }
+    fn set(_ word: u256, offset: u256, value: own u32) -> u256 {
+        with (<Codec as LaneCodec<u32>>) { Codec::set(word, offset: offset, value: value) }
+    }
+}
+struct Counters<C> {}
+impl<C> Pinned for Counters<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Counters<C> {
+    type Key = u256
+    type Entry = u32
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+fn fill<C>(c: mut Counters<C>) { c[1] = 6 }
+
+mod enc {
+    use super::*
+    with (Encoded)
+    pub fn read_twice<C>(c: Counters<C>) -> u256 {
+        let a = c[1]
+        let b = c[1]
+        (a as u256) * 100 + (b as u256)
+    }
+}
+
+msg Twice {
+    #[selector = 1]
+    Run -> u256,
+}
+pub contract Same {
+    mut c: Counters<Codec>
+    recv Twice {
+        Run -> u256 uses (mut c) {
+            fill(c: mut c)
+            enc::read_twice(c: c)
+        }
+    }
+}
+
+#[test]
+fn same_choice_twice() uses (evm: mut Evm) {
+    let k = evm.create2<Same>(value: Wei::zero(), args: (), salt: 0)
+    let raw: u256 = evm.call(addr: k, gas: 400000, value: Wei::zero(), message: Twice::Run {})
+    assert!(raw == 707)
+}
