@@ -155,3 +155,11 @@ error[16-0001]: access conflict in `fn forwarded_row`
     │                   -----------    ^^^ cannot read this place while a `mut` projection of it is open
     │                   │
     │                   projection opened here
+
+error[16-0001]: access conflict in `fn access_element_then_named`
+    ┌─ with_projection_scope.fe:242:9
+    │
+241 │     yield (with (Frame = indented(4)) { mut q }, {
+    │                          ----------- projection opened here
+242 │         mark()
+    │         ^^^^^^ cannot mutably access this place while a `mut` projection of it is open

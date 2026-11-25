@@ -51,20 +51,22 @@ block's tail, is held until control leaves the block, at its end or by
 `return`, `break`, `continue` or a failing `?`, even if no call in the
 block takes it. A place reached through a raw pointer the grant holds,
 `*h.ptr()` or `h.ptr().field`, is not in the grant: reading the pointer
-copies it, which ends the session at once. A block that is a `yield`
-statement's operand is left where the projection's session resumes, as a
-yield site's block is, so its provider is held while the caller uses the
-grant and slides before the code after the `yield`. The projection's
-session lasts until the block is left, or longer while an access the block
-yields from its grant is in use, and its slide runs then; the block's
-bindings are destroyed first, and of several such providers the later
-slides first, each before what the providers' expressions before it bound
-and allocated is destroyed. An exit from a later provider's expression
-leaves the earlier ones. A path that never leaves the block, one that
-panics, fails an `assert!`, calls a function that never returns or loops
-forever, holds the provider throughout and runs no slide. The places the
-session reserves stay reserved for the whole block, so naming one in the
-block, such as `frame` above or the function's
+copies it, which ends the session at once. A `with` block that a granted
+access comes out of, such as a `yield` statement's operand or an element of
+a yielded tuple whose shape holds an access, is left where the projection's
+session resumes ([destruction](destruction.md)), so its provider is held
+while the caller uses the grant and slides before the code after the
+`yield`; an owned element's `with` is left where it ends, before the next
+element. The projection's session lasts until the block is left, or longer
+while an access the block yields from its grant is in use, and its slide
+runs then; the block's bindings are destroyed first, and of several such
+providers the later slides first, each before what the providers'
+expressions before it bound and allocated is destroyed. An exit from a
+later provider's expression leaves the earlier ones. A path that never
+leaves the block, one that panics, fails an `assert!`, calls a function
+that never returns or loops forever, holds the provider throughout and runs
+no slide. The places the session reserves stay reserved for the whole
+block, so naming one in the block, such as `frame` above or the function's
 own `Frame` effect, is an error rather than a use of the place outside the
 scope:
 

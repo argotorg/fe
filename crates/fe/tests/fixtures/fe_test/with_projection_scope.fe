@@ -43,6 +43,16 @@ struct Frame {
     trace: *u256,
 }
 
+impl Frame {
+    // The same as a method, which takes the frame as a parameter.
+    fn clip(mut self, _ by: u256, _ event: u256) -> mut Frame {
+        self.indent += by
+        yield mut self
+        self.indent -= by
+        log(self.trace, event)
+    }
+}
+
 // Indents the frame and logs `event` when its slide runs.
 fn indented(_ by: u256, _ event: u256) -> mut Frame uses (frame: mut Frame) {
     frame.indent += by
@@ -422,6 +432,149 @@ fn yield_two(_ t: *u256, _ other: mut u256) -> Option<mut u256> uses (frame: mut
     log(t, 9)
 }
 
+// A `with` element of a yielded tuple or variant yields on each path of
+// the elements before it, and of its own body, with its scope open: each
+// path's provider slides where that path's session resumes, after the
+// bindings of the `with` and before those of the elements before it.
+fn after_branch(
+    _ t: *u256,
+    _ c: bool,
+    _ a: mut u256,
+    _ other: mut u256,
+    _ f: mut Frame,
+) -> (mut u256, mut u256) {
+    yield (if c {
+        let _g1 = Guard { trace: t, event: 1 }
+        mut a
+    } else {
+        mut a
+    }, with (Frame = f.clip(1, 8)) {
+        let _g = Guard { trace: t, event: 3 }
+        mut other
+    })
+    log(t, 9)
+}
+
+fn branches_inside(_ t: *u256, _ c: bool, _ x: mut u256, _ y: mut u256, _ f: mut Frame) -> Option<mut u256> {
+    yield Option::Some(with (Frame = f.clip(1, 8)) {
+        if c {
+            let _a = Guard { trace: t, event: 1 }
+            mut x
+        } else {
+            mut y
+        }
+    })
+    log(t, 9)
+}
+
+fn returns_inside(_ t: *u256, _ c: bool, _ x: mut u256, _ f: mut Frame) -> Option<mut u256> {
+    yield Option::Some(with (Frame = f.clip(1, 8)) {
+        if c {
+            return Option::None
+        }
+        mut x
+    })
+    log(t, 9)
+}
+
+// An owned element of a yielded tuple is a value: its `with` block ends
+// where it ends, so the provider slides before the next element, which may
+// name the outer frame.
+fn owned_element(_ t: *u256, _ q: mut u256) -> (u256, mut u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(1, 8)) {
+        mark()
+        1
+    }, {
+        mark()
+        mut q
+    })
+    log(t, 9)
+}
+
+// An element the granted access comes out of holds its provider until the
+// session resumes.
+fn access_element(_ t: *u256, _ q: mut u256) -> (mut u256, u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(1, 8)) {
+        let _g = Guard { trace: t, event: 3 }
+        mut q
+    }, 2)
+    log(t, 9)
+}
+
+// An owned `with` element after a branching one is evaluated on each path,
+// its provider sliding before that path's yield.
+fn owned_after_branch(_ t: *u256, _ c: bool, _ x: mut u256, _ y: mut u256, _ f: mut Frame) -> (mut u256, u256) {
+    yield (if c { mut x } else { mut y }, with (Frame = f.clip(1, 8)) {
+        let _g = Guard { trace: t, event: 3 }
+        4
+    })
+    log(t, 9)
+}
+
+// A `return` in an owned `with` element yields on its own: the provider
+// slides where that path resumes. The other path leaves the block first.
+fn owned_return(_ t: *u256, _ c: bool, _ q: mut u256, _ f: mut Frame) -> (u256, mut u256) {
+    yield (with (Frame = f.clip(1, 8)) {
+        if c {
+            return (0, mut q)
+        }
+        1
+    }, mut q)
+    log(t, 9)
+}
+
+fn peek_guard() -> ref Guard uses (guard: Guard) {
+    ref guard
+}
+
+// A yield site `with` keeps its value provider until the session resumes.
+fn value_yield(_ t: *u256) -> ref Guard {
+    with (Guard = Guard { trace: t, event: 1 }) { peek_guard() }
+}
+
+// A `var` declared before the block belongs to its own block, though the
+// `with` block assigns it.
+fn outer_var(_ t: *u256) uses (frame: mut Frame) {
+    var g: Guard
+    with (Frame = indented(1, 8)) {
+        mark()
+        g = Guard { trace: t, event: 3 }
+    }
+    log(t, 9)
+}
+
+struct KQ {
+    k: u256,
+    a: u256,
+}
+
+// A `with` in an or-pattern arm yields on each alternative's path.
+fn or_arm(_ t: *u256, _ kq: mut KQ, _ f: mut Frame) -> mut u256 {
+    match kq {
+        KQ { k: 0 | 1, mut a } => with (Frame = f.clip(1, 8)) {
+            mark()
+            let _g = Guard { trace: t, event: 3 }
+            mut a
+        }
+        KQ { mut a, .. } => mut a
+    }
+}
+
+// A loop whose only exit is `return` holds the provider through the loop.
+// Coverage only: the `return`'s own hold keeps the provider live in the
+// loop, so this passes without the hold at the loop's header, which the
+// uitests of endless loops pin.
+fn loop_return(_ t: *u256, _ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(1, 8)) {
+        loop {
+            let _g = Guard { trace: t, event: 3 }
+            if c {
+                return
+            }
+        }
+    }
+}
+
 // The code after a `yield` in the block still runs under its provider.
 fn shifted(_ t: *u256) -> mut Frame uses (frame: mut Frame) {
     with (Frame = indented(1, 8)) {
@@ -717,6 +870,170 @@ fn compound_yield_operand_ends_at_resume() {
         }
     }
     assert(read(t) == 5389)
+}
+
+#[test]
+fn with_element_slides_on_each_path() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var a: u256 = 0
+    var v: u256 = 0
+    {
+        let (_, mut x) = after_branch(t, true, mut a, mut v, mut frame)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 53819)
+    let u = new_trace()
+    var other = fresh(u)
+    {
+        let (_, mut x) = after_branch(u, false, mut a, mut v, mut other)
+        log(u, 5)
+        x += 1
+    }
+    assert(read(u) == 5389 && v == 2)
+}
+
+#[test]
+fn with_element_branches_slide_on_each_path() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var x: u256 = 0
+    var y: u256 = 0
+    if let Option::Some(mut g) = branches_inside(t, true, mut x, mut y, mut frame) {
+        log(t, 5)
+        g += 1
+    }
+    assert(read(t) == 5189)
+    let u = new_trace()
+    var other = fresh(u)
+    if let Option::Some(mut g) = branches_inside(u, false, mut x, mut y, mut other) {
+        log(u, 5)
+        g += 1
+    }
+    assert(read(u) == 589 && x == 1 && y == 1)
+    let w = new_trace()
+    var third = fresh(w)
+    assert(returns_inside(w, true, mut x, mut third).is_none())
+    assert(read(w) == 8)
+}
+
+#[test]
+fn owned_element_slides_before_the_next() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var q: u256 = 0
+    with (frame) {
+        let (_, mut x) = owned_element(t, mut q)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 18059)
+}
+
+#[test]
+fn access_element_holds_until_resume() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var q: u256 = 0
+    with (frame) {
+        let (mut x, _) = access_element(t, mut q)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 5389)
+}
+
+#[test]
+fn owned_element_after_branch_slides_on_each_path() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var x: u256 = 0
+    var y: u256 = 0
+    {
+        let (mut g, _) = owned_after_branch(t, true, mut x, mut y, mut frame)
+        log(t, 5)
+        g += 1
+    }
+    assert(read(t) == 3859)
+    let u = new_trace()
+    var other = fresh(u)
+    {
+        let (mut g, _) = owned_after_branch(u, false, mut x, mut y, mut other)
+        log(u, 5)
+        g += 1
+    }
+    assert(read(u) == 3859 && x == 1 && y == 1)
+}
+
+#[test]
+fn owned_element_return_slides_at_resume() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var q: u256 = 0
+    {
+        let (_, mut x) = owned_return(t, true, mut q, mut frame)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 58)
+    let u = new_trace()
+    var other = fresh(u)
+    {
+        let (_, mut x) = owned_return(u, false, mut q, mut other)
+        log(u, 5)
+        x += 1
+    }
+    assert(read(u) == 859 && q == 2)
+}
+
+#[test]
+fn yield_site_value_provider_ends_at_resume() {
+    let t = new_trace()
+    {
+        let g = ref value_yield(t)
+        log(t, 5)
+        assert(g.event == 1)
+    }
+    assert(read(t) == 51)
+}
+
+#[test]
+fn outer_var_outlives_the_block() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { outer_var(t) }
+    assert(read(t) == 1893)
+}
+
+#[test]
+fn or_pattern_arm_slides_on_each_alternative() {
+    let t = new_trace()
+    var frame = fresh(t)
+    var kq = KQ { k: 0, a: 0 }
+    {
+        let x = mut or_arm(t, mut kq, mut frame)
+        log(t, 5)
+        x += 1
+    }
+    assert(read(t) == 1538)
+    let u = new_trace()
+    var other = fresh(u)
+    kq.k = 1
+    {
+        let x = mut or_arm(u, mut kq, mut other)
+        log(u, 5)
+        x += 1
+    }
+    assert(read(u) == 1538 && kq.a == 2)
+}
+
+#[test]
+fn loop_with_only_a_return_holds_the_provider() {
+    let t = new_trace()
+    var frame = fresh(t)
+    with (frame) { loop_return(t, true) }
+    assert(read(t) == 38)
 }
 
 #[test]

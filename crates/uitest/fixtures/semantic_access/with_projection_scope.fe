@@ -235,6 +235,26 @@ pub fn ref_read() -> u256 uses (frame: mut Frame) {
     }
 }
 
+// Rejected: a later element of a yielded tuple names the place an element
+// the granted access comes out of still holds.
+pub fn access_element_then_named(_ q: mut u256) -> (mut u256, u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(4)) { mut q }, {
+        mark()
+        1
+    })
+}
+
+// Accepted: an owned element's `with` ends before the next element.
+pub fn owned_element_then_named(_ q: mut u256) -> (u256, mut u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(4)) {
+        mark()
+        1
+    }, {
+        mark()
+        mut q
+    })
+}
+
 // Accepted: a provider that names a place holds nothing between calls.
 pub fn place_provider(_ other: mut Frame) {
     with (Frame = other) {
