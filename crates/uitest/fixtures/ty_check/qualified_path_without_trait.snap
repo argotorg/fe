@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/qualified_path_without_trait.fe
+---
+error[1-0001]: missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+   ┌─ qualified_path_without_trait.fe:34:21
+   │
+34 │     <[u8; { N + 1 }]>::zero()
+   │                     ^ missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+
+error[1-0001]: missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+   ┌─ qualified_path_without_trait.fe:37:23
+   │
+37 │ fn half() -> <(u8, u8)>::Half {
+   │                       ^ missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+
+error[1-0001]: missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+   ┌─ qualified_path_without_trait.fe:42:7
+   │
+42 │     <S>::f()
+   │       ^ missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+
+error[1-0001]: missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type
+   ┌─ qualified_path_without_trait.fe:47:11
+   │
+47 │         <E>::A => 1,
+   │           ^ missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type

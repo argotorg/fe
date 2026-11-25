@@ -1,0 +1,49 @@
+trait Zero {
+    fn zero() -> Self
+}
+
+impl<const N: usize> Zero for [u8; N] {
+    fn zero() -> Self {
+        [0; N]
+    }
+}
+
+trait Width {
+    type Half
+}
+
+impl Width for (u8, u8) {
+    type Half = u8
+}
+
+struct S {}
+
+impl S {
+    fn f() -> u8 {
+        1
+    }
+}
+
+enum E {
+    A,
+}
+
+// Each qualified path without a trait is one error, and nothing follows from
+// it.
+fn padded<const N: usize>() -> [u8; { N + 1 }] {
+    <[u8; { N + 1 }]>::zero()
+}
+
+fn half() -> <(u8, u8)>::Half {
+    7
+}
+
+fn named() -> u8 {
+    <S>::f()
+}
+
+fn pattern(e: E) -> u8 {
+    match e {
+        <E>::A => 1,
+    }
+}
