@@ -31,3 +31,91 @@ error[16-0002]: move conflict in `fn read_after_loop`
 20 │ │     x
 21 │ │ }
    │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_after_breaking_loop`
+   ┌─ let_without_value.fe:66:37
+   │
+66 │   fn read_after_breaking_loop() -> u8 {
+   │ ╭─────────────────────────────────────^
+67 │ │     let x: u8
+68 │ │     loop {
+69 │ │         break
+70 │ │     }
+71 │ │     x
+72 │ │ }
+   │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_as_argument`
+   ┌─ let_without_value.fe:99:10
+   │
+99 │     take(x)
+   │          ^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_through_borrow`
+    ┌─ let_without_value.fe:104:14
+    │
+104 │     let _r = ref x
+    │              ^^^^^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_field`
+    ┌─ let_without_value.fe:114:5
+    │
+114 │     p.a
+    │     ^^^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_destructured`
+    ┌─ let_without_value.fe:117:30
+    │
+117 │   fn read_destructured() -> u8 {
+    │ ╭──────────────────────────────^
+118 │ │     let (a, b): (u8, u8)
+119 │ │     a
+120 │ │ }
+    │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_in_capture`
+    ┌─ let_without_value.fe:124:13
+    │
+124 │     let c = || x
+    │             ^^^^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn <closure>`
+    ┌─ let_without_value.fe:129:16
+    │
+129 │       let c = || {
+    │ ╭────────────────^
+130 │ │         let x: u8
+131 │ │         x
+132 │ │     }
+    │ ╰─────^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_shadowing`
+    ┌─ let_without_value.fe:136:27
+    │
+136 │   fn read_shadowing() -> u8 {
+    │ ╭───────────────────────────^
+137 │ │     let x: u8 = 1
+138 │ │     let x: u8
+139 │ │     x
+140 │ │ }
+    │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_empty`
+    ┌─ let_without_value.fe:150:26
+    │
+150 │   fn read_empty() -> Empty {
+    │ ╭──────────────────────────^
+151 │ │     let x: Empty
+152 │ │     x
+153 │ │ }
+    │ ╰─^ cannot use a value before it is initialized
+
+error[16-0002]: move conflict in `fn read_in_const_fn`
+    ┌─ let_without_value.fe:155:35
+    │
+155 │   const fn read_in_const_fn() -> u8 {
+    │ ╭───────────────────────────────────^
+156 │ │     let x: u8
+157 │ │     x
+158 │ │ }
+    │ ╰─^ cannot use a value before it is initialized

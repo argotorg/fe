@@ -62,3 +62,97 @@ fn read_after_void() -> u8 {
     let _v = void()
     x
 }
+
+fn read_after_breaking_loop() -> u8 {
+    let x: u8
+    loop {
+        break
+    }
+    x
+}
+
+fn read_after_endless_loop() -> u8 {
+    let x: u8
+    loop {}
+    x
+}
+
+fn read_after_loop_that_diverges() -> u8 {
+    let x: u8
+    loop {
+        void()
+        break
+    }
+    x
+}
+
+fn read_after_empty_match(_ v: Void) -> u8 {
+    let x: u8
+    match v {}
+    x
+}
+
+fn take(_ x: u8) {}
+
+fn read_as_argument() {
+    let x: u8
+    take(x)
+}
+
+fn read_through_borrow() {
+    let x: u8
+    let _r = ref x
+}
+
+struct Pair {
+    a: u8,
+    b: u8,
+}
+
+fn read_field() -> u8 {
+    let p: Pair
+    p.a
+}
+
+fn read_destructured() -> u8 {
+    let (a, b): (u8, u8)
+    a
+}
+
+fn read_in_capture() -> u8 {
+    let x: u8
+    let c = || x
+    c()
+}
+
+fn read_in_closure() -> u8 {
+    let c = || {
+        let x: u8
+        x
+    }
+    c()
+}
+
+fn read_shadowing() -> u8 {
+    let x: u8 = 1
+    let x: u8
+    x
+}
+
+fn read_shadowed() -> u8 {
+    let x: u8
+    let x: u8 = 1
+    x
+}
+
+struct Empty {}
+
+fn read_empty() -> Empty {
+    let x: Empty
+    x
+}
+
+const fn read_in_const_fn() -> u8 {
+    let x: u8
+    x
+}
