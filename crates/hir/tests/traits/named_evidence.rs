@@ -5058,3 +5058,303 @@ const fn bound() -> u256 {
         &[("method", 2), ("path", 2), ("qualified", 2), ("bound", 2)],
     );
 }
+
+// The agreement rule: every route by which a body receives or derives the
+// proof of one goal supplies one implementation. A goal is identified in the
+// coordinates of the body's declaration, so two bounds that the signature
+// does not identify are separate goals even when an instantiation makes them
+// equal, and a dictionary received from outside keeps its own conditions. The
+// tests below pin programs that the single check must keep accepting, with the
+// values they have.
+const AGREE: &str = r#"
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { const fn show() -> u256 { 70 } }
+impl Show for Foo as Quiet { const fn show() -> u256 { 30 } }
+struct W<T> {}
+struct V<T> {}
+struct U<T> {}
+trait Tr { type A: Show
+    const fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    const fn via() -> u256 { T::show() } }
+impl<T: Show> Tr for U<T> { type A = T
+    const fn via() -> u256 { T::show() + 1 } }
+trait Tr2 { type A: Tr
+    const fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    const fn via2() -> u256 { T::via() } }
+"#;
+
+// Two separate bounds `B: Tr` and `C: Tr` are two goals: the bound on `B` is
+// built under the choice and the bound on `C` arrives from outside.
+#[test]
+fn agreement_unidentified_bounds_may_differ() {
+    values(
+        &format!(
+            r#"{AGREE}
+const fn g<B: Tr, C: Tr>() -> u256 {{ B::via() * 1000 + C::via() }}
+const fn relay<C: Tr>() -> u256 {{ with (Loud) {{ g<W<Foo>, C>() }} }}
+const fn disagree() -> u256 {{ relay<U<Foo>>() }}
+"#
+        ),
+        &[("disagree", 70101)],
+    );
+}
+
+// Two type parameters instantiated to one type are two goals.
+#[test]
+fn agreement_two_parameters_one_type_may_differ() {
+    values(
+        r#"
+trait Show { const fn show() -> u256 }
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { const fn show() -> u256 { 70 } }
+const fn both<X: Show, Y: Show>() -> u256 { X::show() * 1000 + Y::show() }
+const fn relay<X: Show>() -> u256 { with (Loud) { both<X, Foo>() } }
+const fn top() -> u256 { relay<Foo>() }
+"#,
+        &[("top", 100070)],
+    );
+}
+
+// A dictionary made outside a block keeps the dictionaries of its own
+// conditions: `R: Root` holds the ordinary `Item: Pick`, and the bound `T: Pick`
+// is answered inside the block. The conditions of the received dictionary are
+// no goal of the callee, so the program is accepted with 12 (reading A of the
+// agreement rule; the instance-wide reading is a language change that has not
+// been chosen).
+#[test]
+fn agreement_received_condition_keeps_its_dictionary() {
+    let program = |signature: &str, call: &str| {
+        format!(
+            r#"
+struct Item {{}}
+struct Fixed {{}}
+trait Pick {{ const fn value() -> u256 }}
+impl Pick for Item {{ const fn value() -> u256 {{ 1 }} }}
+impl<T> Pick for T as Alt {{ const fn value() -> u256 {{ 2 }} }}
+trait Root {{ const fn root() -> u256 }}
+impl Root for Fixed where Item: Pick {{ const fn root() -> u256 {{ Item::value() }} }}
+{signature}
+const fn top() -> u256 {{ {call} }}
+"#
+        )
+    };
+    values(
+        &program(
+            "const fn target<R: Root, T: Pick>() -> u256 { R::root() * 10 + T::value() }
+const fn relay<R: Root, T: Pick>() -> u256 { with (Alt) { target<R, T>() } }",
+            "relay<Fixed, Item>()",
+        ),
+        &[("top", 12)],
+    );
+    values(
+        &program(
+            "const fn target<T: Pick, R: Root>() -> u256 { T::value() + R::root() * 10 }
+const fn relay<T: Pick, R: Root>() -> u256 { with (Alt) { target<T, R>() } }",
+            "relay<Item, Fixed>()",
+        ),
+        &[("top", 12)],
+    );
+}
+
+// The bound that `H: Holder<Out = Item>` implies on `Item` and the separate
+// bound `T: Pick` are two goals of the callee, so both orders are accepted
+// with 12. The bound `Item: Pick` implied by the equality is fixed where
+// `impl Holder for Fixed` is declared.
+#[test]
+fn agreement_implied_bound_and_separate_parameter_may_differ() {
+    let program = |signature: &str| {
+        format!(
+            r#"
+struct Item {{}}
+struct Fixed {{}}
+trait Pick {{ const fn value() -> u256 }}
+impl Pick for Item {{ const fn value() -> u256 {{ 1 }} }}
+impl Pick for Item as Alt {{ const fn value() -> u256 {{ 2 }} }}
+trait Holder {{ type Out: Pick }}
+impl Holder for Fixed {{ type Out = Item }}
+{signature}
+"#
+        )
+    };
+    values(
+        &program(
+            "const fn target<H: Holder<Out = Item>, T: Pick>() -> u256 { <H::Out as Pick>::value() * 10 + T::value() }
+const fn go() -> u256 { with (Alt) { target<Fixed, Item>() } }",
+        ),
+        &[("go", 12)],
+    );
+    values(
+        &program(
+            "const fn target<T: Pick, H: Holder<Out = Item>>() -> u256 { T::value() + <H::Out as Pick>::value() * 10 }
+const fn go() -> u256 { with (Alt) { target<Item, Fixed>() } }",
+        ),
+        &[("go", 12)],
+    );
+}
+
+// When the signature identifies the two bounds (`H: Holder<Out = T>`), they
+// are one goal and the differing dictionaries are refused at the call.
+#[test]
+fn agreement_identified_bound_refused() {
+    let codes = diagnostics(
+        r#"
+struct Item {}
+struct Fixed {}
+trait Pick { fn value() -> u256 }
+impl Pick for Item { fn value() -> u256 { 1 } }
+impl Pick for Item as Alt { fn value() -> u256 { 2 } }
+trait Holder { type Out: Pick }
+impl Holder for Fixed { type Out = Item }
+fn target<H: Holder<Out = T>, T: Pick>() -> u256 {
+    <H::Out as Pick>::value() * 10 + T::value()
+}
+fn go() -> u256 { with (Alt) { target<Fixed, Item>() } }
+"#,
+    );
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+// Ordinary implementations only: a pinned bound whose component has its own
+// conditions, reached by two roots and through an implementation's conditions.
+#[test]
+fn agreement_ordinary_pinned_conditions() {
+    values(
+        r#"
+trait Show { const fn show() -> u256 }
+trait Sub: Show {}
+struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 1 } }
+impl Sub for Foo {}
+struct W<T> {}
+struct V<T> {}
+trait Tr { type A: Show
+    const fn via() -> u256 }
+impl<T: Sub> Tr for W<T> { type A = T
+    const fn via() -> u256 { T::show() } }
+trait Tr2 { type A: Tr
+    const fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    const fn via2() -> u256 { T::via() } }
+const fn f<B: Tr<A = Foo>, C: Tr2<A = W<Foo>>>() -> u256 { Foo::show() * 1000 + B::via() + C::via2() }
+struct Both<X, Y> {}
+trait Tb { const fn get() -> u256 }
+impl<X: Tr<A = Foo>, Y: Tr2<A = W<Foo>>> Tb for Both<X, Y> { const fn get() -> u256 { Foo::show() * 1000 + 1 } }
+const fn f1002() -> u256 { f<W<Foo>, V<W<Foo>>>() }
+const fn tb1001() -> u256 { <Both<W<Foo>, V<W<Foo>>> as Tb>::get() }
+"#,
+        &[("f1002", 1002), ("tb1001", 1001)],
+    );
+}
+
+// Mutually implied bounds with equalities and no named implementation.
+#[test]
+fn agreement_mutual_bounds_without_choice() {
+    values(
+        r#"
+trait Left { type Out: Right
+    const fn l() -> u256 }
+trait Right { type Back: Left
+    const fn r() -> u256 }
+struct A {}
+struct B {}
+impl Left for A { type Out = B
+    const fn l() -> u256 { 1 } }
+impl Right for B { type Back = A
+    const fn r() -> u256 { 2 } }
+const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 { T::l() * 10 + U::r() }
+const fn v12() -> u256 { call<A, B>() }
+"#,
+        &[("v12", 12)],
+    );
+}
+
+// A named implementation of `Tr` whose own condition is ordinary: the
+// component `Foo: Show` of `B: Tr<A = Foo>` is the ordinary one unless the
+// block also names `Loud`.
+#[test]
+fn agreement_named_component_condition() {
+    values(
+        &format!(
+            r#"{AGREE}
+impl<T: Show> Tr for W<T> as LoudTr {{ type A = T
+    const fn via() -> u256 {{ T::show() + 5 }} }}
+const fn caller<B: Tr<A = Foo>>() -> u256 {{ Foo::show() * 1000 + B::via() }}
+const fn v100105() -> u256 {{ with (LoudTr) {{ caller<W<Foo>>() }} }}
+const fn v70075() -> u256 {{ with (LoudTr, Loud) {{ caller<W<Foo>>() }} }}
+"#
+        ),
+        &[("v100105", 100105), ("v70075", 70075)],
+    );
+}
+
+// One pinned bound that gives `Foo: Show` one level down.
+#[test]
+fn agreement_depth_one_control() {
+    values(
+        &format!(
+            r#"{AGREE}
+const fn f<B: Tr<A = Foo>>() -> u256 {{ Foo::show() * 1000 + B::via() }}
+const fn v70070() -> u256 {{ with (Loud) {{ f<W<Foo>>() }} }}
+"#
+        ),
+        &[("v70070", 70070)],
+    );
+}
+
+// A constant whose value is computed from a condition's dictionary, read as a
+// value beside a type formed from the same constant in one generic body: the
+// value follows the choice and the type is formed ordinarily, so the two
+// differ (1002: array length 1 beside value 2). Whether a constant may see a
+// choice is a separate rule that has not been decided; these results are
+// pinned as they are today and do not follow from the agreement rule.
+#[test]
+fn agreement_constants_keep_current_values_pending_the_rule() {
+    values(
+        r#"
+trait Foo { const fn value() -> usize }
+impl Foo for u256 { const fn value() -> usize { 1 } }
+impl Foo for u256 as AltFoo { const fn value() -> usize { 2 } }
+struct W<T> {}
+trait Tk { const K: usize }
+impl<T: Foo> Tk for W<T> { const K: usize = T::value() }
+const fn k<T: Tk>() -> usize { T::K }
+const fn mix<T: Tk>() -> usize {
+    let a: [u8; T::K] = [0; T::K]
+    length_of(a) * 1000 + T::K
+}
+const fn h<const N: usize>() -> usize { N }
+const fn length_of<const N: usize>(_ a: [u8; N]) -> usize { N }
+const fn split<T: Tk>() -> usize { h<{ T::K }>() * 1000 + T::K }
+struct Wrapper<T> {}
+impl<T: Foo> Wrapper<T> { const X: usize = T::value() }
+const fn inherent<T: Foo>() -> usize {
+    let a: [u8; Wrapper<T>::X] = [0; Wrapper<T>::X]
+    length_of(a) * 1000 + Wrapper<T>::X
+}
+const fn direct() -> usize { with (AltFoo) { <W<u256> as Tk>::K } }
+const fn generic() -> usize { with (AltFoo) { k<W<u256>>() } }
+const fn mixed() -> usize { with (AltFoo) { mix<W<u256>>() } }
+const fn const_generic_argument() -> usize { with (AltFoo) { split<W<u256>>() } }
+const fn inherent_chosen() -> usize { with (AltFoo) { inherent<u256>() } }
+const fn direct_with_literal_type() -> usize {
+    with (AltFoo) {
+        let a: [u8; 1] = [0; 1]
+        length_of(a) * 1000 + <W<u256> as Tk>::K
+    }
+}
+"#,
+        &[
+            ("direct", 2),
+            ("generic", 2),
+            ("mixed", 1002),
+            ("const_generic_argument", 1002),
+            ("inherent_chosen", 1002),
+            ("direct_with_literal_type", 1002),
+        ],
+    );
+}
