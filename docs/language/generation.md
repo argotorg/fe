@@ -62,7 +62,7 @@ The returned code is the body of the implementation that the header names: funct
 
 ## Writing code
 
-`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template.
+`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template. In an expression, `quote` followed by `{`, or by a parenthesized list of names and `{`, is always a quotation. A struct named `quote` cannot be built with the record literal `quote { x: 42 }`, which is read as a quotation, so it is constructed another way or renamed.
 
 ```fe
 use core::derive::{Derive, DeriveInherent}

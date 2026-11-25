@@ -8161,3 +8161,17 @@ fn an_inherited_default_constant_is_evaluated_for_the_implementations_that_inher
         );
     }
 }
+
+#[test]
+fn a_record_literal_of_a_struct_named_quote_is_read_as_a_quotation() {
+    // `quote` followed by `{` in an expression is always a quotation, so the
+    // record literal `quote { x: 42 }` of a struct named `quote` is refused.
+    // The limit is documented in the generation chapter.
+    let (output, exit) =
+        run_fe_main(&["check", &header_generation_fixture("struct_named_quote.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[1-0001]") && output.contains("expected newline or `}`"),
+        "expected the literal to be read as a quotation:\n{output}"
+    );
+}
