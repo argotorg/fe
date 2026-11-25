@@ -8103,3 +8103,43 @@ fn an_inherited_default_constant_is_access_checked_for_the_implementations_that_
         "expected a move conflict for the non-`Copy` implementation:\n{output}"
     );
 }
+
+#[test]
+fn provider_failures_are_reported_in_words_at_the_providers_own_code() {
+    // A provider that does not end is refused with the documented message,
+    // although its loop has no expression to point at.
+    let (output, exit) =
+        run_fe_main(&["test", &header_generation_fixture("provider_never_ends.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("existing CTFE step limit exceeded")
+            && !output.contains("StepLimitExceeded"),
+        "expected the step limit message:\n{output}"
+    );
+
+    // A header that leaves the provider waiting on a value is described
+    // without the evaluator's internal state.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("provider_const_param_header.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("provider evaluation is blocked") && !output.contains("BlockedInfo"),
+        "expected a sentence for a blocked provider:\n{output}"
+    );
+
+    // A failure inside a library function that the provider called is
+    // reported at the call in the provider, not in the library.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("provider_binder_of_another_variant.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("`.at` field belongs to another owner or variant")
+            && output.contains("provider_binder_of_another_variant.fe:11:")
+            && !output.contains("builtin-core:"),
+        "expected the failure at the provider's call:\n{output}"
+    );
+}

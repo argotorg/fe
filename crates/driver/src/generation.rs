@@ -247,8 +247,21 @@ fn evaluation_error<'db>(
     fallback: GenerationError,
 ) -> GenerationError {
     let mut error = error;
-    while let CtfeError::CalleeError { callee, source, .. } = error {
-        owner = callee.key(db).owner(db);
+    // Where the provider's code first calls into an embedded library, if the
+    // failure is inside one: the library's own text is no help to the author of
+    // the provider, whose call is the place to point at.
+    let mut library_call = None;
+    while let CtfeError::CalleeError {
+        origin,
+        callee,
+        source,
+    } = error
+    {
+        let callee_owner = callee.key(db).owner(db);
+        if library_call.is_none() && in_embedded_library(db, callee_owner) {
+            library_call = Some((owner, *origin));
+        }
+        owner = callee_owner;
         error = source;
     }
     if let BodyOwner::Func(function, _) = owner {
@@ -312,21 +325,35 @@ fn evaluation_error<'db>(
         }
         _ => return fallback,
     };
-    let Some(body) = owner.body(db) else {
-        return fallback;
+    let (owner, origin) = match library_call {
+        Some(call) if in_embedded_library(db, owner) => call,
+        _ => (owner, origin),
     };
-    let SemOrigin::Expr(expr) = origin else {
-        return fallback;
-    };
-    let Some(span) = expr.span(body).resolve(db) else {
-        return fallback;
-    };
-    GenerationError {
-        file: span.file.url(db).unwrap_or(fallback.file),
-        range: span.range,
-        cause,
+    // The message stays where the failure has no expression of its own to
+    // point at, such as the loop that never ends.
+    let span = owner.body(db).and_then(|body| match origin {
+        SemOrigin::Expr(expr) => expr.span(body).resolve(db),
+        _ => None,
+    });
+    match span {
+        Some(span) => GenerationError {
+            file: span.file.url(db).unwrap_or(fallback.file),
+            range: span.range,
+            cause,
+        },
+        None => GenerationError { cause, ..fallback },
     }
 }
+
+/// Whether `owner` is a function or constant of the `core` or `std` that the
+/// toolchain embeds.
+fn in_embedded_library<'db>(db: &'db DriverDataBase, owner: BodyOwner<'db>) -> bool {
+    common::stdlib::is_embedded_builtin(owner.scope().ingot(db).base(db))
+}
+
+/// What a provider that waits on a value cannot get is said in words: the
+/// evaluator's own account of the wait is internal.
+const BLOCKED_PROVIDER: &str = "it depends on a value that is not known where the header is written, such as a const parameter of a generic header";
 
 /// The authored requests of one source file. Explicit requests are validated
 /// against the authored view and kept as syntax; each is frozen later, against
@@ -1625,7 +1652,7 @@ fn evaluate_provider_instance<'db>(
                         validation_diagnostics.push(diagnostic.to_complete(db));
                     }
                 }
-                SemanticAccessCheckResult::Blocked(cause) => {
+                SemanticAccessCheckResult::Blocked(_) => {
                     let origin_owner = current.key(db).owner(db);
                     let errors = match origin_owner {
                         BodyOwner::Func(function, _) => body_errors(db, function),
@@ -1634,7 +1661,7 @@ fn evaluate_provider_instance<'db>(
                     if !errors.is_empty() {
                         helper_diagnostics.extend(errors);
                     } else {
-                        unresolved.push(format!("Blocked: {cause:?}"));
+                        unresolved.push(BLOCKED_PROVIDER.to_string());
                     }
                 }
             }
@@ -1688,10 +1715,10 @@ fn evaluate_provider_instance<'db>(
                 _ => fallback,
             });
         }
-        EvalOutcome::Blocked(cause) => {
+        EvalOutcome::Blocked(_) => {
             return Err(error(
                 range,
-                format!("provider evaluation blocked: {cause:?}"),
+                format!("provider evaluation is blocked: {BLOCKED_PROVIDER}"),
             ));
         }
     };
