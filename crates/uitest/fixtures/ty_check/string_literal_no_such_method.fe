@@ -1,0 +1,4 @@
+// A method neither string type has, on a bare literal.
+fn f() -> usize {
+    "ab".nope()
+}
