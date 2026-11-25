@@ -8047,3 +8047,34 @@ fn a_where_fragment_may_name_a_generic_parameter_of_the_template_that_splices_it
         "expected the unlisted name to be refused:\n{output}"
     );
 }
+
+fn unsafe_trust_app(fixture: &str, app: &str) -> String {
+    fe_test_runner_fixture_dir(fixture)
+        .join(app)
+        .to_str()
+        .expect("fixture dir utf8")
+        .to_string()
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_read_through_an_inherited_default_constant() {
+    // The default of `Magic::C` has the declared type `Self::X`, so a read of it
+    // runs the default checked for the implementation that inherits it. The
+    // `unsafe impl` of `u` is relied on there as it is for a constant that the
+    // implementation writes. `own` has the trait and the implementation in
+    // `u`; `split` has the trait in the trusted `t`.
+    for fixture in [
+        "unsafe_trust_inherited_default_own",
+        "unsafe_trust_inherited_default_split",
+    ] {
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        assert!(
+            output.contains("error[16-0015]")
+                && output.contains("`u`, which is not allowed to use"),
+            "{fixture}: expected a trust error naming `u`:\n{output}"
+        );
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app_trusted")]);
+        assert_eq!(exit_code, 0, "{fixture}: trusting `u` allows it:\n{output}");
+    }
+}

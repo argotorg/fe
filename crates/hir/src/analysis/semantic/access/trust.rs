@@ -278,9 +278,10 @@ fn author_ingot<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Ingot
 }
 
 /// The modules of the quotations that wrote and placed the `unsafe impl` that
-/// `owner` is a member of, if it is one, writer first: a method of it, or the
-/// value of one of its associated constants. A header is written by the ingot
-/// that holds it, though a provider of another ingot supplies its members.
+/// `owner` is a member of, if it is one, writer first: a method of it, the
+/// value of one of its associated constants, or the default of a constant that
+/// it inherits. A header is written by the ingot that holds it, though a
+/// provider of another ingot supplies its members.
 fn unsafe_impl_chain<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -301,6 +302,9 @@ fn unsafe_impl_chain<'db>(
             }
             _ => return None,
         },
+        // The default of a trait's constant that an implementation inherits is
+        // the implementation's own value of the constant where it is read.
+        BodyOwner::InheritedConst { implementation, .. } => implementation,
         _ => return None,
     };
     impl_trait.is_unsafe(db).then(|| impl_chain(db, impl_trait))

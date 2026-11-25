@@ -1,0 +1,9 @@
+pub unsafe trait Magic {
+    type X
+    const C: Self::X = 7
+}
+
+pub struct S {}
+unsafe impl Magic for S {
+    type X = u256
+}
