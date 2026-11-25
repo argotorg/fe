@@ -37,11 +37,17 @@ An operator's operand takes the type the operator's impl needs, on either side:
 in `"x" == s`, the literal is a `String<N>` when `s` is one and a `DynString`
 when `s` is one. When impls for both types fit, the default above decides.
 
-A method call on a literal follows the same rule. When only one of the two
-string types has the method, the literal is that type; when both have it, the
-context decides as above, and otherwise the default: `"ab".len()` uses
-`String<2>`. Whether the function a literal is passed to is `const` does not
-change its type.
+A method call on a literal follows the same rule. A trait method is that
+trait's method on the literal, as `Kind::kind("ab")` would be: its arguments,
+effects and result come from the trait, and the context, or else the default,
+decides the literal. An inherent method only one string type has makes the
+literal that type; `len` and `byte_at`, which both have, use the default:
+`"ab".len()` uses `String<2>`. A result whose type depends on the literal's
+type, used at once by a cast, a method call, an operator or an index, needs an
+annotation on the literal. A literal that begins with a zero byte is a
+`DynString` unless annotated, since `String<N>` cannot hold leading zero bytes.
+Whether the function a literal is passed to is `const` does not change its
+type.
 
 ```fe
 let short = "hello"                 // String<5>
