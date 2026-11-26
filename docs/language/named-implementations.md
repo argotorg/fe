@@ -95,6 +95,25 @@ This also applies when the supertrait is explicitly repeated: a call under
 selects `Wholesale`. Choosing either silently would make dispatch depend on
 bound order. Distinct, explicitly qualified evidence paths are deferred.
 
+Agreement is between routes to one goal of the callee as its signature
+declares it. Two bounds that the signature does not identify are two goals,
+even when a call makes their types equal, and may receive different
+implementations:
+
+```fe
+trait Holder { type Out: Pick }
+impl Holder for Fixed { type Out = Item }
+fn target<H: Holder<Out = Item>, T: Pick>() -> u256 {
+    <H::Out as Pick>::value() * 10 + T::value()
+}
+```
+
+Here `Pick::value` is 1 for `Item` and 2 for the named implementation `Alt`.
+`with (Alt) { target<Fixed, Item>() }` returns 12: `T: Pick` is chosen at
+the call, and the `Item: Pick` that `H` implies is fixed where
+`impl Holder for Fixed` is declared. Written as `H: Holder<Out = T>`, the
+signature makes the two one goal, and the same call is rejected.
+
 The same agreement applies transitively through implementation conditions,
 including private prerequisites of an implementation whose public trait has
 no supertraits. Calls, implementation methods and associated-constant bodies
