@@ -7992,10 +7992,11 @@ fn a_field_type_over_a_projection_or_a_compound_constant_is_spliced_under_a_gene
 }
 
 #[test]
-fn items_spliced_into_a_block_bind_the_later_names_of_the_enclosing_template() {
-    // `${a}` declares `helper` and `bump` in the block that holds it, so the
-    // call `bump()` after it names the spliced item, directly or inside a
-    // nested function, as it does for items written in the block.
+fn items_spliced_into_a_block_bind_a_later_name_only_if_the_template_lists_it() {
+    // `${a}` declares `helper` and `bump` in the block that holds it. A call
+    // `bump()` after it names the spliced item when the template lists `bump`
+    // as open, `quote(bump) { .. }`, directly or inside a nested function, as
+    // it does for items written in the block.
     for name in [
         "item_splice_handwritten.fe",
         "item_splice_binds_enclosing_call.fe",
@@ -8004,6 +8005,33 @@ fn items_spliced_into_a_block_bind_the_later_names_of_the_enclosing_template() {
         let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
         assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
     }
+
+    // A name that the template does not list resolves where the template is
+    // written, whatever the spliced code declares.
+    for name in [
+        "item_splice_unlisted_call_refused.fe",
+        "item_splice_unlisted_nested_call_refused.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("undefined variable `bump`"),
+            "{name}: expected `bump` to stay at the producer:\n{output}"
+        );
+    }
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("item_splice_unlisted_name_stays_at_producer.fe"),
+    ]);
+    assert_eq!(
+        exit, 0,
+        "an unlisted `helper` is the producer's, not the spliced one:\n{output}"
+    );
+    // The fragment of an untrusted package declares `check`; the trusted
+    // template calls its own `check`.
+    let fixture = fe_test_runner_fixture_dir("item_splice_untrusted_fragment");
+    let (output, exit) = run_fe_main(&["test", fixture.join("app").to_str().expect("utf-8 path")]);
+    assert_eq!(exit, 0, "the template keeps its own `check`:\n{output}");
 
     // A fragment spliced beside the item does not capture its free names: the
     // `helper` of the expression fragment is the producer's, which has none.

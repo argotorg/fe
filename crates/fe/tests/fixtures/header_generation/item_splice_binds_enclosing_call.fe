@@ -8,7 +8,7 @@ impl DeriveInherent for P {
             const fn helper() -> u256 { 41 }
             const fn bump() -> u256 { helper() + 1 }
         }
-        quote { pub const fn run() -> u256 { ${a}
+        quote(bump) { pub const fn run() -> u256 { ${a}
             bump() } }
     }
 }

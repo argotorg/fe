@@ -148,6 +148,8 @@ A name that a template takes from the place where it is spliced is listed in par
 undefined variable `other`
 ```
 
+The same list decides what the items that a statement `${items}` splices into a block mean to the template. In `quote(bump) { ${items} bump() }` the call reaches the `bump` that `items` declares. Without `(bump)` the call is resolved where the template is written, whatever `items` declares.
+
 ## Enums
 
 `variant(record, i)` selects one variant. `binders(variant, group)` makes a pattern that binds every field of that variant, and `pattern.at(field)` is the expression for the field that the pattern binds, within the arm that uses the pattern. Two patterns for the same variant in one arm need different group numbers, here 0 and 1. Using the same number twice is refused: `binder group already bound in an enclosing pattern`.

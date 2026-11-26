@@ -51,9 +51,14 @@ impl<'db> PathId<'db> {
                 {
                     let frame = ctxt.quote_frames.last().unwrap();
                     let origin = frame.path_origin();
+                    let by_splice = open_name_bound_by_splice(ctxt, seg.syntax(), ident.text());
                     let is_bound = quote_name_is_bound(ctxt, seg.syntax(), ident.text(), None)
-                        || frame.destination_names.contains(ident.text());
+                        || frame.destination_names.contains(ident.text())
+                        || by_splice;
                     let is_member_quote = frame.is_member_quote;
+                    if by_splice {
+                        ctxt.record_bound_name(ident.text());
+                    }
                     let display_ident = IdentId::lower_token(ctxt, ident.clone());
                     let generic_args = GenericArgListId::lower_ast_opt(ctxt, seg.generic_args());
                     let kind = PathKind::Ident {
@@ -157,8 +162,8 @@ impl<'db> PathId<'db> {
 ///
 /// The top-level items of a fragment spliced into a block (the active frame is
 /// a sub-quote) become items of that block, so they bind the fragment's own
-/// uses as well, and the items that a statement `${items}` of a block splices
-/// bind every name of the block that holds it, written before or after.
+/// uses as well. The items that a statement `${items}` of a block splices bind
+/// a name of the template only if the template lists it (`open_name_bound_by_splice`).
 /// The members of a fragment spliced into an `impl` are not in scope as bare
 /// names, so they do not.
 pub(super) fn quote_name_is_bound(
@@ -178,25 +183,9 @@ pub(super) fn quote_name_is_bound(
         .ancestors()
         .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
         .any(|node| {
-            if let Some(params) = node
-                .children()
-                .find_map(ast::GenericParamList::cast)
-                .or_else(|| {
-                    node.children()
-                        .find_map(ast::FuncSignature::cast)
-                        .and_then(|signature| signature.generic_params())
-                })
-                && params.into_iter().any(|param| match param.kind() {
-                    ast::GenericParamKind::Type(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                    ast::GenericParamKind::Const(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                    ast::GenericParamKind::Shape(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                })
+            if generic_param_names(&node)
+                .iter()
+                .any(|declared| declared == name)
             {
                 return true;
             }
@@ -231,13 +220,75 @@ pub(super) fn quote_name_is_bound(
                     .any(binds);
             }
             if let Some(block) = ast::BlockExpr::cast(node) {
-                return block.items().any(binds)
-                    || block
-                        .stmts()
-                        .any(|stmt| block_splice_declares(ctxt, &stmt, name));
+                return block.items().any(binds);
             }
             false
         })
+}
+
+/// The generic parameters that `node` declares: those of its own parameter
+/// list, or of the signature of the function it is.
+fn generic_param_names(node: &parser::SyntaxNode) -> Vec<String> {
+    let list = node
+        .children()
+        .find_map(ast::GenericParamList::cast)
+        .or_else(|| {
+            node.children()
+                .find_map(ast::FuncSignature::cast)
+                .and_then(|signature| signature.generic_params())
+        });
+    list.into_iter()
+        .flatten()
+        .filter_map(|param| match param.kind() {
+            ast::GenericParamKind::Type(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+            ast::GenericParamKind::Const(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+            ast::GenericParamKind::Shape(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+        })
+        .collect()
+}
+
+/// The generic parameters of the items of the template around `syntax`, from
+/// the innermost outward: the binders that a `where` clause written there can
+/// name.
+pub(super) fn enclosing_generic_param_names(
+    syntax: &parser::SyntaxNode,
+) -> rustc_hash::FxHashSet<String> {
+    syntax
+        .ancestors()
+        .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
+        .flat_map(|node| generic_param_names(&node))
+        .collect()
+}
+
+/// Whether `name` is a name that the template lists as open and that an item
+/// spliced by a statement `${items}` of a block around `syntax` declares. The
+/// spliced item is then the binder of the name where the template is lowered,
+/// as a parameter or a `let` is for any open name; a name that the template
+/// does not list resolves where the template is written, whatever a caller
+/// splices in.
+pub(super) fn open_name_bound_by_splice(
+    ctxt: &FileLowerCtxt<'_>,
+    syntax: &parser::SyntaxNode,
+    name: &str,
+) -> bool {
+    ctxt.quote_frames
+        .last()
+        .is_some_and(|frame| frame.open_names.iter().any(|(open, _)| open == name))
+        && syntax
+            .ancestors()
+            .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
+            .filter_map(ast::BlockExpr::cast)
+            .any(|block| {
+                block
+                    .stmts()
+                    .any(|stmt| block_splice_declares(ctxt, &stmt, name))
+            })
 }
 
 /// Whether the statement `stmt` of a block is a hole that splices item code
