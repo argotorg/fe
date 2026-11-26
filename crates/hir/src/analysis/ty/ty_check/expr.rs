@@ -31,8 +31,8 @@ use super::{
     stmt::ForLoopCall,
     ty_may_be_code_region_token,
     with_operand::{
-        BareName, OperandClass, OperandMeaning, OperandSite, OperandValues, SiteKind,
-        classify_with_operand, earlier_answer, opening_contexts,
+        BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
+        classify_with_operand,
     },
 };
 use crate::analysis::place::{Place, PlaceBase};
@@ -82,8 +82,7 @@ use crate::analysis::ty::{
     trait_def::TraitInstId,
     trait_lower::{complete_impl_trait, lower_impl_trait},
     trait_resolution::{
-        ChosenImpl, GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx,
-        is_goal_satisfiable,
+        GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{
         Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
@@ -2357,6 +2356,47 @@ impl<'db> TyChecker<'db> {
         true
     }
 
+    /// Admits the implementation that the operand `operand` of a `with` list
+    /// pushed onto `choice`, unless an earlier operand answers the same goal.
+    /// The conditions of an opened implementation are proved once the whole
+    /// list is read.
+    fn admit_with_operand(
+        &mut self,
+        list: &mut OperandList<'db>,
+        operand: ExprId,
+        choice: ChosenImpls<'db>,
+        conditions: Vec<TraitInstId<'db>>,
+    ) {
+        let entry = choice
+            .items(self.db)
+            .last()
+            .and_then(|entry| entry.implementation())
+            .expect("a pushed choice is the last item");
+        let span: DynLazySpan<'db> = operand.span(self.body()).into();
+        match list.admit(
+            self.db,
+            self.env.solve_cx(),
+            entry,
+            choice.items(self.db).len() - 1,
+            conditions,
+            span.clone(),
+        ) {
+            Ok(()) => self.env.choices = Some(choice),
+            Err((first, goal, possible)) => {
+                self.push_diag(BodyDiag::DuplicateWithChoice {
+                    primary: span,
+                    first,
+                    goal,
+                    possible,
+                });
+            }
+        }
+        self.env.named_impl_operands.insert(operand);
+        // A named impl is a compile-time operand, with no runtime value.
+        self.env
+            .type_expr(operand, ExprProp::new(TyId::unit(self.db), false));
+    }
+
     fn check_with(
         &mut self,
         bindings: &[WithBinding<'db>],
@@ -2369,12 +2409,9 @@ impl<'db> TyChecker<'db> {
         let mut keyed: Vec<(StoredEffectKey<'db>, DynLazySpan<'db>)> = Vec::new();
         let outer_choices = self.env.choices;
         let mut ambiguous_opening = false;
-        // The implementations this `with` lists, each with its operand's span.
-        let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
-        // The conditions of each opening of this list, with the opening's
-        // position in the list's choices and its operand's span.
-        let mut opening_conditions: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> =
-            Vec::new();
+        // The implementations this `with` lists, and the conditions of its
+        // openings.
+        let mut list = OperandList::new();
         let mut providers = Vec::new();
 
         for binding in bindings {
@@ -2425,61 +2462,11 @@ impl<'db> TyChecker<'db> {
                     continue;
                 }
                 Some(OperandMeaning::Named { choice }) => {
-                    let entry = choice
-                        .items(self.db)
-                        .last()
-                        .and_then(|entry| entry.implementation())
-                        .expect("a pushed choice is the last item");
-                    let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                    if let Some((first, goal, possible)) =
-                        earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
-                    {
-                        self.push_diag(BodyDiag::DuplicateWithChoice {
-                            primary: span,
-                            first,
-                            goal,
-                            possible,
-                        });
-                    } else {
-                        listed.push((entry, span));
-                        self.env.choices = Some(choice);
-                    }
-                    self.env.named_impl_operands.insert(binding.value);
-                    // A named impl is a compile-time operand, with no runtime value.
-                    self.env
-                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    self.admit_with_operand(&mut list, binding.value, choice, Vec::new());
                     continue;
                 }
                 Some(OperandMeaning::Opening { choice, conditions }) => {
-                    let entry = choice
-                        .items(self.db)
-                        .last()
-                        .and_then(|entry| entry.implementation())
-                        .expect("a pushed choice is the last item");
-                    let span: DynLazySpan<'db> = binding.value.span(self.body()).into();
-                    if let Some((first, goal, possible)) =
-                        earlier_answer(self.db, self.env.solve_cx(), &listed, entry)
-                    {
-                        self.push_diag(BodyDiag::DuplicateWithChoice {
-                            primary: span,
-                            first,
-                            goal,
-                            possible,
-                        });
-                    } else {
-                        // The opened implementation's conditions are proved
-                        // once the whole list is read (below the loop).
-                        opening_conditions.push((
-                            choice.items(self.db).len() - 1,
-                            conditions,
-                            span.clone(),
-                        ));
-                        listed.push((entry, span));
-                        self.env.choices = Some(choice);
-                    }
-                    self.env.named_impl_operands.insert(binding.value);
-                    self.env
-                        .type_expr(binding.value, ExprProp::new(TyId::unit(self.db), false));
+                    self.admit_with_operand(&mut list, binding.value, choice, conditions);
                     continue;
                 }
                 Some(OperandMeaning::NotAnImplementation(OperandClass::ProviderType(
@@ -2562,8 +2549,7 @@ impl<'db> TyChecker<'db> {
             let start = outer_choices.map_or(0, |outer| outer.items(self.db).len());
             let list_choices = list_choices.group_after(self.db, start);
             self.env.choices = Some(list_choices);
-            for (goal, context, span) in opening_contexts(self.db, list_choices, opening_conditions)
-            {
+            for (goal, context, span) in list.obligations(self.db, list_choices) {
                 self.env.register_trait_obligation(TraitObligation {
                     choices: context,
                     goal,

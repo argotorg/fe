@@ -44,8 +44,8 @@ use crate::{
 
 use super::BodyOwner;
 use super::with_operand::{
-    BareName, OperandMeaning, OperandSite, OperandValues, SiteKind, classify_with_operand,
-    earlier_answer, opening_contexts,
+    BareName, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
+    classify_with_operand,
 };
 
 /// The frame of a module: its parent's, extended by its own declaration.
@@ -329,11 +329,11 @@ pub(crate) fn declared_choice<'db>(
         diags,
         duplicate_of: None,
     };
-    let (choice, conditions) = match classify_operand(db, scope, with, index, path, outer) {
-        OperandMeaning::Named { choice } => (choice, Vec::new()),
-        OperandMeaning::Opening { choice, conditions } => (choice, conditions),
-        refused => return none(refusal_diags(db, scope, with, index, path, refused)),
-    };
+    let (choice, conditions) =
+        match classify_operand(db, scope, with, index, path, outer).admitted() {
+            Ok(admitted) => admitted,
+            Err(refused) => return none(refusal_diags(db, scope, with, index, path, refused)),
+        };
     let entry = choice
         .items(db)
         .last()
@@ -341,23 +341,20 @@ pub(crate) fn declared_choice<'db>(
         .expect("a pushed choice is the last item");
 
     // An operand that answers the same goal as an earlier one is not chosen.
-    let listed: Vec<_> = frame
-        .into_iter()
-        .flat_map(|frame| frame.items(db).iter())
-        .filter_map(|earlier| match earlier {
-            ChoiceEntry::Declared(earlier)
-                if earlier.with(db) == with && (earlier.index(db) as usize) < index =>
-            {
-                let span = with.span().operands().operand(earlier.index(db) as usize);
-                declared_choice(db, *earlier)
-                    .choice
-                    .map(|choice| (choice, DynLazySpan::from(span)))
-            }
-            _ => None,
-        })
-        .collect();
+    let mut list = OperandList::new();
+    for earlier in frame.into_iter().flat_map(|frame| frame.items(db).iter()) {
+        if let ChoiceEntry::Declared(earlier) = earlier
+            && earlier.with(db) == with
+            && (earlier.index(db) as usize) < index
+            && let Some(earlier_choice) = declared_choice(db, *earlier).choice
+        {
+            let span = with.span().operands().operand(earlier.index(db) as usize);
+            list.earlier(earlier_choice, span.into());
+        }
+    }
     let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(outer);
-    if let Some(duplicate) = earlier_answer(db, cx, &listed, entry) {
+    let span = with.span().operands().operand(index).into();
+    if let Err(duplicate) = list.admit(db, cx, entry, 0, conditions.clone(), span) {
         return DeclaredChoice {
             duplicate_of: Some(duplicate),
             ..none(Vec::new())
@@ -414,9 +411,7 @@ fn module_with_check_query<'db>(
     };
     let frame = module_choices(db, scope).choices;
     let mut diags: Vec<FuncBodyDiag<'db>> = Vec::new();
-    // The conditions of each opening, with the opening's position in the
-    // frame and its operand's span.
-    let mut openings: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> = Vec::new();
+    let mut list = OperandList::new();
 
     for (index, operand) in with.operands(db).iter().enumerate() {
         let Some(path) = operand.to_opt() else {
@@ -459,8 +454,8 @@ fn module_with_check_query<'db>(
                 .into(),
             );
         }
-        if chosen.choice.is_some() && !chosen.conditions.is_empty() {
-            openings.push((position, chosen.conditions.clone(), span));
+        if chosen.choice.is_some() {
+            list.opening(position, chosen.conditions.clone(), span);
         }
     }
 
@@ -468,7 +463,7 @@ fn module_with_check_query<'db>(
     // outer frame and every other operand of the declaration, without the
     // opening itself, whatever the order of the operands.
     if let Some(list_choices) = frame {
-        for (goal, context, span) in opening_contexts(db, list_choices, openings) {
+        for (goal, context, span) in list.obligations(db, list_choices) {
             let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(context);
             if !goal_holds(db, cx, goal) {
                 diags.push(

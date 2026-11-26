@@ -140,6 +140,18 @@ pub(super) enum OperandMeaning<'db> {
     },
 }
 
+impl<'db> OperandMeaning<'db> {
+    /// The choices that an implementation operand pushed, with the conditions
+    /// of an opening; any other meaning is returned.
+    pub(super) fn admitted(self) -> Result<(ChosenImpls<'db>, Vec<TraitInstId<'db>>), Self> {
+        match self {
+            Self::Named { choice } => Ok((choice, Vec::new())),
+            Self::Opening { choice, conditions } => Ok((choice, conditions)),
+            other => Err(other),
+        }
+    }
+}
+
 fn refused<'db>(diag: impl Into<FuncBodyDiag<'db>>, leaves_open: bool) -> OperandMeaning<'db> {
     OperandMeaning::Refused {
         diags: vec![diag.into()],
@@ -557,36 +569,86 @@ fn provider_or_value<'db>(
     }
 }
 
-/// An earlier operand of this list whose header overlaps `entry`, with the
-/// overlap goal and whether some projections remain unknown.
-pub(super) fn earlier_answer<'db>(
-    db: &'db dyn HirAnalysisDb,
-    solve_cx: TraitSolveCx<'db>,
-    listed: &[(ChosenImpl<'db>, DynLazySpan<'db>)],
-    entry: ChosenImpl<'db>,
-) -> Option<(DynLazySpan<'db>, TraitInstId<'db>, bool)> {
-    listed.iter().find_map(|(earlier, span)| {
-        crate::analysis::ty::trait_resolution::common_choice_goal(db, solve_cx, *earlier, entry)
-            .map(|(goal, possible)| (span.clone(), goal, possible))
-    })
+/// An earlier operand of a list that answers the same goal as a later one: the
+/// earlier operand's span, the goal, and whether the overlap is only possible
+/// because some projections remain unknown.
+pub(super) type Duplicate<'db> = (DynLazySpan<'db>, TraitInstId<'db>, bool);
+
+/// The operands of one `with` list that were admitted, in order. A block and a
+/// module read a list the same way: an operand that answers the goal of an
+/// earlier one is refused (8-0160), and the conditions of an opened
+/// implementation are proved once the whole list is read.
+#[derive(Default)]
+pub(super) struct OperandList<'db> {
+    /// Each admitted operand's implementation, with its span: the enclosing
+    /// frame is never compared.
+    listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)>,
+    /// The conditions of each opening, with the opening's position in the
+    /// choices and its operand's span.
+    openings: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)>,
 }
 
-/// The goals that the openings of a list owe, each with the choices it is
-/// proved under and the opening's operand: the whole list but the opening
-/// itself, whatever the order of the operands. An opening whose conditions
-/// can never hold is refused whether or not the body uses it. `openings` holds
-/// each opening's position in `list`, its conditions and its operand.
-pub(super) fn opening_contexts<'db>(
-    db: &'db dyn HirAnalysisDb,
-    list: ChosenImpls<'db>,
-    openings: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)>,
-) -> Vec<(TraitInstId<'db>, Option<ChosenImpls<'db>>, DynLazySpan<'db>)> {
-    let mut goals = Vec::new();
-    for (index, conditions, span) in openings {
-        let context = list.retain(db, |peer, _| peer != index);
-        for goal in conditions {
-            goals.push((goal, context, span.clone()));
+impl<'db> OperandList<'db> {
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records an operand admitted before the one being read.
+    pub(super) fn earlier(&mut self, entry: ChosenImpl<'db>, span: DynLazySpan<'db>) {
+        self.listed.push((entry, span));
+    }
+
+    /// Admits `entry`, the implementation of the operand at `span`, whose
+    /// position in the choices is `at`, unless an earlier operand answers the
+    /// same goal under `cx`.
+    pub(super) fn admit(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        cx: TraitSolveCx<'db>,
+        entry: ChosenImpl<'db>,
+        at: usize,
+        conditions: Vec<TraitInstId<'db>>,
+        span: DynLazySpan<'db>,
+    ) -> Result<(), Duplicate<'db>> {
+        if let Some(duplicate) = self.listed.iter().find_map(|(earlier, earlier_span)| {
+            crate::analysis::ty::trait_resolution::common_choice_goal(db, cx, *earlier, entry)
+                .map(|(goal, possible)| (earlier_span.clone(), goal, possible))
+        }) {
+            return Err(duplicate);
+        }
+        self.opening(at, conditions, span.clone());
+        self.listed.push((entry, span));
+        Ok(())
+    }
+
+    /// Records the conditions of the opening at position `at`.
+    pub(super) fn opening(
+        &mut self,
+        at: usize,
+        conditions: Vec<TraitInstId<'db>>,
+        span: DynLazySpan<'db>,
+    ) {
+        if !conditions.is_empty() {
+            self.openings.push((at, conditions, span));
         }
     }
-    goals
+
+    /// The goals that the openings owe, each with the choices it is proved
+    /// under and the opening's operand: `choices`, the whole list, but the
+    /// opening itself, whatever the order of the operands. An opening whose
+    /// conditions can never hold is refused whether or not the body uses it.
+    pub(super) fn obligations(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        choices: ChosenImpls<'db>,
+    ) -> Vec<(TraitInstId<'db>, Option<ChosenImpls<'db>>, DynLazySpan<'db>)> {
+        let mut goals = Vec::new();
+        for (index, conditions, span) in self.openings {
+            let context = choices.retain(db, |peer, _| peer != index);
+            for goal in conditions {
+                goals.push((goal, context, span.clone()));
+            }
+        }
+        goals
+    }
 }
