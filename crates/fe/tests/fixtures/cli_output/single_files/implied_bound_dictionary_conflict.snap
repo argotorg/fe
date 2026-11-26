@@ -7,10 +7,12 @@ input_file: tests/fixtures/cli_output/single_files/implied_bound_dictionary_conf
 errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/implied_bound_dictionary_conflict.fe
 
 error[16-0019]: conflicting implementations of a bound in `fn target`
-   ┌─ implied_bound_dictionary_conflict.fe:17:4
+   ┌─ implied_bound_dictionary_conflict.fe:18:63
    │
 17 │ fn target<B: Tr<A = X>, X: Pick>() -> u256 { X::val() * 1000 + B::via() }
-   │    ^^^^^^ `Item: Pick`: `Wrap<Item>: Tr<A = Item>` and `Item: Pick` supply different implementations
+   │    ------ the instance of this function that the call builds is refused
+18 │ fn relay<B: Tr<A = X>, X: Pick>() -> u256 { with (Named<X>) { target<B, X>() } }
+   │                                                               ^^^^^^^^^^^^^^ `Item: Pick`: `Wrap<Item>: Tr<A = Item>` and `Item: Pick` supply different implementations
 
 
 === EXIT CODE: 1 ===

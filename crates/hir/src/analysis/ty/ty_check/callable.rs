@@ -707,6 +707,7 @@ impl<'db> Callable<'db> {
                 .map(|goal| RefusedGoal {
                     goal,
                     reason: Refusal::NoComponent { root: None },
+                    others: None,
                 }),
         );
         self.set_bound_evidence(db, func, mode, evidence);

@@ -1110,8 +1110,11 @@ fn output_disagreement_diagnostic<'db>(
             .unwrap_or_else(|| "its implementation".to_string())
     };
     let message = match mismatch {
-        NamedOutputMismatch::NoOrdinaryOutputs => format!(
+        NamedOutputMismatch::NoOrdinary => format!(
             "`{goal}` is answered here by {answers}, but no ordinary implementation defines its associated outputs at `{goal}`"
+        ),
+        NamedOutputMismatch::AmbiguousOrdinary => format!(
+            "`{goal}` is answered here by {answers}, but more than one ordinary implementation may define its associated outputs at `{goal}`"
         ),
         NamedOutputMismatch::AssocType {
             with,
@@ -2380,6 +2383,18 @@ impl<'db> SemanticInstance<'db> {
                     "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
                     root.pretty_print(db, true)
                 ),
+            };
+            let message = match refused.others {
+                Some(others) => format!(
+                    "{message}; also {}",
+                    others
+                        .list(db)
+                        .iter()
+                        .map(|other| format!("`{}`", other.pretty_print(db, true)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                None => message,
             };
             return Err(SemanticBodyAdmissionError::InvalidConcreteType(
                 SemanticDiagnosticId::new(

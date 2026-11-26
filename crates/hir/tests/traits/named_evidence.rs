@@ -5600,3 +5600,53 @@ impl Hold for D where S: Hold { type A = Foo }
     );
     assert!(codes.is_empty(), "{codes:?}");
 }
+
+// The instance check reports every goal it refuses, in an order that does not
+// depend on the order of the bounds: the first by the printed goal, and the
+// rest after it.
+#[test]
+fn agreement_two_conflicts_reported_in_one_order() {
+    let report = |signature: &str| {
+        let source = format!(
+            r#"
+trait Show {{ const fn show() -> u256 }}
+struct Foo {{}}
+struct Bar {{}}
+impl Show for Foo {{ const fn show() -> u256 {{ 100 }} }}
+impl Show for Foo as Loud {{ const fn show() -> u256 {{ 70 }} }}
+impl Show for Bar {{ const fn show() -> u256 {{ 1 }} }}
+impl Show for Bar as LoudBar {{ const fn show() -> u256 {{ 7 }} }}
+struct W<T> {{}}
+struct V<T> {{}}
+trait Tr {{ type A: Show }}
+impl<T: Show> Tr for W<T> {{ type A = T }}
+trait Tr2 {{ type A: Show }}
+impl<T: Show> Tr2 for V<T> {{ type A = T }}
+{signature}
+const fn relay<C: Tr2<A = Foo>, E: Tr2<A = Bar>>() -> u256 {{ with (Loud, LoudBar) {{ f<W<Foo>, C, W<Bar>, E>() }} }}
+const fn demand() -> u256 {{ relay<V<Foo>, V<Bar>>() }}
+"#
+        );
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("named_two_conflicts.fe".into(), &source);
+        let (module, _) = db.top_mod(file);
+        db.assert_no_diags(module);
+        let mut passes = AnalysisPassManager::new();
+        passes.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+        let report = format_diagnostics(&db, &passes.run_on_module(&db, module));
+        report
+            .lines()
+            .find(|line| line.contains("supply different implementations"))
+            .map(|line| line.split('^').next_back().unwrap_or("").trim().to_string())
+            .unwrap_or_else(|| panic!("no refusal in {report}"))
+    };
+    let foo_first = report(
+        "const fn f<B: Tr<A = Foo>, C: Tr2<A = Foo>, D: Tr<A = Bar>, E: Tr2<A = Bar>>() -> u256 { 5 }",
+    );
+    let bar_first = report(
+        "const fn f<B, C, D, E>() -> u256 where D: Tr<A = Bar>, E: Tr2<A = Bar>, B: Tr<A = Foo>, C: Tr2<A = Foo> { 5 }",
+    );
+    assert_eq!(foo_first, bar_first);
+    assert!(foo_first.starts_with("`Bar: Show`"), "{foo_first}");
+    assert!(foo_first.contains("also `Foo: Show`"), "{foo_first}");
+}

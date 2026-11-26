@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[16-0019]: conflicting implementations of a bound in `fn f`
+   ┌─ src/lib.fe:5:53
+   │
+ 5 │ fn relay<C: Tr2<A = Foo>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }
+   │                                                     ^^^^^^^^^^^^^^ `Foo: Show`: `W<Foo>: Tr<A = Foo>` and `V<Foo>: Tr2<A = Foo>` supply different implementations
+   │
+   ┌─ src/lib.fe:15:8
+   │
+15 │ pub fn f<B: Tr<A = Foo>, C: Tr2<A = Foo>>() -> u256 { 5 }
+   │        - the instance of this function that the call builds is refused
+
+
+=== EXIT CODE: 1 ===

@@ -1366,6 +1366,9 @@ pub(crate) enum Refusal<'db> {
 pub(crate) struct RefusedGoal<'db> {
     pub(crate) goal: TraitInstId<'db>,
     pub(crate) reason: Refusal<'db>,
+    /// The next goals the same body refuses, at most three, in the canonical
+    /// order, so that a message can name them.
+    pub(crate) others: Option<PredicateListId<'db>>,
 }
 
 /// A use's proofs of the bounds a body it reaches declares, and the slots
@@ -1393,7 +1396,11 @@ impl<'db> DeclaredBounds<'db> {
                 let goal = substitute_complete(db, *signature.list(db).get(index)?, subst).ok()?;
                 (!mentions_effect_provider(db, goal)
                     && !collect_flags(db, goal).intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID))
-                .then_some(RefusedGoal { goal, reason })
+                .then_some(RefusedGoal {
+                    goal,
+                    reason,
+                    others: None,
+                })
             })
             .collect()
     }
@@ -2498,7 +2505,19 @@ pub(crate) fn instance_evidence<'db>(
     );
     InstanceEvidence {
         proofs: EvidenceList::of(db, received.entries).with_rows(db, supplied.rows(db).clone()),
-        refused: received.refused.first().copied(),
+        refused: received.refused.first().map(|first| RefusedGoal {
+            others: (received.refused.len() > 1).then(|| {
+                PredicateListId::new(
+                    db,
+                    received.refused[1..]
+                        .iter()
+                        .take(3)
+                        .map(|refused| refused.goal)
+                        .collect::<Vec<_>>(),
+                )
+            }),
+            ..*first
+        }),
     }
 }
 
@@ -2566,8 +2585,37 @@ fn refuse_goal<'db>(
     reason: Refusal<'db>,
 ) {
     if !refused.iter().any(|known| known.goal == goal) {
-        refused.push(RefusedGoal { goal, reason });
+        refused.push(RefusedGoal {
+            goal,
+            reason,
+            others: None,
+        });
     }
+}
+
+/// `received_in_walk_order`, with the refused goals in a canonical order that
+/// does not depend on the order of the bounds: by the printed goal, then by the
+/// printed sources of the reason.
+pub(crate) fn received<'db>(
+    db: &'db dyn HirAnalysisDb,
+    layout: PredicateListId<'db>,
+    goals: &[Option<TraitInstId<'db>>],
+    inputs: &[SlotInput<'db>],
+    rows: &[RowEvidence<'db>],
+    cx: TraitSolveCx<'db>,
+    fallback: Fallback,
+) -> Received<'db> {
+    let mut received = received_in_walk_order(db, layout, goals, inputs, rows, cx, fallback);
+    received.refused.sort_by_cached_key(|refused| {
+        let print = |goal: TraitInstId<'db>| goal.pretty_print(db, true);
+        let (first, second) = match refused.reason {
+            Refusal::Differs { a, b } => (print(a), print(b)),
+            Refusal::NoComponent { root } => (root.map(print).unwrap_or_default(), String::new()),
+            Refusal::TooDeep { root } => (print(root), String::new()),
+        };
+        (print(refused.goal), first, second)
+    });
+    received
 }
 
 /// The one agreement check. The proofs a body receives are a map from each of
@@ -2595,7 +2643,7 @@ fn refuse_goal<'db>(
 /// it names an implementation; a route cut at the walk's depth or member limit
 /// refuses on the same condition. The components of a use are not read: they
 /// are compared where the instance is built.
-pub(crate) fn received<'db>(
+fn received_in_walk_order<'db>(
     db: &'db dyn HirAnalysisDb,
     layout: PredicateListId<'db>,
     goals: &[Option<TraitInstId<'db>>],
@@ -3230,6 +3278,7 @@ impl<'db> EvidenceId<'db> {
                 Some(RefusedGoal {
                     goal: component_goal(db, *slot)?,
                     reason: Refusal::NoComponent { root: Some(root) },
+                    others: None,
                 })
             }
             Evidence::Impl { conds, .. } => {

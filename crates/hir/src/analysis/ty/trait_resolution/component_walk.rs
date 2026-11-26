@@ -16,12 +16,9 @@ use super::{
     BoundStep, BoundWalk, PredicateListId, TraitSolveCx, bound_walk_cycle_initial,
     is_concrete_bound, normalize_trait_inst_preserving_validity, step_bound,
 };
-use crate::{
-    analysis::{
-        HirAnalysisDb,
-        ty::{trait_def::TraitInstId, ty_def::TyFlags, visitor::collect_flags},
-    },
-    hir_def::HirIngot,
+use crate::analysis::{
+    HirAnalysisDb,
+    ty::{trait_def::TraitInstId, ty_def::TyFlags, visitor::collect_flags},
 };
 
 /// The permission to derive a bound through ordinary implementations. No value
