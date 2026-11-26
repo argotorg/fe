@@ -1,7 +1,7 @@
 // `is_empty` is an inherent method of `DynString`, and a user trait gives it
-// to `String<N>`: which one runs depends on the literal's type, which the call
-// cannot wait for, so the call is refused whatever its signature and whatever
-// follows it.
+// to `String<N>`: which one runs depends on the literal's type, so a call on a
+// literal whose type is still open is refused, whatever its signature. After
+// `view(s)` the type is known (`view_then_call`), and the call is ordinary.
 use core::abi::DynString
 trait IsE {
     fn is_empty(self) -> bool
