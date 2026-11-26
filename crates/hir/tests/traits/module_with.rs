@@ -467,10 +467,9 @@ mod m {{
 
 /// Operand `<Arr<70> as Size>` names an implementation of `Size` for `Arr<K>`,
 /// where `K` is 70 only under the declaration's own `Discount`. The frame is
-/// built without reading `K`; `K` is fixed under `Discount`, and the opening
-/// is chosen afterwards, so the declaration is well founded. A constant in a
-/// type is refused once the constant, not the use, decides it (`8-0138`);
-/// until then the declaration is accepted.
+/// built without reading `K`. A constant whose value reads the module's frame
+/// is refused in a type (8-0138), and the header `impl Size for Arr<{ K }>`
+/// is a type.
 const SELF_READING: &str = r#"
 pub struct Arr<const N: u256> {}
 pub trait Size { const fn size() -> u256 }
@@ -485,30 +484,34 @@ const fn f() -> u256 { m::f() }
 "#;
 
 #[test]
-fn a_declaration_whose_opening_reads_its_modules_constant_is_well_founded() {
-    values(&with_picks(SELF_READING), &[("f", 1)]);
+fn a_declaration_whose_opening_reads_its_modules_constant_is_refused_at_the_header() {
+    assert_eq!(sorted_codes(&with_picks(SELF_READING)), ["8-0138"]);
 }
 
 /// The same program with a type and a reader of `m::K` before the module:
-/// the entry order changes nothing.
+/// the entry order changes nothing. The struct field and the header are each
+/// refused.
 #[test]
 fn the_order_of_the_readers_of_a_framed_constant_changes_nothing() {
-    values(
-        &with_picks(&format!(
+    assert_eq!(
+        sorted_codes(&with_picks(&format!(
             "{SELF_READING}\npub struct S {{ pub a: Arr<{{ m::K }}> }}\nconst fn early() -> u256 {{ m::K }}\n"
-        )),
-        &[("early", 70), ("f", 1)],
+        ))),
+        ["8-0138", "8-0138"]
     );
 }
 
 /// The frame is built from names and deferred lowering, so the headers
 /// `impl Size for Arr<{ K }>` and `impl Pick for Arr<{ K }>` are not read
 /// while `K = Item::value()` is checked under it. `K` asks a `Pick` goal,
-/// which the `Size` operand never answers.
+/// which the `Size` operand never answers. Both headers read the constant `K`,
+/// whose value reads the frame, so both are refused (8-0138), and nothing
+/// iterates or panics.
 #[test]
 fn a_module_frame_is_built_without_evaluating_its_constants() {
-    values(
-        r#"
+    assert_eq!(
+        sorted_codes(
+            r#"
 pub struct Arr<const N: u256> {}
 pub trait Pick { const fn value() -> u256 }
 pub trait Size { const fn size() -> u256 }
@@ -526,6 +529,41 @@ pub mod outer {
         pub const K: u256 = Item::value()
         impl Size for Arr<{ K }> { const fn size() -> u256 { 2 } }
         impl Pick for Arr<{ K }> { const fn value() -> u256 { 3 } }
+        pub const fn f() -> u256 { Arr<70>::size() }
+    }
+}
+const fn f() -> u256 { outer::m::f() }
+"#
+        ),
+        ["8-0138", "8-0138"]
+    );
+}
+
+/// The same headers written through a constant function, which reads the
+/// frame's `K` (70) and is accepted. The frame is still built without reading
+/// the constants, and the operand chooses the header for `Arr<70>`.
+#[test]
+fn a_header_through_a_constant_function_reads_the_frames_value() {
+    values(
+        r#"
+pub struct Arr<const N: u256> {}
+pub trait Pick { const fn value() -> u256 }
+pub trait Size { const fn size() -> u256 }
+pub struct Item {}
+impl Pick for Item { const fn value() -> u256 { 100 } }
+pub impl Pick for Item as Seventy { const fn value() -> u256 { 70 } }
+impl Size for Arr<100> { const fn size() -> u256 { 1 } }
+
+pub mod outer {
+    use super::*
+    with (Seventy)
+    pub mod m {
+        use super::*
+        with (<Arr<70> as Size>)
+        pub const K: u256 = Item::value()
+        pub const fn kk() -> u256 { K }
+        impl Size for Arr<{ kk() }> { const fn size() -> u256 { 2 } }
+        impl Pick for Arr<{ kk() }> { const fn value() -> u256 { 3 } }
         pub const fn f() -> u256 { Arr<70>::size() }
     }
 }
@@ -616,9 +654,13 @@ fn at_the_operand(code: &str, operand: &str) -> Vec<(String, String)> {
 
 #[test]
 fn a_header_constant_that_asks_its_own_operand_is_refused_at_the_operand() {
+    // The header also reads a constant whose value reads the frame (8-0138).
     assert_eq!(
         located(HEADER_CYCLE),
-        at_the_operand("2-0022", "<Arr<70> as Size>")
+        [
+            ("2-0022".to_string(), "<Arr<70> as Size>".to_string()),
+            ("8-0138".to_string(), "Arr<{ K }>".to_string()),
+        ]
     );
 }
 
@@ -632,7 +674,11 @@ fn the_order_of_the_first_reader_does_not_change_a_refused_operand() {
     );
     assert_eq!(
         located(&source),
-        at_the_operand("2-0022", "<Arr<70> as Size>")
+        [
+            ("2-0022".to_string(), "<Arr<70> as Size>".to_string()),
+            ("8-0138".to_string(), "Arr<{ K }>".to_string()),
+            ("8-0138".to_string(), "Arr<{ outer::m::K }>".to_string()),
+        ]
     );
 }
 
@@ -663,7 +709,8 @@ pub mod outer {
 }
 "#,
     );
-    assert_eq!(codes, ["2-0022"]);
+    // Each header reads the constant (8-0138).
+    assert_eq!(codes, ["2-0022", "8-0138", "8-0138"]);
 }
 
 /// A constant of the module is read by the operand that the constant's own
@@ -693,9 +740,13 @@ pub mod outer {{
 }}
 "#
     );
+    // The operand's own type reads the constant as well (8-0138).
     assert_eq!(
         located(&source),
-        at_the_operand("2-0022", "<Arr<{ K }> as Pick>")
+        [
+            ("2-0022".to_string(), "<Arr<{ K }> as Pick>".to_string()),
+            ("8-0138".to_string(), "Arr<{ K }>".to_string()),
+        ]
     );
 }
 
@@ -1485,5 +1536,181 @@ pub mod m {
 const fn f() -> u256 { m::f() }
 "#,
         &[("f", 100)],
+    );
+}
+
+// Constants refused by the constant
+
+/// Module `a` is framed and its constants read the frame (`Discount`, 70, not
+/// the ordinary 100). Module `b` is not framed and uses them in types.
+fn constants_of_a_framed_module(uses: &str) -> String {
+    format!(
+        r#"
+pub struct Item {{}}
+pub trait CPick {{ const fn value() -> u256 }}
+impl CPick for Item {{ const fn value() -> u256 {{ 100 }} }}
+pub impl CPick for Item as Discount {{ const fn value() -> u256 {{ 70 }} }}
+pub trait HasN {{ const N: u256 }}
+pub struct Arr<const N: u256> {{}}
+impl<const N: u256> Arr<N> {{ pub const fn n(self) -> u256 {{ N }} }}
+pub mod a {{
+    use super::*
+    with (Discount)
+    pub const K: u256 = <Item as CPick>::value()
+    pub const K5: u256 = 5
+    pub struct Bar {{}}
+    impl HasN for Bar {{ const N: u256 = <Item as CPick>::value() }}
+    impl Bar {{ pub const X: u256 = <Item as CPick>::value() }}
+}}
+pub mod b {{
+    use super::*
+    pub const K4: u256 = a::K
+    pub const fn kk() -> u256 {{ a::K }}
+    {uses}
+}}
+const fn run() -> u256 {{ b::f() }}
+"#
+    )
+}
+
+fn use_in_a_type(ty: &str) -> String {
+    constants_of_a_framed_module(&format!(
+        "pub const fn f() -> u256 {{ let v: {ty} = Arr {{}}\n    v.n() }}"
+    ))
+}
+
+#[test]
+fn a_constant_that_reads_a_module_frame_is_refused_in_a_type_of_any_module() {
+    for ty in [
+        "Arr<a::K>",
+        "Arr<{ a::K }>",
+        "Arr<{ <a::Bar as HasN>::N }>",
+        "Arr<{ a::Bar::X }>",
+        "Arr<K4>",
+    ] {
+        assert_eq!(sorted_codes(&use_in_a_type(ty)), ["8-0138"], "{ty}");
+    }
+}
+
+/// A constant function reads the frame of its own module, and so does a
+/// constant that reads no choice: neither is refused in a type.
+#[test]
+fn a_constant_function_and_a_constant_that_reads_no_choice_are_accepted_in_a_type() {
+    for ty in ["Arr<{ kk() }>", "Arr<a::K5>"] {
+        assert_eq!(
+            sorted_codes(&use_in_a_type(ty)),
+            Vec::<String>::new(),
+            "{ty}"
+        );
+    }
+    values(&use_in_a_type("Arr<{ kk() }>"), &[("run", 70)]);
+    values(&use_in_a_type("Arr<a::K5>"), &[("run", 5)]);
+}
+
+/// A constant that holds a block `with` is not a read of a module frame: the
+/// block form of the same constants is unchanged.
+#[test]
+fn constants_read_through_a_block_are_unchanged() {
+    let source = |ty: &str| {
+        with_picks(&format!(
+            r#"
+pub struct Arr<const N: u256> {{}}
+impl<const N: u256> Arr<N> {{ pub const fn n(self) -> u256 {{ N }} }}
+pub const K2: u256 = with (Discount) {{ <Item as Pick>::value() }}
+pub const K3: u256 = K2
+const fn kk() -> u256 {{ K2 }}
+pub const fn f() -> u256 {{ let a: {ty} = Arr {{}}
+    a.n() }}
+"#
+        ))
+    };
+    for ty in ["Arr<{ K2 }>", "Arr<K3>", "Arr<{ kk() }>"] {
+        values(&source(ty), &[("f", 70)]);
+    }
+}
+
+#[test]
+fn module_level_types_that_read_a_choice_are_refused() {
+    assert_eq!(
+        diagnostics(&with_picks(
+            r#"
+pub struct Array<const N: u256> {}
+mod m {
+    use super::*
+    with (Discount)
+    pub struct Holder { pub a: Array<{ Item::value() }> }
+    pub fn sig(_ a: Array<{ read<Item>() }>) {}
+    type Count = Array<{ Item::value() }>
+    pub fn body() { let x: Array<{ Item::value() }> = Array {} }
+}
+"#,
+        )),
+        vec!["8-0138"; 5]
+    );
+}
+
+/// A default declared in an unframed module takes the ordinary value where a
+/// signature uses it; a body of the framed module that uses it is refused.
+#[test]
+fn defaults_read_under_the_frame_are_refused_where_they_are_used() {
+    assert_eq!(
+        diagnostics(&with_picks(
+            r#"
+pub struct Arr<const L: u256 = { Item::value() }> {}
+mod m {
+    use super::*
+    with (Discount)
+    pub fn sig(_ a: Arr) {}
+    pub fn body() { let x: Arr = Arr {} }
+}
+"#,
+        )),
+        vec!["8-0138"; 2]
+    );
+}
+
+#[test]
+fn a_framed_constant_reaching_a_chosen_implementation_through_another_constant_is_refused() {
+    assert_eq!(
+        diagnostics(&with_picks(
+            r#"
+pub struct Arr<const N: u256> {}
+mod m {
+    use super::*
+    with (Discount)
+    pub const K: u256 = Item::value()
+    pub const J: u256 = K + 1
+    pub fn sig(_ a: Arr<{ J }>) {}
+}
+"#,
+        )),
+        vec!["8-0138"]
+    );
+}
+
+/// `kk()` reads `K`, sealed at the module's choice (70), and an explicit
+/// ordinary opening reads the ordinary value (100): the types differ.
+#[test]
+fn const_fn_reads_of_constants_and_explicit_ordinary_openings_in_types_are_accepted() {
+    let source = |body: &str| {
+        with_picks(&format!(
+            r#"
+pub struct Array<const N: u256> {{}}
+mod m {{
+    use super::*
+    with (Discount)
+    pub const K: u256 = Item::value()
+    pub struct Opened {{ pub a: Array<{{ with (<Item as Pick>) {{ Item::value() }} }}> }}
+    pub fn inside() {{ with (<Item as Pick>) {{ let x: Array<{{ Item::value() }}> = Array {{}} }} }}
+    pub const fn kk() -> u256 {{ K }}
+    pub fn sealed(a: Array<{{ kk() }}>) {{ {body} }}
+}}
+"#
+        ))
+    };
+    assert!(diagnostics(&source("let x: Array<70> = a")).is_empty());
+    assert_eq!(
+        diagnostics(&source("let x: Array<100> = a")),
+        vec!["8-0000"]
     );
 }

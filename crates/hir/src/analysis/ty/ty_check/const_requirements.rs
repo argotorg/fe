@@ -1007,7 +1007,7 @@ pub(super) fn check_body_requirements<'db>(
             let cx = TraitSolveCx::new(db, body.scope(), Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(typed.expr_choices(expr));
-            if let Some(goal) = type_choice_read(db, deferred, cx, &mut checker.check.demands) {
+            if let Some(goal) = type_frame_read(db, deferred, cx, &mut checker.check.demands) {
                 checker.check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: expr.span(body).into(),
@@ -1051,7 +1051,7 @@ pub(super) fn check_body_requirements<'db>(
                             None,
                         ),
                     );
-                    if let Some(goal) = type_choice_read(db, ty, cx, &mut check.demands) {
+                    if let Some(goal) = type_frame_read(db, ty, cx, &mut check.demands) {
                         check.diags.push(
                             BodyDiag::ChosenTypeRead {
                                 primary: nested.expr(db).span(nested).into(),
@@ -1075,7 +1075,7 @@ pub(super) fn check_body_requirements<'db>(
             let cx = TraitSolveCx::new(db, written.scope, Tier::All)
                 .with_assumptions(typed.assumptions())
                 .with_choices(Some(choices));
-            if let Some(goal) = type_choice_read(db, deferred, cx, &mut check.demands) {
+            if let Some(goal) = type_frame_read(db, deferred, cx, &mut check.demands) {
                 check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: written.span.clone(),
@@ -1103,7 +1103,7 @@ pub(super) fn check_body_requirements<'db>(
                     None,
                 ),
             );
-            if let Some(goal) = type_choice_read(db, ty, cx, &mut check.demands) {
+            if let Some(goal) = type_frame_read(db, ty, cx, &mut check.demands) {
                 check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: nested.expr(db).span(nested).into(),
@@ -1499,7 +1499,7 @@ fn anon_const_position_check<'db>(
                 db,
                 crate::analysis::ty::const_ty::ConstTyId::from_body(db, body, Some(expected), None),
             );
-            if let Some(goal) = type_choice_read(db, ty, cx, &mut check.demands) {
+            if let Some(goal) = type_frame_read(db, ty, cx, &mut check.demands) {
                 check.diags.push(
                     BodyDiag::ChosenTypeRead {
                         primary: body.expr(db).span(body).into(),
@@ -2773,6 +2773,10 @@ fn written_type_check_query<'db>(
     region: WrittenTypeRegion<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let entries = written_types(db, region.item(db));
+    let in_framed_body = matches!(
+        region.item(db),
+        ItemKind::Body(body) if module_with::scope_choices(db, body.scope()).is_some()
+    );
     let mut diags = Vec::new();
     // The failing application each entry reported, if any.
     let mut reported: Vec<Option<TyId<'db>>> = Vec::with_capacity(entries.len());
@@ -2868,9 +2872,16 @@ fn written_type_check_query<'db>(
                     );
                     let cx = TraitSolveCx::new(db, written.scope, Tier::All)
                         .with_assumptions(assumptions);
-                    if let Some(goal) =
+                    // A body of a framed module reports what its types read of
+                    // the frame itself (`check_body_requirements`).
+                    let read =
                         type_choice_read(db, deferred, cx, &mut GenerationDemands::default())
-                    {
+                            .or_else(|| {
+                                (!in_framed_body)
+                                    .then(|| frame_dependent_const(db, deferred, true))
+                                    .flatten()
+                            });
+                    if let Some(goal) = read {
                         diags.push(
                             BodyDiag::ChosenTypeRead {
                                 primary: written.span.clone(),
@@ -3184,4 +3195,144 @@ fn type_choice_read<'db>(
     };
     ty.visit_with(&mut reads);
     reads.found
+}
+
+/// What a written type reads of a module's frame: a chosen implementation its
+/// constants ask for (`type_choice_read`), or a constant whose value reads one
+/// (`frame_dependent_const`).
+fn type_frame_read<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    cx: TraitSolveCx<'db>,
+    demands: &mut GenerationDemands,
+) -> Option<TraitInstId<'db>> {
+    type_choice_read(db, ty, cx, demands).or_else(|| frame_dependent_const(db, ty, false))
+}
+
+/// The goal of a chosen implementation that a constant in `ty` reads from a
+/// module's frame, if any. A named constant is one value, fixed under its own
+/// module's frame (`const_frame_read`), so a type that uses it reads that
+/// frame wherever the type is written. An anonymous constant written in a
+/// framed module's declaration is checked under the frame (`declaration`; a
+/// body reads its own choices at each position), and a constant it uses is
+/// read as a named one is. A function it calls is not followed: it runs under
+/// its own module's frame, and its value is the one it is given.
+fn frame_dependent_const<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+    declaration: bool,
+) -> Option<TraitInstId<'db>> {
+    use crate::analysis::ty::{
+        const_ty::{ConstTyData, ConstTyId},
+        visitor::{TyVisitable, TyVisitor, walk_const_ty},
+    };
+    struct Reads<'db> {
+        db: &'db dyn HirAnalysisDb,
+        declaration: bool,
+        found: Option<TraitInstId<'db>>,
+        seen: FxHashSet<ConstTyId<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Reads<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+        fn visit_const_ty(&mut self, value: &ConstTyId<'db>) {
+            if self.found.is_some() || !self.seen.insert(*value) {
+                return;
+            }
+            let db = self.db;
+            if let ConstTyData::UnEvaluated {
+                body, const_def, ..
+            } = value.data(db)
+            {
+                let framed = if self.declaration && const_def.is_none() {
+                    module_with::scope_choices(db, body.scope())
+                } else {
+                    None
+                };
+                let written = framed.and_then(|frame| {
+                    let cx =
+                        TraitSolveCx::new(db, body.scope(), Tier::All).with_choices(Some(frame));
+                    type_choice_read(
+                        db,
+                        TyId::const_ty(db, *value),
+                        cx,
+                        &mut GenerationDemands::default(),
+                    )
+                });
+                self.found = written.or_else(|| const_frame_read(db, *value));
+            }
+            walk_const_ty(self, value);
+        }
+    }
+    let mut reads = Reads {
+        db,
+        declaration,
+        found: None,
+        seen: FxHashSet::default(),
+    };
+    ty.visit_with(&mut reads);
+    reads.found
+}
+
+/// The goal of a chosen implementation that the value of the constant `value`
+/// reads from its own module's frame, directly or through the constants it
+/// uses. The typed body of a constant of a framed module carries the frame, so
+/// its own reads are those of `type_choice_read`; the constants it uses are
+/// followed as `const_body_resolution_reenters` follows them. It reads typed
+/// bodies, so it is a check of a written type and never a part of lowering or
+/// of a module's frame. A cycle of constants reads nothing.
+#[salsa::tracked(returns(copy), cycle_result = const_frame_read_cycle)]
+fn const_frame_read<'db>(
+    db: &'db dyn HirAnalysisDb,
+    value: crate::analysis::ty::const_ty::ConstTyId<'db>,
+) -> Option<TraitInstId<'db>> {
+    use crate::analysis::ty::const_ty::{
+        ConstTyData, ConstTyId, const_ty_from_assoc_const_use, const_ty_from_inherent_const_use,
+    };
+    let data = value.data(db);
+    let ConstTyData::UnEvaluated {
+        body,
+        ty,
+        template_ty,
+        capture,
+        ..
+    } = data
+    else {
+        return None;
+    };
+    let owner = data.unevaluated_owner(template_ty.or(*ty)?)?;
+    if module_with::body_frame(db, owner).is_some() {
+        let cx = TraitSolveCx::new(db, body.scope(), Tier::All);
+        let own = type_choice_read(
+            db,
+            TyId::const_ty(db, value),
+            cx,
+            &mut GenerationDemands::default(),
+        );
+        if own.is_some() {
+            return own;
+        }
+    }
+    infer_body(db, owner).1.const_refs().find_map(|reference| {
+        let used = match reference {
+            ConstRef::Const(used) => {
+                ConstTyId::from_body(db, used.body(db).to_opt()?, Some(used.ty(db)), Some(used))
+            }
+            ConstRef::TraitConst { use_, .. } => const_ty_from_assoc_const_use(
+                db,
+                use_.with_inst(capture.specialize(db, use_.inst())),
+            )?,
+            ConstRef::InherentConst { use_, .. } => const_ty_from_inherent_const_use(db, use_)?,
+        };
+        const_frame_read(db, used)
+    })
+}
+
+fn const_frame_read_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _: crate::analysis::ty::const_ty::ConstTyId<'db>,
+) -> Option<TraitInstId<'db>> {
+    None
 }
