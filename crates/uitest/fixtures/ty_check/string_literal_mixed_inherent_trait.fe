@@ -1,0 +1,45 @@
+// `is_empty` is an inherent method of `DynString`, and a user trait gives it
+// to `String<N>`: which one runs depends on the literal's type, which the call
+// cannot wait for, so the call is refused whatever its signature and whatever
+// follows it.
+use core::abi::DynString
+trait IsE {
+    fn is_empty(self) -> bool
+}
+impl<const N: usize> IsE for String<N> {
+    fn is_empty(self) -> bool {
+        N == 99
+    }
+}
+trait OnlyDyn {
+    fn od(self) -> bool
+}
+impl OnlyDyn for DynString {
+    fn od(self) -> bool {
+        true
+    }
+}
+fn view(_ d: DynString) -> bool {
+    true
+}
+fn needs<T: OnlyDyn>(_ x: own T) -> bool {
+    x.od()
+}
+fn call_then_view() -> bool {
+    let s = ""
+    let e = s.is_empty()
+    e && view(s)
+}
+fn view_then_call() -> bool {
+    let s = ""
+    let v = view(s)
+    v && s.is_empty()
+}
+fn call_then_bound() -> bool {
+    let s = ""
+    let e = s.is_empty()
+    e && needs(s)
+}
+fn alone() -> bool {
+    "".is_empty()
+}

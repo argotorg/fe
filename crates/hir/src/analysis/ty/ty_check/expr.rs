@@ -188,15 +188,6 @@ pub(super) struct LiteralTrait<'db> {
     dyn_: bool,
 }
 
-/// Why a method both string types have gives no signature to type a call by.
-pub(super) enum SharedSignatureError {
-    /// A side has no usable method, or the call does not fit the method: the
-    /// call is checked on the default type, which reports it.
-    Unusable,
-    /// The two signatures differ.
-    Differ,
-}
-
 /// The types an open string literal can take as the receiver of a method:
 /// see `string_receiver_choice`.
 pub(super) enum StringReceiver<'db> {
@@ -208,9 +199,9 @@ pub(super) enum StringReceiver<'db> {
     InherentOnly(LiteralSide),
     /// Every type that has it has it from a trait.
     Traits(Vec<LiteralTrait<'db>>),
-    /// Both types have it, at least one as an inherent method; the literal's
-    /// default type.
-    Shared(TyId<'db>),
+    /// Both types have it, at least one as an inherent method: the call needs
+    /// the literal's type.
+    Shared,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2554,85 +2545,11 @@ impl<'db> TyChecker<'db> {
                         .collect(),
                 )
             }
-            // Both have it, and at least one as an inherent method. In core
-            // only `len` and `byte_at` are such methods (`ingots/core/src/
-            // string.fe` and `abi.fe`): inherent methods can be added only in
-            // the ingot that defines the type.
-            _ => StringReceiver::Shared(default),
+            // Both have it, and at least one as an inherent method. Core has no
+            // method both types have inherently; a user trait can give one type
+            // a method the other has inherently.
+            _ => StringReceiver::Shared,
         }
-    }
-
-    /// Whether a method that both string types have, one of them as an inherent
-    /// method, has different signatures on the two: parameter modes and types,
-    /// result, generics or effects. A method that a side cannot use counts as
-    /// the same.
-    fn literal_signatures_differ(
-        &mut self,
-        default: TyId<'db>,
-        method_name: IdentId<'db>,
-        span: DynLazySpan<'db>,
-    ) -> bool {
-        let db = self.db;
-        let Some(dyn_ty) = self.dyn_string_ty() else {
-            return false;
-        };
-        let mut signatures = Vec::with_capacity(2);
-        for ty in [default, dyn_ty] {
-            let snapshot = self.snapshot_state();
-            let signature = (|| {
-                let canonical = Canonicalized::new(db, ty);
-                let candidate = select_method_candidate(
-                    db,
-                    &canonical,
-                    method_name,
-                    self.env.scope(),
-                    self.env.assumptions(),
-                    None,
-                )
-                .map_err(|_| SharedSignatureError::Unusable)?;
-                let (func_ty, inst) =
-                    self.selected_method_ty(candidate, &canonical, ty, span.clone());
-                let callable = Callable::new(db, func_ty, span.clone(), inst)
-                    .map_err(|_| SharedSignatureError::Unusable)?;
-                if !callable.callable_def().is_method(db) {
-                    return Err(SharedSignatureError::Unusable);
-                }
-                let method_generics = callable.generic_args().len()
-                    > callable
-                        .callable_def()
-                        .offset_to_explicit_params_position(db);
-                // The arguments are typed before the call resolves, so a `mut`
-                // parameter, which needs its argument's mode, is not shared.
-                let modes = callable.input_modes(db);
-                if method_generics
-                    || !callable.effect_providers().is_empty()
-                    || callable.ret_shape(db).is_some()
-                    || modes
-                        .iter()
-                        .skip(1)
-                        .any(|(mode, _)| *mode == FuncParamMode::Mut)
-                {
-                    return Err(SharedSignatureError::Differ);
-                }
-                let params: Vec<_> = modes
-                    .iter()
-                    .skip(1)
-                    .map(|(mode, ty)| (*mode, self.normalize_ty(*ty)))
-                    .collect();
-                let ret = self.normalize_ty(callable.ret_ty(db));
-                if ret.has_var(db) || params.iter().any(|(_, ty)| ty.has_var(db)) {
-                    return Err(SharedSignatureError::Differ);
-                }
-                Ok((params, ret))
-            })();
-            self.rollback_state(snapshot);
-            match signature {
-                Ok(signature) => signatures.push(signature),
-                Err(SharedSignatureError::Differ) => return true,
-                Err(SharedSignatureError::Unusable) => return false,
-            }
-        }
-        signatures[0] != signatures[1]
     }
 
     /// `inst` with `new_self` for its `Self`.
@@ -4239,20 +4156,12 @@ impl<'db> TyChecker<'db> {
                 self.equate_ty(receiver_prop.ty, ty, receiver.span(self.body()).into());
                 selected_receiver_ty = ty;
             }
-            StringReceiver::Shared(default) => {
-                // The types give the method one signature, or the literal's type
-                // is needed. The call is checked on the default type, which
-                // reports a call that does not fit.
-                if self.literal_signatures_differ(
-                    default,
-                    method_name,
-                    receiver.span(self.body()).into(),
-                ) {
-                    self.refuse_string_literal_type(receiver_prop.ty, method_span);
-                    return ExprProp::invalid(self.db);
-                }
-                self.equate_ty(receiver_prop.ty, default, receiver.span(self.body()).into());
-                selected_receiver_ty = default;
+            StringReceiver::Shared => {
+                // One string type has the method inherently and the other gets it from
+                // a trait: which one runs depends on the literal's type, which the
+                // call cannot wait for.
+                self.refuse_string_literal_type(receiver_prop.ty, method_span);
+                return ExprProp::invalid(self.db);
             }
             StringReceiver::Traits(traits) if traits.len() == 1 => {
                 let chosen = &traits[0];
