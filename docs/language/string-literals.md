@@ -46,8 +46,9 @@ else the default, decides the literal. When several traits give the method
 name, the argument types and the literal's type choose among them once the
 whole body is checked, as for a receiver of a known type. An inherent method
 only one string type has makes the literal that type. `len` and `byte_at`,
-which both types have, run on the type the literal takes: the default when
-nothing else decides it, so `"ab".len()` uses `String<2>`. A result whose type
+which both types have through the trait `StringBytes`, are trait methods like
+any other: the default decides when nothing else does, so `"ab".len()` uses
+`String<2>`. A result whose type
 depends on the literal's type, such as an associated type that differs between
 the two, cannot be cast, called, indexed, matched, iterated, negated or used in
 an operator or a field access until the literal's type is decided; annotate the

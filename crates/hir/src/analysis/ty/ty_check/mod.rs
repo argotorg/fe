@@ -2678,10 +2678,6 @@ impl<'db> TyChecker<'db> {
                         self.push_diag(diag);
                     }
                 }
-                env::DeferredTask::LiteralReceiver(pending) => {
-                    // The fallback round resolves every such call.
-                    self.push_diag(BodyDiag::TypeMustBeKnown(pending.span));
-                }
                 env::DeferredTask::Negation(pending) => {
                     self.check_pending_negation(pending);
                 }
@@ -2713,18 +2709,12 @@ impl<'db> TyChecker<'db> {
         let mut progressed = true;
         while closure.is_none_or(|def| self.env.has_pending_method_in(def)) {
             if !progressed {
-                if closure.is_some() {
+                if fallback || closure.is_some() {
                     break;
                 }
-                if fallback {
-                    // Nothing else resolves: a literal a method call on it waits
-                    // for takes its default, and the call completes.
-                    if !self.settle_literal_receivers_by_default() {
-                        break;
-                    }
-                } else if !self.settle_literals_by_bounds() {
-                    // A literal that only `DynString` satisfies the bounds of is
-                    // that type before any literal takes its default.
+                // A literal that only `DynString` satisfies the bounds of is
+                // that type before any literal takes its default.
+                if !self.settle_literals_by_bounds() {
                     fallback = true;
                 }
             }
@@ -2788,18 +2778,6 @@ impl<'db> TyChecker<'db> {
                             progressed = true;
                         } else {
                             self.env.register_pending_method(pending);
-                        }
-                    }
-                    env::DeferredTask::LiteralReceiver(pending)
-                        if closure.is_some() && pending.site.closure != closure =>
-                    {
-                        self.env.register_pending_literal_receiver(pending);
-                    }
-                    env::DeferredTask::LiteralReceiver(pending) => {
-                        if self.resolve_literal_receiver(&pending) {
-                            progressed = true;
-                        } else {
-                            self.env.register_pending_literal_receiver(pending);
                         }
                     }
                     env::DeferredTask::Effects(pending)
@@ -3102,24 +3080,6 @@ impl<'db> TyChecker<'db> {
         });
         self.rollback_state(snapshot);
         unsatisfiable
-    }
-
-    /// Binds each open string literal that a method call on it waits for to
-    /// its default type, all against the same state. Returns whether any was
-    /// bound. It runs when nothing else resolves, so a literal that anything
-    /// else decides is not given its default here.
-    fn settle_literal_receivers_by_default(&mut self) -> bool {
-        let mut defaults = Vec::new();
-        for ty in self.env.pending_literal_receiver_tys() {
-            if let Some(literal) = self.open_literal_sort(ty) {
-                defaults.push((literal.var, literal.default));
-            }
-        }
-        let mut bound = false;
-        for (literal, default) in defaults {
-            bound |= self.table.unify(literal, default).is_ok();
-        }
-        bound
     }
 
     /// Whether each open string literal among `operands`, as unified so far,

@@ -18,6 +18,7 @@ use super::num::{Bounded, IntDowncast, IntWord, swap_bytes}
 use super::ops::WrappingAdd
 use super::option::Option
 use super::ptr::{self, MemBuffer, MemSpan}
+use super::string::StringBytes
 
 /// A value a `Hasher` reads, such as a `HashMap` key. Equal values must
 /// feed the same words, and so must values of two types with an `Eq`

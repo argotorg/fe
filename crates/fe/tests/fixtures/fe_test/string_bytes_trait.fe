@@ -1,0 +1,46 @@
+// `len` and `byte_at` of `String<N>` and `DynString` come from one core trait
+// in the prelude: no import, a `const fn` length, a generic bound.
+use core::abi::DynString
+
+const SHORT_LEN: usize = "abc".len()
+
+fn generic_len<T: StringBytes>(_ x: own T) -> usize {
+    x.len()
+}
+fn generic_byte<T: StringBytes>(_ x: own T) -> u8 {
+    x.byte_at(1)
+}
+
+#[test]
+fn inline_receiver() {
+    let s: String<4> = "abc"
+    assert(s.len() == 3)
+    assert(s.byte_at(0) == 0x61)
+    assert(s.byte_at(2) == 0x63)
+}
+
+#[test]
+fn dynamic_receiver() {
+    let d: DynString = "hello"
+    assert(d.len() == 5)
+    assert(d.byte_at(4) == 0x6f)
+}
+
+#[test]
+fn const_length() {
+    assert(SHORT_LEN == 3)
+}
+
+#[test]
+fn generic_bound() {
+    let d: DynString = "xyz"
+    assert(generic_len(d) == 3)
+    assert(generic_len("ab") == 2)
+    assert(generic_byte("ab") == 0x62)
+}
+
+#[test]
+fn trait_path_form() {
+    assert(StringBytes::len("abcd") == 4)
+    assert(StringBytes::byte_at("abcd", 3) == 0x64)
+}

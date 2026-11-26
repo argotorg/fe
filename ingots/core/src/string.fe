@@ -22,8 +22,29 @@ impl<const N: usize> String<N> {
         (bytes.word(0) >> (((32 - N) * 8) as u256)) as Self
     }
 
-    /// Returns the effective (unpadded) length in bytes.
-    pub const fn len(self) -> usize {
+    /// The text as a word's first `len` bytes, the rest zero, given the
+    /// string's `len()`.
+    pub(ingot) const fn text_word(self, _ len: usize) -> u256 {
+        padded_word(self) << (((32 - len) * 8) as u256)
+    }
+}
+
+/// The length and the bytes of a string, which `String<N>` and `DynString`
+/// both have. A method call on a string literal that this trait gives follows
+/// the rule of every trait method: the context decides the literal's type,
+/// else its default.
+pub trait StringBytes {
+    /// The effective length in bytes: for a `String<N>`, the length after the
+    /// zero padding.
+    const fn len(self) -> usize
+
+    /// The byte at `index` of the string's `len()` bytes. Panics if `index` is
+    /// not below `len()`.
+    fn byte_at(self, _ index: usize) -> u8
+}
+
+impl<const N: usize> StringBytes for String<N> {
+    const fn len(self) -> usize {
         let word = padded_word(self)
         if word == 0 {
             return 0
@@ -31,15 +52,7 @@ impl<const N: usize> String<N> {
         word_to_usize(32 - leading_zeros(word) / 8)
     }
 
-    /// The text as a word's first `len` bytes, the rest zero, given the
-    /// string's `len()`.
-    pub(ingot) const fn text_word(self, _ len: usize) -> u256 {
-        padded_word(self) << (((32 - len) * 8) as u256)
-    }
-
-    /// Returns the byte at `index` of the string's `len()` bytes, the text
-    /// after the zero padding. Panics if `index` is not below `len()`.
-    pub fn byte_at(self, _ index: usize) -> u8 {
+    fn byte_at(self, _ index: usize) -> u8 {
         let len = self.len()
         if index >= len {
             index_out_of_bounds()

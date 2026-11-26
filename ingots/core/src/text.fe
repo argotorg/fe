@@ -15,6 +15,7 @@ use super::option::Option
 use super::panic_code
 use super::panics::PANIC_ASSERT
 use super::ptr::{self, MemArray, MemBuffer, MemSlice, MemSpan}
+use super::string::StringBytes
 
 /// Text the parsers read in place, and a span's searches look for: a
 /// literal, a `String<N>`, a `DynString`, a `MemSpan` or a `MemBuffer`.
