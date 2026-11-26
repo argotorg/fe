@@ -23,16 +23,33 @@ use crate::analysis::{
 };
 
 use super::{
+    adt_def::AdtDef,
     const_ty::{ConstBodyLowering, ConstTyData, LoweringContext, ty_is_fully_ground},
     diagnostics::{ImplDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag},
     normalize::normalize_ty,
     shape::{lower_shape_list, lower_shape_value, param_product_diags, shape_value_diags},
     trait_resolution::{PredicateListId, TraitSolveCx, WellFormedness, check_ty_wf},
-    ty_def::{InvalidCause, Kind, ShapeMode, TyData, TyId},
+    ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
     ty_lower::{lower_hir_ty, lower_hir_ty_in_mode, lower_kind_in_bounds},
 };
 use crate::core::semantic::mut_grant;
 use crate::visitor::prelude::LazyTraitRefSpan;
+
+/// The first record or enum in `ty`, outermost first, that `viewer` cannot see.
+fn first_invisible_adt<'db>(
+    db: &'db dyn HirAnalysisDb,
+    viewer: Viewer<'db>,
+    ty: TyId<'db>,
+) -> Option<AdtDef<'db>> {
+    let (base, args) = ty.decompose_ty_app(db);
+    if let TyData::TyBase(TyBase::Adt(adt)) = base.data(db)
+        && !viewer.sees(db, adt.scope(db))
+    {
+        return Some(*adt);
+    }
+    args.iter()
+        .find_map(|arg| first_invisible_adt(db, viewer, *arg))
+}
 
 /// The generic arguments written on `path`'s last segment, with their spans.
 pub(crate) fn path_generic_args<'db>(
@@ -780,6 +797,23 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
             self.assumptions,
             self.const_bodies,
         );
+
+        // The type of a record's field that generated code splices by name has
+        // no path to check. Over the header's parameters it stands for the
+        // field's declared type at the header's arguments, and the code that
+        // is generated may name only what it can see: a private type of
+        // another module is refused, as it is where the header is ground.
+        if matches!(hir_ty.data(self.db), TypeKind::AuthoredField(_))
+            && ty.has_param(self.db)
+            && let Some(adt) = first_invisible_adt(self.db, self.viewer_at(ctxt.scope()), ty)
+            && let Some(ident) = adt.adt_ref(self.db).name(self.db)
+            && let Some(span) = ctxt.span()
+        {
+            let definition = adt.adt_ref(self.db).name_span(self.db);
+            self.diags
+                .push(PathResDiag::Invisible(span.into(), ident, Some(definition)).into());
+            return;
+        }
 
         // This will report errors with nested types that are fundamental to the nested type,
         // but will not catch cases where the nested type is fine on its own, but incompatible

@@ -8256,3 +8256,19 @@ fn test_cli_test_unsafe_trust_judges_the_provider_that_a_dependencys_header_runs
     let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app_ok")]);
     assert_eq!(exit_code, 0, "trusting `u` allows it:\n{output}");
 }
+
+#[test]
+fn a_field_type_over_header_parameters_must_be_visible_where_it_is_generated() {
+    // `Hidden` is private to module `m`, and the generated method is public in
+    // the root. A generic header is refused as the ground header and the
+    // handwritten method are.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("field_type_private_under_generic_header.fe"),
+    ]);
+    assert_ne!(exit, 0, "expected a refusal:\n{output}");
+    assert!(
+        output.contains("`Hidden` is not visible"),
+        "expected the private field type to be refused:\n{output}"
+    );
+}
