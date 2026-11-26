@@ -635,6 +635,9 @@ pub enum BodyDiag<'db> {
         assoc_types: Vec<(IdentId<'db>, TyId<'db>)>,
         /// The diagnostic of the check for the implementation.
         inner: Box<FuncBodyDiag<'db>>,
+        /// Whether `inner` is a failure of evaluating the default, not of
+        /// type checking it.
+        evaluation: bool,
     },
     TypeMismatch {
         span: DynLazySpan<'db>,

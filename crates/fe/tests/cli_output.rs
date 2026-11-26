@@ -8213,7 +8213,8 @@ fn an_inherited_default_constant_is_evaluated_for_the_implementations_that_inher
         let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
         assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
         assert!(
-            output.contains("division by zero in const context")
+            output.contains("cannot be evaluated for this implementation")
+                && output.contains("division by zero in const context")
                 && output.contains("`C` is inherited here"),
             "{name}: expected the failure at the implementation:\n{output}"
         );

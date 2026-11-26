@@ -233,13 +233,18 @@ pub(super) fn check_inherited_defaults<'db>(
         } else {
             Vec::new()
         };
-        for diag in checked.iter().chain(&evaluated) {
+        let found = checked
+            .iter()
+            .map(|diag| (diag, false))
+            .chain(evaluated.iter().map(|diag| (diag, true)));
+        for (diag, evaluation) in found {
             diags.push(
                 BodyDiag::InheritedConstDefault {
                     primary: implementation.span().trait_ref().into(),
                     const_name: inherited.name,
                     assoc_types: assoc_types.clone(),
                     inner: Box::new(diag.clone()),
+                    evaluation,
                 }
                 .into(),
             );
