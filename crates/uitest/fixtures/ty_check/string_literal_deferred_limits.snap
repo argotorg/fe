@@ -43,6 +43,7 @@ error[8-0151]: `note` needs `Log` after its closure's effects are inferred
    │               ---^^^^^^^^^^^
    │               │  │
    │               │  this call's effects are known only after the closure's body is checked
+   │               │  the call waits for the type of this literal; annotate it as `String<N>` or `DynString`
    │               this closure's effects are inferred from its body, without `Log`
    │
    = annotate the types the call depends on in the closure's body, so that it resolves there
