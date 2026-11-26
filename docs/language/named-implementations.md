@@ -254,14 +254,15 @@ refused at the operand (2-0022). As in a block, a choice is a candidate and
 never an assumption: a chosen implementation whose conditions fail is an
 error, and two operands that could answer one goal are refused.
 
-A module's `with` never decides a type. Associated types and aliases normalize
-through the ordinary implementations, and a named implementation that would
-change one is refused (5-0005). A constant is one value, fixed under the frame
-of the module that declares it. A type that uses a constant whose value reads a
-chosen implementation of a module frame is refused (8-0138), whichever module
-writes the type and whether the constant is named directly, in braces, through
-another constant, or as an associated or inherent constant. A constant function
-may read the frame, and its value is the one it returns:
+A module's `with` does not change an associated type: a named implementation
+that would change one is refused (5-0005). A constant is one value, fixed under
+the frame of the module that declares it. A type that names a constant whose
+value reads a frame's choice is refused (8-0138), whichever module writes the
+type and whether the constant is named directly, in braces, through another
+constant, or as an associated or inherent constant. A constant function called
+inside a type runs under the frame of its own module, so such a type can follow
+that frame, as the `sealed` example shows; the block form behaves the same.
+A constant function may read the frame, and its value is the one it returns:
 
 ```fe
 struct Array<const N: u256> {}
@@ -304,7 +305,10 @@ const fn shown<H: Holder>() -> u256 { <H::A as Show>::show() }
 Here `Show` is a trait with `const fn show() -> u256`, `Foo` implements it
 with 100, and `Loud` is a named implementation for `Foo` with 70.
 `shown<framed::Slot>()` returns 70 even though `shown` is written outside the
-module, and `Foo::show()` outside the module still returns 100.
+module, and `Foo::show()` outside the module still returns 100. A closed
+projection written outside the module,
+`<<framed::Slot as Holder>::A as Show>::show()`, reads the ordinary
+implementation and returns 100.
 
 Some code is generated from the program, and a frame does not reach all of
 it. The `Drop` implementation of a type is a fact of the type. A panic
@@ -331,11 +335,6 @@ Limits:
   signature of a framed module, takes the ordinary value: the default
   `Array<const N: u256 = { Item::price() }>` is `Array<100>` in the signature
   of a function of `shop`, not `Array<70>`.
-- A named implementation with a const parameter whose default nothing applies
-  is refused with 6-0003, in a block and in a module alike.
-- The checks of a contract's effect keys, the Solidity type names that an ABI
-  description reads, and the field check of an `#[abi]` struct use the
-  ordinary implementations. A choice of a module is not seen there.
 - The language server does not resolve the names in a module's `with`: hover,
   go to definition and rename do not apply to them, and the formatter keeps
   the operands on one line.
