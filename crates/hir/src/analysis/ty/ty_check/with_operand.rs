@@ -35,32 +35,6 @@ use crate::hir_def::{GenericParamOwner, PathKind};
 use crate::span::DynLazySpan;
 use crate::{hir_def::IdentId, hir_def::PathId, hir_def::scope_graph::ScopeId};
 
-/// The kind of place an operand is written in. The classifier answers the same
-/// question at every site: what a name is. The kind says which of those
-/// meanings the site can use (`SiteKind::accepts`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum SiteKind {
-    /// An operand of a `with` block: providers and values are meaningful, and
-    /// local bindings are in scope.
-    Block,
-    /// An operand of a module's `with` declaration: implementations only.
-    Module,
-}
-
-impl SiteKind {
-    /// Whether a site can use a name that is not an implementation. A block
-    /// provides providers and values, and checks any other name as an
-    /// expression, which reports what it is. A module chooses implementations
-    /// only. A site that takes a proof parameter, or a use that supplies a
-    /// proof, adds its class here.
-    pub(super) fn accepts(self, _class: &OperandClass<'_>) -> bool {
-        match self {
-            SiteKind::Block => true,
-            SiteKind::Module => false,
-        }
-    }
-}
-
 /// Where an operand is written: what its names resolve in and what is already
 /// chosen around it.
 pub(super) struct OperandSite<'db> {
@@ -245,22 +219,6 @@ fn provider_type<'db>(
         Ok(Some(_))
     )
     .then(|| (ty, ty.as_scope(db).and_then(|scope| scope.name_span(db))))
-}
-
-/// What kind of name a type that no implementation operand names is, for a
-/// site that cannot use it: a derive provider type, or a plain type.
-pub(super) fn type_kind_name<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    ty: TyId<'db>,
-) -> &'static str {
-    let assumptions = PredicateListId::empty_list(db);
-    let ty = normalize_ty(db, ty, scope, assumptions);
-    if matches!(provider_hints(db, scope, assumptions, ty), Ok(Some(_))) {
-        "provider type"
-    } else {
-        "type"
-    }
 }
 
 /// What the operand `path` means, written at `site`. The caller reads the
@@ -621,11 +579,6 @@ pub(super) struct OperandList<'db> {
 impl<'db> OperandList<'db> {
     pub(super) fn new() -> Self {
         Self::default()
-    }
-
-    /// Records an operand admitted before the one being read.
-    pub(super) fn earlier(&mut self, entry: ChosenImpl<'db>, span: DynLazySpan<'db>) {
-        self.listed.push((entry, span));
     }
 
     /// Admits `entry`, the implementation of the operand at `span`, whose

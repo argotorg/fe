@@ -31,7 +31,7 @@ use crate::{
             trait_lower::lower_impl_trait_header,
             trait_resolution::{
                 ChoiceEntry, ChosenImpl, ChosenImpls, DeclaredOperand, PredicateListId,
-                TraitSolveCx, goal_holds,
+                TraitSolveCx, common_choice_goal, goal_holds,
             },
             ty_def::{TyData, TyId},
         },
@@ -42,13 +42,19 @@ use crate::{
 
 use super::BodyOwner;
 use super::with_operand::{
-    BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
-    classify_with_operand, type_kind_name,
+    BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues,
+    classify_with_operand,
 };
 
 /// The frame of a module: its parent's, extended by its own declaration.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct ModuleChoices<'db> {
+    /// The frame of the parent module.
+    outer: Option<ChosenImpls<'db>>,
+    /// The entry of each operand of the declaration, by operand index. `None`:
+    /// the operand names no implementation, and `module_with_check` reports it.
+    entries: Vec<Option<DeclaredOperand<'db>>>,
+    /// `outer` extended by `entries`.
     pub choices: Option<ChosenImpls<'db>>,
 }
 
@@ -174,22 +180,34 @@ fn module_choices_query<'db>(
         .parent_module(db)
         .and_then(|parent| module_choices(db, parent).choices);
     let Some(declaration) = declaration_of(db, scope) else {
-        return ModuleChoices { choices: outer };
-    };
-    let mut current = outer;
-    for (index, operand) in declaration.operands(db).iter().enumerate() {
-        // An operand that the parser dropped, or that names no implementation,
-        // adds no entry: `module_with_check` reports it.
-        let Some((trait_, self_ty)) = operand
-            .to_opt()
-            .and_then(|path| operand_header(db, scope, path))
-        else {
-            continue;
+        return ModuleChoices {
+            outer,
+            entries: Vec::new(),
+            choices: outer,
         };
-        let operand = DeclaredOperand::new(db, declaration, index as u32, trait_, self_ty);
-        current = Some(ChosenImpls::push_declared(db, current, operand));
+    };
+    // An operand that the parser dropped, or that names no implementation,
+    // has no entry.
+    let entries: Vec<_> = declaration
+        .operands(db)
+        .iter()
+        .enumerate()
+        .map(|(index, operand)| {
+            let (trait_, self_ty) = operand_header(db, scope, operand.to_opt()?)?;
+            Some(DeclaredOperand::new(
+                db,
+                declaration,
+                index as u32,
+                trait_,
+                self_ty,
+            ))
+        })
+        .collect();
+    ModuleChoices {
+        outer,
+        choices: frame_with(db, outer, &entries),
+        entries,
     }
-    ModuleChoices { choices: current }
 }
 
 /// What a declared operand chose, when a goal of its trait asked.
@@ -207,18 +225,14 @@ pub(crate) struct DeclaredChoice<'db> {
     pub duplicate_of: Option<(DynLazySpan<'db>, TraitInstId<'db>, bool)>,
 }
 
-/// The choices of `frame` that come before operand `index` of `with`.
-fn frame_before<'db>(
+/// `frame` extended by the operands that have an entry.
+fn frame_with<'db>(
     db: &'db dyn HirAnalysisDb,
     frame: Option<ChosenImpls<'db>>,
-    with: WithItem<'db>,
-    index: usize,
+    entries: &[Option<DeclaredOperand<'db>>],
 ) -> Option<ChosenImpls<'db>> {
-    frame.and_then(|frame| {
-        frame.retain(db, |_, entry| {
-            !matches!(entry, ChoiceEntry::Declared(operand)
-                if operand.with(db) == with && operand.index(db) as usize >= index)
-        })
+    entries.iter().flatten().fold(frame, |frame, &operand| {
+        Some(ChosenImpls::push_declared(db, frame, operand))
     })
 }
 
@@ -289,38 +303,30 @@ fn refusal_diags<'db>(
         // is still read.
         OperandMeaning::Refused { diags, .. } if !silent => diags,
         OperandMeaning::Refused { .. } => Vec::new(),
+        // A module chooses implementations only: any other name is refused
+        // with what it is.
         OperandMeaning::NotAnImplementation(class) => {
-            if SiteKind::Module.accepts(&class) {
-                return Vec::new();
-            }
-            let name = path.ident(db).to_opt();
-            let kind = match &class {
-                OperandClass::ProviderType(ty, alias) => {
-                    Some(match type_kind_name(db, scope, *ty) {
-                        "type" if alias.is_some() => "type alias",
-                        kind => kind,
-                    })
-                }
-                OperandClass::Other(Some(res)) => Some(res.kind_name()),
+            let empty = PredicateListId::empty_list(db);
+            let kind = match class {
+                OperandClass::ProviderType(_, alias) => Ok(if alias.is_some() {
+                    "type alias"
+                } else {
+                    "type"
+                }),
+                OperandClass::Other(Some(res)) => Ok(res.kind_name()),
                 // A value, or a name that resolved to nothing as a type: it
                 // is named as an expression would name it.
-                OperandClass::Value | OperandClass::Other(None) => None,
+                OperandClass::Value | OperandClass::Other(None) => {
+                    resolve_path(db, path, scope, empty, true)
+                        .or_else(|_| resolve_path(db, path, scope, empty, false))
+                        .map(|res| res.kind_name())
+                }
             };
-            if let Some(kind) = kind {
-                // It names something, and it is not an implementation.
-                return name
+            match kind {
+                Ok(kind) => path
+                    .ident(db)
+                    .to_opt()
                     .map(|name| PathResDiag::ExpectedImpl(operand_span.into(), name, kind).into())
-                    .into_iter()
-                    .collect();
-            }
-            let empty = PredicateListId::empty_list(db);
-            match resolve_path(db, path, scope, empty, true)
-                .or_else(|_| resolve_path(db, path, scope, empty, false))
-            {
-                Ok(res) => name
-                    .map(|name| {
-                        PathResDiag::ExpectedImpl(operand_span.into(), name, res.kind_name()).into()
-                    })
                     .into_iter()
                     .collect(),
                 // It names nothing: the path is reported as it is anywhere.
@@ -345,8 +351,8 @@ pub(crate) fn declared_choice<'db>(
     let with = operand.with(db);
     let index = operand.index(db) as usize;
     let scope = module_of(db, with.scope());
-    let frame = module_choices(db, scope).choices;
-    let outer = frame_before(db, frame, with, index);
+    let module = module_choices(db, scope);
+    let outer = frame_with(db, module.outer, &module.entries[..index]);
     let path = with.operands(db)[index]
         .to_opt()
         .expect("an operand with an entry has a path");
@@ -377,24 +383,17 @@ pub(crate) fn declared_choice<'db>(
         .expect("a pushed choice is the last item");
 
     // An operand that answers the same goal as an earlier one is not chosen.
-    let mut list = OperandList::new();
-    for earlier in frame.into_iter().flat_map(|frame| frame.items(db).iter()) {
-        if let ChoiceEntry::Declared(earlier) = earlier
-            && earlier.with(db) == with
-            && (earlier.index(db) as usize) < index
-            && let Some(earlier_choice) = declared_choice(db, *earlier).choice
+    let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(outer);
+    for earlier in module.entries[..index].iter().flatten() {
+        if let Some(earlier_choice) = declared_choice(db, *earlier).choice
+            && let Some((goal, possible)) = common_choice_goal(db, cx, earlier_choice, entry)
         {
             let span = with.span().operands().operand(earlier.index(db) as usize);
-            list.earlier(earlier_choice, span.into());
+            return DeclaredChoice {
+                duplicate_of: Some((span.into(), goal, possible)),
+                ..none(Vec::new())
+            };
         }
-    }
-    let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(outer);
-    let span = with.span().operands().operand(index).into();
-    if let Err(duplicate) = list.admit(db, cx, entry, 0, conditions.clone(), span) {
-        return DeclaredChoice {
-            duplicate_of: Some(duplicate),
-            ..none(Vec::new())
-        };
     }
     DeclaredChoice {
         choice: Some(entry),
@@ -452,9 +451,11 @@ fn module_with_check_query<'db>(
     let Some(with) = declaration_of(db, scope) else {
         return Vec::new();
     };
-    let frame = module_choices(db, scope).choices;
+    let module = module_choices(db, scope);
     let mut diags: Vec<FuncBodyDiag<'db>> = Vec::new();
     let mut list = OperandList::new();
+    // The position of the next entry in the frame.
+    let mut position = module.outer.map_or(0, |outer| outer.items(db).len());
 
     for (index, operand) in with.operands(db).iter().enumerate() {
         let Some(path) = operand.to_opt() else {
@@ -462,28 +463,16 @@ fn module_with_check_query<'db>(
             continue;
         };
         let span: DynLazySpan<'db> = with.span().operands().operand(index).into();
-        let entry = frame.and_then(|frame| {
-            frame
-                .items(db)
-                .iter()
-                .enumerate()
-                .find_map(|(position, entry)| match entry {
-                    ChoiceEntry::Declared(operand)
-                        if operand.with(db) == with && operand.index(db) as usize == index =>
-                    {
-                        Some((position, *operand))
-                    }
-                    _ => None,
-                })
-        });
-        let Some((position, operand)) = entry else {
+        let Some(operand) = module.entries[index] else {
             // No entry: the operand names no implementation, and is
             // classified as a block would.
-            let outer = frame_before(db, frame, with, index);
+            let outer = frame_with(db, module.outer, &module.entries[..index]);
             let meaning = classify_operand(db, scope, with, index, path, outer);
             diags.extend(refusal_diags(db, scope, with, index, path, meaning));
             continue;
         };
+        let at = position;
+        position += 1;
         let chosen = declared_choice(db, operand);
         diags.extend(chosen.diags.iter().cloned());
         if let Some((first, goal, possible)) = &chosen.duplicate_of {
@@ -498,14 +487,14 @@ fn module_with_check_query<'db>(
             );
         }
         if chosen.choice.is_some() {
-            list.opening(position, chosen.conditions.clone(), span);
+            list.opening(at, chosen.conditions.clone(), span);
         }
     }
 
     // An opening's conditions are proved once the whole list is read, with the
     // outer frame and every other operand of the declaration, without the
     // opening itself, whatever the order of the operands.
-    if let Some(list_choices) = frame {
+    if let Some(list_choices) = module.choices {
         for (goal, context, span) in list.obligations(db, list_choices) {
             let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(context);
             if !goal_holds(db, cx, goal) {

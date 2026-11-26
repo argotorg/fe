@@ -31,7 +31,7 @@ use super::{
     stmt::ForLoopCall,
     ty_may_be_code_region_token,
     with_operand::{
-        BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
+        BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues,
         classify_with_operand,
     },
 };
@@ -2469,7 +2469,6 @@ impl<'db> TyChecker<'db> {
                     continue;
                 }
                 Some(OperandMeaning::NotAnImplementation(class)) => {
-                    debug_assert!(SiteKind::Block.accepts(&class));
                     // A type is a derive provider candidate; any other name
                     // is checked as an expression.
                     if let OperandClass::ProviderType(provider_ty, alias_scope) = class
