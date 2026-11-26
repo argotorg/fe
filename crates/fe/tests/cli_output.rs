@@ -8223,3 +8223,21 @@ fn test_cli_test_unsafe_trust_judges_the_unsafe_code_that_a_provider_runs() {
         assert_eq!(exit_code, 0, "{app}: expected acceptance:\n{output}");
     }
 }
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_the_provider_that_a_dependencys_header_runs() {
+    // `t`, which `app` trusts, writes `impl S with (u::Evil)`, and `Evil::derive`
+    // runs `unsafe`. `t` does not trust `u`, so no package of the build does,
+    // although the header is written in a dependency and not in the package
+    // being checked.
+    let fixture = "unsafe_trust_provider_in_dependency";
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("error[16-0015]") && output.contains("`u`, which is not allowed to use"),
+        "expected a trust error naming `u`:\n{output}"
+    );
+    // The same build with `t` trusting `u`.
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app_ok")]);
+    assert_eq!(exit_code, 0, "trusting `u` allows it:\n{output}");
+}

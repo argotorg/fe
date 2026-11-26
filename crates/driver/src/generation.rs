@@ -1624,7 +1624,9 @@ fn evaluate_provider_instance<'db>(
     let mut validation_diagnostics = Vec::new();
     let mut unresolved = Vec::new();
     let mut untrusted_use = None;
-    let requester = db.top_mod(file);
+    // The build's trust, built once for the evaluation: a header in a
+    // dependency is judged by it as one in the package being checked.
+    let trust = hir::analysis::semantic::access::EvaluationTrust::new(db, db.top_mod(file));
     {
         use hir::analysis::semantic::access::SemanticAccessCheckResult;
         let mut pending = std::collections::VecDeque::from([instance]);
@@ -1636,10 +1638,9 @@ fn evaluate_provider_instance<'db>(
             match hir::analysis::semantic::access::semantic_access_check_query(db, current) {
                 SemanticAccessCheckResult::Ok { .. } => {
                     if untrusted_use.is_none() {
-                        untrusted_use = hir::analysis::semantic::access::untrusted_unsafe_use_in_evaluated_body(
-                            db, requester, current,
-                        )
-                        .map(|voucher| voucher.to_complete(db));
+                        untrusted_use = trust
+                            .untrusted_use(db, current)
+                            .map(|voucher| voucher.to_complete(db));
                     }
                     for callee in current.callees(db) {
                         pending.push_back(hir::analysis::semantic::SemanticInstance::new(
