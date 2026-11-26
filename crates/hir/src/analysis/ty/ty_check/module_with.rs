@@ -129,18 +129,20 @@ impl<'db> OperandValues<'db> for ModuleOperands<'db> {
     }
 }
 
-/// The trait that the operand `path` can answer, known from names and deferred
-/// lowering alone: a named implementation's trait, or the trait of an opening
-/// `<Type as Trait>`. `None`: the operand names neither, and the declaration
-/// reports it (`module_with_check`).
-fn operand_trait<'db>(
+/// The trait that the operand `path` can answer and the self type it serves,
+/// known from names and deferred lowering alone: a named implementation's
+/// header, or the goal of an opening `<Type as Trait>`. `None`: the operand
+/// names neither, and the declaration reports it (`module_with_check`).
+fn operand_header<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     path: PathId<'db>,
-) -> Option<Trait<'db>> {
+) -> Option<(Trait<'db>, TyId<'db>)> {
     if let ImplNameRes::Found(implementation) = resolve_impl_name(db, path, scope) {
-        return lower_impl_trait_header(db, implementation)
-            .map(|header| header.trait_inst(db).def(db));
+        return lower_impl_trait_header(db, implementation).map(|header| {
+            let inst = header.trait_inst(db);
+            (inst.def(db), inst.self_ty(db))
+        });
     }
     if path.len(db) != 1 || !matches!(path.kind(db), PathKind::QualifiedType { .. }) {
         return None;
@@ -156,7 +158,7 @@ fn operand_trait<'db>(
         return None;
     };
     match ty.data(db) {
-        TyData::QualifiedTy(goal) => Some(goal.def(db)),
+        TyData::QualifiedTy(goal) => Some((goal.def(db), goal.self_ty(db))),
         _ => None,
     }
 }
@@ -180,13 +182,13 @@ fn module_choices_query<'db>(
     for (index, operand) in declaration.operands(db).iter().enumerate() {
         // An operand that the parser dropped, or that names no implementation,
         // adds no entry: `module_with_check` reports it.
-        let Some(trait_) = operand
+        let Some((trait_, self_ty)) = operand
             .to_opt()
-            .and_then(|path| operand_trait(db, scope, path))
+            .and_then(|path| operand_header(db, scope, path))
         else {
             continue;
         };
-        let operand = DeclaredOperand::new(db, declaration, index as u32, trait_);
+        let operand = DeclaredOperand::new(db, declaration, index as u32, trait_, self_ty);
         current = Some(ChosenImpls::push_declared(db, current, operand));
     }
     ModuleChoices { choices: current }

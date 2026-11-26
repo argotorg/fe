@@ -512,6 +512,58 @@ const fn f() -> u256 { outer::m::f() }
     );
 }
 
+/// The traits `Show` and `Show2` both declare `show`. The operand answers
+/// `Show2` for `Arr<100>`, so `Foo::show()` in the constant is answered by
+/// `Show` for `Foo` and never asks the operand, which reads the constant.
+#[test]
+fn a_declared_operand_for_another_type_is_not_chosen_by_a_method_of_the_same_name() {
+    values(
+        r#"
+pub struct Arr<const N: u256> {}
+pub struct Foo {}
+pub trait Show { const fn show() -> u256 }
+pub trait Show2 { const fn show() -> u256 }
+impl Show for Foo { const fn show() -> u256 { 100 } }
+pub mod m {
+    use super::*
+    with (<Arr<100> as Show2>)
+    pub const K: u256 = Foo::show()
+    impl Show2 for Arr<{ K }> { const fn show() -> u256 { 2 } }
+    pub const fn f() -> u256 { K }
+}
+const fn f() -> u256 { m::f() }
+"#,
+        &[("f", 100)],
+    );
+}
+
+/// The operand answers `Show` for `Foo`, the type that the constant calls
+/// `show` on, so the call chooses it: the outer frame says 70, the operand
+/// restores the ordinary implementation.
+#[test]
+fn a_declared_operand_for_the_receivers_type_is_chosen_by_a_method_of_its_trait() {
+    values(
+        r#"
+pub struct Foo {}
+pub trait Show { const fn show() -> u256 }
+impl Show for Foo { const fn show() -> u256 { 100 } }
+pub impl Show for Foo as Seventy { const fn show() -> u256 { 70 } }
+pub mod outer {
+    use super::*
+    with (Seventy)
+    pub mod m {
+        use super::*
+        with (<Foo as Show>)
+        pub const K: u256 = Foo::show()
+        pub const fn f() -> u256 { K }
+    }
+}
+const fn f() -> u256 { outer::m::f() }
+"#,
+        &[("f", 100)],
+    );
+}
+
 /// An implementation header that reads a constant whose own check asks the
 /// operand's trait: with an alternative answer the states alternate. Closed
 /// when a framed constant in an implementation header must be a literal

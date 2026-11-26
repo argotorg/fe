@@ -39,6 +39,7 @@ mod table_solver;
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
     match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
+    self_ty_may_match,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
@@ -185,6 +186,12 @@ pub struct DeclaredOperand<'db> {
     /// The trait the operand can answer, known without lowering its arguments.
     #[returns(copy)]
     pub trait_: Trait<'db>,
+    /// The self type of the operand's implementation, as its header states it
+    /// before anything is evaluated: an unevaluated constant stays unevaluated.
+    /// A goal or a receiver of a type that it cannot match never chooses the
+    /// operand (`self_ty_may_match`).
+    #[returns(copy)]
+    pub self_ty: TyId<'db>,
 }
 
 impl<'db> TyFoldable<'db> for DeclaredOperand<'db> {
@@ -219,18 +226,18 @@ impl<'db> ChoiceEntry<'db> {
         }
     }
 
-    /// The implementation the entry holds, for a reader that wants the traits
-    /// `wants` accepts. A declared operand is chosen only when its trait is
-    /// wanted, so a reader never forces an operand it cannot use.
+    /// The implementation the entry holds, for a reader that wants an operand
+    /// of the trait and self type `wants` accepts. A declared operand is chosen
+    /// only then, so a reader never forces an operand it cannot use.
     pub fn implementation_if(
         self,
         db: &'db dyn HirAnalysisDb,
-        wants: impl FnOnce(Trait<'db>) -> bool,
+        wants: impl FnOnce(Trait<'db>, TyId<'db>) -> bool,
     ) -> Option<ChosenImpl<'db>> {
         match self {
             Self::Impl(choice) => Some(choice),
             Self::Provider(_) => None,
-            Self::Declared(operand) => wants(operand.trait_(db))
+            Self::Declared(operand) => wants(operand.trait_(db), operand.self_ty(db))
                 .then(|| declared_choice(db, operand).choice)
                 .flatten(),
         }

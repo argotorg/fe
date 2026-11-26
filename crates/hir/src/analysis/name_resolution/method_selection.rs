@@ -19,7 +19,7 @@ use crate::analysis::{
         trait_resolution::{
             ChoiceEntry, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
             TraitSolveCx, generation::GenerationRequest, goal_query_has_solution,
-            is_goal_query_satisfiable,
+            is_goal_query_satisfiable, self_ty_may_match,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -650,11 +650,14 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             .choices
             .map(|choices| choices.items(self.db).clone())
             .unwrap_or_default();
-        // A declared operand is chosen only when its trait declares the method.
-        let (db, method_name) = (self.db, self.method_name);
+        // A declared operand is chosen only when its trait declares the method
+        // and its self type can be the receiver's. An operator is looked up the
+        // same way.
+        let (db, method_name, receiver) = (self.db, self.method_name, self.receiver.original());
         for choice in chosen.into_iter().filter_map(|entry| {
-            entry.implementation_if(db, |trait_| {
+            entry.implementation_if(db, |trait_, self_ty| {
                 trait_.method_defs(db).contains_key(&method_name)
+                    && self_ty_may_match(db, self_ty, receiver)
             })
         }) {
             self.insert_chosen_trait_method_cand(choice);

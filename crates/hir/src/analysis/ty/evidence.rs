@@ -2193,7 +2193,7 @@ fn prove_in<'db>(
                         .source_choices?
                         .items(db)
                         .get(index)?
-                        .implementation_if(db, |_| true)?
+                        .implementation_if(db, |_, _| true)?
                         .applied?;
                     (source.origin(db) == choice.template.origin(db))
                         .then(|| source.constraints(db))

@@ -53,7 +53,7 @@ use crate::analysis::{
         },
         trait_resolution::{
             ChoiceEntry, GoalSatisfiability, PredicateListId, TraitSolveCx,
-            constraint::collect_constraints, is_goal_satisfiable,
+            constraint::collect_constraints, is_goal_satisfiable, self_ty_may_match,
         },
         ty_def::{InvalidCause, Kind, ShapeMode, TyBase, TyData, TyId},
         ty_error::emit_invalid_ty_error,
@@ -2656,9 +2656,12 @@ fn select_assoc_const_candidate<'db>(
             .with_assumptions(assumptions)
             .with_choices(choices);
         // A declared operand is chosen only when its trait declares the
-        // constant.
+        // constant and its self type can be the receiver's.
         for choice in chosen.into_iter().filter_map(|entry| {
-            entry.implementation_if(db, |trait_| trait_.const_(db, name).is_some())
+            entry.implementation_if(db, |trait_, self_ty| {
+                trait_.const_(db, name).is_some()
+                    && self_ty_may_match(db, self_ty, receiver.original())
+            })
         }) {
             let implementation = choice.implementation();
             let declared = implementation.trait_(db);
