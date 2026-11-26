@@ -8056,6 +8056,21 @@ fn a_where_fragment_may_name_a_generic_parameter_of_the_template_that_splices_it
         assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
     }
 
+    // The binder is a generic parameter of an item around the `where ${w}`
+    // hole, nothing else: `a<T>` does not give `T` to `b`, whichever of the two
+    // comes first, and `b` does not capture the `struct T` of the destination.
+    for name in [
+        "where_open_name_of_other_function.fe",
+        "where_open_name_of_other_function_later.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("quoted open name `T` has no enclosing binder"),
+            "{name}: expected the open name to be refused:\n{output}"
+        );
+    }
+
     // A name that no enclosing binder declares keeps its diagnostic, in a
     // where fragment as in an expression.
     let (output, exit) = run_fe_main(&[
