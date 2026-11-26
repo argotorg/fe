@@ -2965,7 +2965,7 @@ where
 impl DiagnosticVoucher for BodyDiag<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
         let error_code = GlobalErrorCode::new(DiagnosticPass::TyCheck, self.local_code());
-        let severity = Severity::Error;
+        let severity = self.severity();
 
         match self {
             Self::TypeMismatch {
@@ -4560,7 +4560,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::MutAccessCopied { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Warning,
+                severity,
                 message: "`var` copies a `mut` access".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,

@@ -20,6 +20,7 @@ use crate::{
     core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
+use common::diagnostics::Severity;
 use either::Either;
 use ruint::aliases::U256;
 use salsa::SalsaValue;
@@ -34,9 +35,13 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
-    /// Whether this reports something that does not stop compilation.
-    pub(crate) fn is_warning(&self) -> bool {
-        matches!(self, Self::Body(BodyDiag::MutAccessCopied { .. }))
+    /// How serious this is: the severity its completed diagnostic has. Only a
+    /// body diagnostic can be a warning.
+    pub(crate) fn severity(&self) -> Severity {
+        match self {
+            Self::Body(diag) => diag.severity(),
+            Self::Ty(_) | Self::NameRes(_) => Severity::Error,
+        }
     }
 
     pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
@@ -1476,6 +1481,15 @@ pub enum BodyDiag<'db> {
 }
 
 impl<'db> BodyDiag<'db> {
+    /// How serious this is. Every body diagnostic is an error except the ones
+    /// listed here; the voucher and every other consumer take it from here.
+    pub(crate) fn severity(&self) -> Severity {
+        match self {
+            Self::MutAccessCopied { .. } => Severity::Warning,
+            _ => Severity::Error,
+        }
+    }
+
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
         primary: DynLazySpan<'db>,

@@ -57,7 +57,7 @@ use callable::{CallGenericArgPhase, CallGenericArgUnifyError, unify_explicit_cal
 pub use callable::{
     CallParam, Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
 };
-use common::indexmap::IndexMap;
+use common::{diagnostics::Severity, indexmap::IndexMap};
 use cranelift_entity::{PrimaryMap, SecondaryMap, entity_impl, packed_option::PackedOption};
 use ena::unify::InPlace;
 pub use env::{
@@ -919,7 +919,7 @@ fn diags_allow_evaluation<'db>(db: &'db dyn HirAnalysisDb, diags: &[FuncBodyDiag
             diag,
             FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { ty, .. })
                 if ty.is_integral_var(db)
-        ) || matches!(diag, FuncBodyDiag::Body(BodyDiag::MutAccessCopied { .. }))
+        ) || diag.severity() == Severity::Warning
     })
 }
 
@@ -2658,7 +2658,10 @@ impl<'db> TyChecker<'db> {
                             traits: viable.into_iter().map(|candidate| candidate.inst).collect(),
                         });
                     } else if viable.is_empty()
-                        && self.diags.iter().all(FuncBodyDiag::is_warning)
+                        && !self
+                            .diags
+                            .iter()
+                            .any(|diag| diag.severity() == Severity::Error)
                         && self.env.callable_expr(pending.expr).is_none()
                     {
                         // No candidate fits and no callee was registered: report it,
