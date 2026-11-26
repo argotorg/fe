@@ -71,6 +71,10 @@ pub enum PathResDiag<'db> {
     /// A module's `with` operand names something that is not an implementation.
     ExpectedImpl(DynLazySpan<'db>, IdentId<'db>, &'static str),
 
+    /// A module's `with` operand has a constant argument that is neither a
+    /// literal nor a path to a constant with a literal initializer.
+    NonLiteralWithArgument(DynLazySpan<'db>),
+
     /// The name is found but belongs to a different name domain other than the
     /// value.
     ExpectedValue(DynLazySpan<'db>, IdentId<'db>, &'static str),
@@ -149,6 +153,7 @@ impl<'db> PathResDiag<'db> {
             Self::ExpectedType(span, _, _) => span.top_mod(db).unwrap(),
             Self::ExpectedTrait(span, _, _) => span.top_mod(db).unwrap(),
             Self::ExpectedImpl(span, _, _) => span.top_mod(db).unwrap(),
+            Self::NonLiteralWithArgument(span) => span.top_mod(db).unwrap(),
             Self::ExpectedValue(span, _, _) => span.top_mod(db).unwrap(),
             Self::ArgNumMismatch { span, .. } => span.top_mod(db).unwrap(),
             Self::ArgKindMismatch { span, .. } => span.top_mod(db).unwrap(),
@@ -181,6 +186,7 @@ impl<'db> PathResDiag<'db> {
             Self::ExpectedType(..) => 6,
             Self::ExpectedTrait(..) => 7,
             Self::ExpectedImpl(..) => 21,
+            Self::NonLiteralWithArgument(..) => 22,
             Self::ExpectedValue(..) => 8,
             Self::AmbiguousAssociatedType { .. } => 9,
             Self::AmbiguousAssociatedConst { .. } => 18,

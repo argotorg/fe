@@ -557,7 +557,6 @@ pub impl Pick for Arr<70> as Seventy { const fn value() -> u256 { 70 } }
 "#;
 
 #[test]
-#[ignore = "known limit until module operands take literal constant arguments: the constant's check forces the operand that reads the constant"]
 fn an_operand_that_reads_a_constant_of_its_own_check_is_refused() {
     let codes = sorted_codes(&format!(
         r#"{ALTERNATING}
@@ -577,7 +576,6 @@ pub mod outer {{
 }
 
 #[test]
-#[ignore = "known limit until module operands take literal constant arguments: the constant function's check forces the operand that calls it"]
 fn an_operand_that_calls_a_function_of_its_own_check_is_refused() {
     let codes = sorted_codes(&format!(
         r#"{ALTERNATING}
@@ -593,6 +591,75 @@ pub mod outer {{
 "#
     ));
     assert_eq!(codes, ["2-0022"]);
+}
+
+/// A computed constant named by a path is refused where the operand is
+/// written, before the constant is read: the constant's own check would ask
+/// the operand (the shape of the alternating declaration, without braces).
+#[test]
+fn a_computed_constant_named_by_path_is_refused_before_it_is_read() {
+    let codes = sorted_codes(&format!(
+        r#"{ALTERNATING}
+pub mod outer {{
+    use super::*
+    with (Seventy)
+    pub mod m {{
+        use super::*
+        with (<Arr<K> as Pick>)
+        pub const K: u256 = Arr<70>::value()
+        pub fn f() -> u256 {{ K }}
+    }}
+}}
+"#
+    ));
+    // 8-0138: the constant reads the frame's choice and is written in a type.
+    assert_eq!(codes, ["2-0022", "8-0138"]);
+}
+
+/// A constant argument of a module's operand is a literal, or a path to a
+/// constant with a literal initializer: a computed one could be decided by the
+/// frame it is written for. The same operands are accepted in a block.
+#[test]
+fn module_operands_take_literal_constant_arguments() {
+    let source = |operand: &str| {
+        format!(
+            r#"
+pub struct Arr<const N: u256> {{}}
+pub trait Size {{ const fn size() -> u256 }}
+impl Size for Arr<70> {{ const fn size() -> u256 {{ 1 }} }}
+impl Size for Arr<71> {{ const fn size() -> u256 {{ 1 }} }}
+pub impl<const N: u256> Size for Arr<N> as Pk {{ const fn size() -> u256 {{ 2 }} }}
+pub const N0: u256 = 70
+pub const K0: u256 = N0 + 1
+pub const fn f() -> u256 {{ 70 }}
+pub type Computed = Arr<{{ N0 + 1 }}>
+mod m {{
+    use super::*
+    with ({operand})
+}}
+"#
+        )
+    };
+    for operand in [
+        "<Arr<70> as Size>",
+        "<Arr<{ 70 }> as Size>",
+        "<Arr<N0> as Size>",
+        "<Arr<{ N0 }> as Size>",
+        "Pk<70>",
+        "Pk<N0>",
+    ] {
+        assert!(sorted_codes(&source(operand)).is_empty(), "{operand}");
+    }
+    for operand in [
+        "<Arr<{ N0 + 1 }> as Size>",
+        "<Arr<{ f() }> as Size>",
+        "<Arr<K0> as Size>",
+        "<Computed as Size>",
+        "Pk<K0>",
+        "Pk<{ f() }>",
+    ] {
+        assert_eq!(sorted_codes(&source(operand)), ["2-0022"], "{operand}");
+    }
 }
 
 // The frame of every body

@@ -1372,6 +1372,18 @@ impl DiagnosticVoucher for PathResDiag<'_> {
                 )
             }
 
+            Self::NonLiteralWithArgument(prim_span) => CompleteDiagnostic::new(
+                Severity::Error,
+                "a module's `with` operand takes literal constant arguments".into(),
+                vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    "this constant argument is not a literal".to_string(),
+                    prim_span.resolve(db),
+                )],
+                vec!["write the value, or open the implementation in a `with` block".to_string()],
+                error_code,
+            ),
+
             Self::ExpectedValue(prim_span, name, given_kind) => {
                 let name = name.data(db);
                 primary_diag(
