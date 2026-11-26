@@ -165,6 +165,29 @@ fn sorted_codes(source: &str) -> Vec<String> {
     codes
 }
 
+/// Each diagnostic as its code and the source text its primary label covers,
+/// in the order of the codes.
+fn located(source: &str) -> Vec<(String, String)> {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("module_with.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let mut found: Vec<_> = fe_hir::analysis::initialize_analysis_pass()
+        .run_on_module(&db, module)
+        .into_iter()
+        .map(|diagnostic| {
+            let diagnostic = diagnostic.to_complete(&db);
+            let range = diagnostic
+                .first_span()
+                .expect("a diagnostic with a span")
+                .range;
+            let text = &source[usize::from(range.start())..usize::from(range.end())];
+            (diagnostic.error_code.to_string(), text.to_string())
+        })
+        .collect();
+    found.sort();
+    found
+}
+
 /// The operands of a block `with`, and the codes each one is refused with.
 /// These pin what the block says about an operand, whatever code decides it.
 #[test]
@@ -564,12 +587,58 @@ const fn f() -> u256 { outer::m::f() }
     );
 }
 
-/// An implementation header that reads a constant whose own check asks the
-/// operand's trait: with an alternative answer the states alternate. Closed
-/// when a framed constant in an implementation header must be a literal
-/// (specification amendment 5.2); until then a known limit.
+/// An operand whose implementation needs a value that is checked under the
+/// module's own frame has no consistent meaning: the value decides which
+/// implementation answers, and the implementation decides the value. The
+/// operand is refused where the cycle meets it, whatever way the cycle runs.
+///
+/// The header `impl Size for Arr<{ K }>` reads a constant whose own check asks
+/// the operand's trait.
+const HEADER_CYCLE: &str = r#"
+pub struct Arr<const N: u256> {}
+pub trait Size { const fn size() -> u256 }
+pub impl Size for Arr<70> as S70 { const fn size() -> u256 { 70 } }
+pub mod outer {
+    use super::*
+    with (S70)
+    pub mod m {
+        use super::*
+        with (<Arr<70> as Size>)
+        pub const K: u256 = Arr<70>::size()
+        impl Size for Arr<{ K }> { const fn size() -> u256 { 100 } }
+    }
+}
+"#;
+
+fn at_the_operand(code: &str, operand: &str) -> Vec<(String, String)> {
+    vec![(code.to_string(), operand.to_string())]
+}
+
 #[test]
-#[ignore = "known limit: a header that reads a constant whose check asks the operand's trait iterates; closed by the framed-constant rule for implementation headers"]
+fn a_header_constant_that_asks_its_own_operand_is_refused_at_the_operand() {
+    assert_eq!(
+        located(HEADER_CYCLE),
+        at_the_operand("2-0022", "<Arr<70> as Size>")
+    );
+}
+
+/// The same program with a type that reads the constant, written before the
+/// module: the order in which the constant is first read changes nothing.
+#[test]
+fn the_order_of_the_first_reader_does_not_change_a_refused_operand() {
+    let source = format!(
+        "pub struct S {{ pub a: Arr<{{ outer::m::K }}> }}\n{}",
+        HEADER_CYCLE
+    );
+    assert_eq!(
+        located(&source),
+        at_the_operand("2-0022", "<Arr<70> as Size>")
+    );
+}
+
+/// An implementation header that reads a constant whose own check asks the
+/// operand's trait, with another header in the program.
+#[test]
 fn a_header_constant_that_asks_its_own_operand_ends_without_iteration() {
     let codes = sorted_codes(
         r#"
@@ -594,7 +663,7 @@ pub mod outer {
 }
 "#,
     );
-    assert!(!codes.is_empty(), "{codes:?}");
+    assert_eq!(codes, ["2-0022"]);
 }
 
 /// A constant of the module is read by the operand that the constant's own
@@ -609,9 +678,8 @@ pub impl Pick for Arr<70> as Seventy { const fn value() -> u256 { 70 } }
 "#;
 
 #[test]
-#[ignore = "known limit until module operands take literal constant arguments: the constant's check forces the operand that reads the constant"]
 fn an_operand_that_reads_a_constant_of_its_own_check_is_refused() {
-    let codes = sorted_codes(&format!(
+    let source = format!(
         r#"{ALTERNATING}
 pub mod outer {{
     use super::*
@@ -624,14 +692,16 @@ pub mod outer {{
     }}
 }}
 "#
-    ));
-    assert_eq!(codes, ["2-0022"]);
+    );
+    assert_eq!(
+        located(&source),
+        at_the_operand("2-0022", "<Arr<{ K }> as Pick>")
+    );
 }
 
 #[test]
-#[ignore = "known limit until module operands take literal constant arguments: the constant function's check forces the operand that calls it"]
 fn an_operand_that_calls_a_function_of_its_own_check_is_refused() {
-    let codes = sorted_codes(&format!(
+    let source = format!(
         r#"{ALTERNATING}
 pub mod outer {{
     use super::*
@@ -643,8 +713,68 @@ pub mod outer {{
     }}
 }}
 "#
-    ));
-    assert_eq!(codes, ["2-0022"]);
+    );
+    assert_eq!(
+        located(&source),
+        at_the_operand("2-0022", "<Arr<{ kf() }> as Pick>")
+    );
+}
+
+/// The constant reaches the operand through an alias that the operand names.
+#[test]
+fn an_operand_that_reads_the_constant_through_an_alias_is_refused_at_the_operand() {
+    let source = r#"
+pub struct Arr<const N: u256> {}
+pub trait Pick { const fn value() -> u256 }
+impl Pick for Arr<70> { const fn value() -> u256 { 100 } }
+impl Pick for Arr<100> { const fn value() -> u256 { 100 } }
+pub impl Pick for Arr<70> as Seventy { const fn value() -> u256 { 70 } }
+pub mod outer {
+    use super::*
+    with (Seventy)
+    pub mod m {
+        use super::*
+        pub type A = Arr<K>
+        with (<A as Pick>)
+        pub const K: u256 = Arr<70>::value()
+    }
+}
+"#;
+    let found = located(source);
+    assert!(
+        found.contains(&("2-0022".to_string(), "<A as Pick>".to_string())),
+        "{found:?}"
+    );
+}
+
+/// A named implementation whose parameter has a default that nothing applies is
+/// not an implementation of its trait for any type: the operand names it, and
+/// a body that asks for the trait finds none. That is so whatever the default
+/// reads, in a module and in a block alike, and has nothing to do with the
+/// frame: the operand is chosen and is no cycle.
+#[test]
+fn a_named_implementation_with_an_unapplied_default_is_not_chosen_in_a_module_as_in_a_block() {
+    let program = |frame: &str, body: &str| {
+        format!(
+            r#"
+pub struct Item {{}}
+pub trait Pick {{ const fn value() -> u256 }}
+impl Pick for Item {{ const fn value() -> u256 {{ 100 }} }}
+pub impl<const N: u256 = {{ 70 + 1 }}> Pick for Item as D {{ const fn value() -> u256 {{ N }} }}
+pub mod m {{
+    use super::*
+    {frame}
+    pub const fn f() -> u256 {{ {body} }}
+}}
+"#
+        )
+    };
+    let mut module = sorted_codes(&program("with (D)", "Item::value()"));
+    let mut block = sorted_codes(&program("", "with (D) { Item::value() }"));
+    module.dedup();
+    block.dedup();
+    assert_eq!(block, ["6-0003"]);
+    assert_eq!(module, block);
 }
 
 // The frame of every body

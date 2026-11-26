@@ -26,9 +26,7 @@ use crate::{
         },
         ty::{
             const_ty::LoweringContext,
-            diagnostics::{
-                BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
-            },
+            diagnostics::{BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection},
             trait_def::TraitInstId,
             trait_lower::lower_impl_trait_header,
             trait_resolution::{
@@ -256,6 +254,23 @@ fn classify_operand<'db>(
     classify_with_operand(db, &site, path, &values)
 }
 
+/// Whether a refusal is left unreported: a generated implementation changes
+/// what written code chose, which is reported for written code only, and a
+/// declaration that generated code wrote changes nothing.
+fn is_silent<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    meaning: &OperandMeaning<'db>,
+) -> bool {
+    matches!(
+        meaning,
+        OperandMeaning::Refused {
+            changed_choice: true,
+            ..
+        }
+    ) && scope.is_within_generated(db, scope.ingot(db))
+}
+
 /// What a refused operand reports. An operand that is admitted reports
 /// nothing here.
 fn refusal_diags<'db>(
@@ -267,22 +282,13 @@ fn refusal_diags<'db>(
     meaning: OperandMeaning<'db>,
 ) -> Vec<FuncBodyDiag<'db>> {
     let operand_span = with.span().operands().operand(index);
+    let silent = is_silent(db, scope, &meaning);
     match meaning {
         OperandMeaning::Named { .. } | OperandMeaning::Opening { .. } => Vec::new(),
         // A refused operand contributes nothing; the rest of the declaration
-        // is still read. A generated implementation changes what written code
-        // chose; a declaration that generated code wrote changes nothing.
-        OperandMeaning::Refused {
-            diags,
-            changed_choice,
-            ..
-        } => {
-            if !changed_choice || !scope.is_within_generated(db, scope.ingot(db)) {
-                diags
-            } else {
-                Vec::new()
-            }
-        }
+        // is still read.
+        OperandMeaning::Refused { diags, .. } if !silent => diags,
+        OperandMeaning::Refused { .. } => Vec::new(),
         OperandMeaning::NotAnImplementation(class) => {
             if SiteKind::Module.accepts(&class) {
                 return Vec::new();
@@ -353,7 +359,16 @@ pub(crate) fn declared_choice<'db>(
     let (choice, conditions) =
         match classify_operand(db, scope, with, index, path, outer).admitted() {
             Ok(admitted) => admitted,
-            Err(refused) => return none(refusal_diags(db, scope, with, index, path, refused)),
+            Err(refused) => {
+                let silent = is_silent(db, scope, &refused);
+                let mut diags = refusal_diags(db, scope, with, index, path, refused);
+                // A refusal that reports nothing was made inside a cycle that
+                // hid its report: the operand is where the cycle is refused.
+                if diags.is_empty() && !silent {
+                    diags.push(operand_cycle(db, operand));
+                }
+                return none(diags);
+            }
         };
     let entry = choice
         .items(db)
@@ -389,6 +404,20 @@ pub(crate) fn declared_choice<'db>(
     }
 }
 
+/// The refusal of an operand whose implementation needs a value that is checked
+/// under the frame the operand is part of.
+fn operand_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    operand: DeclaredOperand<'db>,
+) -> FuncBodyDiag<'db> {
+    let span = operand
+        .with(db)
+        .span()
+        .operands()
+        .operand(operand.index(db) as usize);
+    PathResDiag::OperandNeedsOwnFrame(span.into()).into()
+}
+
 // A declaration whose operand needs a value that the operand itself decides
 // is refused where the cycle meets it, never iterated.
 fn declared_choice_cycle<'db>(
@@ -396,17 +425,10 @@ fn declared_choice_cycle<'db>(
     _: salsa::Id,
     operand: DeclaredOperand<'db>,
 ) -> DeclaredChoice<'db> {
-    let span = operand
-        .with(db)
-        .span()
-        .operands()
-        .operand(operand.index(db) as usize);
     DeclaredChoice {
         choice: None,
         conditions: Vec::new(),
-        diags: vec![FuncBodyDiag::Ty(
-            TyLowerDiag::TypeLoweringCycle(span.into()).into(),
-        )],
+        diags: vec![operand_cycle(db, operand)],
         duplicate_of: None,
     }
 }
