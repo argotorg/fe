@@ -2982,7 +2982,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
         let error_code = GlobalErrorCode::new(DiagnosticPass::TyCheck, self.local_code());
         let severity = self.severity();
 
-        match self {
+        let mut complete = match self {
             Self::TypeMismatch {
                 span,
                 expected,
@@ -2995,7 +2995,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
             Self::InfiniteOccurrence(span) => primary_diag(
-                Severity::Error,
+                severity,
                 "infinite sized type found",
                 "infinite sized type found",
                 span.resolve(db),
@@ -3007,7 +3007,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 conflicat_with,
                 name,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: format!("duplicate binding `{}` in pattern", name.data(db)),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -3026,7 +3026,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::BindingsInOrPat(span) => primary_diag(
-                Severity::Error,
+                severity,
                 "bindings in `|` patterns are not supported",
                 "split this into separate arms or remove the binding",
                 span.resolve(db),
@@ -3034,7 +3034,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::DuplicatedRestPat(span) => primary_diag(
-                Severity::Error,
+                severity,
                 "duplicate `..` in pattern",
                 "`..` can be used only once",
                 span.resolve(db),
@@ -3042,7 +3042,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::UnexpectedRestPat(span) => primary_diag(
-                Severity::Error,
+                severity,
                 "unexpected `..` in pattern",
                 "`..` is only allowed inside tuple and record patterns",
                 span.resolve(db),
@@ -3065,7 +3065,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "invalid item is given here".to_string(),
                     sub_diagnostics: labels,
                     notes: vec![],
@@ -3097,7 +3097,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "expected unit variant".to_string(),
                     sub_diagnostics: labels,
                     notes: vec![],
@@ -3129,7 +3129,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "expected tuple variant".to_string(),
                     sub_diagnostics: labels,
                     notes: vec![],
@@ -3161,7 +3161,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "expected record variant or struct".to_string(),
                     sub_diagnostics: labels,
                     notes: vec![],
@@ -3174,7 +3174,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 expected,
                 given,
             } => primary_diag(
-                Severity::Error,
+                severity,
                 "field count mismatch",
                 format!("expected {expected} fields here, but {given} given"),
                 primary.resolve(db),
@@ -3186,7 +3186,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 first_use,
                 name,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "duplicated record field binding".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -3205,7 +3205,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::RecordFieldNotFound { span, label } => primary_diag(
-                Severity::Error,
+                severity,
                 "specified field not found",
                 format!("field `{}` not found", label.data(db)),
                 span.resolve(db),
@@ -3228,7 +3228,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "explicit label is required".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -3262,7 +3262,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "missing fields in record pattern".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -3273,7 +3273,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::UndefinedVariable(primary, ident, assoc_fn) => {
                 let ident = ident.data(db);
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "undefined variable".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3300,7 +3300,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             Self::ContractFieldNotInUses { primary, field } => {
                 let field = field.data(db);
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("contract field `{field}` is not in this handler's `uses`"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3331,7 +3331,6 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 };
 
                 let message = "unresolved effect".to_string();
-                let severity = Severity::Error;
                 if is_contract_scoped_uses && !is_labeled {
                     CompleteDiagnostic {
                         severity,
@@ -3458,7 +3457,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let key_str = key.pretty_print(db);
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("missing effect `{key_str}` required by `{func_name}`"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3506,7 +3505,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     row.name(db).map_or("<row>", |name| name.data(db))
                 );
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("missing effect row `{row}` required by `{func_name}`"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3532,7 +3531,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let key_str = key.pretty_print(db);
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "multiple effect candidates found".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -3577,7 +3576,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 sub_diagnostics.extend(split_demand_label(db, split));
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "effect `{key_str}` must be mutable when calling `{func_name}`"
                     ),
@@ -3618,7 +3617,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let mode = if *is_mut { "mut " } else { "" };
                 let key = format!("{mode}{}", key.pretty_print(db));
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "`{func_name}` needs `{key}` after its closure's effects are inferred"
                     ),
@@ -3680,7 +3679,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "effect `{key_str}` provided to `{func_name}` has type `{given_ty}`, but `{expected_ty}` is required"
                     ),
@@ -3722,7 +3721,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "effect provider mismatch for `{key_str}` when calling `{func_name}`"
                     ),
@@ -3764,7 +3763,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "effect `{key_str}` supplied to `{func_name}` does not satisfy `{trait_str}`"
                     ),
@@ -3784,7 +3783,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let trait_str = trait_req.pretty_print(db, false);
                 let given_ty = given.pretty_print(db).to_string();
 
-                primary_diag(Severity::Error, format!(
+                primary_diag(severity, format!(
                         "keyed effect binding `{key_str}` requires `{given_ty}` to implement `{trait_str}`"
                     ), format!(
                             "`{given_ty}` does not implement `{trait_str}` for effect `{key_str}`"
@@ -3798,7 +3797,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             } => {
                 let key_str = key.pretty_print(db);
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("effect `{key_str}` is provided twice in one `with`"),
                     sub_diagnostics: vec![
                         SubDiagnostic {
@@ -3827,7 +3826,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let expected_ty = pretty_print_ty_for_mismatch(db, *expected);
                 let given_ty = pretty_print_ty_for_mismatch(db, *given);
 
-                primary_diag(Severity::Error, format!(
+                primary_diag(severity, format!(
                         "keyed effect binding `{key_str}` requires a provider compatible with `{expected_ty}`, but `{given_ty}` is given",
                     ), format!(
                             "`{given_ty}` is not compatible with keyed effect `{key_str}`",
@@ -3879,7 +3878,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "returned type mismatch".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -3887,7 +3886,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
             Self::TypeMustBeKnown(span) => primary_diag(
-                Severity::Error,
+                severity,
                 "type must be known",
                 "type must be known here",
                 span.resolve(db),
@@ -3913,7 +3912,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ));
                 }
                 CompleteDiagnostic::new(
-                    Severity::Error,
+                    severity,
                     "type must be known".to_string(),
                     sub_diagnostics,
                     vec![],
@@ -4012,7 +4011,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::RuntimeParameterInConst { primary, path } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "runtime parameter cannot be used in a type-level const expression".to_string(),
                 sub_diagnostics: vec![SubDiagnostic::new(
                     LabelStyle::Primary,
@@ -4098,7 +4097,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 note,
             } => {
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: if *lossy {
                         "cast is not provably lossless"
                     } else {
@@ -4122,12 +4121,12 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 literal,
                 ty,
-            } => primary_diag(Severity::Error, "integer literal out of range", format!(
+            } => primary_diag(severity, "integer literal out of range", format!(
                         "`{literal}` is not representable in `{}`",
                         ty.pretty_print(db),
                     ), primary.resolve(db), error_code),
             Self::ArrayIndexOutOfBounds { primary, index, len } => primary_diag(
-                Severity::Error,
+                severity,
                 "index out of bounds",
                 format!(
                         "index `{}` is out of bounds for array of length `{len}`",
@@ -4155,7 +4154,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 };
 
                 primary_diag(
-                    Severity::Error,
+                    severity,
                     "invalid field index",
                     message,
                     primary.resolve(db),
@@ -4199,7 +4198,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     vec![]
                 };
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("`{}` trait is not implemented", trait_path.pretty_print(db)),
                     sub_diagnostics,
                     notes,
@@ -4207,21 +4206,21 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
             Self::BlackBoxNonScalar { primary, ty } => primary_diag(
-                Severity::Error,
+                severity,
                 "`core::hint::black_box` requires a scalar argument",
                 format!("expected an integer or `bool`, but found `{}`", ty.pretty_print(db)),
                 primary.resolve(db),
                 error_code,
             ),
             Self::UnsupportedMacroCall(primary) => primary_diag(
-                Severity::Error,
+                severity,
                 "unsupported macro call",
                 "the macros are `assert!`, `format!`, `write!`, `writeln!`, `print!`, `println!`, `eprint!` and `eprintln!`",
                 primary.resolve(db),
                 error_code,
             ),
             Self::UnsupportedUnaryPlus(primary) => primary_diag(
-                Severity::Error,
+                severity,
                 "unary `+` is not supported",
                 "remove the unary `+`",
                 primary.resolve(db),
@@ -4229,7 +4228,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::BorrowFromNonPlace { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "cannot borrow from this expression",
                 "expected a place expression",
                 primary.resolve(db),
@@ -4265,7 +4264,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 sub_diagnostics.extend(split_demand_label(db, split));
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "mutable borrow requires a mutable place".to_string(),
                     sub_diagnostics,
                     notes,
@@ -4284,7 +4283,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 };
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("`{kw}` argument must be a place"),
                     sub_diagnostics: [SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -4315,7 +4314,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 };
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "explicit borrow required".to_string(),
                     sub_diagnostics: [SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -4338,7 +4337,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::AccessNotValue { primary, literal } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "an access is not a value".to_string(),
                 sub_diagnostics: [SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4356,7 +4355,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::AccessChoiceNeedsProjection { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "a runtime choice between accesses needs a projection".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4371,7 +4370,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::UnsafeSplitOperand { primary, callee } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "an unsafe split component is a place or a `#[raw_place]` call"
                     .to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
@@ -4387,7 +4386,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::RefBindingRequired { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "a read access needs a `ref` binding".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4405,7 +4404,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::MutBindingRequired { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "a `mut` result needs a `mut` binding".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4429,7 +4428,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ("ref", "remove `ref`: an owned value is bound by value")
                 };
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("a `{marker}` binding needs a place or an access"),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -4442,7 +4441,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::VarOfAccess { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "`var` binds a value, not an access".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4457,7 +4456,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::MaybeMutWithoutMode { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "`mut?` outside a `mut?` function".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4475,7 +4474,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 split_reads,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "a `mut` binding needs a mutable place or access".to_string(),
                 sub_diagnostics: [SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4497,7 +4496,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 name,
                 write,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: format!(
                     "{} an `unsafe` field requires an `unsafe` block",
                     if *write { "writing" } else { "initializing" }
@@ -4515,7 +4514,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::VarOfNoValue { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: format!("`{}` has no value for `var` to hold", ty.pretty_print(db)),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4573,7 +4572,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     span: span.resolve(db),
                 }));
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message,
                     sub_diagnostics,
                     notes: vec![note.to_string()],
@@ -4600,7 +4599,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::TupleOfAccesses { primary } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "a tuple does not hold accesses".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4615,7 +4614,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::InvalidYield { primary, shape } => primary_diag(
-                Severity::Error,
+                severity,
                 "invalid yield",
                 format!("this does not yield `{shape}`"),
                 primary.resolve(db),
@@ -4623,7 +4622,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::RefutableLetPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "refutable pattern in `let`",
                 "this pattern may not match; handle the other cases with `let … else`",
                 primary.resolve(db),
@@ -4631,7 +4630,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::ProductArgExpected { primary, expected } => primary_diag(
-                Severity::Error,
+                severity,
                 "a product parameter takes a tuple of its parts",
                 format!("pass a part for each of `{}`", expected.pretty_print_product(db)),
                 primary.resolve(db),
@@ -4651,7 +4650,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     "the parameter"
                 };
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "this argument grants a product's parts too weakly".to_string(),
                     sub_diagnostics: [SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -4671,7 +4670,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::RefutableParamPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "refutable pattern in a parameter",
                 "this pattern may not match every argument",
                 primary.resolve(db),
@@ -4679,7 +4678,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::RefutableLoopPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "refutable pattern in `for`",
                 "this pattern may not match every step",
                 primary.resolve(db),
@@ -4687,7 +4686,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::RefutableRecvArmPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "refutable pattern in a recv arm",
                 "this pattern may not match every value of its variant",
                 primary.resolve(db),
@@ -4695,7 +4694,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::ConstPatternType { primary, ty } => primary_diag(
-                Severity::Error,
+                severity,
                 "unsupported constant pattern",
                 format!(
                     "a constant pattern must be an integer or `bool`, but this has type `{}`",
@@ -4706,7 +4705,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::GenericConstPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "unsupported constant pattern",
                 "a constant pattern can't depend on generic parameters",
                 primary.resolve(db),
@@ -4714,7 +4713,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::InvalidConstPattern { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "failed to evaluate constant pattern",
                 "this constant's definition is invalid or depends on this pattern",
                 primary.resolve(db),
@@ -4746,7 +4745,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     ),
                 };
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message,
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -4764,7 +4763,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 name,
                 effect,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: if *effect {
                     format!("`{}` is also bound by an effect", name.data(db))
                 } else {
@@ -4787,7 +4786,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::LetElseMustDiverge { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "`let … else` block must diverge",
                 "this block must return, break, continue or revert",
                 primary.resolve(db),
@@ -4795,7 +4794,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::TryOnNonSum { primary, ty } => primary_diag(
-                Severity::Error,
+                severity,
                 "`?` needs an `Option` or a `Result`",
                 format!("this has type `{}`", ty.pretty_print(db)),
                 primary.resolve(db),
@@ -4807,7 +4806,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 operand,
                 ret,
             } => primary_diag(
-                Severity::Error,
+                severity,
                 "`?` cannot return from this function",
                 format!(
                     "`?` on `{}` may exit early, but `{}` cannot carry its `None` or `Err`",
@@ -4823,7 +4822,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 ty,
                 position,
             } => primary_diag(
-                Severity::Error,
+                severity,
                 format!(
                     "this call instantiates its callee at the `#[view]` type `{}`",
                     ty.pretty_print(db)
@@ -4834,7 +4833,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::YieldOutsideProjection { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "`yield` outside a projection",
                 "only a function returning `ref`, `mut` or a yield shape can yield",
                 primary.resolve(db),
@@ -4853,11 +4852,11 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         "bind the shape's components with a tuple or variant pattern",
                     )
                 };
-                primary_diag(Severity::Error, message, label, primary.resolve(db), error_code)
+                primary_diag(severity, message, label, primary.resolve(db), error_code)
             }
 
             Self::ArrayRepeatRequiresCopy { primary, ty } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "array repetition requires `Copy`".to_string(),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -4875,7 +4874,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::NonAssignableExpr(primary) => primary_diag(
-                Severity::Error,
+                severity,
                 "not assignable left-hand side of assignment",
                 "cant assign to this expression",
                 primary.resolve(db),
@@ -4935,7 +4934,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "left-hand side of assignment is immutable".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -4969,7 +4968,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "immutable contract field is not initialized".to_string(),
                     sub_diagnostics,
                     notes: vec![format!(
@@ -4986,7 +4985,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 field,
                 space,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: format!("{}-backed contract fields are not supported", space.pretty()),
                 sub_diagnostics: vec![SubDiagnostic {
                     style: LabelStyle::Primary,
@@ -5012,7 +5011,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 field,
                 field_span,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "cannot bind immutable contract field as `mut`".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5038,7 +5037,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 effect,
                 effect_span,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "cannot bind immutable contract effect as `mut`".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5063,7 +5062,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let stmt = if *is_break { "break" } else { "continue" };
 
                 primary_diag(
-                    Severity::Error,
+                    severity,
                     format!("`{stmt}` is not allowed outside of a loop"),
                     format!("`{stmt}` is not allowed here"),
                     primary.resolve(db),
@@ -5079,7 +5078,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let trait_name = trait_name.data(db);
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!("`{trait_name}` needs to be implemented for {ty}"),
                     sub_diagnostics: vec![
                         SubDiagnostic {
@@ -5100,7 +5099,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
 
             Self::NotCallable(primary, ty) => {
                 let ty = ty.pretty_print(db);
-                primary_diag(Severity::Error, format!("expected function, found `{ty}`"), format!(
+                primary_diag(severity, format!("expected function, found `{ty}`"), format!(
                             "call expression requires function; `{ty}` is not callable"
                         ), primary.resolve(db), error_code)
             }
@@ -5114,7 +5113,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 let field = field.data(db);
                 let receiver = receiver.map_or("…".to_string(), |name| name.data(db).to_string());
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: format!(
                         "no method named `{field}` found for `{}`",
                         receiver_ty.pretty_print(db)
@@ -5137,7 +5136,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 given,
                 expected,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "too many generic arguments".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5167,7 +5166,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 given,
                 expected,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "argument number mismatch".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5186,7 +5185,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             },
 
             Self::OpaqueShapeBound { primary, shape } => primary_diag(
-                Severity::Error,
+                severity,
                 format!("a value of `{}` can only be passed on", shape.pretty_print(db)),
                 "its parts are not known here: return it, or pass it to a parameter of the same shape",
                 primary.resolve(db),
@@ -5198,7 +5197,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 def_span,
                 shape,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: "the callee's parameters are not known".to_string(),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5223,7 +5222,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 primary,
                 given,
             } => primary_diag(
-                Severity::Error,
+                severity,
                 "`assert!` argument number mismatch",
                 format!("expected 1 or 2 arguments, but {given} given"),
                 primary.resolve(db),
@@ -5231,7 +5230,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::AssertMessageMustBeStringLiteral { primary } => primary_diag(
-                Severity::Error,
+                severity,
                 "`assert!` message must be a string literal",
                 "use a string literal for the revert message",
                 primary.resolve(db),
@@ -5269,7 +5268,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 });
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "argument label mismatch".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -5283,7 +5282,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 func_name,
                 func_ty,
             } => CompleteDiagnostic {
-                severity: Severity::Error,
+                severity,
                 message: format!("`{}` is not a method", func_name.data(db)),
                 sub_diagnostics: vec![
                     SubDiagnostic {
@@ -5337,7 +5336,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "ambiguous method call".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -5422,7 +5421,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "multiple trait candidates found".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -5460,7 +5459,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "ambiguous trait implementation".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -5486,7 +5485,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "trait is not in the scope".to_string(),
                     sub_diagnostics,
                     notes: vec![],
@@ -5495,7 +5494,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             }
 
             Self::NotValue { primary, given } => primary_diag(
-                Severity::Error,
+                severity,
                 "value is expected",
                 format!(
                         "`{}` cannot be used as a value",
@@ -5509,7 +5508,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
             ),
 
             Self::VariadicArgLabel(primary) => primary_diag(
-                Severity::Error,
+                severity,
                 "a variadic argument takes no label",
                 "no parameter has this label",
                 primary.resolve(db),
@@ -5526,7 +5525,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     "a variadic argument is an `i32`, `u32`, `i64`, `u64`, `isize`, `usize` or a raw pointer"
                 };
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "a variadic argument must be a C integer or a raw pointer".to_string(),
                     sub_diagnostics: vec![SubDiagnostic {
                         style: LabelStyle::Primary,
@@ -5596,7 +5595,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 });
 
                 CompleteDiagnostic {
-                    severity: Severity::Error,
+                    severity,
                     message: "type annotation is needed".to_string(),
                     sub_diagnostics: vec![
                         SubDiagnostic {
@@ -6198,7 +6197,9 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                     error_code,
                 )
             }
-        }
+        };
+        complete.severity = severity;
+        complete
     }
 }
 
