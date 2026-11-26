@@ -8145,6 +8145,21 @@ fn an_inherited_default_constant_is_access_checked_for_the_implementations_that_
             && output.contains("cannot use a value after it was moved"),
         "expected a move conflict for the non-`Copy` implementation:\n{output}"
     );
+
+    // A default that copies a value of a type that does not depend on the
+    // implementation is refused at the trait, with no implementation at all
+    // and when it is read through a bound.
+    for name in [
+        "default_access_error_without_implementation.fe",
+        "default_access_error_through_bound.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("error[16-0002]"),
+            "{name}: expected a move conflict:\n{output}"
+        );
+    }
 }
 
 #[test]

@@ -1,0 +1,13 @@
+struct NC { v: u256 }
+trait Tr {
+    type X
+    const C: Option<Self::X> = {
+        let a = NC { v: 1 }
+        let _b = a
+        let _c = a
+        Option::None
+    }
+}
+fn g<T: Tr>() -> bool { match T::C { Option::None => true, _ => false } }
+#[test]
+fn t() { assert(true) }

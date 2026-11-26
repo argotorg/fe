@@ -398,11 +398,12 @@ pub(crate) fn inherited_assoc_const_bodies<'db>(
 /// retention and the semantic access walk share. An implementation holds, after
 /// the values it writes, each default it inherits that is checked for it
 /// (`inherited_assoc_const_bodies`). A trait's default whose declared type
-/// mentions a parameter is not held by the trait: it is checked for each
-/// implementation that inherits it, with that implementation's types. Checked
-/// once for the trait, with the parameter abstract, it would be refused for
-/// what no implementation does, such as a copy of a `Self::X` that has no
-/// `Copy` bound where every implementation's `X` is `Copy`.
+/// mentions a parameter is held only when its own check has no diagnostics at
+/// all: a deferred mismatch is found through the implementations' bodies, which
+/// have no invalid type in them. What the semantic access walk finds in such a
+/// default when the parameter is abstract and depends on what an implementation
+/// makes of it is left to the implementations
+/// (`access_diag_depends_on_param_instantiation`).
 pub(crate) fn assoc_const_bodies_of<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
@@ -417,7 +418,10 @@ pub(crate) fn assoc_const_bodies_of<'db>(
         ItemKind::Trait(trait_) => trait_default_const_bodies(db, trait_)
             .into_iter()
             .filter(|constant| {
-                !constant.expected.has_param(db) || constant.expected.has_invalid(db)
+                !(constant.expected.has_param(db) && !constant.expected.has_invalid(db))
+                    || check_anon_const_body(db, constant.body, constant.expected)
+                        .0
+                        .is_empty()
             })
             .collect(),
         _ => Vec::new(),
@@ -728,6 +732,34 @@ fn diag_depends_on_param_instantiation<'db>(
         FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. }) => true,
         _ => false,
     }
+}
+
+/// Whether an access diagnostic of the default of a trait's constant could be
+/// an artifact of walking it with the trait's parameter abstract, as
+/// `diag_depends_on_param_instantiation` decides it for a type diagnostic: the
+/// default is one that is checked per implementation, and the value the
+/// diagnostic is about has a type that mentions a parameter. A copy of a
+/// `Self::X`, which an implementation with a `Copy` `X` makes valid, is such a
+/// diagnostic; a copy of a value of a type that does not depend on the
+/// implementation is not.
+pub(crate) fn access_diag_depends_on_param_instantiation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diag: &crate::analysis::semantic::diagnostics::SemanticDiagnostic<'db>,
+) -> bool {
+    use crate::analysis::semantic::{SemOrigin, diagnostics::SemanticDiagnosticSpan};
+    let SemanticDiagnosticSpan::Origin {
+        owner: owner @ BodyOwner::AnonConstBody { body, .. },
+        origin: SemOrigin::Expr(expr),
+    } = &diag.primary.span
+    else {
+        return false;
+    };
+    let Some(ItemKind::Trait(trait_)) = body.scope().parent_item(db) else {
+        return false;
+    };
+    trait_.assoc_consts(db).any(|constant| {
+        constant.default_body(db) == Some(*body) && default_checked_per_implementation(db, constant)
+    }) && infer_body(db, *owner).1.expr_ty(db, *expr).has_param(db)
 }
 
 /// Ground predicates are declaration obligations. Ordinary generic functions

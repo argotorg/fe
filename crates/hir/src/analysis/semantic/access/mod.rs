@@ -626,6 +626,11 @@ fn collect_semantic_access_with_blocked<'db>(
                     );
                 }
                 SemanticAccessCheckResult::Blocked(body) => blocked.push(body.clone()),
+                SemanticAccessCheckResult::Err(diag)
+                    if crate::analysis::ty::ty_check::access_diag_depends_on_param_instantiation(
+                        db,
+                        diag.diag(db),
+                    ) => {}
                 SemanticAccessCheckResult::Err(diag) => {
                     // The body of a default is walked once for each
                     // implementation that inherits it, and its text is one:
