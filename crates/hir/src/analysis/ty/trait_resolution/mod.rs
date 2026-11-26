@@ -1464,7 +1464,7 @@ pub(crate) struct ComponentTable<'db> {
 }
 
 impl<'db> ComponentTable<'db> {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             slots: 0,
             members: Vec::new(),
@@ -1652,11 +1652,6 @@ pub(crate) struct BoundWalk<'db> {
 }
 
 impl<'db> BoundWalk<'db> {
-    /// Whether any bound's associated-type bounds were left unfollowed.
-    pub(crate) fn is_truncated(&self) -> bool {
-        self.capped || !self.truncated.is_empty()
-    }
-
     /// The steps from the first predicate to the member at `target`, along
     /// the shortest chain of recorded derivations.
     pub(crate) fn path_to(

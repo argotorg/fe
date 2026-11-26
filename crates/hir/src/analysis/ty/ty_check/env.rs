@@ -1761,18 +1761,9 @@ impl<'db> TyCheckEnv<'db> {
         };
         let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
         {
-            Refusal::Differs { a, .. } => super::super::diagnostics::FuncBodyDiag::from(
+            Refusal::Differs { a, b } => super::super::diagnostics::FuncBodyDiag::from(
                 super::super::diagnostics::TyDiagCollection::from(
                     super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
-                        span,
-                        primary_goal: refused.goal,
-                        root: a,
-                    },
-                ),
-            ),
-            Refusal::ConditionsDiffer { a, b } => super::super::diagnostics::FuncBodyDiag::from(
-                super::super::diagnostics::TyDiagCollection::from(
-                    super::super::diagnostics::TraitConstraintDiag::ConditionsDiffer {
                         span,
                         primary_goal: refused.goal,
                         a,

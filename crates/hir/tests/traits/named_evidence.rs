@@ -5517,41 +5517,50 @@ impl Right for B { type Back = A
 
 // `T: Left<Out = U>` and the `T: Left` that `U: Right<Back = T>` implies are
 // one goal of the body, reached by two routes. A choice that names it for one
-// route and not the other is refused, in either order of the bounds and
-// behind a generic relay.
+// route and not the other is refused where the call is checked, here through a
+// generic relay whose own bounds repeat the two routes.
 #[test]
 fn agreement_slots_of_one_bound_refused() {
-    refused(
-        &format!(
-            r#"{MUTUAL}
-const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + <U::Back as Left>::l() }}
-const fn go() -> u256 {{ with (BigA) {{ call<A, B>() }} }}
-"#
-        ),
-        "go",
-        "A: Left",
-    );
-    refused(
-        &format!(
-            r#"{MUTUAL}
-const fn swapped<U: Right<Back = T>, T: Left<Out = U>>() -> u256 {{ T::l() * 10 + <U::Back as Left>::l() }}
-const fn go() -> u256 {{ with (BigA) {{ swapped<B, A>() }} }}
-"#
-        ),
-        "go",
-        "A: Left",
-    );
-    refused(
-        &format!(
-            r#"{MUTUAL}
+    let codes = diagnostics(&format!(
+        r#"{MUTUAL}
 const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + U::r() }}
 const fn relay<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ call<T, U>() }}
 const fn go() -> u256 {{ with (BigA) {{ relay<A, B>() }} }}
 "#
+    ));
+    assert!(codes.contains(&"6-0003".to_string()), "{codes:?}");
+}
+
+// The same two routes at a call that shows both dictionaries: the use is
+// refused where it is checked, in either order of the bounds, whether or not
+// the body reads the second route.
+#[test]
+fn agreement_slots_of_one_bound_refused_at_the_use() {
+    for (signature, call, body) in [
+        (
+            "call<T: Left<Out = U>, U: Right<Back = T>>",
+            "call<A, B>()",
+            "T::l() * 10 + U::r() + A::l() * 100",
         ),
-        "go",
-        "A: Left",
-    );
+        (
+            "call<T: Left<Out = U>, U: Right<Back = T>>",
+            "call<A, B>()",
+            "T::l() * 10 + <U::Back as Left>::l()",
+        ),
+        (
+            "call<U: Right<Back = T>, T: Left<Out = U>>",
+            "call<B, A>()",
+            "T::l() * 10 + <U::Back as Left>::l()",
+        ),
+    ] {
+        let codes = diagnostics(&format!(
+            r#"{MUTUAL}
+const fn {signature}() -> u256 {{ {body} }}
+const fn go() -> u256 {{ with (BigA) {{ {call} }} }}
+"#
+        ));
+        assert!(codes.contains(&"6-0003".to_string()), "{call}: {codes:?}");
+    }
 }
 
 #[test]

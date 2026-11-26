@@ -29,9 +29,9 @@ use super::{
     },
     trait_lower::lower_impl_trait,
     trait_resolution::{
-        BoundStep, ChosenImpls, Component, PredicateListId, Selection, TraitSolveCx,
-        answering_assumption, assumption_matcher, component_path_goal, concrete_components,
-        constraint::collect_candidate_constraints, has_concrete_components,
+        BoundStep, ChosenImpls, Component, ComponentTable, PredicateListId, Selection,
+        TraitSolveCx, answering_assumption, assumption_matcher, component_path_goal,
+        concrete_components, constraint::collect_candidate_constraints, has_concrete_components,
         normalize_trait_inst_preserving_validity, same_identity, step_bound,
     },
     ty_check::{BodyOwner, func_declared_bounds, func_signature},
@@ -918,17 +918,6 @@ fn names_impl<'db>(db: &'db dyn HirAnalysisDb, proof: Option<EvidenceId<'db>>) -
     proof.is_some_and(|proof| proof.has_named_impl(db))
 }
 
-/// Whether the dictionary of the closed slot `slot` holds a named
-/// implementation.
-fn slot_names_impl<'db>(
-    db: &'db dyn HirAnalysisDb,
-    closed: &[bool],
-    entries: &[Option<EvidenceId<'db>>],
-    slot: usize,
-) -> bool {
-    closed[slot] && names_impl(db, entries[slot])
-}
-
 #[salsa::tracked(returns(copy))]
 fn evidence_is_closed<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId<'db>) -> bool {
     match evidence.data(db) {
@@ -1357,16 +1346,11 @@ pub(crate) enum Refusal<'db> {
     /// No proof of the goal can be had, or the dictionary of `root` (when
     /// known) has no such component.
     NoComponent { root: Option<TraitInstId<'db>> },
-    /// The goal is implemented, but the dictionaries of the bounds `a` and `b`
-    /// (or a proof written for the goal, `b`) supply different implementations.
+    /// The goal is implemented, but two routes to it supply different
+    /// implementations: `a` and `b` are the bounds the routes start from (or a
+    /// proof written for the goal, `b`). Inside a selected implementation they
+    /// are its conditions, as it states them at the call's types.
     Differs {
-        a: TraitInstId<'db>,
-        b: TraitInstId<'db>,
-    },
-    /// The goal is a component that two conditions of the implementation
-    /// selected for a bound hold from different dictionaries: `a` and `b` are
-    /// the conditions, as the implementation states them at the call's types.
-    ConditionsDiffer {
         a: TraitInstId<'db>,
         b: TraitInstId<'db>,
     },
@@ -1435,7 +1419,7 @@ pub(crate) fn declared_bound_evidence<'db>(
         declared,
         signature,
         subst,
-        assumptions,
+        solve_cx.with_assumptions(assumptions),
         |_, goal, direct| {
             // Without a lexical choice, a closed goal that no slot answers is
             // left to the instance, unless the dictionaries hold components:
@@ -1455,125 +1439,81 @@ pub(crate) fn declared_bound_evidence<'db>(
     )
 }
 
-/// The candidates for a slot are the proof written for it, when the body
-/// declares the bound directly, and the component of the dictionary of each
-/// bound whose derivation the walk recorded as entering the slot: a declared
-/// bound, or a slot settled before it. A written proof is never dropped: the
-/// entry is it, or else the first projection. Two closed candidates that
-/// differ refuse the slot, as does a proof that cannot be had or projected. A
-/// projection an assumption cannot give yet (a concrete goal an equality made)
-/// waits for the instance, which compares it with the written proof.
+/// A use's proofs of the bounds a callee declares are the proofs the callee's
+/// body will receive, as far as the use knows them, and `received` fills and
+/// checks them: the candidates for a slot are the proof written for it, when
+/// the body declares the bound directly, and the component of the dictionary
+/// of each bound whose derivation the walk recorded as entering the slot (a
+/// declared bound, or a slot settled before it). A written proof is never
+/// dropped: the entry is it, or else the first projection. Two closed
+/// candidates that differ refuse the slot, as does a proof that cannot be had.
+/// A projection an assumption cannot give yet (a concrete goal an equality
+/// made) waits for the instance, which compares it with the written proof.
 pub(crate) fn declared_bound_evidence_from<'db>(
     db: &'db dyn HirAnalysisDb,
     declared: PredicateListId<'db>,
     signature: PredicateListId<'db>,
     subst: &CompleteSubst<'db>,
-    assumptions: PredicateListId<'db>,
+    cx: TraitSolveCx<'db>,
     mut declared_proof: impl FnMut(TraitInstId<'db>, TraitInstId<'db>, bool) -> Option<EvidenceId<'db>>,
 ) -> DeclaredBounds<'db> {
-    #[derive(Clone, Copy)]
-    enum Slot<'db> {
-        Proof(EvidenceId<'db>),
-        Pending,
-        Refused(Refusal<'db>),
-    }
+    let signature = opened_bounds(db, signature);
     let bounds = signature.list(db);
     let edges = signature.implied_edges(db);
-    // The dictionary each bound offers to the bounds it implies. A declared
-    // bound offers the proof of it in the use's context, whether or not its own
-    // slot is left to the instance; a derived bound offers its own slot.
-    let mut offered: Vec<Option<Slot<'db>>> = vec![None; bounds.len()];
-    let mut slots: Vec<Slot<'db>> = Vec::with_capacity(bounds.len());
-    for (index, &bound) in bounds.iter().enumerate() {
-        let is_declared = declared.list(db).contains(&bound);
-        let Ok(goal) = substitute_complete(db, bound, subst) else {
-            slots.push(Slot::Pending);
-            offered[index] = Some(Slot::Pending);
-            continue;
-        };
-        let mut answer = None;
-        let mut refuse: Option<Refusal<'db>> = None;
-        if is_declared {
-            match declared_proof(bound, goal, true) {
-                Some(written) => answer = Some(written),
-                None => refuse = Some(Refusal::NoComponent { root: None }),
-            }
-        }
-        for edge in edges.iter().filter(|edge| edge.child as usize == index) {
-            let parent = edge.parent as usize;
-            let parent_declared = declared.list(db).contains(&bounds[parent]);
-            // A derived bound is read from the slots settled before it. A
-            // declared bound is read wherever it stands in the list.
-            if refuse.is_some() || parent == index || (parent > index && !parent_declared) {
-                continue;
-            }
-            let parent_goal = substitute_complete(db, bounds[parent], subst).ok();
-            let offer = *offered[parent].get_or_insert_with(|| {
-                match substitute_complete(db, bounds[parent], subst) {
-                    Ok(source_goal) => declared_proof(bounds[parent], source_goal, false).map_or(
-                        Slot::Refused(Refusal::NoComponent { root: None }),
-                        Slot::Proof,
-                    ),
-                    Err(_) => Slot::Pending,
-                }
-            });
-            let proof = match offer {
-                Slot::Proof(proof) => proof,
-                // The caller offers no dictionary for it yet.
-                Slot::Pending => continue,
-                Slot::Refused(_) => {
-                    refuse = Some(Refusal::NoComponent { root: parent_goal });
-                    continue;
-                }
-            };
-            match project_step(db, proof, edge.step, Some(goal), assumptions) {
-                Projection::Proof(projected) => match answer {
-                    Some(previous)
-                        if previous.is_closed(db)
-                            && projected.is_closed(db)
-                            && !same_dictionary(db, previous, projected, assumptions) =>
-                    {
-                        refuse = Some(match parent_goal {
-                            Some(root) => Refusal::Differs { a: root, b: goal },
-                            None => Refusal::NoComponent { root: None },
-                        });
-                    }
-                    Some(_) => {}
-                    None => answer = Some(projected),
-                },
-                // The dictionary is an assumption of the caller that has no
-                // slot for the goal yet: the instance supplies it.
-                Projection::Pending => {}
-                Projection::Refused => refuse = Some(Refusal::NoComponent { root: parent_goal }),
-                Projection::ConditionsDiffer { a, b } => {
-                    refuse = Some(Refusal::ConditionsDiffer { a, b });
-                }
-            }
-        }
-        let slot = match refuse {
-            Some(reason) => Slot::Refused(reason),
-            None => answer.map_or(Slot::Pending, Slot::Proof),
-        };
-        if !is_declared {
-            offered[index] = Some(slot);
-        }
-        slots.push(slot);
-    }
-    let mut refused = Vec::new();
-    let proofs = slots
+    let goals: Vec<Option<TraitInstId<'db>>> = bounds
+        .iter()
+        .map(|&bound| substitute_complete(db, bound, subst).ok())
+        .collect();
+    let inputs: Vec<SlotInput<'db>> = bounds
         .iter()
         .enumerate()
-        .map(|(index, slot)| match slot {
-            Slot::Proof(proof) => Some(*proof),
-            Slot::Pending => None,
-            Slot::Refused(reason) => {
-                refused.push((index, *reason));
-                None
+        .map(|(index, &bound)| {
+            let (Some(goal), true) = (goals[index], declared.list(db).contains(&bound)) else {
+                return SlotInput {
+                    own: None,
+                    offer: None,
+                    declared: false,
+                };
+            };
+            let own = declared_proof(bound, goal, true);
+            // A declared bound offers the proof of it in the use's context to
+            // the bounds it implies, whether or not its own slot is left to
+            // the instance.
+            let implies = edges
+                .iter()
+                .any(|edge| edge.parent as usize == index && edge.child as usize != index);
+            let offer = own.or_else(|| {
+                implies
+                    .then(|| declared_proof(bound, goal, false))
+                    .flatten()
+            });
+            SlotInput {
+                own,
+                offer,
+                declared: true,
             }
         })
         .collect();
+    let chosen = cx.choices().is_some();
+    let received = received(
+        db,
+        signature,
+        &goals,
+        &inputs,
+        &[],
+        cx,
+        Fallback::Use { chosen },
+    );
+    let refused = received
+        .refused
+        .iter()
+        .filter_map(|refused| {
+            let index = goals.iter().position(|goal| *goal == Some(refused.goal))?;
+            Some((index, refused.reason))
+        })
+        .collect();
     DeclaredBounds {
-        proofs: EvidenceList::of(db, proofs),
+        proofs: EvidenceList::of(db, received.entries),
         refused,
     }
 }
@@ -1586,19 +1526,16 @@ pub(crate) enum Projection<'db> {
     Proof(EvidenceId<'db>),
     Pending,
     Refused,
-    /// Two conditions of a selected implementation hold the component from
-    /// different dictionaries; `a` and `b` are the conditions' goals.
-    ConditionsDiffer {
-        a: TraitInstId<'db>,
-        b: TraitInstId<'db>,
-    },
+    /// The dictionaries a selected implementation holds for its conditions
+    /// disagree on the component, for the reason given.
+    Conflict(Refusal<'db>),
 }
 
 impl<'db> Projection<'db> {
     pub(crate) fn proof(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proof(proof) => Some(proof),
-            Self::Pending | Self::Refused | Self::ConditionsDiffer { .. } => None,
+            Self::Pending | Self::Refused | Self::Conflict(_) => None,
         }
     }
 }
@@ -1669,18 +1606,18 @@ fn same_arguments<'db>(
         })
 }
 
-/// Where an implementation's component for a declared bound comes from, in
-/// the implementation's own coordinates (no caller types).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-enum ImplComponent<'db> {
+/// Which goal of an implementation's conditions answers a declared bound, in
+/// the implementation's own coordinates (no caller types): a node of the
+/// layout that `received_conditions` fills.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+enum ImplComponent {
     /// The implementation's own component, proved where it is declared.
     Own,
-    /// Held by the dictionaries of conditions that state a bound answering the
-    /// declared one: the condition's position, and the steps from it.
-    Held(Vec<(u32, Vec<BoundStep<'db>>)>),
-    /// As `Own`, but the walk of a condition stopped at its limit, so the
-    /// bound may be held below it. A closed bound only.
-    Truncated,
+    /// A slot of the extended conditions that the conditions' dictionaries
+    /// imply and that answers an open bound.
+    Slot(u32),
+    /// A concrete component of the conditions' dictionaries.
+    Member(u32),
 }
 
 /// A condition whose bound (or a bound it implies, including a bound an
@@ -1690,46 +1627,32 @@ enum ImplComponent<'db> {
 /// mode; the reverse does not answer it. A closed one is answered by the
 /// candidate of the same trait and arguments (`same_identity`), the rule by
 /// which a body's goal reads a component, so that both read one dictionary.
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked(returns(copy))]
 fn impl_component<'db>(
     db: &'db dyn HirAnalysisDb,
     selected: ImplementorId<'db>,
     declared: TraitInstId<'db>,
-) -> ImplComponent<'db> {
+) -> ImplComponent {
     let ImplementorOrigin::Hir(implementation) = selected.origin(db) else {
         return ImplComponent::Own;
     };
     let basis = selected.constraints(db);
-    let cx = TraitSolveCx::new(db, implementation.scope()).with_assumptions(basis);
-    let answers = assumption_matcher(db, cx, declared);
-    let closed = is_closed_goal(db, declared);
+    let layout = opened_bounds(db, basis.extend_all_bounds(db));
     let scope = implementation.scope();
-    let mut held = Vec::new();
-    let mut truncated = false;
-    for (index, &condition) in basis.list(db).iter().enumerate() {
-        let walk = PredicateListId::new(db, vec![condition]).bound_walk_keeping_concrete(db);
-        truncated |= walk.is_truncated();
-        for (member, &candidate) in walk.list.list(db).iter().enumerate().skip(1) {
-            let answering = if closed {
-                same_identity(db, scope, candidate, declared)
-            } else {
-                answers(candidate)
-            };
-            if basis.list(db).contains(&candidate) || !answering {
-                continue;
-            }
-            if let Some(path) = walk.path_to(db, member) {
-                held.push((index as u32, path));
-            }
-        }
+    if is_closed_goal(db, declared) {
+        return concrete_components(db, layout)
+            .answering(db, scope, declared)
+            .map_or(ImplComponent::Own, |(member, _)| {
+                ImplComponent::Member(member as u32)
+            });
     }
-    if !held.is_empty() {
-        ImplComponent::Held(held)
-    } else if truncated && closed {
-        ImplComponent::Truncated
-    } else {
-        ImplComponent::Own
-    }
+    let cx = TraitSolveCx::new(db, scope).with_assumptions(basis);
+    let answers = assumption_matcher(db, cx, declared);
+    layout
+        .list(db)
+        .iter()
+        .position(|candidate| !basis.list(db).contains(candidate) && answers(*candidate))
+        .map_or(ImplComponent::Own, |slot| ImplComponent::Slot(slot as u32))
 }
 
 /// The component of the dictionary `proof` that `step` names, with `goal` the
@@ -1813,58 +1736,46 @@ pub(crate) fn project_step<'db>(
     let Some(declared) = step_bound(db, selected.trait_inst(db), step) else {
         return Projection::Refused;
     };
-    let component = impl_component(db, *selected, declared);
-    // A dictionary that holds a named implementation is not read where the
-    // walk of its conditions stopped before the bound: it is refused.
-    if matches!(component, ImplComponent::Truncated) && proof.has_named_impl(db) {
-        return Projection::Refused;
-    }
-    match component {
-        ImplComponent::Held(held) => {
-            let mut agreed: Option<(EvidenceId<'db>, u32)> = None;
-            let mut pending = false;
-            for (condition, steps) in held {
-                let Some(&source) = conds.get(*condition as usize) else {
-                    return Projection::Refused;
-                };
-                let mut current = Projection::Proof(source);
-                for (position, &next) in steps.iter().enumerate() {
-                    let Projection::Proof(from) = current else {
-                        break;
-                    };
-                    let last = position + 1 == steps.len();
-                    current = project_step(db, from, next, goal.filter(|_| last), assumptions);
-                }
-                match current {
-                    Projection::Proof(component) => match agreed {
-                        Some((other, first))
-                            if !same_dictionary(db, other, component, assumptions) =>
-                        {
-                            // The conditions, as the selected implementation
-                            // states them at the instantiated arguments.
-                            let conditions = instantiated.constraints(db);
-                            return match (
-                                conditions.list(db).get(first as usize),
-                                conditions.list(db).get(*condition as usize),
-                            ) {
-                                (Some(&a), Some(&b)) => Projection::ConditionsDiffer { a, b },
-                                _ => Projection::Refused,
-                            };
-                        }
-                        Some(_) => {}
-                        None => agreed = Some((component, *condition)),
-                    },
-                    Projection::Pending => pending = true,
-                    Projection::Refused | Projection::ConditionsDiffer { .. } => return current,
-                }
+    // The dictionaries the implementation holds for its conditions, and the
+    // bounds they imply, are what it received: the proofs of its conditions
+    // are its slots, and a bound they imply is read from the node that
+    // answers it.
+    let received = received_conditions(db, proof, assumptions);
+    let named = proof.has_named_impl(db);
+    let read = |value: Option<EvidenceId<'db>>, pending: bool| match value {
+        Some(value) => Projection::Proof(value),
+        None => match received.refused.first() {
+            Some(first) if named => Projection::Conflict(first.reason),
+            _ if pending => Projection::Pending,
+            _ => Projection::Refused,
+        },
+    };
+    match impl_component(db, *selected, declared) {
+        ImplComponent::Slot(slot) => read(
+            received.entries.get(slot as usize).copied().flatten(),
+            received
+                .pending
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(false),
+        ),
+        ImplComponent::Member(member) => read(
+            received.members.get(member as usize).copied().flatten(),
+            conds.iter().any(|cond| !cond.is_closed(db)),
+        ),
+        ImplComponent::Own => {
+            // A dictionary that holds a named implementation is not read where
+            // the walk of its conditions stopped before the bound: it is
+            // refused.
+            if named
+                && is_closed_goal(db, declared)
+                && received
+                    .refused
+                    .iter()
+                    .any(|refused| matches!(refused.reason, Refusal::TooDeep { .. }))
+            {
+                return Projection::Refused;
             }
-            match (pending, agreed) {
-                (true, _) => Projection::Pending,
-                (false, Some((agreed, _))) => Projection::Proof(agreed),
-                (false, None) => Projection::Refused,
-            }
-        }
-        ImplComponent::Own | ImplComponent::Truncated => {
             let Ok(subst) = CompleteSubst::for_owner(
                 db,
                 implementation.into(),
@@ -1882,7 +1793,7 @@ pub(crate) fn project_step<'db>(
                 declared,
                 declared,
             );
-            let supplied = expanded_condition_evidence(db, proof, assumptions);
+            let supplied = EvidenceList::of(db, received.entries.clone());
             instantiate_proofs(db, &proofs, &subst, supplied)
                 .get(db, 0)
                 .map_or(Projection::Refused, Projection::Proof)
@@ -1935,98 +1846,6 @@ pub(crate) fn implied_bound_evidence<'db>(
         current = project_step(db, from, step, last.then_some(goal), assumptions);
     }
     current
-}
-
-/// Extend an implementation's actual prerequisite dictionaries with their
-/// implied dictionaries, along the derivations the walk of its conditions
-/// recorded. A slot that a condition states and another condition's dictionary
-/// implies, or that two dictionaries imply, must have one dictionary. This is
-/// projection through supplied proofs, never selection in the caller's scope.
-#[salsa::tracked(returns(copy))]
-fn expanded_condition_evidence<'db>(
-    db: &'db dyn HirAnalysisDb,
-    proof: EvidenceId<'db>,
-    assumptions: PredicateListId<'db>,
-) -> EvidenceList<'db> {
-    let Evidence::Impl {
-        selected,
-        instantiated,
-        conds,
-    } = proof.data(db)
-    else {
-        return EvidenceList::none(db);
-    };
-    // The conditions of a function item's callable implementation are written
-    // at the item's own arguments: it has no parameters to substitute.
-    let subst = match selected.origin(db) {
-        ImplementorOrigin::Hir(implementation) => {
-            let Ok(subst) = CompleteSubst::for_owner(
-                db,
-                implementation.into(),
-                instantiated.params(db).clone(),
-            ) else {
-                return EvidenceList::none(db);
-            };
-            Some(subst)
-        }
-        ImplementorOrigin::Callable => None,
-        _ => return EvidenceList::none(db),
-    };
-    let basis = selected.constraints(db);
-    let slots = basis.extend_all_bounds(db);
-    let edges = slots.implied_edges(db);
-    let goals: Vec<Option<TraitInstId<'db>>> = slots
-        .list(db)
-        .iter()
-        .map(|&bound| match &subst {
-            Some(subst) => substitute_complete(db, bound, subst).ok(),
-            None => Some(bound),
-        })
-        .collect();
-    let mut entries: Vec<Option<EvidenceId<'db>>> = vec![None; goals.len()];
-    for (index, &bound) in slots.list(db).iter().enumerate() {
-        let mut answer = basis
-            .list(db)
-            .iter()
-            .position(|&condition| condition == bound)
-            .and_then(|condition| conds.get(condition).copied());
-        let mut failed = false;
-        for edge in edges
-            .iter()
-            .filter(|edge| edge.child as usize == index && (edge.parent as usize) < index)
-        {
-            let projected = entries[edge.parent as usize]
-                .map(|source| project_step(db, source, edge.step, goals[index], assumptions));
-            match projected {
-                Some(Projection::Proof(component)) => match answer {
-                    Some(previous) if !same_dictionary(db, previous, component, assumptions) => {
-                        failed = true;
-                        break;
-                    }
-                    Some(_) => {}
-                    None => answer = Some(component),
-                },
-                _ => {
-                    failed = true;
-                    break;
-                }
-            }
-        }
-        entries[index] = if failed { None } else { answer };
-    }
-    // A slot that a later slot also implies (conditions that imply one
-    // another) must read the same dictionary from it.
-    for edge in edges.iter().filter(|edge| edge.parent > edge.child) {
-        let (parent, child) = (edge.parent as usize, edge.child as usize);
-        let (Some(source), Some(entry)) = (entries[parent], entries[child]) else {
-            continue;
-        };
-        match project_step(db, source, edge.step, goals[child], assumptions) {
-            Projection::Proof(component) if same_dictionary(db, component, entry, assumptions) => {}
-            _ => entries[child] = None,
-        }
-    }
-    EvidenceList::of(db, entries)
 }
 
 /// Recover each selected condition in the original goal's type coordinates.
@@ -2305,7 +2124,7 @@ fn prove_selected<'db>(
         // producer owns the selection, before any body could reconstruct a
         // missing slot with an ordinary proof.
         if proof.has_named_impl(db) {
-            let supplied = expanded_condition_evidence(db, proof, solve_cx.assumptions());
+            let supplied = condition_evidence(db, proof, solve_cx.assumptions());
             let count = resolved
                 .selected()
                 .constraints(db)
@@ -2559,7 +2378,7 @@ pub(crate) fn impl_method_bound_evidence<'db>(
     let Evidence::Impl { selected, .. } = selection.data(db) else {
         return EvidenceList::none(db);
     };
-    let conditions = expanded_condition_evidence(db, selection, assumptions);
+    let conditions = condition_evidence(db, selection, assumptions);
     let condition_count = selected
         .constraints(db)
         .extend_all_bounds(db)
@@ -2590,8 +2409,19 @@ pub(crate) fn impl_const_bound_evidence<'db>(
     else {
         return EvidenceList::none(db);
     };
-    let supplied = expanded_condition_evidence(db, selection, assumptions);
+    let supplied = condition_evidence(db, selection, assumptions);
     instantiate_proofs(db, proofs, subst, supplied)
+}
+
+/// The bounds a body opens, which the agreement law governs: today every
+/// declared bound. A bound a body receives by name and does not open would be
+/// left out here, and every caller of `received` lays out its slots through
+/// this one choice.
+pub(crate) fn opened_bounds<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    declared: PredicateListId<'db>,
+) -> PredicateListId<'db> {
+    declared
 }
 
 /// The evidence an instance runs with, and the goals whose dictionaries refuse
@@ -2619,6 +2449,7 @@ pub(crate) fn instance_evidence<'db>(
     // A body that contains closures declares their bounds after its own
     // signature, which the goals are the prefix of.
     let count = goals.list(db).len();
+    let declared = opened_bounds(db, declared);
     debug_assert!(declared.list(db).len() >= count);
     let layout = PredicateListId::new(
         db,
@@ -2630,29 +2461,37 @@ pub(crate) fn instance_evidence<'db>(
             .collect::<Vec<_>>(),
     );
     // A closed supplied proof of a closed goal, or any proof of an open one.
-    let own: Vec<Option<EvidenceId<'db>>> = (0..count)
+    let inputs: Vec<SlotInput<'db>> = (0..count)
         .map(|index| {
-            let proof = supplied.get(db, index)?;
-            let closed = is_closed_goal(db, goals.list(db)[index]);
-            if proof.has_deferred(db) {
-                // A selected parent is authoritative even if one retained
-                // obligation cannot close. Never replace that tree.
-                // Known gap: the completed proof is not compared with ordinary
-                // normalization (`proof_output_mismatch`), as the proofs
-                // completed in `entry_codec_callees` are; see
-                // `semantic_callee_key_with_assumptions`.
-                complete_deferred_evidence(db, proof)
-                    .filter(|completed| !closed || completed.is_closed(db))
-            } else {
-                (!closed || proof.is_closed(db)).then_some(proof)
+            let own = supplied.get(db, index).and_then(|proof| {
+                let closed = is_closed_goal(db, goals.list(db)[index]);
+                if proof.has_deferred(db) {
+                    // A selected parent is authoritative even if one retained
+                    // obligation cannot close. Never replace that tree.
+                    // Known gap: the completed proof is not compared with
+                    // ordinary normalization (`proof_output_mismatch`), as the
+                    // proofs completed in `entry_codec_callees` are; see
+                    // `semantic_callee_key_with_assumptions`.
+                    complete_deferred_evidence(db, proof)
+                        .filter(|completed| !closed || completed.is_closed(db))
+                } else {
+                    (!closed || proof.is_closed(db)).then_some(proof)
+                }
+            });
+            SlotInput {
+                own,
+                offer: own,
+                declared: false,
             }
         })
         .collect();
+    let goals_list: Vec<Option<TraitInstId<'db>>> =
+        goals.list(db).iter().copied().map(Some).collect();
     let received = received(
         db,
         layout,
-        goals,
-        &own,
+        &goals_list,
+        &inputs,
         supplied.rows(db),
         solve_cx,
         Fallback::Instance,
@@ -2666,20 +2505,58 @@ pub(crate) fn instance_evidence<'db>(
 /// What a missing dictionary means to the caller of `received`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Fallback {
-    /// A closed goal that no route reaches and no proof was supplied for is
-    /// proved in the instance's own context. A projection is preferred to the
-    /// supplied proof as the entry.
+    /// An instance. A closed goal that no route reaches and no proof was
+    /// supplied for is proved in the instance's own context, and a projection
+    /// is preferred to the supplied proof as the entry.
     Instance,
+    /// A use's proofs of the bounds a callee declares. A bound that is not
+    /// proved yet stays pending, for the instance to supply, and a proof
+    /// written for a declared bound is preferred as the entry. `chosen`: the
+    /// use is under a lexical choice, which can make its proofs disagree even
+    /// where none of them names an implementation yet.
+    Use { chosen: bool },
+    /// The conditions of a selected implementation. A bound no route gives
+    /// stays empty, and the proof of a stated condition is preferred.
+    Conditions,
+}
+
+/// What a body is given for one slot of its layout.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SlotInput<'db> {
+    /// The proof supplied for the slot: the instance's, the proof written at a
+    /// use for a declared bound, or the proof of a stated condition.
+    pub(crate) own: Option<EvidenceId<'db>>,
+    /// The dictionary a declared bound offers to the bounds it implies. A
+    /// use proves a declared parent for its children even where it leaves the
+    /// parent's own entry to the instance.
+    pub(crate) offer: Option<EvidenceId<'db>>,
+    /// Whether the slot is a bound the body declares, of a use: its proof must
+    /// exist, and it may be read from a position after the bounds it implies.
+    pub(crate) declared: bool,
 }
 
 /// The proofs a body receives, one dictionary for each goal of the body.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) struct Received<'db> {
     /// The dictionary of each slot; `None` for a slot with none yet or refused.
     pub(crate) entries: Vec<Option<EvidenceId<'db>>>,
     /// The dictionary of each member of `concrete_components(layout)`.
     pub(crate) members: Vec<Option<EvidenceId<'db>>>,
-    /// The goals whose routes refuse the instance, the first found first.
+    /// Whether a slot has no dictionary yet, as against none that can be read.
+    pub(crate) pending: Vec<bool>,
+    /// The goals whose routes refuse the body, the first found first.
     pub(crate) refused: Vec<RefusedGoal<'db>>,
+}
+
+impl<'db> Received<'db> {
+    fn none() -> Self {
+        Self {
+            entries: Vec::new(),
+            members: Vec::new(),
+            pending: Vec::new(),
+            refused: Vec::new(),
+        }
+    }
 }
 
 /// Record a refused goal once, in the order the routes were followed.
@@ -2704,10 +2581,10 @@ fn refuse_goal<'db>(
 /// even where an instantiation makes them equal. A route is a slot followed by
 /// the derivation steps the walk of the layout recorded.
 ///
-/// `own` is the proof supplied for each slot. A slot with a derivation entering
-/// it takes the dictionary that derivation gives (`project_step`); a root keeps
-/// its supplied proof, takes the component that slots deriving it from later
-/// positions give, or is proved in `cx`.
+/// `inputs` are the proofs supplied for the slots. A slot with a derivation
+/// entering it takes the dictionary that derivation gives (`project_step`); a
+/// root keeps its supplied proof, takes the component that slots deriving it
+/// from later positions give, or is proved (`Fallback`).
 ///
 /// Two dictionaries agree when `same_dictionary` says so, or when neither
 /// selects a named implementation at any depth: two proofs of one closed goal
@@ -2716,27 +2593,40 @@ fn refuse_goal<'db>(
 /// body selects one (the gate), only the slots are filled and nothing is
 /// compared. A route that cannot be followed refuses only when a dictionary on
 /// it names an implementation; a route cut at the walk's depth or member limit
-/// refuses on the same condition.
+/// refuses on the same condition. The components of a use are not read: they
+/// are compared where the instance is built.
 pub(crate) fn received<'db>(
     db: &'db dyn HirAnalysisDb,
     layout: PredicateListId<'db>,
-    goals: PredicateListId<'db>,
-    own: &[Option<EvidenceId<'db>>],
+    goals: &[Option<TraitInstId<'db>>],
+    inputs: &[SlotInput<'db>],
     rows: &[RowEvidence<'db>],
     cx: TraitSolveCx<'db>,
     fallback: Fallback,
 ) -> Received<'db> {
-    let Fallback::Instance = fallback;
-    let count = goals.list(db).len();
+    let count = goals.len();
+    debug_assert_eq!(inputs.len(), count);
     let edges = layout.implied_edges(db);
     let assumptions = cx.assumptions();
-    let goal_at = |index: usize| goals.list(db)[index];
-    let closed: Vec<bool> = (0..count)
-        .map(|index| is_closed_goal(db, goal_at(index)))
+    let goal_at = |index: usize| goals[index].expect("a slot with no goal is not read");
+    // A slot is read where its goal is known; an instance reads only closed
+    // goals, whose dictionary every slot that implies it must give.
+    let closed: Vec<bool> = goals
+        .iter()
+        .map(|goal| {
+            goal.is_some_and(|goal| match fallback {
+                Fallback::Instance => is_closed_goal(db, goal),
+                Fallback::Use { .. } | Fallback::Conditions => true,
+            })
+        })
         .collect();
     let agree = |a: EvidenceId<'db>, b: EvidenceId<'db>| {
         same_dictionary(db, a, b, assumptions) || (!a.has_named_impl(db) && !b.has_named_impl(db))
     };
+    // Two proofs that name no assumption and do not agree. A proof that names
+    // an assumption of the caller is a placeholder, not a dictionary.
+    let differ =
+        |a: EvidenceId<'db>, b: EvidenceId<'db>| a.is_closed(db) && b.is_closed(db) && !agree(a, b);
     // A closed dictionary has no pending slot: it projects or refuses.
     let project = |proof, step, index: usize| {
         let projection = project_step(db, proof, step, Some(goal_at(index)), assumptions);
@@ -2747,11 +2637,87 @@ pub(crate) fn received<'db>(
         root: Some(goal_at(parent)),
     };
     let mut entries: Vec<Option<EvidenceId<'db>>> = vec![None; count];
+    let mut pending = vec![false; count];
     let mut refused: Vec<RefusedGoal<'db>> = Vec::new();
+    let own: Vec<Option<EvidenceId<'db>>> = inputs.iter().map(|input| input.own).collect();
     // Pass 1: the slots, in walk order.
     for index in 0..count {
         if !closed[index] {
             entries[index] = own[index];
+            pending[index] = goals[index].is_none();
+            continue;
+        }
+        if !matches!(fallback, Fallback::Instance) {
+            // A use or the conditions of an implementation.
+            let goal = goal_at(index);
+            let mut answer = own[index];
+            let mut refusal = None;
+            let mut blocked = false;
+            if matches!(fallback, Fallback::Use { .. })
+                && inputs[index].declared
+                && answer.is_none()
+            {
+                // A declared bound that no proof can be had for.
+                refusal = Some(Refusal::NoComponent { root: None });
+            }
+            for edge in edges.iter().filter(|edge| edge.child as usize == index) {
+                let parent = edge.parent as usize;
+                let parent_declared = inputs[parent].declared;
+                // A derived bound is read from the slots settled before it. A
+                // declared bound is read wherever it stands in the list.
+                if refusal.is_some() || parent == index || (parent > index && !parent_declared) {
+                    continue;
+                }
+                let Some(parent_goal) = goals[parent] else {
+                    continue;
+                };
+                let offered = if parent_declared {
+                    inputs[parent].offer
+                } else {
+                    entries[parent]
+                };
+                let Some(offered) = offered else {
+                    // The parent gives no dictionary: nothing to read from it
+                    // yet, or none that can be.
+                    let unreadable = parent_declared || !pending[parent];
+                    blocked |= unreadable;
+                    if unreadable && names_impl(db, own[index]) {
+                        refusal = Some(Refusal::NoComponent {
+                            root: Some(parent_goal),
+                        });
+                    }
+                    continue;
+                };
+                match project_step(db, offered, edge.step, Some(goal), assumptions) {
+                    Projection::Proof(projected) => match answer {
+                        Some(previous) if differ(previous, projected) => {
+                            refusal = Some(Refusal::Differs {
+                                a: parent_goal,
+                                b: goal,
+                            });
+                        }
+                        Some(_) => {}
+                        None => answer = Some(projected),
+                    },
+                    // The dictionary is an assumption of the caller that has
+                    // no slot for the goal yet: the instance supplies it.
+                    Projection::Pending => {}
+                    Projection::Refused => {
+                        blocked = true;
+                        if names_impl(db, Some(offered)) || names_impl(db, own[index]) {
+                            refusal = Some(no_component(parent));
+                        }
+                    }
+                    Projection::Conflict(reason) => refusal = Some(reason),
+                }
+            }
+            match refusal {
+                Some(reason) => refuse_goal(&mut refused, goal, reason),
+                None => {
+                    entries[index] = answer;
+                    pending[index] = answer.is_none() && !blocked;
+                }
+            }
             continue;
         }
         let mut candidates: Vec<(usize, EvidenceId<'db>)> = Vec::new();
@@ -2783,11 +2749,11 @@ pub(crate) fn received<'db>(
             // choice, must be the one the implying dictionaries hold.
             let differing = candidates[1..]
                 .iter()
-                .find(|&&(_, other)| !agree(first, other))
+                .find(|&&(_, other)| differ(first, other))
                 .map(|&(parent, _)| goal_at(parent))
                 .or_else(|| {
                     own[index]
-                        .filter(|&other| !agree(first, other))
+                        .filter(|&other| differ(first, other))
                         .map(|_| goal_at(index))
                 });
             refusal = differing.map(|b| Refusal::Differs {
@@ -2814,7 +2780,7 @@ pub(crate) fn received<'db>(
                 Some((first_parent, Some(first))) => {
                     refusal = later.find_map(|(parent, other)| match other {
                         None => Some(no_component(parent)),
-                        Some(other) if !agree(first, other) => Some(Refusal::Differs {
+                        Some(other) if differ(first, other) => Some(Refusal::Differs {
                             a: goal_at(first_parent),
                             b: goal_at(parent),
                         }),
@@ -2854,48 +2820,75 @@ pub(crate) fn received<'db>(
         }
     }
     // The gate. A refusal needs a named implementation in a dictionary the
-    // instance received: where there is none, the slots are all there is.
-    let active = own.iter().any(|&proof| names_impl(db, proof))
-        || rows.iter().any(|row| names_impl(db, row.proof));
-    if !active {
+    // body received: where there is none, the slots are all there is. The
+    // dictionaries of the components of an implementation's conditions are
+    // read, whatever they are.
+    let active = inputs
+        .iter()
+        .any(|input| names_impl(db, input.own) || names_impl(db, input.offer))
+        || rows.iter().any(|row| names_impl(db, row.proof))
+        || matches!(fallback, Fallback::Use { chosen: true });
+    let reads_components = matches!(fallback, Fallback::Conditions);
+    if !active && !reads_components {
         return Received {
             entries,
             members: Vec::new(),
+            pending,
             refused,
         };
     }
-    // Pass 2: every derivation whose two ends are closed. Slots that imply
-    // one another hold one implementation each: every slot is what the
-    // dictionary of each slot that implies it projects for it.
-    for edge in edges {
-        let (parent, child) = (edge.parent as usize, edge.child as usize);
-        if parent == child || !closed[parent] || !closed[child] {
-            continue;
+    // The dictionary a slot offers to the bounds it implies.
+    let source_of = |slot: usize, entries: &[Option<EvidenceId<'db>>]| {
+        if inputs[slot].declared {
+            inputs[slot].offer.or(entries[slot])
+        } else {
+            entries[slot]
         }
-        let (Some(source), Some(entry)) = (entries[parent], entries[child]) else {
-            continue;
-        };
-        let reason = match project(source, edge.step, child) {
-            None if names_impl(db, Some(source)) || names_impl(db, Some(entry)) => {
-                Some(no_component(parent))
+    };
+    // Pass 2: every derivation whose two ends hold a dictionary. Slots that
+    // imply one another hold one implementation each: every slot is what the
+    // dictionary of each slot that implies it projects for it.
+    if active {
+        for edge in edges {
+            let (parent, child) = (edge.parent as usize, edge.child as usize);
+            if parent == child || !closed[parent] || !closed[child] {
+                continue;
             }
-            None => None,
-            Some(component) if !agree(component, entry) => Some(Refusal::Differs {
-                a: goal_at(parent),
-                b: goal_at(child),
-            }),
-            Some(_) => None,
-        };
-        if let Some(reason) = reason {
-            entries[child] = None;
-            refuse_goal(&mut refused, goal_at(child), reason);
+            let (Some(source), Some(entry)) = (source_of(parent, &entries), entries[child]) else {
+                continue;
+            };
+            let reason =
+                match project_step(db, source, edge.step, Some(goal_at(child)), assumptions) {
+                    Projection::Refused
+                        if names_impl(db, Some(source)) || names_impl(db, Some(entry)) =>
+                    {
+                        Some(no_component(parent))
+                    }
+                    Projection::Proof(component) if differ(component, entry) => {
+                        Some(Refusal::Differs {
+                            a: goal_at(parent),
+                            b: goal_at(child),
+                        })
+                    }
+                    Projection::Conflict(reason) => Some(reason),
+                    _ => None,
+                };
+            if let Some(reason) = reason {
+                entries[child] = None;
+                refuse_goal(&mut refused, goal_at(child), reason);
+            }
         }
     }
     // The concrete bounds the slots' dictionaries hold are fields of those
     // dictionaries as well. Each derivation of one gives it a dictionary, and
     // they must all be one. Members are read only from slots that were not
     // refused.
-    let table = concrete_components(db, layout);
+    let no_components = ComponentTable::empty();
+    let table = if matches!(fallback, Fallback::Use { .. }) {
+        &no_components
+    } else {
+        concrete_components(db, layout)
+    };
     let mut values: Vec<Option<EvidenceId<'db>>> = vec![None; table.members.len()];
     if refused.is_empty() {
         // The slot a derivation entering `parent` starts from.
@@ -2919,7 +2912,7 @@ pub(crate) fn received<'db>(
                 )
                 .collect::<Vec<_>>()
         };
-        let named = |slot: usize| slot_names_impl(db, &closed, &entries, slot);
+        let named = |slot: usize| closed[slot] && names_impl(db, entries[slot]);
         // A derivation that finds no dictionary or no component refuses only a
         // member read from a dictionary that holds a named implementation.
         let applies = |member: &Component<'db>, reason: &Refusal<'db>| {
@@ -2937,6 +2930,7 @@ pub(crate) fn received<'db>(
                 }
                 match entries[parent] {
                     Some(source) => source,
+                    None if pending[parent] => return Ok(None),
                     None => {
                         return Err(Refusal::NoComponent {
                             root: Some(goal_at(parent)),
@@ -2952,11 +2946,10 @@ pub(crate) fn received<'db>(
             match project_step(db, source, step, Some(member.goal), assumptions) {
                 Projection::Proof(proof) => Ok(Some(proof)),
                 Projection::Pending => Ok(None),
-                Projection::Refused | Projection::ConditionsDiffer { .. } => {
-                    Err(Refusal::NoComponent {
-                        root: Some(root_goal(parent)),
-                    })
-                }
+                Projection::Refused => Err(Refusal::NoComponent {
+                    root: Some(root_goal(parent)),
+                }),
+                Projection::Conflict(reason) => Err(reason),
             }
         };
         // Each member is read from the members before it, which hold the
@@ -2979,7 +2972,7 @@ pub(crate) fn received<'db>(
                     }
                     Err(_) | Ok(None) => {}
                     Ok(Some(proof)) => match agreed {
-                        Some((first, first_parent)) if !agree(first, proof) => {
+                        Some((first, first_parent)) if differ(first, proof) => {
                             refuse_goal(
                                 &mut refused,
                                 member.goal,
@@ -3016,7 +3009,7 @@ pub(crate) fn received<'db>(
                     Err(reason) if applies(member, &reason) => {
                         refuse_goal(&mut refused, member.goal, reason);
                     }
-                    Ok(Some(proof)) if !agree(value, proof) => {
+                    Ok(Some(proof)) if differ(value, proof) => {
                         refuse_goal(
                             &mut refused,
                             member.goal,
@@ -3053,6 +3046,14 @@ pub(crate) fn received<'db>(
                 );
             }
         }
+    }
+    if !active {
+        return Received {
+            entries,
+            members: values,
+            pending,
+            refused,
+        };
     }
     // Pass 3: one dictionary for each goal. The slots and the members of one
     // trait are compared by the identity of their goals in the coordinates of
@@ -3102,7 +3103,7 @@ pub(crate) fn received<'db>(
                 .iter()
                 .find(|&&first| same_identity(db, scope, declared_goal(first), goal))
                 && let Some(other) = value_of(first, &entries)
-                && !agree(other, value)
+                && differ(other, value)
             {
                 let at = if node < count { goal_at(node) } else { goal };
                 refuse_goal(
@@ -3124,8 +3125,93 @@ pub(crate) fn received<'db>(
     Received {
         entries,
         members: values,
+        pending,
         refused,
     }
+}
+
+/// The dictionaries a selected implementation's proof holds for its
+/// conditions, the bounds they imply and the concrete bounds they hold: the
+/// implementation's own proofs of its conditions (`conds`) are what it
+/// received. The same agreement rule holds one level down: each of its
+/// conditions, and the bounds they imply, give one dictionary to a goal.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn received_conditions<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: EvidenceId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> Received<'db> {
+    let Evidence::Impl {
+        selected,
+        instantiated,
+        conds,
+    } = proof.data(db)
+    else {
+        return Received::none();
+    };
+    // The conditions of a function item's callable implementation are written
+    // at the item's own arguments: it has no parameters to substitute.
+    let (subst, scope) = match selected.origin(db) {
+        ImplementorOrigin::Hir(implementation) => {
+            let Ok(subst) = CompleteSubst::for_owner(
+                db,
+                implementation.into(),
+                instantiated.params(db).clone(),
+            ) else {
+                return Received::none();
+            };
+            (Some(subst), implementation.scope())
+        }
+        ImplementorOrigin::Callable => (None, selected.trait_inst(db).def(db).scope()),
+        _ => return Received::none(),
+    };
+    let basis = selected.constraints(db);
+    let layout = opened_bounds(db, basis.extend_all_bounds(db));
+    let goals: Vec<Option<TraitInstId<'db>>> = layout
+        .list(db)
+        .iter()
+        .map(|&bound| match &subst {
+            Some(subst) => substitute_complete(db, bound, subst).ok(),
+            None => Some(bound),
+        })
+        .collect();
+    let inputs: Vec<SlotInput<'db>> = layout
+        .list(db)
+        .iter()
+        .map(|&bound| {
+            let own = basis
+                .list(db)
+                .iter()
+                .position(|&condition| condition == bound)
+                .and_then(|condition| conds.get(condition).copied());
+            SlotInput {
+                own,
+                offer: None,
+                declared: false,
+            }
+        })
+        .collect();
+    received(
+        db,
+        layout,
+        &goals,
+        &inputs,
+        &[],
+        TraitSolveCx::new(db, scope).with_assumptions(assumptions),
+        Fallback::Conditions,
+    )
+}
+
+/// The dictionaries of an implementation's extended conditions, as a supply.
+fn condition_evidence<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: EvidenceId<'db>,
+    assumptions: PredicateListId<'db>,
+) -> EvidenceList<'db> {
+    EvidenceList::of(
+        db,
+        received_conditions(db, proof, assumptions).entries.clone(),
+    )
 }
 
 impl<'db> EvidenceId<'db> {

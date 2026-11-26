@@ -6632,7 +6632,7 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }
             }
 
-            Self::ConditionsDiffer {
+            Self::ImplementationDiffers {
                 span,
                 primary_goal,
                 a,
@@ -6640,28 +6640,22 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
             } => primary_diag(
                 severity,
                 "trait bound is not satisfied",
-                format!(
-                    "`{}`: `{}` and `{}` supply different implementations",
-                    primary_goal.pretty_print(db, true),
-                    a.pretty_print(db, true),
-                    b.pretty_print(db, true)
-                ),
-                span.resolve(db),
-                error_code,
-            ),
-
-            Self::ImplementationDiffers {
-                span,
-                primary_goal,
-                root,
-            } => primary_diag(
-                severity,
-                "trait bound is not satisfied",
-                format!(
-                    "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
-                    primary_goal.pretty_print(db, true),
-                    root.pretty_print(db, true)
-                ),
+                if b == primary_goal {
+                    // The proof written for the goal itself against the
+                    // dictionary of `a`.
+                    format!(
+                        "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
+                        primary_goal.pretty_print(db, true),
+                        a.pretty_print(db, true)
+                    )
+                } else {
+                    format!(
+                        "`{}`: `{}` and `{}` supply different implementations",
+                        primary_goal.pretty_print(db, true),
+                        a.pretty_print(db, true),
+                        b.pretty_print(db, true)
+                    )
+                },
                 span.resolve(db),
                 error_code,
             ),

@@ -2364,7 +2364,7 @@ impl<'db> SemanticInstance<'db> {
         if let Some(refused) = typed_body.refused_bound() {
             let goal = refused.goal.pretty_print(db, true);
             let message = match refused.reason {
-                Refusal::Differs { a, b } | Refusal::ConditionsDiffer { a, b } => format!(
+                Refusal::Differs { a, b } => format!(
                     "`{goal}`: `{}` and `{}` supply different implementations",
                     a.pretty_print(db, true),
                     b.pretty_print(db, true)

@@ -474,7 +474,7 @@ pub(crate) fn supply_direct_effect_evidence<'db>(
         declared,
         signature,
         &subst,
-        assumptions,
+        TraitSolveCx::new(db, func.scope()).with_assumptions(assumptions),
         |root, _, _| match root.self_ty(db).data(db) {
             TyData::TyParam(param) if param.is_effect_provider() => {
                 proofs.get(param.idx).copied().flatten()
