@@ -2387,7 +2387,7 @@ impl EntryPlanError {
         goal: TraitInstId<'db>,
     ) -> Self {
         let chain = UnmetGoal::chain(db, solve_cx, goal).unwrap_or_else(|| vec![goal]);
-        Self::NoInstance(vec![UnmetGoal::of_chain(db, None, &chain)])
+        Self::NoInstance(vec![UnmetGoal::of_chain(db, solve_cx, None, &chain)])
     }
 
     /// What each part of the error says, with the `init` argument that it is
@@ -2442,9 +2442,12 @@ impl UnmetGoal {
         Some(chain)
     }
 
-    /// The error that names the first and the last goal of `chain`.
+    /// The error that names the first and the last goal of `chain`. A trait
+    /// of the last goal that a dependency re-exports prints under the name
+    /// that the code of `solve_cx` can write.
     pub fn of_chain<'db>(
         db: &'db dyn HirAnalysisDb,
+        solve_cx: TraitSolveCx<'db>,
         arg: Option<usize>,
         chain: &[TraitInstId<'db>],
     ) -> Self {
@@ -2454,7 +2457,7 @@ impl UnmetGoal {
             cause: chain
                 .last()
                 .filter(|_| chain.len() > 1)
-                .map(|cause| cause.pretty_print(db, true)),
+                .map(|cause| cause.pretty_print_from(db, true, solve_cx.origin_scope(db))),
         }
     }
 
@@ -2463,7 +2466,12 @@ impl UnmetGoal {
         solve_cx: TraitSolveCx<'db>,
         goal: TraitInstId<'db>,
     ) -> Option<Self> {
-        Some(Self::of_chain(db, None, &Self::chain(db, solve_cx, goal)?))
+        Some(Self::of_chain(
+            db,
+            solve_cx,
+            None,
+            &Self::chain(db, solve_cx, goal)?,
+        ))
     }
 
     /// The goal and, when known, the goal that stops its proof.
@@ -2577,7 +2585,7 @@ fn contract_entry_plan<'db>(
             let unmet: Vec<_> = chains
                 .iter()
                 .filter(|(arg, _)| arg.is_some() || !by_arg)
-                .map(|(arg, chain)| UnmetGoal::of_chain(db, *arg, chain))
+                .map(|(arg, chain)| UnmetGoal::of_chain(db, solve_cx, *arg, chain))
                 .collect();
             if !unmet.is_empty() {
                 return EntryPlanError::NoInstance(unmet);

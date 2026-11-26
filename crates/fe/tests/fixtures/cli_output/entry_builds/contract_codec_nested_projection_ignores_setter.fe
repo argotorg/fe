@@ -1,0 +1,83 @@
+// A read through two projections of a packed entry runs the getter of its lane codec and never the setter, so a drop in the setter is not judged.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, Drop}
+
+pub struct Inner {
+    pub a: u8,
+    pub b: u8,
+}
+
+pub struct Outer {
+    pub inner: Inner,
+    pub tag: u16,
+}
+
+struct Codec {}
+impl LaneCodec<Outer> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> Outer {
+        let raw: u256 = (word >> offset) & 0xffffffff
+        Outer {
+            inner: Inner {
+                a: (raw & 0xff).downcast_truncate(),
+                b: ((raw >> 8) & 0xff).downcast_truncate(),
+            },
+            tag: ((raw >> 16) & 0xffff).downcast_truncate(),
+        }
+    }
+    fn set(_ word: u256, offset: u256, value: own Outer) -> u256 {
+        with (Loud2) { hold(Tag2 {}) }
+        let packed: u256 = (value.inner.a as u256) | ((value.inner.b as u256) << 8) | ((value.tag as u256) << 16)
+        (word & !(0xffffffff << offset)) | (packed << offset)
+    }
+}
+struct Outers<C> {}
+impl<C> Pinned for Outers<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Outers<C> {
+    type Key = u256
+    type Entry = Outer
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u8,
+}
+pub contract K {
+    mut o: Outers<Codec>
+    recv M {
+        Run -> u8 uses (o) {
+            o[1].inner.a
+        }
+    }
+}

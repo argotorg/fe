@@ -1,0 +1,6 @@
+[ingot]
+name = "entry_reexport_chain_consumer"
+version = "0.1.0"
+
+[dependencies]
+entry_reexport_chain_middle = { path = "../entry_reexport_chain_middle" }

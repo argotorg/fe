@@ -1,0 +1,134 @@
+// A use of a packed entry that only reads it (a projection, a shared reference, a method call, a read-only effect, a match, a reference that nothing uses) runs the getter of its lane codec and never the setter, so a drop in the setter is not judged.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, Drop}
+
+pub struct Pair {
+    pub a: u16,
+    pub b: u16,
+}
+
+impl Pair {
+    fn get_a(self) -> u16 {
+        self.a
+    }
+}
+
+fn peek(_ x: ref Pair) -> u16 {
+    x.a
+}
+
+fn peek_u16(_ x: ref u16) -> u16 {
+    x
+}
+
+fn read_eff() -> u16 uses (pair: Pair) {
+    pair.a
+}
+
+struct Codec {}
+impl LaneCodec<Pair> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> Pair {
+        let raw: u256 = (word >> offset) & 0xffffffff
+        Pair {
+            a: (raw & 0xffff).downcast_truncate(),
+            b: ((raw >> 16) & 0xffff).downcast_truncate(),
+        }
+    }
+    fn set(_ word: u256, offset: u256, value: own Pair) -> u256 {
+        with (Loud2) { hold(Tag2 {}) }
+        let packed: u256 = (value.a as u256) | ((value.b as u256) << 16)
+        (word & !(0xffffffff << offset)) | (packed << offset)
+    }
+}
+struct Pairs<C> {}
+impl<C> Pinned for Pairs<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Pairs<C> {
+    type Key = u256
+    type Entry = Pair
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+msg M {
+    #[selector = 1]
+    Field -> u16,
+    #[selector = 2]
+    Peek -> u16,
+    #[selector = 3]
+    Bind -> u16,
+    #[selector = 4]
+    Method -> u16,
+    #[selector = 5]
+    Effect -> u16,
+    #[selector = 6]
+    Matched -> u16,
+    #[selector = 7]
+    FieldRef -> u16,
+    #[selector = 8]
+    Unused -> u16,
+}
+pub contract K {
+    mut p: Pairs<Codec>
+    recv M {
+        Field -> u16 uses (p) {
+            p[1].a
+        }
+        Peek -> u16 uses (p) {
+            peek(p[1])
+        }
+        Bind -> u16 uses (p) {
+            let r = ref p[1]
+            r.a
+        }
+        Method -> u16 uses (p) {
+            p[1].get_a()
+        }
+        Effect -> u16 uses (p) {
+            with (Pair = p[1]) {
+                read_eff()
+            }
+        }
+        Matched -> u16 uses (p) {
+            match p[1] {
+                Pair { a, b } => a + b
+            }
+        }
+        FieldRef -> u16 uses (p) {
+            peek_u16(p[1].a)
+        }
+        Unused -> u16 uses (p) {
+            let _r = ref p[1]
+            7
+        }
+    }
+}

@@ -13,7 +13,7 @@ use hir::analysis::{
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
-            NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
+            NTerminator, NTerminatorKind, NValueDefinition, NValueId, PlaceUse, ReadMode,
         },
         panic_payload_encodable, panic_payload_revert_key, reify_runtime_const_for_ty,
         runtime_size_bytes, sem_const_ty,
@@ -26,7 +26,7 @@ use hir::analysis::{
             runtime_builtin_func_kind,
         },
         ty_check::{BodyOwner, LocalBinding},
-        ty_def::{BorrowKind, TyId},
+        ty_def::TyId,
     },
 };
 use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp};
@@ -1288,10 +1288,10 @@ impl<'db> RmirEmitter<'db> {
                     place,
                     dst_class,
                 );
-                if let NExpr::Borrow {
-                    kind: BorrowKind::Mut,
-                    ..
-                } = expr
+                // A copy is stored back only for a use that updates the lane
+                // (`PlaceUse`); a view and a shared borrow only read it.
+                if let NExpr::Borrow { kind, .. } = expr
+                    && PlaceUse::of_borrow(*kind).stores_back()
                     && let Some(copy) = copy
                 {
                     let owned = self.open_lane_hold(bb, copy);
@@ -2963,9 +2963,9 @@ impl<'db> RmirEmitter<'db> {
         let lane_copies: Vec<_> = std::mem::take(&mut self.call_lane_copies)
             .into_iter()
             .filter(|(place, _)| {
-                effect_args
-                    .iter()
-                    .any(|effect| effect.required_mut && effect.place == *place)
+                effect_args.iter().any(|effect| {
+                    PlaceUse::of_effect_arg(effect).stores_back() && effect.place == *place
+                })
             })
             .map(|(_, copy)| (copy, self.open_lane_hold(bb, copy)))
             .collect();

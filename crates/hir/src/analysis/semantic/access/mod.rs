@@ -45,8 +45,8 @@ use crate::{
             },
             identity_semantic_instance_key,
             normalized::{
-                NBlockId, NDataProjection, NDropTarget, NExpr, NPlace, NStatementId,
-                NStatementKind, NormalizedBody, SemanticBodyAdmission, normalize_semantic_body,
+                NBlockId, NDataProjection, NExpr, NPlace, NStatementId, NStatementKind,
+                NormalizedBody, PlaceUse, SemanticBodyAdmission, normalize_semantic_body,
                 runtime_semantic_body_admission, semantic_body_admission,
             },
             panic_revert_edges, root_semantic_instance_key,
@@ -789,22 +789,18 @@ fn run_edges<'db>(
                     .as_ref()
                     .and_then(|site| site.callee)
                     .map(|callee| callee.key);
-                // A lane that the place ends at is read or written by the
-                // method for that use; one that a projection continues from
-                // is held as a copy and stored back.
-                let usage = if idx + 1 == place.path.len() {
-                    usage
-                } else {
-                    PlaceUse::Address
-                };
+                // The use decides which methods of the codec the entry runs
+                // (`PlaceUse::lane_methods`), as it decides what runtime
+                // lowering emits for the lane.
+                let methods = usage.lane_methods(idx + 1 < place.path.len());
                 let codec = instance
                     .state_index_lanes(db, collection)
                     .and_then(|_| instance.entry_codec_callees(db, *entry).ok())
                     .into_iter()
-                    .flat_map(|[get, set]| match usage {
-                        PlaceUse::Read => vec![get],
-                        PlaceUse::Write => vec![set],
-                        PlaceUse::Address => vec![get, set],
+                    .flat_map(|[get, set]| {
+                        [(methods.get, get), (methods.set, set)]
+                            .into_iter()
+                            .filter_map(|(runs, key)| runs.then_some(key))
                     });
                 callees.extend(
                     locate
@@ -814,52 +810,21 @@ fn run_edges<'db>(
                 );
             }
         };
-        match &statement.kind {
-            NStatementKind::Define { expr, .. } => {
-                match expr {
-                    NExpr::Load { place, .. } => visit(place, PlaceUse::Read),
-                    _ => expr.for_each_place_operand(|place| visit(place, PlaceUse::Address)),
-                }
-                if let NExpr::CodeRegionRef { region }
-                | NExpr::CodeRegionOffset {
-                    target: SemanticCodeRegionTarget::Resolved(region),
-                }
-                | NExpr::CodeRegionLen {
-                    target: SemanticCodeRegionTarget::Resolved(region),
-                } = expr
-                {
-                    let SemanticCodeRegionRef::ManualContractRoot { func } = region;
-                    callees.extend(
-                        root(BodyOwner::Func(*func, None)).map(|key| (key, statement.origin)),
-                    );
-                }
+        statement.kind.for_each_place_use(&mut visit);
+        if let NStatementKind::Define { expr, .. } = &statement.kind
+            && let NExpr::CodeRegionRef { region }
+            | NExpr::CodeRegionOffset {
+                target: SemanticCodeRegionTarget::Resolved(region),
             }
-            NStatementKind::Store { destination, .. } => visit(destination, PlaceUse::Write),
-            NStatementKind::Drop {
-                target: NDropTarget::Place(destination),
-            } => visit(destination, PlaceUse::Address),
-            NStatementKind::End { .. }
-            | NStatementKind::CheckIndex { .. }
-            | NStatementKind::Drop {
-                target: NDropTarget::Value(_),
-            } => {}
+            | NExpr::CodeRegionLen {
+                target: SemanticCodeRegionTarget::Resolved(region),
+            } = expr
+        {
+            let SemanticCodeRegionRef::ManualContractRoot { func } = region;
+            callees.extend(root(BodyOwner::Func(*func, None)).map(|key| (key, statement.origin)));
         }
     }
     RunEdges { callees, failures }
-}
-
-/// How a statement uses a place that ends at, or runs through, an entry of a
-/// collection that packs its elements into lanes. Runtime lowering decides the
-/// codec method of the entry by the use: a value read calls the getter
-/// (`read_lane`), a store the setter (`write_lane`), and an address, a view, an
-/// effect argument, a drop or a place that a projection continues from holds a
-/// copy of the lane, which it reads with the getter and stores back with the
-/// setter (`hold_lane`).
-#[derive(Clone, Copy)]
-enum PlaceUse {
-    Read,
-    Write,
-    Address,
 }
 
 /// The statements of `body`, a body of `instance`, that no run executes: those
