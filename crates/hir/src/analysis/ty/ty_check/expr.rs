@@ -2178,7 +2178,10 @@ impl<'db> TyChecker<'db> {
         // arguments of a function item passed for an `F: Fn(..)`.
         callable.process_constraints(self, expr, call_span.callee().into());
         self.check_callable_effects(expr, &mut callable);
-        self.finish_call(expr, callable)
+        // A trait-path call `Trait::method(literal, ..)` is typed as the method
+        // form is.
+        let literal = callable.trait_inst().map(|inst| inst.self_ty(self.db));
+        self.finish_literal_call(expr, callable, literal)
     }
 
     /// Checks a call `f(..)` of a callable value as the call `f.call(..)` of
@@ -4507,13 +4510,20 @@ impl<'db> TyChecker<'db> {
 
         callable.process_constraints(self, expr, call_span.method_name().into());
         self.check_callable_effects(expr, &mut callable);
-        // A result that is the same whichever type the literal takes is known
-        // now; the projection keeps it consistent with the type chosen.
-        let known = if either_way {
-            self.literal_result_known_either_way(&callable, literal_ty)
-        } else {
-            None
-        };
+        self.finish_literal_call(expr, callable, either_way.then_some(literal_ty))
+    }
+
+    /// Registers a checked call, as `finish_call` does. A result that is the same
+    /// whichever type the open literal `literal` takes is known now; the
+    /// projection keeps it consistent with the type chosen.
+    fn finish_literal_call(
+        &mut self,
+        expr: ExprId,
+        callable: Callable<'db>,
+        literal: Option<TyId<'db>>,
+    ) -> ExprProp<'db> {
+        let known =
+            literal.and_then(|literal| self.literal_result_known_either_way(&callable, literal));
         let mut prop = self.finish_call(expr, callable);
         if let Some(known) = known
             && !prop.ty.has_invalid(self.db)
