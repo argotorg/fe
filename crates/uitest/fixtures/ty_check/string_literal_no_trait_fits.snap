@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_no_trait_fits.fe
+---
+error[8-0000]: type mismatch
+   ┌─ string_literal_no_trait_fits.fe:21:14
+   │
+21 │     "ab".foo(true)
+   │              ^^^^ expected `u8`, but `bool` is given

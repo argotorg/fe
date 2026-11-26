@@ -1,0 +1,66 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_pattern_refused.fe
+---
+error[8-0014]: type must be known
+   ┌─ string_literal_pattern_refused.fe:85:11
+   │
+85 │     match "ab".p() {
+   │           ^^^^^^^^
+   │           │
+   │           the type of this string literal is needed here
+   │           annotate this literal as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+   ┌─ string_literal_pattern_refused.fe:91:11
+   │
+91 │     match P::p("ab") {
+   │           ^^^^^^^^^^
+   │           │    │
+   │           │    annotate this literal as `String<N>` or `DynString`
+   │           the type of this string literal is needed here
+
+error[8-0014]: type must be known
+   ┌─ string_literal_pattern_refused.fe:98:11
+   │
+97 │     let v = "ab".p()
+   │             ---- annotate this literal as `String<N>` or `DynString`
+98 │     match v {
+   │           ^ the type of this string literal is needed here
+
+error[8-0014]: type must be known
+    ┌─ string_literal_pattern_refused.fe:104:19
+    │
+104 │     let (_a, b) = "ab".pt()
+    │                   ^^^^^^^^^
+    │                   │
+    │                   the type of this string literal is needed here
+    │                   annotate this literal as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_pattern_refused.fe:109:15
+    │
+109 │     for _x in "ab".arr() {
+    │               ^^^^^^^^^^
+    │               │
+    │               the type of this string literal is needed here
+    │               annotate this literal as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_pattern_refused.fe:115:15
+    │
+115 │     let _v = -"ab".sg()
+    │               ^^^^^^^^^
+    │               │
+    │               the type of this string literal is needed here
+    │               annotate this literal as `String<N>` or `DynString`
+
+error[8-0014]: type must be known
+    ┌─ string_literal_pattern_refused.fe:119:6
+    │
+119 │     !"ab".fl()
+    │      ^^^^^^^^^
+    │      │
+    │      the type of this string literal is needed here
+    │      annotate this literal as `String<N>` or `DynString`

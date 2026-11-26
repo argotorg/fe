@@ -34,6 +34,11 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
+    /// Whether this reports something that does not stop compilation.
+    pub(crate) fn is_warning(&self) -> bool {
+        matches!(self, Self::Body(BodyDiag::MutAccessCopied { .. }))
+    }
+
     pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self {
             Self::Ty(diag) => diag.to_voucher(),
@@ -786,7 +791,11 @@ pub enum BodyDiag<'db> {
     TypeMustBeKnown(DynLazySpan<'db>),
     /// An operation needs the type of a string literal that its context has not
     /// decided: see `waits_on_open_string_literal`.
-    StringLiteralTypeNeeded(DynLazySpan<'db>),
+    StringLiteralTypeNeeded {
+        primary: DynLazySpan<'db>,
+        /// Where the literal is written, if known.
+        literal: Option<DynLazySpan<'db>>,
+    },
     TypeSizeOverflow {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
@@ -1582,7 +1591,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
-            Self::StringLiteralTypeNeeded(..) => 14,
+            Self::StringLiteralTypeNeeded { .. } => 14,
             Self::TypeSizeOverflow { .. } => 88,
             Self::NoStorageLayout { .. } => 128,
             Self::InvalidCast { .. } => 55,

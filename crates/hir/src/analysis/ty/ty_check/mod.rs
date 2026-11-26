@@ -27,7 +27,6 @@ use crate::analysis::name_resolution::{ResolvedVariant, is_scope_visible_from};
 pub use crate::analysis::ty::AddressSpace;
 use crate::analysis::ty::adt_def::AdtRef;
 use crate::analysis::ty::const_check::const_body_language_failure;
-use crate::analysis::ty::corelib::resolve_lib_type_path;
 use crate::analysis::ty::fold::TyFoldable;
 use crate::analysis::ty::method_table::ProbedMethod;
 use crate::analysis::ty::provider::{ProviderKind, provider_semantics};
@@ -1549,6 +1548,8 @@ pub struct TyChecker<'db> {
     /// Set once deferred work is resolved for the last time, after which type
     /// equalities are decided rather than retained.
     final_pass: bool,
+    /// The open string literals checked so far, with where each is written.
+    string_literal_spans: Vec<(TyId<'db>, DynLazySpan<'db>)>,
     /// What the arithmetic operators written in the body do on overflow, by
     /// its arithmetic mode. They wrap in unchecked code.
     overflow: Overflow,
@@ -2657,12 +2658,12 @@ impl<'db> TyChecker<'db> {
                             traits: viable.into_iter().map(|candidate| candidate.inst).collect(),
                         });
                     } else if viable.is_empty()
-                        && self.diags.is_empty()
+                        && self.diags.iter().all(FuncBodyDiag::is_warning)
                         && self.env.callable_expr(pending.expr).is_none()
                     {
                         // No candidate fits and no callee was registered: report it,
-                        // as a body without a diagnostic is lowered, and its call
-                        // has no plan.
+                        // as a body without an error is lowered, and its call has no
+                        // plan.
                         let diag = expr::body_diag_from_method_selection_err(
                             db,
                             MethodSelectionError::NotFound,
@@ -3020,8 +3021,7 @@ impl<'db> TyChecker<'db> {
                 .collect();
             collect(self, keys);
         }
-        let Some(dyn_ty) = resolve_lib_type_path(db, self.env.scope(), "core::abi::DynString")
-        else {
+        let Some(dyn_ty) = self.dyn_string_ty() else {
             return false;
         };
         let mut dyn_literals = Vec::new();
@@ -3104,18 +3104,10 @@ impl<'db> TyChecker<'db> {
     /// bound. It runs when nothing else resolves, so a literal that anything
     /// else decides is not given its default here.
     fn settle_literal_receivers_by_default(&mut self) -> bool {
-        let db = self.db;
-        let scope = self.env.scope();
         let mut defaults = Vec::new();
         for ty in self.env.pending_literal_receiver_tys() {
-            let ty = ty.fold_with(db, &mut self.table);
-            if let TyData::TyVar(var) = ty.data(db)
-                && let TyVarSort::String { min_len, fallback } = var.sort
-            {
-                defaults.push((
-                    ty,
-                    env::string_literal_default_ty(db, scope, min_len, fallback),
-                ));
+            if let Some(literal) = self.open_literal_sort(ty) {
+                defaults.push((literal.var, literal.default));
             }
         }
         let mut bound = false;
@@ -3177,6 +3169,20 @@ impl<'db> TyChecker<'db> {
             let inst_self = self.table.instantiate_to_term(inst.self_ty(db));
             if self.table.unify(inst_self, recv_ty).is_err() {
                 return rejection(inst_self, recv_ty);
+            }
+            // A candidate whose `Self` is an open literal fits the type the literal
+            // takes only if that type implements its trait. While the literal is
+            // open, nothing is ruled out here.
+            if candidate.literal_self {
+                let goal = self.normalize_trait_goal(inst);
+                let solve_cx = TraitSolveCx::new(db, scope).with_assumptions(assumptions);
+                let query = CanonicalGoalQuery::new(db, goal, assumptions);
+                if matches!(
+                    is_goal_query_satisfiable(db, solve_cx, &query),
+                    GoalSatisfiability::UnSat(_)
+                ) {
+                    return Viability::Incompatible;
+                }
             }
 
             let Ok(func_ty) =
@@ -3309,6 +3315,7 @@ impl<'db> TyChecker<'db> {
             split_reads: Vec::new(),
             diags: Vec::new(),
             final_pass: false,
+            string_literal_spans: Vec::new(),
             overflow: env.owner().scope().arithmetic_mode(db).into(),
             env,
         }

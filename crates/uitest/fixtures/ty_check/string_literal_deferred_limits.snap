@@ -1,0 +1,48 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_deferred_limits.fe
+---
+error[8-0014]: type must be known
+   ┌─ string_literal_deferred_limits.fe:61:17
+   │
+61 │     "ab".ap(|x| x + 10)
+   │                 ^ type must be known here
+
+error[8-0031]: type annotation is needed
+   ┌─ string_literal_deferred_limits.fe:61:17
+   │
+61 │     "ab".ap(|x| x + 10)
+   │                 ^
+   │                 │
+   │                 type annotation is needed
+   │                 consider giving `: Type` here
+
+error[8-0031]: type annotation is needed
+   ┌─ string_literal_deferred_limits.fe:61:21
+   │
+61 │     "ab".ap(|x| x + 10)
+   │                     ^^
+   │                     │
+   │                     type annotation is needed
+   │                     no default type is provided for an integer type. consider giving integer type
+
+error[8-0031]: type annotation is needed
+   ┌─ string_literal_deferred_limits.fe:64:10
+   │
+64 │     "ab".bp(7)
+   │          ^^
+   │          │
+   │          cannot infer the type parameter `F` of `bp`
+   │          consider giving it explicitly: `bp<F>`
+
+error[8-0151]: `note` needs `Log` after its closure's effects are inferred
+   ┌─ string_literal_deferred_limits.fe:68:18
+   │
+68 │         apply(|| "ab".note())
+   │               ---^^^^^^^^^^^
+   │               │  │
+   │               │  this call's effects are known only after the closure's body is checked
+   │               this closure's effects are inferred from its body, without `Log`
+   │
+   = annotate the types the call depends on in the closure's body, so that it resolves there

@@ -192,7 +192,8 @@ impl<'db> TyChecker<'db> {
             } else {
                 prop
             };
-            self.check_pat(*pat, prop.ty);
+            let pat_ty = self.scrutinee_pat_ty(*expr, prop.ty, &[*pat]);
+            self.check_pat(*pat, pat_ty);
             if let Some((site, idx)) = param {
                 self.check_param_bindings(*pat, site, idx);
             }
@@ -447,7 +448,12 @@ impl<'db> TyChecker<'db> {
         let base = (*base, prop.ty);
         // The pattern chooses the traversal: a read one, unless it binds an
         // access of the step `mut`, which opens the base mutably.
-        let mut plan = self.plan_for_loop(base, false);
+        // The result of a method on an open literal has no type to iterate yet.
+        let mut plan = if self.refuse_waiting_literal(prop.ty, base.0.span(self.body()).into()) {
+            None
+        } else {
+            self.plan_for_loop(base, false)
+        };
         if let Some(read) = &plan {
             let items: Vec<_> = self
                 .access_pats(*pat, &read.shape)

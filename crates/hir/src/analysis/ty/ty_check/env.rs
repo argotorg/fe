@@ -2758,6 +2758,9 @@ pub(super) struct PendingMethodCandidate<'db> {
     pub inst: TraitInstId<'db>,
     pub method: Func<'db>,
     pub needs_confirmation: bool,
+    /// Its `Self` is an open string literal: it fits only a type that
+    /// implements the trait.
+    pub literal_self: bool,
 }
 
 /// `-inner`, at `expr`, on an integer whose type is not yet known.

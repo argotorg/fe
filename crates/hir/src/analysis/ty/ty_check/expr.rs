@@ -7,10 +7,9 @@ use smallvec1::SmallVec;
 use crate::core::{
     hir_def::{
         ArithBinOp, BinOp, BindingMarker, CallArg as HirCallArg, CallableDef, CompBinOp, Cond,
-        CondId, Expr, ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode,
-        GenericArgListId, IdentId, IntegerId, LitKind, LogicalBinOp, ModeMarker, Partial, Pat,
-        PatId, PathId, Stmt, StmtId, TypeId as HirTyId, TypeKind, TypeMode, UnOp, VariantKind,
-        WithBinding,
+        CondId, Expr, ExprId, FieldIndex, Func, FuncParam, FuncParamListId, FuncParamMode, IdentId,
+        IntegerId, LitKind, LogicalBinOp, ModeMarker, Partial, Pat, PatId, PathId, Stmt, StmtId,
+        TypeId as HirTyId, TypeKind, TypeMode, UnOp, VariantKind, WithBinding,
     },
     semantic::{EffectRequirement, EffectRequirementKey as SemanticEffectRequirementKey},
 };
@@ -22,9 +21,9 @@ use super::{
     effect_env::{FrameLookupResult, MatchedKeyedEntry},
     env::{
         BindingAccess, ClosureExpectation, EffectOrigin, EffectParamSite, ExprProp, LocalBinding,
-        ParamSite, PendingEffects, PendingEffectsTarget, PendingLiteralReceiver, PendingNegation,
-        Prober, ProvidedEffect, TraitObligation, TraitObligationOrigin, TyCheckEnv, hir_param,
-        string_literal_default_ty,
+        ParamSite, PendingEffects, PendingEffectsTarget, PendingLiteralReceiver,
+        PendingMethodCandidate, PendingNegation, Prober, ProvidedEffect, TraitObligation,
+        TraitObligationOrigin, TyCheckEnv, hir_param, string_literal_default_ty,
     },
     has_invisible_newtype_field, merged_borrow_provider,
     path::ResolvedPathInBody,
@@ -79,12 +78,11 @@ use crate::analysis::ty::{
         GoalSatisfiability, PredicateListId, TraitGoalSolution, TraitSolveCx, is_goal_satisfiable,
     },
     ty_check::callable::{
-        CallGenericArgPhase, Callable, EffectArgProvider, EffectProviderProvenance,
-        EffectProviderSpecialization, unify_explicit_call_generic_args,
+        Callable, EffectArgProvider, EffectProviderProvenance, EffectProviderSpecialization,
     },
     ty_def::{
-        BorrowKind, ClosureDef, ClosureTy, PrimTy, StringFallback, TyBase, TyData, TyVarSort,
-        inference_keys, int_literal_fits_prim, prim_int_bits,
+        BorrowKind, ClosureDef, ClosureTy, MAX_INLINE_STRING_BYTES, PrimTy, TyBase, TyData,
+        TyVarSort, inference_keys, int_literal_fits_prim, prim_int_bits,
     },
     ty_error::{diag_from_invalid_cause, first_invalid_ty_cause, generic_arg_list_diags},
     unify::UnificationTable,
@@ -147,6 +145,13 @@ struct EffectEvidence<'db> {
     commit: EffectCommitPlan<'db>,
 }
 
+/// An open string literal: its root variable, its length and its default type.
+pub(super) struct OpenLiteral<'db> {
+    pub(super) var: TyId<'db>,
+    pub(super) min_len: usize,
+    pub(super) default: TyId<'db>,
+}
+
 /// One of the two types an open string literal can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LiteralSide {
@@ -162,7 +167,7 @@ enum StringSide<'db> {
     /// The traits it comes from.
     Traits(Vec<Trait<'db>>),
     /// Found, but selection reports something other than a method: an
-    /// invisible trait or an ambiguity among inherent methods.
+    /// ambiguity among inherent methods.
     Unusable,
 }
 
@@ -510,7 +515,12 @@ impl<'db> TyChecker<'db> {
         self.env.enter_expr(expr);
         let mut actual = match expr_data {
             Expr::Lit(LitKind::String(string_id)) => {
-                ExprProp::new(self.string_literal_ty(*string_id, expected), true)
+                let ty = self.string_literal_ty(*string_id, expected);
+                if ty.is_ty_var(self.db) {
+                    self.string_literal_spans
+                        .push((ty, expr.span(self.body()).into()));
+                }
+                ExprProp::new(ty, true)
             }
             Expr::Lit(LitKind::Int(integer)) if integer.data(self.db).bits() > 256 => {
                 // No primitive integer type can represent more than one EVM word.
@@ -1142,6 +1152,14 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
+        // The result of a method on an open literal has no type to apply an
+        // operator to yet.
+        if matches!(op, UnOp::Plus | UnOp::Minus | UnOp::Not | UnOp::BitNot)
+            && self.refuse_waiting_literal(prop.ty, lhs.span(self.body()).into())
+        {
+            return ExprProp::invalid(self.db);
+        }
+
         if *op == UnOp::Deref {
             // Calldata is immutable input.
             if let Some((pointee, space)) = prop.ty.as_ptr(self.db) {
@@ -1423,9 +1441,7 @@ impl<'db> TyChecker<'db> {
         );
         let to = normalize_ty(self.db, target_ty, self.env.scope(), self.env.assumptions());
 
-        if self.waits_on_open_string_literal(from) {
-            let diag = BodyDiag::StringLiteralTypeNeeded(inner_expr.span(self.body()).into());
-            self.push_diag(diag);
+        if self.refuse_waiting_literal(from, inner_expr.span(self.body()).into()) {
             return ExprProp::invalid(self.db);
         }
 
@@ -1788,13 +1804,11 @@ impl<'db> TyChecker<'db> {
             return ExprProp::new(ty, true);
         }
 
-        if self.waits_on_open_string_literal(lhs.ty) {
+        if self.refuse_waiting_literal(lhs.ty, lhs_expr.span(self.body()).into()) {
             // The right operand is checked against no type, so that a literal
             // there does not report a type annotation as well.
             let no_ty = TyId::invalid(self.db, InvalidCause::Other);
             self.check_expr(rhs_expr, no_ty);
-            let diag = BodyDiag::StringLiteralTypeNeeded(lhs_expr.span(self.body()).into());
-            self.push_diag(diag);
             return ExprProp::invalid(self.db);
         }
 
@@ -1867,7 +1881,8 @@ impl<'db> TyChecker<'db> {
         let scrutinee_prop = self.check_expr(scrutinee, scrutinee_ty);
         self.take_initializer_marker(scrutinee, &[pat], MarkerPosition::Scrutinee);
         let scrutinee_prop = self.open_matched_place(scrutinee, scrutinee_prop, [pat]);
-        self.check_pat(pat, scrutinee_prop.ty);
+        let pat_ty = self.scrutinee_pat_ty(scrutinee, scrutinee_prop.ty, &[pat]);
+        self.check_pat(pat, pat_ty);
         self.bind_pattern_source(pat, scrutinee, &scrutinee_prop, false);
 
         ExprProp::new(TyId::bool(self.db), true)
@@ -2195,6 +2210,7 @@ impl<'db> TyChecker<'db> {
                     &canonical,
                     ambiguous,
                     args,
+                    false,
                     callee_span,
                 );
             }
@@ -2316,17 +2332,18 @@ impl<'db> TyChecker<'db> {
         ambiguous: AmbiguousTraitMethods<'db>,
         canonical: &Canonicalized<'db, TyId<'db>>,
         method_name: IdentId<'db>,
-    ) -> Vec<super::env::PendingMethodCandidate<'db>> {
+    ) -> Vec<PendingMethodCandidate<'db>> {
         ambiguous
             .candidates
             .into_iter()
             .map(|candidate| {
                 let inst = canonical.extract_solution(&mut self.table, candidate.cand.inst);
                 let inst = self.specialize_same_trait_method_inst(method_name, inst);
-                super::env::PendingMethodCandidate {
+                PendingMethodCandidate {
                     inst,
                     method: candidate.cand.method,
                     needs_confirmation: candidate.needs_confirmation,
+                    literal_self: false,
                 }
             })
             .collect()
@@ -2368,7 +2385,13 @@ impl<'db> TyChecker<'db> {
                     StringSide::Traits(traits)
                 }
             }
-            Err(MethodSelectionError::NotFound) => StringSide::Missing,
+            // A method the call site cannot see is missing on that side: it is not
+            // one the call could run.
+            Err(
+                MethodSelectionError::NotFound
+                | MethodSelectionError::InvisibleInherentMethod(_)
+                | MethodSelectionError::InvisibleTraitMethod(_),
+            ) => StringSide::Missing,
             Err(_) => StringSide::Unusable,
         }
     }
@@ -2379,30 +2402,31 @@ impl<'db> TyChecker<'db> {
         self.table.instantiate_to_term(string)
     }
 
-    /// The default type of `ty`, if it is an open string literal.
-    fn open_literal_default_ty(&mut self, ty: TyId<'db>) -> Option<TyId<'db>> {
-        let ty = ty.fold_with(self.db, &mut self.table);
-        let TyData::TyVar(var) = ty.data(self.db) else {
+    /// The root variable of `ty`, if it is an open string literal, and the type
+    /// it takes when nothing else decides it.
+    pub(super) fn open_literal_sort(&mut self, ty: TyId<'db>) -> Option<OpenLiteral<'db>> {
+        let var = ty.fold_with(self.db, &mut self.table);
+        let TyData::TyVar(data) = var.data(self.db) else {
             return None;
         };
-        let TyVarSort::String { min_len, fallback } = var.sort else {
+        let TyVarSort::String { min_len, fallback } = data.sort else {
             return None;
         };
-        Some(string_literal_default_ty(
-            self.db,
-            self.env.scope(),
+        let default = string_literal_default_ty(self.db, self.env.scope(), min_len, fallback);
+        Some(OpenLiteral {
+            var,
             min_len,
-            fallback,
-        ))
+            default,
+        })
     }
 
-    fn dyn_string_ty(&self) -> Option<TyId<'db>> {
+    pub(super) fn dyn_string_ty(&self) -> Option<TyId<'db>> {
         resolve_lib_type_path(self.db, self.env.scope(), "core::abi::DynString")
     }
 
     /// The type of `side`: an inline `String` of an open length, or a
     /// `DynString`.
-    fn literal_side_ty(&mut self, side: LiteralSide) -> TyId<'db> {
+    pub(super) fn literal_side_ty(&mut self, side: LiteralSide) -> TyId<'db> {
         match side {
             LiteralSide::Inline => self.fresh_inline_string_ty(),
             LiteralSide::Dyn => self
@@ -2421,23 +2445,23 @@ impl<'db> TyChecker<'db> {
         ty: TyId<'db>,
         method_name: IdentId<'db>,
     ) -> StringReceiver<'db> {
-        let db = self.db;
-        // The sort of the root variable, not the one the type was made with:
-        // a literal unified with a longer one takes its length.
-        let ty = ty.fold_with(db, &mut self.table);
-        let TyData::TyVar(var) = ty.data(db) else {
-            return StringReceiver::NotLiteral;
-        };
-        let TyVarSort::String { min_len, fallback } = var.sort else {
+        // The sort of the root variable, not the one the type was made with: a
+        // literal unified with a longer one takes its length.
+        let Some(OpenLiteral {
+            min_len, default, ..
+        }) = self.open_literal_sort(ty)
+        else {
             return StringReceiver::NotLiteral;
         };
         let Some(dyn_ty) = self.dyn_string_ty() else {
             return StringReceiver::NotLiteral;
         };
-        let default = string_literal_default_ty(db, self.env.scope(), min_len, fallback);
-        let inline_side = match fallback {
-            StringFallback::Fixed => self.string_side(None, method_name),
-            StringFallback::Dynamic => StringSide::Missing,
+        // A literal of more than 31 bytes cannot be an inline `String`; one that
+        // begins with a zero byte can, if the context asks for it.
+        let inline_side = if min_len > MAX_INLINE_STRING_BYTES {
+            StringSide::Missing
+        } else {
+            self.string_side(None, method_name)
         };
         let dyn_side = self.string_side(Some(dyn_ty), method_name);
         match (inline_side, dyn_side) {
@@ -2496,16 +2520,18 @@ impl<'db> TyChecker<'db> {
     /// The signature a method that both string types have gives a call on an
     /// open literal: its parameter types after the receiver, and its result.
     /// Both types must give the same one; only the function that runs waits
-    /// for the literal's type.
+    /// for the literal's type. Only core's `len` and `byte_at` are such
+    /// methods.
     fn shared_literal_signature(
         &mut self,
-        tys: [TyId<'db>; 2],
+        default: TyId<'db>,
         method_name: IdentId<'db>,
         span: DynLazySpan<'db>,
     ) -> Result<(Vec<TyId<'db>>, TyId<'db>), SharedSignatureError> {
         let db = self.db;
+        let dyn_ty = self.dyn_string_ty().ok_or(SharedSignatureError::Unusable)?;
         let mut signatures = Vec::with_capacity(2);
-        for ty in tys {
+        for ty in [default, dyn_ty] {
             let snapshot = self.snapshot_state();
             let signature = (|| {
                 let canonical = Canonicalized::new(db, ty);
@@ -2529,6 +2555,8 @@ impl<'db> TyChecker<'db> {
                     > callable
                         .callable_def()
                         .offset_to_explicit_params_position(db);
+                // The arguments are typed before the call resolves, so a `mut`
+                // parameter, which needs its argument's mode, is not shared.
                 let modes = callable.input_modes(db);
                 if method_generics
                     || !callable.effect_providers().is_empty()
@@ -2565,25 +2593,17 @@ impl<'db> TyChecker<'db> {
     /// Types a call of a method both string types have on an open literal by
     /// the signature they share, and defers the choice of function until the
     /// literal's type is known: see `PendingLiteralReceiver`.
-    #[allow(clippy::too_many_arguments)]
     fn defer_shared_literal_receiver(
         &mut self,
         expr: ExprId,
         receiver_ty: TyId<'db>,
         method_name: IdentId<'db>,
         args: &[HirCallArg<'db>],
-        args_typed: bool,
         (params, ret): (Vec<TyId<'db>>, TyId<'db>),
         span: DynLazySpan<'db>,
     ) -> ExprProp<'db> {
         for (arg, param_ty) in args.iter().zip(params) {
-            let prop = if args_typed {
-                self.env
-                    .typed_expr(arg.expr)
-                    .unwrap_or_else(|| ExprProp::invalid(self.db))
-            } else {
-                self.check_expr(arg.expr, param_ty)
-            };
+            let prop = self.check_expr(arg.expr, param_ty);
             self.equate_ty(prop.ty, param_ty, arg.expr.span(self.body()).into());
         }
         let typed = ExprProp::new(ret, true);
@@ -2600,85 +2620,65 @@ impl<'db> TyChecker<'db> {
         typed
     }
 
-    /// The instance of `def` with `self_ty` as `Self` and an open type for
-    /// each other parameter, as `Trait::method(..)` instantiates it.
-    fn trait_inst_with_self(&mut self, def: Trait<'db>, self_ty: TyId<'db>) -> TraitInstId<'db> {
+    /// `inst` with `new_self` for its `Self`.
+    fn trait_inst_with_self(
+        &mut self,
+        inst: TraitInstId<'db>,
+        new_self: TyId<'db>,
+    ) -> TraitInstId<'db> {
+        struct ReplaceSelf<'db> {
+            from: TyId<'db>,
+            to: TyId<'db>,
+        }
+
+        impl<'db> TyFolder<'db> for ReplaceSelf<'db> {
+            fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
+                if ty == self.from {
+                    return self.to;
+                }
+                ty.super_fold_with(db, self)
+            }
+        }
+
+        let db = self.db;
+        let mut folder = ReplaceSelf {
+            from: inst.self_ty(db),
+            to: new_self,
+        };
+        let args = inst
+            .args(db)
+            .iter()
+            .map(|&ty| ty.fold_with(db, &mut folder))
+            .collect::<Vec<_>>();
+        let assoc_type_bindings: IndexMap<_, _> = inst
+            .assoc_type_bindings(db)
+            .iter()
+            .map(|(name, ty)| (*name, ty.fold_with(db, &mut folder)))
+            .collect();
+        TraitInstId::new(db, inst.def(db), args, assoc_type_bindings, inst.mode(db))
+    }
+
+    /// The instance of `def` that `Trait::method(receiver, ..)` has: `receiver`
+    /// for `Self` and an open type for each other parameter.
+    fn trait_inst_for_receiver(
+        &mut self,
+        def: Trait<'db>,
+        receiver_ty: TyId<'db>,
+    ) -> TraitInstId<'db> {
         let args: Vec<_> = def
             .params(self.db)
             .iter()
             .enumerate()
             .map(|(i, &param)| {
                 if i == 0 {
-                    self_ty
+                    param
                 } else {
                     self.table.new_var_from_param(param)
                 }
             })
             .collect();
-        TraitInstId::new_simple(self.db, def, args)
-    }
-
-    /// The traits among `traits` whose method `method_name`, called on an
-    /// open literal with the already typed `args`, fits those arguments.
-    fn literal_traits_fitting_args(
-        &mut self,
-        traits: &[LiteralTrait<'db>],
-        receiver_ty: TyId<'db>,
-        method_name: IdentId<'db>,
-        generic_args: GenericArgListId<'db>,
-        args: &[HirCallArg<'db>],
-        span: DynLazySpan<'db>,
-    ) -> Vec<usize> {
-        let db = self.db;
-        let (scope, assumptions) = (self.env.scope(), self.env.assumptions());
-        let mut kept = Vec::new();
-        for (idx, literal_trait) in traits.iter().enumerate() {
-            let snapshot = self.snapshot_state();
-            let fits = (|| {
-                let inst = self.trait_inst_with_self(literal_trait.def, receiver_ty);
-                let method = *literal_trait.def.method_defs(db).get(&method_name)?;
-                let func_ty = self.instantiate_trait_method_to_term(method, receiver_ty, inst);
-                let mut callable = Callable::new(db, func_ty, span.clone(), Some(inst)).ok()?;
-                if !callable.callable_def().is_method(db) {
-                    return None;
-                }
-                unify_explicit_call_generic_args(
-                    &mut callable,
-                    self,
-                    generic_args,
-                    CallGenericArgPhase::Probe,
-                    |this, _, given, current| this.table.unify(given, *current).is_ok(),
-                )
-                .ok()?;
-                let params = callable
-                    .params_resolving(db, |shape| {
-                        normalize_ty(db, shape.fold_with(db, &mut self.table), scope, assumptions)
-                    })
-                    .ok()?;
-                if params.len() != args.len() + 1 {
-                    return None;
-                }
-                for (arg, param) in args.iter().zip(params.iter().skip(1)) {
-                    let given = self.env.typed_expr(arg.expr)?.ty;
-                    let expected = normalize_ty(
-                        db,
-                        param.shape.erased_ty(db).fold_with(db, &mut self.table),
-                        scope,
-                        assumptions,
-                    );
-                    let given =
-                        normalize_ty(db, given.fold_with(db, &mut self.table), scope, assumptions);
-                    self.table.unify(given, expected).ok()?;
-                }
-                Some(())
-            })()
-            .is_some();
-            self.rollback_state(snapshot);
-            if fits {
-                kept.push(idx);
-            }
-        }
-        kept
+        let inst = TraitInstId::new_simple(self.db, def, args);
+        self.trait_inst_with_self(inst, receiver_ty)
     }
 
     /// The type of a call on an open literal when it is the same whichever
@@ -2692,24 +2692,19 @@ impl<'db> TyChecker<'db> {
     ) -> Option<TyId<'db>> {
         let db = self.db;
         let ret = self.normalize_ty(callable.ret_ty(db));
-        let literal = receiver_ty.fold_with(db, &mut self.table);
-        let TyData::TyVar(var) = literal.data(db) else {
-            return None;
-        };
+        let literal = self.open_literal_sort(receiver_ty)?.var;
+        let literal_keys = inference_keys(db, &literal);
         if !super::depends_on_type_inference(db, ret)
-            || !inference_keys(db, &ret).contains(&var.key)
+            || !inference_keys(db, &ret)
+                .iter()
+                .any(|key| literal_keys.contains(key))
         {
             return None;
         }
-        let dyn_ty = self.dyn_string_ty()?;
         let mut results = Vec::with_capacity(2);
         for side in [LiteralSide::Inline, LiteralSide::Dyn] {
             let snapshot = self.snapshot_state();
-            let side_ty = if side == LiteralSide::Dyn {
-                dyn_ty
-            } else {
-                self.fresh_inline_string_ty()
-            };
+            let side_ty = self.literal_side_ty(side);
             let result = self
                 .table
                 .unify(literal, side_ty)
@@ -2721,20 +2716,72 @@ impl<'db> TyChecker<'db> {
         (results[0] == results[1]).then_some(results[0])
     }
 
-    /// Whether `ty` is the projection of a trait on an open string literal,
-    /// which is the type of the call of a trait method on a literal whose type
-    /// is not yet known. Nothing can be said of such a type yet.
-    pub(super) fn waits_on_open_string_literal(&mut self, ty: TyId<'db>) -> bool {
+    /// The type a pattern is checked against, given the type `ty` of its scrutinee
+    /// `scrutinee`: invalid, after a report, if `ty` waits on an open string
+    /// literal and a pattern in `pats` destructures it.
+    pub(super) fn scrutinee_pat_ty(
+        &mut self,
+        scrutinee: ExprId,
+        ty: TyId<'db>,
+        pats: &[PatId],
+    ) -> TyId<'db> {
+        if pats.iter().any(|&pat| self.pat_destructures(pat))
+            && self.refuse_waiting_literal(ty, scrutinee.span(self.body()).into())
+        {
+            return TyId::invalid(self.db, InvalidCause::Other);
+        }
+        ty
+    }
+
+    /// Whether `pat` takes its scrutinee apart: a literal, a tuple, a variant or
+    /// a record, as opposed to a binding or `_`.
+    fn pat_destructures(&self, pat: PatId) -> bool {
+        match pat.data(self.db, self.body()) {
+            Partial::Present(
+                Pat::Lit(..) | Pat::Tuple(..) | Pat::PathTuple(..) | Pat::Record(..),
+            ) => true,
+            Partial::Present(Pat::Or(lhs, rhs)) => {
+                self.pat_destructures(*lhs) || self.pat_destructures(*rhs)
+            }
+            _ => false,
+        }
+    }
+
+    /// The open string literal that the projection type `ty` waits on: `ty`
+    /// is a trait's associated type of it, which nothing can be said of until
+    /// the literal's type is decided.
+    fn waiting_literal(&mut self, ty: TyId<'db>) -> Option<TyId<'db>> {
         let db = self.db;
         let ty = self.normalize_ty(ty);
         let TyData::AssocTy(assoc) = ty.data(db) else {
+            return None;
+        };
+        self.open_literal_sort(assoc.trait_.self_ty(db))
+            .map(|literal| literal.var)
+    }
+
+    /// Reports at `at` that the type of the string literal `ty` waits on is
+    /// needed, if it does. Returns whether it did.
+    pub(super) fn refuse_waiting_literal(&mut self, ty: TyId<'db>, at: DynLazySpan<'db>) -> bool {
+        let Some(literal) = self.waiting_literal(ty) else {
             return false;
         };
-        let self_ty = assoc.trait_.self_ty(db).fold_with(db, &mut self.table);
-        matches!(
-            self_ty.data(db),
-            TyData::TyVar(var) if matches!(var.sort, TyVarSort::String { .. })
-        )
+        self.refuse_string_literal_type(literal, at);
+        true
+    }
+
+    /// Reports at `at` that the type of the open literal `literal` is needed.
+    fn refuse_string_literal_type(&mut self, literal: TyId<'db>, at: DynLazySpan<'db>) {
+        let literal = self.open_literal_sort(literal).and_then(|literal| {
+            (0..self.string_literal_spans.len()).find_map(|i| {
+                let (ty, span) = self.string_literal_spans[i].clone();
+                (ty.fold_with(self.db, &mut self.table) == literal.var).then_some(span)
+            })
+        });
+        self.push_diag(BodyDiag::StringLiteralTypeNeeded {
+            primary: at,
+            literal,
+        });
     }
 
     /// Resolves the deferred call `pending` once its literal receiver has a
@@ -2826,6 +2873,7 @@ impl<'db> TyChecker<'db> {
     /// argument and result types choose once the body is checked, unless the
     /// arguments already leave one. `span` is the method's name, or a value
     /// call's callee.
+    #[allow(clippy::too_many_arguments)]
     fn defer_method_call(
         &mut self,
         expr: ExprId,
@@ -2833,6 +2881,7 @@ impl<'db> TyChecker<'db> {
         canonical: &Canonicalized<'db, TyId<'db>>,
         ambiguous: AmbiguousTraitMethods<'db>,
         args: &[HirCallArg<'db>],
+        args_typed: bool,
         span: DynLazySpan<'db>,
     ) -> ExprProp<'db> {
         let method_name = ambiguous.candidates[0]
@@ -2841,13 +2890,44 @@ impl<'db> TyChecker<'db> {
             .name(self.db)
             .to_opt()
             .expect("trait methods have names");
+        let candidates = self.pending_method_candidates(ambiguous, canonical, method_name);
+        self.defer_pending_method(
+            expr,
+            receiver_ty,
+            method_name,
+            candidates,
+            args,
+            args_typed,
+            span,
+            false,
+        )
+        .expect("a call without a candidate is deferred")
+    }
+
+    /// Defers a call to the best of `candidates`: see `defer_method_call`.
+    /// With `refuse_unfit`, a call that no candidate fits at all is not
+    /// deferred, and the caller checks it another way, with the arguments
+    /// typed.
+    #[allow(clippy::too_many_arguments)]
+    fn defer_pending_method(
+        &mut self,
+        expr: ExprId,
+        receiver_ty: TyId<'db>,
+        method_name: IdentId<'db>,
+        candidates: Vec<PendingMethodCandidate<'db>>,
+        args: &[HirCallArg<'db>],
+        args_typed: bool,
+        span: DynLazySpan<'db>,
+        refuse_unfit: bool,
+    ) -> Option<ExprProp<'db>> {
         let typed = ExprProp::new(self.fresh_ty(), true);
         self.env.type_expr(expr, typed.clone());
         // The arguments are typed now so that they constrain the choice.
-        for arg in args {
-            self.check_expr_unknown(arg.expr);
+        if !args_typed {
+            for arg in args {
+                self.check_expr_unknown(arg.expr);
+            }
         }
-        let candidates = self.pending_method_candidates(ambiguous, canonical, method_name);
         let pending = super::env::PendingMethod {
             expr,
             recv_ty: receiver_ty,
@@ -2867,7 +2947,10 @@ impl<'db> TyChecker<'db> {
                 self.viable_pending_candidates(&pending, recv_ty, typed.ty, parts, false);
             if !undecided && let [candidate] = viable[..] {
                 self.resolve_pending_method(&pending, candidate, recv_ty, typed.ty, parts);
-                return typed;
+                return Some(typed);
+            }
+            if refuse_unfit && !undecided && viable.is_empty() {
+                return None;
             }
             // For the same reason, a type all fitting candidates return is
             // the call's: `!s.eq("serve")` is a `bool` whichever impl the
@@ -2887,7 +2970,7 @@ impl<'db> TyChecker<'db> {
             }
         }
         self.env.register_pending_method(pending);
-        typed
+        Some(typed)
     }
 
     /// A callee's return type with the call's generic arguments filled in can
@@ -4183,11 +4266,8 @@ impl<'db> TyChecker<'db> {
                 selected_receiver_ty = ty;
             }
             StringReceiver::Shared(default) => {
-                let Some(dyn_ty) = self.dyn_string_ty() else {
-                    return ExprProp::invalid(self.db);
-                };
                 match self.shared_literal_signature(
-                    [default, dyn_ty],
+                    default,
                     method_name,
                     receiver.span(self.body()).into(),
                 ) {
@@ -4197,13 +4277,13 @@ impl<'db> TyChecker<'db> {
                             receiver_prop.ty,
                             method_name,
                             args,
-                            false,
                             signature,
                             method_span,
                         );
                     }
+                    // The two types give the method different signatures.
                     Err(SharedSignatureError::Differ) => {
-                        self.push_diag(BodyDiag::StringLiteralTypeNeeded(method_span));
+                        self.refuse_string_literal_type(receiver_prop.ty, method_span);
                         return ExprProp::invalid(self.db);
                     }
                     // The call does not fit the method: checked on the default
@@ -4218,59 +4298,8 @@ impl<'db> TyChecker<'db> {
                     }
                 }
             }
-            StringReceiver::Traits(traits) => {
-                let chosen = if let [only] = traits.as_slice() {
-                    Some(only)
-                } else {
-                    // The argument types choose among several traits.
-                    for arg in args {
-                        self.check_expr_unknown(arg.expr);
-                    }
-                    args_typed = true;
-                    let kept = self.literal_traits_fitting_args(
-                        &traits,
-                        receiver_prop.ty,
-                        method_name,
-                        *generic_args,
-                        args,
-                        method_span.clone(),
-                    );
-                    match kept.as_slice() {
-                        [one] => Some(&traits[*one]),
-                        [] => None,
-                        // Several fit: the call is the same for each if both
-                        // string types give the method one signature.
-                        _ => {
-                            let (Some(default), Some(dyn_ty)) = (
-                                self.open_literal_default_ty(receiver_prop.ty),
-                                self.dyn_string_ty(),
-                            ) else {
-                                return ExprProp::invalid(self.db);
-                            };
-                            if let Ok(signature) = self.shared_literal_signature(
-                                [default, dyn_ty],
-                                method_name,
-                                receiver.span(self.body()).into(),
-                            ) && signature.0.len() == args.len()
-                            {
-                                return self.defer_shared_literal_receiver(
-                                    expr,
-                                    receiver_prop.ty,
-                                    method_name,
-                                    args,
-                                    true,
-                                    signature,
-                                    method_span,
-                                );
-                            }
-                            None
-                        }
-                    }
-                };
-                let Some(chosen) = chosen else {
-                    self.push_diag(BodyDiag::StringLiteralTypeNeeded(method_span));
-                    return ExprProp::invalid(self.db);
-                };
+            StringReceiver::Traits(traits) if traits.len() == 1 => {
+                let chosen = &traits[0];
                 // A trait that only one string type implements fixes the
                 // literal to it.
                 let only_side = match (chosen.inline, chosen.dyn_) {
@@ -4284,13 +4313,56 @@ impl<'db> TyChecker<'db> {
                 }
                 literal_trait = Some((chosen.def, chosen.inline && chosen.dyn_));
             }
+            StringReceiver::Traits(traits) => {
+                // Several traits give the method: which one is chosen when the
+                // whole body is known, as for a receiver of a known type, each
+                // with the literal as its `Self`.
+                let candidates = traits
+                    .iter()
+                    .filter_map(|literal_trait| {
+                        let method = *literal_trait.def.method_defs(self.db).get(&method_name)?;
+                        let inst =
+                            self.trait_inst_for_receiver(literal_trait.def, receiver_prop.ty);
+                        Some(PendingMethodCandidate {
+                            inst,
+                            method,
+                            needs_confirmation: true,
+                            literal_self: true,
+                        })
+                    })
+                    .collect();
+                if let Some(deferred) = self.defer_pending_method(
+                    expr,
+                    receiver_prop.ty,
+                    method_name,
+                    candidates,
+                    args,
+                    false,
+                    method_span.clone(),
+                    true,
+                ) {
+                    return deferred;
+                }
+                // No trait takes these arguments: the call is checked on the
+                // default type, which reports the mismatch.
+                args_typed = true;
+                let Some(sort) = self.open_literal_sort(receiver_prop.ty) else {
+                    return ExprProp::invalid(self.db);
+                };
+                self.equate_ty(
+                    receiver_prop.ty,
+                    sort.default,
+                    receiver.span(self.body()).into(),
+                );
+                selected_receiver_ty = sort.default;
+            }
         }
 
         let (func_ty, trait_inst, either_way) = if let Some((def, either_way)) = literal_trait {
             let Some(&method) = def.method_defs(self.db).get(&method_name) else {
                 return ExprProp::invalid(self.db);
             };
-            let inst = self.trait_inst_with_self(def, receiver_prop.ty);
+            let inst = self.trait_inst_for_receiver(def, receiver_prop.ty);
             self.env.register_trait_obligation(TraitObligation {
                 goal: inst,
                 origin: TraitObligationOrigin::GenericConfirmation,
@@ -4318,6 +4390,7 @@ impl<'db> TyChecker<'db> {
                         &canonical_r_ty,
                         ambiguous,
                         args,
+                        args_typed,
                         call_span.method_name().into(),
                     );
                 }
@@ -4343,16 +4416,18 @@ impl<'db> TyChecker<'db> {
                 Err(err) => {
                     // A result that depends on a literal's type is not a type
                     // to look a method up on yet.
-                    let diag = if self.waits_on_open_string_literal(selected_receiver_ty) {
-                        BodyDiag::StringLiteralTypeNeeded(receiver.span(self.body()).into()).into()
-                    } else {
-                        body_diag_from_method_selection_err(
-                            self.db,
-                            err,
-                            Spanned::new(selected_receiver_ty, receiver.span(self.body()).into()),
-                            Spanned::new(method_name, call_span.method_name().into()),
-                        )
-                    };
+                    if self.refuse_waiting_literal(
+                        selected_receiver_ty,
+                        receiver.span(self.body()).into(),
+                    ) {
+                        return ExprProp::invalid(self.db);
+                    }
+                    let diag = body_diag_from_method_selection_err(
+                        self.db,
+                        err,
+                        Spanned::new(selected_receiver_ty, receiver.span(self.body()).into()),
+                        Spanned::new(method_name, call_span.method_name().into()),
+                    );
                     self.push_diag(diag);
                     return ExprProp::invalid(self.db);
                 }
@@ -4845,51 +4920,8 @@ impl<'db> TyChecker<'db> {
                         trait_inst.self_ty(self.db).data(self.db),
                         TyData::TyParam(param) if param.is_trait_self()
                     ) {
-                        let old_self = trait_inst.self_ty(self.db);
-                        let new_self = self.table.new_var_from_param(old_self);
-
-                        struct ReplaceSelf<'db> {
-                            from: TyId<'db>,
-                            to: TyId<'db>,
-                        }
-
-                        impl<'db> TyFolder<'db> for ReplaceSelf<'db> {
-                            fn fold_ty(
-                                &mut self,
-                                db: &'db dyn HirAnalysisDb,
-                                ty: TyId<'db>,
-                            ) -> TyId<'db> {
-                                if ty == self.from {
-                                    return self.to;
-                                }
-                                ty.super_fold_with(db, self)
-                            }
-                        }
-
-                        let mut folder = ReplaceSelf {
-                            from: old_self,
-                            to: new_self,
-                        };
-
-                        let args = trait_inst
-                            .args(self.db)
-                            .iter()
-                            .map(|&ty| ty.fold_with(self.db, &mut folder))
-                            .collect::<Vec<_>>();
-
-                        let assoc_type_bindings: IndexMap<_, _> = trait_inst
-                            .assoc_type_bindings(self.db)
-                            .iter()
-                            .map(|(name, ty)| (*name, ty.fold_with(self.db, &mut folder)))
-                            .collect();
-
-                        TraitInstId::new(
-                            self.db,
-                            trait_inst.def(self.db),
-                            args,
-                            assoc_type_bindings,
-                            trait_inst.mode(self.db),
-                        )
+                        let new_self = self.table.new_var_from_param(trait_inst.self_ty(self.db));
+                        self.trait_inst_with_self(trait_inst, new_self)
                     } else {
                         trait_inst
                     };
@@ -5207,9 +5239,7 @@ impl<'db> TyChecker<'db> {
             return ExprProp::invalid(self.db);
         }
 
-        if self.waits_on_open_string_literal(lhs_place_ty) {
-            let diag = BodyDiag::StringLiteralTypeNeeded(lhs.span(self.body()).into());
-            self.push_diag(diag);
+        if self.refuse_waiting_literal(lhs_place_ty, lhs.span(self.body()).into()) {
             return ExprProp::invalid(self.db);
         }
 
@@ -5482,12 +5512,12 @@ impl<'db> TyChecker<'db> {
 
         let scrutinee_ty = self.fresh_ty();
         let scrutinee_prop = self.check_expr(*scrutinee, scrutinee_ty);
-        let scrutinee_pat_ty = scrutinee_prop.ty;
 
         let Partial::Present(arms) = arms else {
             return ExprProp::invalid(self.db);
         };
         let arm_pats: Vec<_> = arms.iter().map(|arm| arm.pat).collect();
+        let scrutinee_pat_ty = self.scrutinee_pat_ty(*scrutinee, scrutinee_prop.ty, &arm_pats);
         self.take_initializer_marker(*scrutinee, &arm_pats, MarkerPosition::Scrutinee);
         let scrutinee_prop = self.open_matched_place(*scrutinee, scrutinee_prop, arm_pats);
 
@@ -5777,9 +5807,7 @@ impl<'db> TyChecker<'db> {
             if rhs.ty.has_invalid(self.db) {
                 return ExprProp::invalid(self.db);
             }
-            if self.waits_on_open_string_literal(rhs.ty) {
-                let diag = BodyDiag::StringLiteralTypeNeeded(rhs_expr.span(self.body()).into());
-                self.push_diag(diag);
+            if self.refuse_waiting_literal(rhs.ty, rhs_expr.span(self.body()).into()) {
                 return ExprProp::invalid(self.db);
             }
 

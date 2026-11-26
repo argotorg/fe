@@ -3875,13 +3875,32 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
-            Self::StringLiteralTypeNeeded(span) => primary_diag(
-                Severity::Error,
-                "type must be known",
-                "the type of this string literal is needed here; annotate it as `String<N>` or `DynString`",
-                span.resolve(db),
-                error_code,
-            ),
+            Self::StringLiteralTypeNeeded { primary, literal } => {
+                let mut sub_diagnostics = vec![SubDiagnostic::new(
+                    LabelStyle::Primary,
+                    if literal.is_some() {
+                        "the type of this string literal is needed here".to_string()
+                    } else {
+                        "the type of this string literal is needed here; annotate it as `String<N>` or `DynString`"
+                            .to_string()
+                    },
+                    primary.resolve(db),
+                )];
+                if let Some(literal) = literal {
+                    sub_diagnostics.push(SubDiagnostic::new(
+                        LabelStyle::Secondary,
+                        "annotate this literal as `String<N>` or `DynString`".to_string(),
+                        literal.resolve(db),
+                    ));
+                }
+                CompleteDiagnostic::new(
+                    Severity::Error,
+                    "type must be known".to_string(),
+                    sub_diagnostics,
+                    vec![],
+                    error_code,
+                )
+            }
 
             Self::TypeSizeOverflow { primary, ty } => primary_diag(
                 severity,
