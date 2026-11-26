@@ -1,0 +1,45 @@
+// A call whose method name several traits give is deferred as for a receiver
+// of a known type, and an argument that passes an access (`ref` or `mut`) is
+// not typed as one before the call resolves: the limit of deferred calls.
+use core::abi::DynString
+trait R1 {
+    fn rr(self, _ x: ref u8) -> u8
+}
+trait R2 {
+    fn rr(self, _ x: ref u8) -> u8
+}
+impl<const N: usize> R1 for String<N> {
+    fn rr(self, _ x: ref u8) -> u8 {
+        x + 1
+    }
+}
+impl R2 for DynString {
+    fn rr(self, _ x: ref u8) -> u8 {
+        x + 100
+    }
+}
+trait B1 {
+    fn bm(self, _ c: mut u8)
+}
+trait B2 {
+    fn bm(self, _ c: mut u8)
+}
+impl<const N: usize> B1 for String<N> {
+    fn bm(self, _ c: mut u8) {
+        c += 1
+    }
+}
+impl B2 for DynString {
+    fn bm(self, _ c: mut u8) {
+        c += 100
+    }
+}
+fn ref_argument() -> u8 {
+    let v: u8 = 5
+    "ab".rr(ref v)
+}
+fn mut_argument() -> u8 {
+    var c: u8 = 0
+    "ab".bm(mut c)
+    c
+}

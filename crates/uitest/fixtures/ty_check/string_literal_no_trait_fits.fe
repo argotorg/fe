@@ -1,0 +1,22 @@
+// The method name comes from one trait for each string type, and neither
+// takes `bool`: the argument is reported against the default type's method.
+use core::abi::DynString
+trait T1 {
+    fn foo(self, _ x: u8) -> usize
+}
+trait T2 {
+    fn foo(self, _ x: u16) -> usize
+}
+impl<const N: usize> T1 for String<N> {
+    fn foo(self, _ x: u8) -> usize {
+        N
+    }
+}
+impl T2 for DynString {
+    fn foo(self, _ x: u16) -> usize {
+        1000
+    }
+}
+fn f() -> usize {
+    "ab".foo(true)
+}

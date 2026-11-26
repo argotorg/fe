@@ -1,0 +1,13 @@
+// An inherent method of one string type and a trait method of the other with
+// different signatures: the literal's type is needed.
+trait IsE {
+    fn is_empty(self) -> u8
+}
+impl<const N: usize> IsE for String<N> {
+    fn is_empty(self) -> u8 {
+        7
+    }
+}
+fn f() -> bool {
+    "".is_empty()
+}

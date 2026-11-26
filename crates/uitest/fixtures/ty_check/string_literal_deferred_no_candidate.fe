@@ -1,0 +1,39 @@
+// A call whose method name two traits give, and no trait takes the argument,
+// is reported when checked, also in a body that has a warning.
+struct S {
+    x: u8,
+}
+struct Cell {
+    word: u256,
+}
+impl Cell {
+    fn get_mut(mut self) -> mut u256 {
+        mut self.word
+    }
+}
+trait T1 {
+    fn m(self, _ v: u8) -> u8
+}
+trait T2 {
+    fn m(self, _ v: u16) -> u8
+}
+impl T1 for S {
+    fn m(self, _ v: u8) -> u8 {
+        1
+    }
+}
+impl T2 for S {
+    fn m(self, _ v: u16) -> u8 {
+        2
+    }
+}
+fn plain() -> u8 {
+    let s = S { x: 0 }
+    s.m(true)
+}
+fn with_warning(_ cell: mut Cell) -> u8 {
+    var w = cell.get_mut()
+    w += 1
+    let s = S { x: 0 }
+    s.m(true)
+}
