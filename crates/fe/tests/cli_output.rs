@@ -4145,6 +4145,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "minimum_gas_calls",
     "mixed_space_forwarding",
     "mode_receivers_contract",
+    "module_with_codec_evidence",
     "module_with_panic",
     "module_with_storage",
     "msg_array_arg",

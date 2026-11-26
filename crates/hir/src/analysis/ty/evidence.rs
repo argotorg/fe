@@ -36,7 +36,7 @@ use super::{
         has_concrete_components, normalize_trait_inst_preserving_validity, same_identity,
         step_bound,
     },
-    ty_check::{BodyOwner, func_declared_bounds, func_signature},
+    ty_check::{BodyOwner, func_declared_bounds, func_signature, module_with::scope_choices},
     ty_def::{BorrowKind, TyFlags, TyId},
     ty_lower::CompleteSubst,
     unify::UnificationTable,
@@ -1950,9 +1950,13 @@ pub(crate) fn project_step<'db>(
             };
             let declared_bounds = selected.constraints(db).extend_all_bounds(db);
             let declared = PredicateListId::new(db, vec![declared]);
+            // A header's requirements are proved at the header, under its
+            // module's frame: the component is the one the declaring module
+            // sees, whoever reads it.
             let proofs = basis_proofs(
                 db,
                 implementation.scope(),
+                scope_choices(db, implementation.scope()),
                 BoundOwner::ImplementationConditions(*selected),
                 declared_bounds,
                 declared,
@@ -2538,6 +2542,7 @@ pub(crate) fn impl_method_evidence<'db>(
     Some(basis_proofs(
         db,
         body.scope(),
+        None,
         origin,
         basis,
         func_declared_bounds(db, body, body_mode),
@@ -2561,6 +2566,7 @@ pub(crate) fn impl_const_evidence<'db>(
     Some(basis_proofs(
         db,
         body.scope(),
+        None,
         BoundOwner::ConstBasis(body),
         collect_candidate_constraints(db, impl_trait.into())
             .instantiate_identity()
@@ -2586,6 +2592,7 @@ pub(crate) fn inherited_const_evidence<'db>(
     basis_proofs(
         db,
         implementation.scope(),
+        None,
         BoundOwner::InheritedConstBasis(implementation, body),
         collect_candidate_constraints(db, implementation.into())
             .instantiate_identity()
@@ -2599,10 +2606,12 @@ pub(crate) fn inherited_const_evidence<'db>(
 /// that the body declares (`declared`), from the assumptions `basis`, each
 /// naming the assumptions it uses by their positions in `basis` itself. A
 /// bound `basis` states is that assumption, including supplied supertrait
-/// dictionaries. Other implied bounds are left for the instance to prove.
+/// dictionaries. Other implied bounds are left for the instance to prove. The
+/// proofs are made with the chosen implementations `choices`, if any.
 fn basis_proofs<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     owner: BoundOwner<'db>,
     basis: PredicateListId<'db>,
     declared: PredicateListId<'db>,
@@ -2622,7 +2631,9 @@ fn basis_proofs<'db>(
                 .collect::<Vec<_>>(),
         )
     };
-    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(basis);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
+        .with_assumptions(basis)
+        .with_choices(choices);
     let proofs = signature
         .list(db)
         .iter()

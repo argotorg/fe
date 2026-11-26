@@ -2188,11 +2188,16 @@ fn finalized_derive_provider<'db>(
         .get(&IdentId::new(db, "derive"))
         .copied()
         .ok_or("canonical Derive protocol has no derive method")?;
+    // A header's requirements are proved at the header, under its module's
+    // frame, so the provider's bounds are too.
+    let frame = requested_by_header
+        .then(|| crate::analysis::ty::ty_check::module_with::scope_choices(db, scope))
+        .flatten();
     let finalized = crate::analysis::semantic::generated_callee(
         db,
         scope,
         assumptions,
-        None,
+        frame,
         derive_method,
         Some(inst),
         &[],

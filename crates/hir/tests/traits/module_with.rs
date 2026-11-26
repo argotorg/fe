@@ -1394,3 +1394,96 @@ pub mod a {{ use super::*
     assert_eq!(shifted_wire(""), ["5-0005"]);
     assert_eq!(shifted_wire("with (Shifted)"), ["5-0005"]);
 }
+
+// A header's requirements are proved at the header, under its module's frame
+
+/// The implementation `N` of `Tr` is declared in a framed module. The proof
+/// that its associated type `Foo` implements `Show` is made where `N` is
+/// declared, under that module's frame, so a reader outside the module gets
+/// the framed `show` (70) and `N`'s own method gets the same (70).
+#[test]
+fn the_components_of_an_implementation_in_a_framed_module_are_proved_under_its_frame() {
+    values(
+        r#"
+pub trait Show { const fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { const fn show() -> u256 { 100 } }
+pub impl Show for Foo as Loud { const fn show() -> u256 { 70 } }
+pub trait Tr {
+    type A: Show
+    const fn via() -> u256
+}
+pub mod n {
+    use super::*
+    with (Loud)
+    pub struct N {}
+    impl Tr for N {
+        type A = Foo
+        const fn via() -> u256 { Foo::show() }
+    }
+}
+const fn read<B: Tr>() -> u256 { <B::A as Show>::show() * 1000 + B::via() }
+const fn f() -> u256 { read<n::N>() }
+"#,
+        &[("f", 70070)],
+    );
+}
+
+/// A second root of the same component, passed ordinarily, proves `Foo: Show`
+/// with the ordinary implementation: the two roots disagree where they meet.
+#[test]
+fn a_component_proved_under_a_frame_disagrees_with_an_ordinary_one() {
+    let source = [
+        TWO_ROOTS,
+        r#"
+pub mod n {
+    use super::*
+    with (Loud)
+    pub struct N {}
+    impl Tr for N {
+        type A = Foo
+        fn via() -> u256 { Foo::show() }
+    }
+}
+fn disagree() -> u256 { f<n::N, V<Foo>>() }
+fn demand() -> u256 { disagree() }
+"#,
+    ]
+    .concat();
+    assert!(diagnostics(&source).is_empty());
+    assert!(access_report(&source).contains("error[16-0019]"));
+}
+
+/// The operator `+` on a type that has nothing to do with the operand
+/// `<Arr<100> as Add2>` does not choose it, though `Add2` declares a method
+/// named `add`: the operand's implementation reads the constant that the
+/// operator is checked in.
+#[test]
+fn a_declared_operand_for_another_type_is_not_chosen_by_an_operator() {
+    values(
+        r#"
+use core::ops::Add
+pub struct Arr<const N: u256> {}
+pub struct Money { pub v: u256 }
+impl Add for Money {
+    type Output = Money
+    const fn add(own self, _ other: own Money) -> Money { Money { v: self.v + other.v } }
+}
+pub trait Add2 { const fn add(self) -> u256 }
+pub mod m {
+    use super::*
+    with (<Arr<100> as Add2>)
+    pub const K: u256 = {
+        let a = Money { v: 1 }
+        let b = Money { v: 2 }
+        let s = a + b
+        s.v + 97
+    }
+    impl Add2 for Arr<{ K }> { const fn add(self) -> u256 { 2 } }
+    pub const fn f() -> u256 { K }
+}
+const fn f() -> u256 { m::f() }
+"#,
+        &[("f", 100)],
+    );
+}
