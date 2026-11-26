@@ -185,6 +185,161 @@ type aliases, and a constant argument of a written type that opens its own
 function body. A type constant can use that helper's result with ordinary
 arguments and bounds.
 
+## Choosing for a whole module
+
+A module can name the implementations its code uses once, in a `with`
+declaration:
+
+```fe
+struct Item {}
+trait Price { const fn price() -> u256 }
+impl Price for Item { const fn price() -> u256 { 100 } }
+impl Price for Item as Wholesale { const fn price() -> u256 { 70 } }
+impl Price for Item as Clearance { const fn price() -> u256 { 30 } }
+
+mod shop {
+    use super::{Clearance, Item, Price, Wholesale}
+    with (Wholesale)
+
+    pub const fn quote() -> u256 { Item::price() }
+    pub const fn sale() -> u256 { with (Clearance) { Item::price() } }
+
+    pub mod back {
+        use super::super::{Item, Price}
+        pub const fn quote() -> u256 { Item::price() }
+    }
+
+    pub mod outlet {
+        use super::super::{Clearance, Item, Price}
+        with (Clearance)
+        pub const fn quote() -> u256 { Item::price() }
+    }
+}
+
+const fn plain() -> u256 { Item::price() }
+```
+
+With a `#[test]` function added that asserts `plain() == 100`,
+`shop::quote() == 70`, `shop::sale() == 30`, `shop::back::quote() == 70` and
+`shop::outlet::quote() == 30`, the file passes under `fe test prices.fe`.
+
+The declaration is the outermost choice frame of every body written in the
+module and in its child modules, child files included. Each such body is
+checked as if it were wrapped in `with (Wholesale) { .. }`. The nearest frame
+answers a goal: the declaration of a child module, then a `with` block, then,
+inside the methods of an implementation, that implementation's own entry, which
+is nearer than the module's frame but farther than a `with` block in the
+method. A function item written inside a body is a body of the module and gets
+the frame; a `with` block does not reach items nested inside it. Importing a
+module brings its names and not its frame. A module has one declaration, and it
+can stand anywhere among the items.
+
+The frame covers functions and methods, the default methods of a trait (in the
+module of the trait), the initializers of named, associated and inherent
+constants, the defaults of a trait's constants (in the module of the trait),
+`static_assert` conditions, `where` conditions on functions, `init` and `recv`
+bodies of contracts, closures, and the members that a derive header generates.
+It does not cover constants written inside a type, nor `where` conditions on a
+struct, an enum, an implementation or a trait: those are facts about a type and
+use the ordinary choice.
+
+Operands are implementations only: a named implementation (`Name`,
+`path::Name`, `Name<Args>`) or an ordinary one opened as `<Type as Trait>`.
+Names are looked up in the scope of the module, with the visibility rules of a
+block operand. A value, an effect provider or a type is refused with 2-0021
+(`with (Item)` reports that `Item` is a type, not an implementation).
+Values and providers are written in a `with` block. An operand whose
+implementation needs a value that is checked under its own module's frame is
+refused at the operand (2-0022). As in a block, a choice is a candidate and
+never an assumption: a chosen implementation whose conditions fail is an
+error, and two operands that could answer one goal are refused.
+
+A module's `with` never decides a type. Associated types and aliases normalize
+through the ordinary implementations, and a named implementation that would
+change one is refused (5-0005). A constant is one value, fixed under the frame
+of the module that declares it. A type that uses a constant whose value reads a
+chosen implementation of a module frame is refused (8-0138), whichever module
+writes the type and whether the constant is named directly, in braces, through
+another constant, or as an associated or inherent constant. A constant function
+may read the frame, and its value is the one it returns:
+
+```fe
+struct Array<const N: u256> {}
+
+mod shop {
+    use super::{Array, Item, Price, Wholesale}
+    with (Wholesale)
+
+    pub const BASE: u256 = Item::price()
+    pub const fn base() -> u256 { BASE }
+
+    pub fn sealed(a: Array<{ base() }>) -> Array<70> { a }
+    pub fn refused(_ a: Array<BASE>) {}
+}
+```
+
+`sealed` is accepted, and `refused` reports 8-0138 at `BASE`. An
+implementation header such as `impl Size for Array<{ BASE }>` is a type like
+any other, so the same rule applies to it.
+
+A header's requirements are proved at the header, under its module's frame.
+The bound on an associated type of an implementation declared in a framed
+module, and the provider bounds of a derive header, are proved with that
+module's choices, whoever reads them:
+
+```fe
+trait Holder { type A: Show }
+
+mod framed {
+    use super::{Foo, Holder, Loud, Show}
+    with (Loud)
+
+    pub struct Slot {}
+    impl Holder for Slot { type A = Foo }
+}
+
+const fn shown<H: Holder>() -> u256 { <H::A as Show>::show() }
+```
+
+Here `Show` is a trait with `const fn show() -> u256`, `Foo` implements it
+with 100, and `Loud` is a named implementation for `Foo` with 70.
+`shown<framed::Slot>()` returns 70 even though `shown` is written outside the
+module, and `Foo::show()` outside the module still returns 100.
+
+Some code is generated from the program, and a frame does not reach all of
+it. The `Drop` implementation of a type is a fact of the type. A panic
+payload and a hash computed for a written expression receive no choice. The
+entry code of a contract is planned under the frame of the module that holds
+the contract: the decoding of `init` arguments, the reading of each message and
+the encoding of each return value. `fe check` and `fe build` read the same
+plan, so a chosen implementation whose prerequisite nothing satisfies is
+refused at the arm with 16-0024 in both. A contract in a module that
+declares `with (Twice)`, where `Twice` is a named `Encode<Sol>` for the return
+type, encodes its return value with `Twice`; the same contract in a module
+without the declaration uses the ordinary encoder.
+
+Limits:
+
+- The frame is built from names alone, before any constant of the module is
+  evaluated. An operand is therefore chosen when its trait has a method of
+  the called name and its self type can match, and it is refused if that
+  choice needs the calling constant. With `with (<Array<70> as Show>)` in a
+  module that declares `const K: u256 = Array<70>::show()` and
+  `impl Show for Array<{ K }>`, the operand is refused with 2-0022, and the
+  header with 8-0138.
+- A default declared in a module without a declaration, and used in a
+  signature of a framed module, takes the ordinary value: the default
+  `Array<const N: u256 = { Item::price() }>` is `Array<100>` in the signature
+  of a function of `shop`, not `Array<70>`.
+- A named implementation with a const parameter whose default nothing applies
+  is refused with 6-0003, in a block and in a module alike.
+- The checks of a contract's effect keys, the Solidity type names that an ABI
+  description reads, and the field check of an `#[abi]` struct use the
+  ordinary implementations. A choice of a module is not seen there.
+- The language server does not resolve the names in a module's `with`: hover,
+  go to definition and rename do not apply to them, and the formatter keeps
+  the operands on one line.
+
 ## Indexed storage
 
 A storage entry uses the `StateIndex::locate` dictionary proved where the
