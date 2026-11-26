@@ -25,7 +25,7 @@ use crate::{
             },
         },
         ty::{
-            const_ty::{ConstTyData, ConstTyId, LoweringContext},
+            const_ty::LoweringContext,
             diagnostics::{
                 BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
             },
@@ -36,13 +36,9 @@ use crate::{
                 TraitSolveCx, goal_holds,
             },
             ty_def::{TyData, TyId},
-            visitor::{TyVisitable, TyVisitor, walk_const_ty},
         },
     },
-    hir_def::{
-        Body, Expr, ExprId, GenericArg, ItemKind, Partial, PathId, PathKind, Stmt, Trait, TypeId,
-        TypeKind, WithItem, scope_graph::ScopeId,
-    },
+    hir_def::{ItemKind, PathId, PathKind, Trait, WithItem, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
 
@@ -165,156 +161,6 @@ fn operand_trait<'db>(
     }
 }
 
-/// Whether the operand `path` has a constant argument that is not a literal,
-/// or a path to a constant with a literal initializer. The syntax of the
-/// operand is read, and a type alias that it names is lowered deferred;
-/// nothing is evaluated. A constant argument that is computed could be decided
-/// by the frame it is written for.
-fn has_non_literal_argument<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    path: PathId<'db>,
-) -> bool {
-    struct Computed<'db> {
-        db: &'db dyn HirAnalysisDb,
-        found: bool,
-    }
-    impl<'db> TyVisitor<'db> for Computed<'db> {
-        fn db(&self) -> &'db dyn HirAnalysisDb {
-            self.db
-        }
-        fn visit_const_ty(&mut self, const_ty: &ConstTyId<'db>) {
-            if let ConstTyData::UnEvaluated { body, .. } = const_ty.data(self.db)
-                && !literal_body(self.db, *body, 0)
-            {
-                self.found = true;
-            }
-            walk_const_ty(self, const_ty);
-        }
-    }
-
-    fn in_path<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>, path: PathId<'db>) -> bool {
-        if let PathKind::QualifiedType { type_, trait_ } = path.kind(db) {
-            return in_type(db, scope, type_)
-                || trait_
-                    .path(db)
-                    .to_opt()
-                    .is_some_and(|trait_path| in_path(db, scope, trait_path));
-        }
-        let mut segment = Some(path);
-        while let Some(current) = segment {
-            let computed = current
-                .generic_args(db)
-                .data(db)
-                .iter()
-                .any(|arg| match arg {
-                    GenericArg::Const(arg) => arg
-                        .value
-                        .to_opt()
-                        .is_some_and(|body| !literal_body(db, body, 0)),
-                    GenericArg::Type(arg) => {
-                        arg.ty.to_opt().is_some_and(|ty| in_type(db, scope, ty))
-                    }
-                    _ => false,
-                });
-            if computed {
-                return true;
-            }
-            segment = current.parent(db);
-        }
-        false
-    }
-
-    fn in_type<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>, ty: TypeId<'db>) -> bool {
-        match ty.data(db) {
-            TypeKind::Path(Partial::Present(path)) => {
-                if in_path(db, scope, *path) {
-                    return true;
-                }
-                // A path that names a constant, or an alias.
-                match resolve_path_with_minter(
-                    db,
-                    *path,
-                    scope,
-                    PredicateListId::empty_list(db),
-                    true,
-                    &LoweringContext::deferred(),
-                ) {
-                    Ok(PathRes::Const(constant, _)) => constant
-                        .body(db)
-                        .to_opt()
-                        .is_none_or(|body| !literal_body(db, body, 0)),
-                    Ok(PathRes::TraitConst(..) | PathRes::InherentConst(..)) => true,
-                    Ok(PathRes::TyAlias(_, aliased)) => {
-                        let mut computed = Computed { db, found: false };
-                        aliased.visit_with(&mut computed);
-                        computed.found
-                    }
-                    _ => false,
-                }
-            }
-            TypeKind::Ptr(Partial::Present(inner)) | TypeKind::Mode(_, Partial::Present(inner)) => {
-                in_type(db, scope, *inner)
-            }
-            TypeKind::Tuple(elems) => elems
-                .data(db)
-                .iter()
-                .any(|elem| elem.to_opt().is_some_and(|elem| in_type(db, scope, elem))),
-            TypeKind::Array(elem, length) => {
-                length
-                    .to_opt()
-                    .is_some_and(|body| !literal_body(db, body, 0))
-                    || elem.to_opt().is_some_and(|elem| in_type(db, scope, elem))
-            }
-            _ => false,
-        }
-    }
-
-    in_path(db, scope, path)
-}
-
-/// Whether the constant body `body` is a literal, or a path to a constant
-/// whose initializer is one. The depth bounds a chain of constants.
-fn literal_body<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>, depth: usize) -> bool {
-    fn literal_expr<'db>(
-        db: &'db dyn HirAnalysisDb,
-        body: Body<'db>,
-        expr: ExprId,
-        depth: usize,
-    ) -> bool {
-        match expr.data(db, body) {
-            Partial::Present(Expr::Lit(_)) => true,
-            Partial::Present(Expr::Block(stmts, _)) => match stmts.as_slice() {
-                [stmt] => matches!(
-                    stmt.data(db, body),
-                    Partial::Present(Stmt::Expr(inner))
-                        if literal_expr(db, body, *inner, depth)
-                ),
-                _ => false,
-            },
-            Partial::Present(Expr::Path(Partial::Present(path))) if depth < 8 => {
-                matches!(
-                    resolve_path_with_minter(
-                        db,
-                        *path,
-                        body.scope(),
-                        PredicateListId::empty_list(db),
-                        true,
-                        &LoweringContext::deferred(),
-                    ),
-                    Ok(PathRes::Const(constant, _))
-                        if constant
-                            .body(db)
-                            .to_opt()
-                            .is_some_and(|body| literal_body(db, body, depth + 1))
-                )
-            }
-            _ => false,
-        }
-    }
-    literal_expr(db, body, body.expr(db), depth)
-}
-
 /// The frame of a module is built from names and deferred lowering only. It
 /// never evaluates a constant, searches for an implementation or checks a
 /// body: no value checked under a frame can feed the frame itself.
@@ -334,16 +180,10 @@ fn module_choices_query<'db>(
     for (index, operand) in declaration.operands(db).iter().enumerate() {
         // An operand that the parser dropped, or that names no implementation,
         // adds no entry: `module_with_check` reports it.
-        let Some(path) = operand.to_opt() else {
-            continue;
-        };
-        // An operand with a computed constant argument adds no entry: the
-        // argument could be decided by the frame it is written for. It is
-        // read from the syntax, before anything is lowered.
-        if has_non_literal_argument(db, scope, path) {
-            continue;
-        }
-        let Some(trait_) = operand_trait(db, scope, path) else {
+        let Some(trait_) = operand
+            .to_opt()
+            .and_then(|path| operand_trait(db, scope, path))
+        else {
             continue;
         };
         let operand = DeclaredOperand::new(db, declaration, index as u32, trait_);
@@ -613,13 +453,6 @@ fn module_with_check_query<'db>(
                 })
         });
         let Some((position, operand)) = entry else {
-            // An operand with a computed constant argument is refused before
-            // anything is evaluated.
-            if has_non_literal_argument(db, scope, path) && operand_trait(db, scope, path).is_some()
-            {
-                diags.push(PathResDiag::NonLiteralWithArgument(span).into());
-                continue;
-            }
             // No entry: the operand names no implementation, and is
             // classified as a block would.
             let outer = frame_before(db, frame, with, index);
