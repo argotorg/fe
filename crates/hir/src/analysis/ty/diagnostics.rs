@@ -816,6 +816,13 @@ pub enum BodyDiag<'db> {
         call: DynLazySpan<'db>,
         fault: Box<TyDiagCollection<'db>>,
     },
+    /// A constant in a field's type fails to evaluate for the generic
+    /// arguments of this initializer, as `[u256; N - 1]` does at `N = 0`.
+    /// `fault` is the evaluation failure, reported at the constant.
+    FieldTypeConstFault {
+        field: DynLazySpan<'db>,
+        fault: Box<TyDiagCollection<'db>>,
+    },
     WhereConstPredicateFailed(DynLazySpan<'db>),
     WhereTypeBoundMissing(DynLazySpan<'db>),
     GenericConstPredicateUnsupported(DynLazySpan<'db>),
@@ -1587,6 +1594,7 @@ impl<'db> BodyDiag<'db> {
             Self::ConstDependencyMustBeKnown { .. } => 90,
             Self::ConstEvaluationFailed { .. } => 89,
             Self::CallReturnTypeConstFault { .. } => 96,
+            Self::FieldTypeConstFault { .. } => 163,
             Self::WhereConstPredicateFailed(..) => 91,
             Self::GenericConstPredicateUnsupported(..) => 92,
             Self::RecursiveConstRequirement(..) => 94,

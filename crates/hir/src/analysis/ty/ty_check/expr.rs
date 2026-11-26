@@ -2351,6 +2351,22 @@ impl<'db> TyChecker<'db> {
         }
     }
 
+    /// A field's type with the initializer's generic arguments filled in can
+    /// hold a const that fails to evaluate only now, such as `[u256; N - 1]`
+    /// at `N = 0`. The failure leaves an invalid type, which matches any
+    /// value. Report it instead.
+    fn report_field_const_fault(&mut self, field_ty: TyId<'db>, field: DynLazySpan<'db>) {
+        if let Some(cause) = first_invalid_ty_cause(self.db, field_ty)
+            && cause.const_eval_fault().is_some()
+            && let Some(fault) = diag_from_invalid_cause(field.clone(), &cause)
+        {
+            self.push_diag(BodyDiag::FieldTypeConstFault {
+                field,
+                fault: Box::new(fault),
+            });
+        }
+    }
+
     fn check_assert(&mut self, expr: ExprId, args: &[HirCallArg<'db>]) -> ExprProp<'db> {
         if !(1..=2).contains(&args.len()) {
             for arg in args {
@@ -4459,10 +4475,14 @@ impl<'db> TyChecker<'db> {
 
         for (i, field) in fields.iter().enumerate() {
             let label = field.label_eagerly(rec_checker.tc.db, rec_checker.tc.body());
-            let field_span = span.clone().field(i).into();
+            let field_span: DynLazySpan<'db> = span.clone().field(i).into();
 
-            let expected = match rec_checker.feed_label(label, field_span) {
-                Ok(ty) => ty,
+            let expected = match rec_checker.feed_label(label, field_span.clone()) {
+                Ok(ty) => {
+                    let ty = rec_checker.tc.normalize_ty(ty);
+                    rec_checker.tc.report_field_const_fault(ty, field_span);
+                    ty
+                }
                 Err(diag) => {
                     rec_checker.tc.push_diag(diag);
                     TyId::invalid(rec_checker.tc.db, InvalidCause::Other)

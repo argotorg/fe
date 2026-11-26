@@ -1,0 +1,58 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_generic_array_arith.fe
+---
+error[3-0034]: arithmetic overflow in const context
+   ┌─ const_generic_array_arith.fe:47:33
+   │
+47 │ fn direct_underflow() -> [u256; 0 - 1] {
+   │                                 ^^^^^ checked arithmetic overflowed during const evaluation
+
+error[8-0000]: type mismatch
+   ┌─ const_generic_array_arith.fe:15:14
+   │
+15 │     Vk { ic: [G1 { x: 1, y: 2 }, G1 { x: 3, y: 4 }, G1 { x: 5, y: 6 }] }
+   │              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `[G1; 2]`, but `[G1; 3]` is given
+
+error[8-0000]: type mismatch
+   ┌─ const_generic_array_arith.fe:36:15
+   │
+36 │     sum<2>(a: [1, 2])
+   │               ^^^^^^ expected `[u256; 3]`, but `[{integer}; 2]` is given
+
+error[8-0031]: type annotation is needed
+   ┌─ const_generic_array_arith.fe:36:9
+   │
+36 │     sum<2>(a: [1, 2])
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         no default type is provided for an integer type. consider giving integer type
+
+error[8-0163]: arithmetic overflow in const context
+   ┌─ const_generic_array_arith.fe:40:12
+   │
+19 │     pub a: [u256; N - 1],
+   │                   ----- checked arithmetic overflowed during const evaluation
+   ·
+40 │     Pair { a: [], b: [] }
+   │            ^^^^^ in the type of this field
+
+error[8-0163]: arithmetic overflow in const context
+   ┌─ const_generic_array_arith.fe:44:29
+   │
+19 │     pub a: [u256; N - 1],
+   │                   ----- checked arithmetic overflowed during const evaluation
+   ·
+44 │     let p: Pair<0> = Pair { a: [], b: [] }
+   │                             ^^^^^ in the type of this field
+
+error[8-0163]: arithmetic overflow in const context
+   ┌─ const_generic_array_arith.fe:56:14
+   │
+52 │     pub a: [u256; { N - 1 }],
+   │                     ----- checked arithmetic overflowed during const evaluation
+   ·
+56 │     Braced { a: [] }
+   │              ^^^^^ in the type of this field

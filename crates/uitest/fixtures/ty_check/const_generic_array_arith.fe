@@ -1,0 +1,57 @@
+struct G1 {
+    pub x: u256,
+    pub y: u256,
+}
+
+struct Vk<const N: usize> {
+    pub ic: [G1; N + 1],
+}
+
+fn make_vk() -> Vk<1> {
+    Vk { ic: [G1 { x: 1, y: 2 }, G1 { x: 3, y: 4 }] }
+}
+
+fn make_bad_vk() -> Vk<1> {
+    Vk { ic: [G1 { x: 1, y: 2 }, G1 { x: 3, y: 4 }, G1 { x: 5, y: 6 }] }
+}
+
+struct Pair<const N: usize> {
+    pub a: [u256; N - 1],
+    pub b: [u256; N * 2],
+}
+
+fn make_pair() -> Pair<3> {
+    Pair { a: [1, 2], b: [1, 2, 3, 4, 5, 6] }
+}
+
+fn sum<const N: usize>(a: [u256; N + 1]) -> u256 {
+    a[0]
+}
+
+fn call_sum() -> u256 {
+    sum<2>(a: [1, 2, 3])
+}
+
+fn call_sum_bad() -> u256 {
+    sum<2>(a: [1, 2])
+}
+
+fn underflow() -> Pair<0> {
+    Pair { a: [], b: [] }
+}
+
+fn underflow_annotated() {
+    let p: Pair<0> = Pair { a: [], b: [] }
+}
+
+fn direct_underflow() -> [u256; 0 - 1] {
+    todo()
+}
+
+struct Braced<const N: usize> {
+    pub a: [u256; { N - 1 }],
+}
+
+fn braced_underflow() -> Braced<0> {
+    Braced { a: [] }
+}
