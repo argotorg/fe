@@ -1,7 +1,8 @@
 // A derive header in a framed module proves the provider's bounds under that
 // module's frame: `DecodeWith<WirePolicy>` needs `WirePolicy: CodecPolicy`,
 // which only the module's named implementation provides. The receiver is in
-// an unframed module and uses the generated decoder: 7 + 5 + 10.
+// an unframed module and uses the generated decoder: 7 + 5 + 10. A receiver in
+// a module that chooses a decoder uses it for the message: 7 + 9 + 10.
 use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
 use core::derive::Derive
 use core::message::MsgVariant
@@ -82,6 +83,25 @@ pub contract Receiver {
     }
 }
 
+impl Decode<Sol> for Packet as AlternateDecode {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Packet { amount: d.read_word(input) + 9 }
+    }
+}
+
+mod selected_receive {
+    use super::{AlternateDecode, Packet}
+    with (AlternateDecode)
+
+    pub contract Receiver {
+        recv {
+            Packet { amount } -> u256 {
+                amount + 10
+            }
+        }
+    }
+}
+
 #[test]
 fn a_real_receiver_uses_the_generated_decode()
 uses (evm: mut Evm, call: mut Call)
@@ -90,4 +110,8 @@ uses (evm: mut Evm, call: mut Call)
     let result = addr.try_call(Packet { amount: 7 })
     assert!(result.success() && result.returndata_len() == 32)
     assert!(result.returndata().word_at(0) == 22)
+    let selected = evm.create2<selected_receive::Receiver>(value: Wei::zero(), args: (), salt: 1)
+    let result = selected.try_call(Packet { amount: 7 })
+    assert!(result.success() && result.returndata_len() == 32)
+    assert!(result.returndata().word_at(0) == 26)
 }

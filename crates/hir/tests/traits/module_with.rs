@@ -1714,3 +1714,64 @@ mod m {{
         vec!["8-0000"]
     );
 }
+
+// Entry code is planned under the contract module's frame
+
+/// The decoder of `Packet` reads a word and builds its `Word<u256>` field
+/// itself. The module chooses a `Decode` for `Word<T>` whose bound is unmet,
+/// but nothing the receiver runs calls it, so the entry code is accepted.
+#[test]
+fn a_receiver_choice_for_a_field_decoder_that_the_message_decoder_never_uses_is_accepted() {
+    let source = |prerequisite: &str| {
+        format!(
+            r#"
+use core::abi::{{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}}
+use core::message::MsgVariant
+use std::abi::Sol
+
+pub struct Word<T> {{ v: u256 }}
+pub struct Packet {{ w: Word<u256> }}
+pub trait Gate {{}}
+{prerequisite}
+impl<T> AbiSize for Word<T> {{
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}}
+impl<T> Decode<Sol> for Word<T> {{
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {{
+        Word {{ v: d.read_word(input) }}
+    }}
+}}
+impl<T: Gate> Decode<Sol> for Word<T> as StrictWord {{
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {{
+        Word {{ v: d.read_word(input) + 1 }}
+    }}
+}}
+impl MsgVariant<Sol> for Packet {{
+    const SELECTOR: u32 = 0x11223344
+    type Return = u256
+}}
+impl AbiSize for Packet {{
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}}
+impl Encode<Sol> for Packet {{
+    fn encode(self, _ out: AbiFrame) {{ out.store_word(at: 0, value: self.w.v) }}
+}}
+impl Decode<Sol> for Packet {{
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {{
+        Packet {{ w: Word {{ v: d.read_word(input) }} }}
+    }}
+}}
+with (StrictWord)
+pub contract Receiver {{
+    recv {{
+        Packet {{ w }} -> u256 {{ w.v }}
+    }}
+}}
+"#
+        )
+    };
+    assert!(diagnostics(&source("")).is_empty());
+    assert!(diagnostics(&source("impl Gate for u256 {}")).is_empty());
+}

@@ -32,7 +32,7 @@ use crate::{
             ty_def::TyId,
         },
     },
-    semantic::{RecvArmInput, UnmetGoal, contract_entry_plan},
+    semantic::{RecvArmInput, UnmetGoal, contract_entry},
 };
 /// The instances the dispatcher runs for `owner`, which is an `init` or a
 /// `recv` arm of a contract: the decode of the arguments, and for an arm the
@@ -45,7 +45,7 @@ pub fn dispatcher_callees<'db>(
     owner: BodyOwner<'db>,
 ) -> Vec<SemanticInstanceKey<'db>> {
     match owner {
-        BodyOwner::ContractInit { contract } => contract_entry_plan(db, contract, None)
+        BodyOwner::ContractInit { contract } => contract_entry(db, contract)
             .init
             .iter()
             .flatten()
@@ -56,7 +56,7 @@ pub fn dispatcher_callees<'db>(
             recv_idx,
             arm_idx,
         } => {
-            let Some(arm) = contract_entry_plan(db, contract, None).arm(recv_idx, arm_idx) else {
+            let Some(arm) = contract_entry(db, contract).arm(recv_idx, arm_idx) else {
                 return Vec::new();
             };
             let mut callees = Vec::new();
