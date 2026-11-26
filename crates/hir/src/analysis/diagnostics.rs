@@ -272,6 +272,21 @@ fn primary_diag(
     )
 }
 
+/// The label that says where to annotate the string literal a call waits on.
+fn literal_label(
+    db: &dyn SpannedHirAnalysisDb,
+    literal: &Option<DynLazySpan<'_>>,
+) -> Option<SubDiagnostic> {
+    literal.as_ref().map(|literal| {
+        SubDiagnostic::new(
+            LabelStyle::Secondary,
+            "the call waits for the type of this literal; annotate it as `String<N>` or `DynString`"
+                .to_string(),
+            literal.resolve(db),
+        )
+    })
+}
+
 fn cmp_trait_inst_by_name<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     a: &TraitInstId<'db>,
@@ -3594,6 +3609,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 key,
                 is_mut,
                 closure,
+                literal,
             } => {
                 let func_name = func
                     .name(db)
@@ -3620,7 +3636,10 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                             ),
                             span: closure.resolve(db),
                         },
-                    ],
+                    ]
+                    .into_iter()
+                    .chain(literal_label(db, literal))
+                    .collect(),
                     notes: vec![
                         "annotate the types the call depends on in the closure's body, so that it resolves there"
                             .to_string(),
@@ -4318,14 +4337,17 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 }
             }
 
-            Self::AccessNotValue { primary } => CompleteDiagnostic {
+            Self::AccessNotValue { primary, literal } => CompleteDiagnostic {
                 severity: Severity::Error,
                 message: "an access is not a value".to_string(),
-                sub_diagnostics: vec![SubDiagnostic {
+                sub_diagnostics: [SubDiagnostic {
                     style: LabelStyle::Primary,
                     message: "this access is used as a value".to_string(),
                     span: primary.resolve(db),
-                }],
+                }]
+                .into_iter()
+                .chain(literal_label(db, literal))
+                .collect(),
                 notes: vec![
                     "bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection"
                         .to_string(),

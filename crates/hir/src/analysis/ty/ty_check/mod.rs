@@ -1550,6 +1550,8 @@ pub struct TyChecker<'db> {
     final_pass: bool,
     /// The open string literals checked so far, with where each is written.
     string_literal_spans: Vec<(TyId<'db>, DynLazySpan<'db>)>,
+    /// The calls on an open string literal that wait for its type.
+    deferred_literal_calls: Vec<expr::DeferredLiteralCall<'db>>,
     /// What the arithmetic operators written in the body do on overflow, by
     /// its arithmetic mode. They wrap in unchecked code.
     overflow: Overflow,
@@ -3319,6 +3321,7 @@ impl<'db> TyChecker<'db> {
             diags: Vec::new(),
             final_pass: false,
             string_literal_spans: Vec::new(),
+            deferred_literal_calls: Vec::new(),
             overflow: env.owner().scope().arithmetic_mode(db).into(),
             env,
         }

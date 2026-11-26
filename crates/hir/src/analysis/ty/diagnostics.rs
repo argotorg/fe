@@ -736,6 +736,8 @@ pub enum BodyDiag<'db> {
         key: HirTypeId<'db>,
         is_mut: bool,
         closure: DynLazySpan<'db>,
+        /// Where the string literal the call waits on is written, if it does.
+        literal: Option<DynLazySpan<'db>>,
     },
 
     EffectTypeMismatch {
@@ -993,6 +995,8 @@ pub enum BodyDiag<'db> {
     /// `ref p`, `mut p`, or a tuple or sum yield shape used as a value.
     AccessNotValue {
         primary: DynLazySpan<'db>,
+        /// Where the string literal the call waits on is written, if it does.
+        literal: Option<DynLazySpan<'db>>,
     },
 
     /// An `if` or `match` outside a projection's yield whose branches end in

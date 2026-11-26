@@ -612,7 +612,10 @@ impl<'db> TyChecker<'db> {
             self.push_diag(
                 match self.env.typed_expr(expr).and_then(|prop| prop.shape) {
                     Some(Shape::Opaque(shape)) => BodyDiag::OpaqueShapeBound { primary, shape },
-                    _ => BodyDiag::AccessNotValue { primary },
+                    _ => BodyDiag::AccessNotValue {
+                        primary,
+                        literal: self.deferred_literal_label(expr),
+                    },
                 },
             );
         }

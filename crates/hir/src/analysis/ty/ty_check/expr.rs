@@ -152,6 +152,16 @@ pub(super) struct OpenLiteral<'db> {
     pub(super) default: TyId<'db>,
 }
 
+/// A deferred call on an open string literal: what it waits on, for the label
+/// that tells where to annotate.
+pub(super) struct DeferredLiteralCall<'db> {
+    call: ExprId,
+    args: Vec<ExprId>,
+    result: TyId<'db>,
+    /// Where the literal is written, if known.
+    literal: Option<DynLazySpan<'db>>,
+}
+
 /// One of the two types an open string literal can take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LiteralSide {
@@ -1241,8 +1251,7 @@ impl<'db> TyChecker<'db> {
 
         let base_ty = prop.ty.base_ty(self.db);
         if base_ty.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
-            self.push_diag(diag);
+            self.report_type_must_be_known(prop.ty, lhs.span(self.body()).into());
             return ExprProp::invalid(self.db);
         }
 
@@ -1480,8 +1489,7 @@ impl<'db> TyChecker<'db> {
         if literal.is_none() {
             // Fail if the source type is unknown.
             if from.base_ty(self.db).is_ty_var(self.db) {
-                let diag = BodyDiag::TypeMustBeKnown(inner_expr.span(self.body()).into());
-                self.push_diag(diag);
+                self.report_type_must_be_known(from, inner_expr.span(self.body()).into());
                 return ExprProp::invalid(self.db);
             }
 
@@ -1818,8 +1826,7 @@ impl<'db> TyChecker<'db> {
             && !matches!(var.sort, TyVarSort::String { .. })
         {
             self.check_expr_unknown(rhs_expr);
-            let diag = BodyDiag::TypeMustBeKnown(lhs_expr.span(self.body()).into());
-            self.push_diag(diag);
+            self.report_type_must_be_known(lhs.ty, lhs_expr.span(self.body()).into());
             return ExprProp::invalid(self.db);
         }
 
@@ -2775,16 +2782,48 @@ impl<'db> TyChecker<'db> {
 
     /// Reports at `at` that the type of the open literal `literal` is needed.
     fn refuse_string_literal_type(&mut self, literal: TyId<'db>, at: DynLazySpan<'db>) {
-        let literal = self.open_literal_sort(literal).and_then(|literal| {
-            (0..self.string_literal_spans.len()).find_map(|i| {
-                let (ty, span) = self.string_literal_spans[i].clone();
-                (ty.fold_with(self.db, &mut self.table) == literal.var).then_some(span)
-            })
-        });
+        let literal = self
+            .open_literal_sort(literal)
+            .and_then(|literal| self.string_literal_span(literal.var));
         self.push_diag(BodyDiag::StringLiteralTypeNeeded {
             primary: at,
             literal,
         });
+    }
+
+    /// Where the literal whose root variable is `var` is written.
+    fn string_literal_span(&mut self, var: TyId<'db>) -> Option<DynLazySpan<'db>> {
+        (0..self.string_literal_spans.len()).find_map(|i| {
+            let (ty, span) = self.string_literal_spans[i].clone();
+            (ty.fold_with(self.db, &mut self.table) == var).then_some(span)
+        })
+    }
+
+    /// Reports at `at` that the type `ty` must be known; if `ty` is the result of
+    /// a deferred call on an open literal, as that literal's type is needed.
+    fn report_type_must_be_known(&mut self, ty: TyId<'db>, at: DynLazySpan<'db>) {
+        let ty = ty.fold_with(self.db, &mut self.table);
+        let call = (0..self.deferred_literal_calls.len()).find(|&i| {
+            let result = self.deferred_literal_calls[i].result;
+            result.fold_with(self.db, &mut self.table) == ty
+        });
+        let diag = match call {
+            Some(i) => BodyDiag::StringLiteralTypeNeeded {
+                primary: at,
+                literal: self.deferred_literal_calls[i].literal.clone(),
+            },
+            None => BodyDiag::TypeMustBeKnown(at),
+        };
+        self.push_diag(diag);
+    }
+
+    /// Where the literal a deferred call waits on is written, for the call
+    /// `expr` or one of its arguments.
+    pub(super) fn deferred_literal_label(&self, expr: ExprId) -> Option<DynLazySpan<'db>> {
+        self.deferred_literal_calls
+            .iter()
+            .find(|call| call.call == expr || call.args.contains(&expr))
+            .and_then(|call| call.literal.clone())
     }
 
     /// Resolves the deferred call `pending` once its literal receiver has a
@@ -2925,6 +2964,15 @@ impl<'db> TyChecker<'db> {
     ) -> Option<ExprProp<'db>> {
         let typed = ExprProp::new(self.fresh_ty(), true);
         self.env.type_expr(expr, typed.clone());
+        if let Some(literal) = self.open_literal_sort(receiver_ty) {
+            let literal = self.string_literal_span(literal.var);
+            self.deferred_literal_calls.push(DeferredLiteralCall {
+                call: expr,
+                args: args.iter().map(|arg| arg.expr).collect(),
+                result: typed.ty,
+                literal,
+            });
+        }
         // The arguments are typed now so that they constrain the choice.
         if !args_typed {
             for arg in args {
@@ -3394,6 +3442,7 @@ impl<'db> TyChecker<'db> {
                             key: key_ty,
                             is_mut: req.required_mut,
                             closure: closure.expr.span(self.body()).into(),
+                            literal: call.and_then(|call| self.deferred_literal_label(call)),
                         },
                         None => missing(),
                     };
@@ -3448,6 +3497,7 @@ impl<'db> TyChecker<'db> {
                         key: requirement.binding_ty,
                         is_mut: requirement.is_mut,
                         closure: closure.expr.span(self.body()).into(),
+                        literal: call.and_then(|call| self.deferred_literal_label(call)),
                     },
                     None => BodyDiag::MissingRow {
                         primary: call_span.clone(),
@@ -3707,6 +3757,7 @@ impl<'db> TyChecker<'db> {
                 key,
                 is_mut: true,
                 closure: closure.expr.span(self.body()).into(),
+                literal: None,
             });
             return false;
         }
@@ -4423,6 +4474,13 @@ impl<'db> TyChecker<'db> {
                         selected_receiver_ty,
                         receiver.span(self.body()).into(),
                     ) {
+                        return ExprProp::invalid(self.db);
+                    }
+                    if err == MethodSelectionError::ReceiverTypeMustBeKnown {
+                        self.report_type_must_be_known(
+                            selected_receiver_ty,
+                            receiver.span(self.body()).into(),
+                        );
                         return ExprProp::invalid(self.db);
                     }
                     let diag = body_diag_from_method_selection_err(
@@ -5244,8 +5302,7 @@ impl<'db> TyChecker<'db> {
         }
 
         if lhs_place_ty.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
-            self.push_diag(diag);
+            self.report_type_must_be_known(lhs_place_ty, lhs.span(self.body()).into());
             return ExprProp::invalid(self.db);
         }
 
@@ -5703,8 +5760,7 @@ impl<'db> TyChecker<'db> {
 
         let lhs_base_ty = lhs_place_ty.base_ty(self.db);
         if lhs_base_ty.is_ty_var(self.db) {
-            let diag = BodyDiag::TypeMustBeKnown(lhs.span(self.body()).into());
-            self.push_diag(diag);
+            self.report_type_must_be_known(lhs_place_ty, lhs.span(self.body()).into());
             return unit;
         }
 
