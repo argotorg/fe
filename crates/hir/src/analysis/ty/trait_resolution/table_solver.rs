@@ -156,7 +156,7 @@ pub(super) fn matching_choice_in<'db>(
             }
             let opening = match entry {
                 ChoiceEntry::Provider(opening) => Some(opening),
-                ChoiceEntry::Impl(_) => None,
+                ChoiceEntry::Impl(_) | ChoiceEntry::Declared(_) => None,
             };
             match &selected {
                 Some((previous, _, earlier)) if opening.is_some() || earlier.is_some() => {
@@ -192,6 +192,14 @@ pub(super) fn match_choice_entry<'db>(
 ) -> Option<ChoiceMatch<'db>> {
     let choice = match entry {
         super::ChoiceEntry::Impl(choice) => choice,
+        // A declared operand answers only goals of its trait, and is chosen
+        // only then: a goal of another trait never forces it.
+        super::ChoiceEntry::Declared(operand) => {
+            if operand.trait_(db) != goal.def(db) {
+                return None;
+            }
+            super::super::ty_check::module_with::declared_choice(db, operand).choice?
+        }
         super::ChoiceEntry::Provider(opening) => {
             if !opening.may_offer(db, goal.def(db)) {
                 return None;
@@ -993,6 +1001,11 @@ impl<'db> TraitResolutionContext<'db> {
                         || !choices.items(self.db).iter().any(|entry| match entry {
                             super::ChoiceEntry::Provider(opening) => {
                                 opening.may_offer(self.db, goal.def(self.db))
+                            }
+                            // A declared operand may answer a goal of its trait,
+                            // and is not chosen to say so.
+                            super::ChoiceEntry::Declared(operand) => {
+                                operand.trait_(self.db) == goal.def(self.db)
                             }
                             super::ChoiceEntry::Impl(choice) => {
                                 let implementation = choice

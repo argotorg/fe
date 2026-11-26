@@ -3,6 +3,13 @@
 //! operand classifier that a block `with` uses (`with_operand`), at the
 //! module's scope, so a name means the same in both forms. A module adds no
 //! values or providers: those are written in a block.
+//!
+//! The frame is built from names and deferred lowering only (`module_choices`).
+//! Each operand is an entry that knows the trait it can answer. Its
+//! implementation is chosen by `declared_choice` on first use, and only for a
+//! goal of that trait, so no value checked under a frame can feed the frame.
+//! The diagnostics of the declaration are `module_with_check`, which nothing
+//! else reads.
 
 use salsa::SalsaValue;
 
@@ -10,22 +17,28 @@ use crate::{
     analysis::{
         HirAnalysisDb,
         name_resolution::{
-            ExpectedPathKind, PathRes, Tier,
+            ExpectedPathKind, PathRes, Tier, Viewer,
             diagnostics::PathResDiag,
-            path_resolver::{PathResErrorKind, resolve_path},
+            path_resolver::{
+                ImplNameRes, PathResErrorKind, resolve_impl_name, resolve_path,
+                resolve_path_with_minter,
+            },
         },
         ty::{
+            const_ty::LoweringContext,
             diagnostics::{
                 BodyDiag, FuncBodyDiag, TraitConstraintDiag, TyDiagCollection, TyLowerDiag,
             },
             trait_def::TraitInstId,
+            trait_lower::lower_impl_trait_header,
             trait_resolution::{
-                ChoiceEntry, ChosenImpl, ChosenImpls, PredicateListId, TraitSolveCx, goal_holds,
+                ChoiceEntry, ChosenImpl, ChosenImpls, DeclaredOperand, PredicateListId,
+                TraitSolveCx, goal_holds,
             },
-            ty_def::TyId,
+            ty_def::{TyData, TyId},
         },
     },
-    hir_def::{ItemKind, PathId, Trait, scope_graph::ScopeId},
+    hir_def::{ItemKind, PathId, PathKind, Trait, WithItem, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
 
@@ -35,13 +48,10 @@ use super::with_operand::{
     earlier_answer, opening_contexts,
 };
 
-/// The frame of a module and the diagnostics of its own declaration.
+/// The frame of a module: its parent's, extended by its own declaration.
 #[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub(crate) struct ModuleChoices<'db> {
-    /// The module's frame: its parent's, extended by its own declaration.
     pub choices: Option<ChosenImpls<'db>>,
-    /// The diagnostics of the module's own declaration.
-    pub diags: Vec<FuncBodyDiag<'db>>,
 }
 
 #[salsa::interned]
@@ -50,16 +60,28 @@ struct ModuleKey<'db> {
     module: ItemKind<'db>,
 }
 
+fn module_key<'db>(db: &'db dyn HirAnalysisDb, module: ScopeId<'db>) -> ModuleKey<'db> {
+    let ScopeId::Item(item @ (ItemKind::Mod(_) | ItemKind::TopMod(_))) = module else {
+        unreachable!("a module scope is the scope of a module item");
+    };
+    ModuleKey::new(db, item)
+}
+
 /// The frame of `module`, a module scope: the choices of the `with`
 /// declarations of the module and of its parent modules, outermost first.
 pub(crate) fn module_choices<'db>(
     db: &'db dyn HirAnalysisDb,
     module: ScopeId<'db>,
 ) -> &'db ModuleChoices<'db> {
-    let ScopeId::Item(item @ (ItemKind::Mod(_) | ItemKind::TopMod(_))) = module else {
-        unreachable!("a module scope is the scope of a module item");
-    };
-    module_choices_query(db, ModuleKey::new(db, item))
+    module_choices_query(db, module_key(db, module))
+}
+
+/// The module's `with` declaration, if it has one.
+fn declaration_of<'db>(db: &'db dyn HirAnalysisDb, scope: ScopeId<'db>) -> Option<WithItem<'db>> {
+    scope.child_items(db).find_map(|child| match child {
+        ItemKind::With(declaration) => Some(declaration),
+        _ => None,
+    })
 }
 
 /// The names a module's operand sees: items only.
@@ -107,7 +129,42 @@ impl<'db> OperandValues<'db> for ModuleOperands<'db> {
     }
 }
 
-#[salsa::tracked(cycle_initial = module_choices_cycle_initial)]
+/// The trait that the operand `path` can answer, known from names and deferred
+/// lowering alone: a named implementation's trait, or the trait of an opening
+/// `<Type as Trait>`. `None`: the operand names neither, and the declaration
+/// reports it (`module_with_check`).
+fn operand_trait<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    path: PathId<'db>,
+) -> Option<Trait<'db>> {
+    if let ImplNameRes::Found(implementation) = resolve_impl_name(db, path, scope) {
+        return lower_impl_trait_header(db, implementation)
+            .map(|header| header.trait_inst(db).def(db));
+    }
+    if path.len(db) != 1 || !matches!(path.kind(db), PathKind::QualifiedType { .. }) {
+        return None;
+    }
+    let Ok(PathRes::Ty(ty)) = resolve_path_with_minter(
+        db,
+        path,
+        scope,
+        PredicateListId::empty_list(db),
+        false,
+        &LoweringContext::deferred(),
+    ) else {
+        return None;
+    };
+    match ty.data(db) {
+        TyData::QualifiedTy(goal) => Some(goal.def(db)),
+        _ => None,
+    }
+}
+
+/// The frame of a module is built from names and deferred lowering only. It
+/// never evaluates a constant, searches for an implementation or checks a
+/// body: no value checked under a frame can feed the frame itself.
+#[salsa::tracked(returns(ref))]
 fn module_choices_query<'db>(
     db: &'db dyn HirAnalysisDb,
     key: ModuleKey<'db>,
@@ -116,123 +173,301 @@ fn module_choices_query<'db>(
     let outer = scope
         .parent_module(db)
         .and_then(|parent| module_choices(db, parent).choices);
-    let Some(declaration) = scope.child_items(db).find_map(|child| match child {
-        ItemKind::With(declaration) => Some(declaration),
-        _ => None,
-    }) else {
-        return ModuleChoices {
-            choices: outer,
-            diags: Vec::new(),
-        };
+    let Some(declaration) = declaration_of(db, scope) else {
+        return ModuleChoices { choices: outer };
     };
-
-    let ingot = scope.ingot(db);
-    let mut diags: Vec<FuncBodyDiag<'db>> = Vec::new();
     let mut current = outer;
-    // This declaration's own entries, each with its operand's span: the
-    // parent's frame is never compared.
-    let mut listed: Vec<(ChosenImpl<'db>, DynLazySpan<'db>)> = Vec::new();
+    for (index, operand) in declaration.operands(db).iter().enumerate() {
+        // An operand that the parser dropped, or that names no implementation,
+        // adds no entry: `module_with_check` reports it.
+        let Some(trait_) = operand
+            .to_opt()
+            .and_then(|path| operand_trait(db, scope, path))
+        else {
+            continue;
+        };
+        let operand = DeclaredOperand::new(db, declaration, index as u32, trait_);
+        current = Some(ChosenImpls::push_declared(db, current, operand));
+    }
+    ModuleChoices { choices: current }
+}
+
+/// What a declared operand chose, when a goal of its trait asked.
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
+pub(crate) struct DeclaredChoice<'db> {
+    /// `None`: the operand contributes nothing, because it is refused or
+    /// repeats an earlier operand's answer.
+    pub choice: Option<ChosenImpl<'db>>,
+    /// An opening's conditions, proved by `module_with_check`.
+    pub conditions: Vec<TraitInstId<'db>>,
+    /// What the classifier reported for the operand.
+    pub diags: Vec<FuncBodyDiag<'db>>,
+    /// The earlier operand that answers the same goal (8-0160), with the
+    /// goal and whether the overlap is only possible.
+    pub duplicate_of: Option<(DynLazySpan<'db>, TraitInstId<'db>, bool)>,
+}
+
+/// The choices of `frame` that come before operand `index` of `with`.
+fn frame_before<'db>(
+    db: &'db dyn HirAnalysisDb,
+    frame: Option<ChosenImpls<'db>>,
+    with: WithItem<'db>,
+    index: usize,
+) -> Option<ChosenImpls<'db>> {
+    frame.and_then(|frame| {
+        frame.retain(db, |_, entry| {
+            !matches!(entry, ChoiceEntry::Declared(operand)
+                if operand.with(db) == with && operand.index(db) as usize >= index)
+        })
+    })
+}
+
+/// What operand `index` of `with`, whose path is `path`, means where the
+/// module writes it, with `outer` already chosen.
+fn classify_operand<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    with: WithItem<'db>,
+    index: usize,
+    path: PathId<'db>,
+    outer: Option<ChosenImpls<'db>>,
+) -> OperandMeaning<'db> {
+    let operand_span = with.span().operands().operand(index);
+    let site = OperandSite {
+        kind: SiteKind::Module,
+        scope,
+        assumptions: PredicateListId::empty_list(db),
+        written_assumptions: PredicateListId::empty_list(db),
+        viewer: Viewer::written_in(db, with.scope()),
+        outer,
+        span: operand_span.clone().into(),
+        name_span: operand_span
+            .clone()
+            .segment(path.segment_index(db))
+            .ident()
+            .into(),
+    };
+    let values = ModuleOperands {
+        db,
+        scope,
+        path_span: operand_span,
+    };
+    classify_with_operand(db, &site, path, &values)
+}
+
+/// What a refused operand reports. An operand that is admitted reports
+/// nothing here.
+fn refusal_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    with: WithItem<'db>,
+    index: usize,
+    path: PathId<'db>,
+    meaning: OperandMeaning<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let operand_span = with.span().operands().operand(index);
+    match meaning {
+        OperandMeaning::Named { .. } | OperandMeaning::Opening { .. } => Vec::new(),
+        // A refused operand contributes nothing; the rest of the declaration
+        // is still read. A generated implementation changes what written code
+        // chose; a declaration that generated code wrote changes nothing.
+        OperandMeaning::Refused {
+            diags,
+            changed_choice,
+            ..
+        } => {
+            if !changed_choice || !scope.is_within_generated(db, scope.ingot(db)) {
+                diags
+            } else {
+                Vec::new()
+            }
+        }
+        OperandMeaning::NotAnImplementation(_) => {
+            let empty = PredicateListId::empty_list(db);
+            match resolve_path(db, path, scope, empty, true)
+                .or_else(|_| resolve_path(db, path, scope, empty, false))
+            {
+                // It names something, and it is not an implementation.
+                Ok(res) => path
+                    .ident(db)
+                    .to_opt()
+                    .map(|name| {
+                        PathResDiag::ExpectedImpl(operand_span.into(), name, res.kind_name()).into()
+                    })
+                    .into_iter()
+                    .collect(),
+                // It names nothing: the path is reported as it is anywhere.
+                Err(error) => error
+                    .into_diag(db, path, operand_span, ExpectedPathKind::Value)
+                    .map(Into::into)
+                    .into_iter()
+                    .collect(),
+            }
+        }
+    }
+}
+
+/// The implementation operand `operand` chooses. It is read only when a goal
+/// of the operand's trait asks (the solver, the enumerations that name a
+/// trait, `module_with_check`), never while a frame is built.
+#[salsa::tracked(returns(ref), cycle_result = declared_choice_cycle)]
+pub(crate) fn declared_choice<'db>(
+    db: &'db dyn HirAnalysisDb,
+    operand: DeclaredOperand<'db>,
+) -> DeclaredChoice<'db> {
+    let with = operand.with(db);
+    let index = operand.index(db) as usize;
+    let scope = module_of(db, with.scope());
+    let frame = module_choices(db, scope).choices;
+    let outer = frame_before(db, frame, with, index);
+    let path = with.operands(db)[index]
+        .to_opt()
+        .expect("an operand with an entry has a path");
+    let none = |diags| DeclaredChoice {
+        choice: None,
+        conditions: Vec::new(),
+        diags,
+        duplicate_of: None,
+    };
+    let (choice, conditions) = match classify_operand(db, scope, with, index, path, outer) {
+        OperandMeaning::Named { choice } => (choice, Vec::new()),
+        OperandMeaning::Opening { choice, conditions } => (choice, conditions),
+        refused => return none(refusal_diags(db, scope, with, index, path, refused)),
+    };
+    let entry = choice
+        .items(db)
+        .last()
+        .and_then(|entry| entry.implementation())
+        .expect("a pushed choice is the last item");
+
+    // An operand that answers the same goal as an earlier one is not chosen.
+    let listed: Vec<_> = frame
+        .into_iter()
+        .flat_map(|frame| frame.items(db).iter())
+        .filter_map(|earlier| match earlier {
+            ChoiceEntry::Declared(earlier)
+                if earlier.with(db) == with && (earlier.index(db) as usize) < index =>
+            {
+                let span = with.span().operands().operand(earlier.index(db) as usize);
+                declared_choice(db, *earlier)
+                    .choice
+                    .map(|choice| (choice, DynLazySpan::from(span)))
+            }
+            _ => None,
+        })
+        .collect();
+    let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(outer);
+    if let Some(duplicate) = earlier_answer(db, cx, &listed, entry) {
+        return DeclaredChoice {
+            duplicate_of: Some(duplicate),
+            ..none(Vec::new())
+        };
+    }
+    DeclaredChoice {
+        choice: Some(entry),
+        conditions,
+        diags: Vec::new(),
+        duplicate_of: None,
+    }
+}
+
+// A declaration whose operand needs a value that the operand itself decides
+// is refused where the cycle meets it, never iterated.
+fn declared_choice_cycle<'db>(
+    db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    operand: DeclaredOperand<'db>,
+) -> DeclaredChoice<'db> {
+    let span = operand
+        .with(db)
+        .span()
+        .operands()
+        .operand(operand.index(db) as usize);
+    DeclaredChoice {
+        choice: None,
+        conditions: Vec::new(),
+        diags: vec![FuncBodyDiag::Ty(
+            TyLowerDiag::TypeLoweringCycle(span.into()).into(),
+        )],
+        duplicate_of: None,
+    }
+}
+
+/// The diagnostics of the module's own `with` declaration: what each refused
+/// operand reports, the operands that repeat an earlier answer, and the
+/// conditions of the openings. Only `ModuleWithAnalysisPass` reads it.
+pub(crate) fn module_with_check<'db>(
+    db: &'db dyn HirAnalysisDb,
+    module: ScopeId<'db>,
+) -> &'db Vec<FuncBodyDiag<'db>> {
+    module_with_check_query(db, module_key(db, module))
+}
+
+#[salsa::tracked(returns(ref))]
+fn module_with_check_query<'db>(
+    db: &'db dyn HirAnalysisDb,
+    key: ModuleKey<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    let scope = ScopeId::from_item(key.module(db));
+    let Some(with) = declaration_of(db, scope) else {
+        return Vec::new();
+    };
+    let frame = module_choices(db, scope).choices;
+    let mut diags: Vec<FuncBodyDiag<'db>> = Vec::new();
     // The conditions of each opening, with the opening's position in the
-    // choices and its operand's span.
+    // frame and its operand's span.
     let mut openings: Vec<(usize, Vec<TraitInstId<'db>>, DynLazySpan<'db>)> = Vec::new();
 
-    for (idx, operand) in declaration.operands(db).iter().enumerate() {
+    for (index, operand) in with.operands(db).iter().enumerate() {
         let Some(path) = operand.to_opt() else {
             // The parser reported it.
             continue;
         };
-        let operand_span = declaration.span().operands().operand(idx);
-        let span: DynLazySpan<'db> = operand_span.clone().into();
-        let site = OperandSite {
-            kind: SiteKind::Module,
-            scope,
-            assumptions: PredicateListId::empty_list(db),
-            written_assumptions: PredicateListId::empty_list(db),
-            viewer: crate::analysis::name_resolution::Viewer::written_in(db, declaration.scope()),
-            outer: current,
-            span: span.clone(),
-            name_span: operand_span
-                .clone()
-                .segment(path.segment_index(db))
-                .ident()
-                .into(),
-        };
-        let values = ModuleOperands {
-            db,
-            scope,
-            path_span: operand_span.clone(),
-        };
-        let (choice, conditions) = match classify_with_operand(db, &site, path, &values) {
-            OperandMeaning::Named { choice } => (choice, None),
-            OperandMeaning::Opening { choice, conditions } => (choice, Some(conditions)),
-            // A refused operand contributes nothing; the rest of the
-            // declaration is still read.
-            OperandMeaning::Refused {
-                diags: refused,
-                changed_choice,
-                ..
-            } => {
-                // A generated implementation changes what written code
-                // chose; a declaration that generated code wrote changes
-                // nothing.
-                if !changed_choice || !scope.is_within_generated(db, ingot) {
-                    diags.extend(refused);
-                }
-                continue;
-            }
-            OperandMeaning::NotAnImplementation(_) => {
-                let empty = PredicateListId::empty_list(db);
-                match resolve_path(db, path, scope, empty, true)
-                    .or_else(|_| resolve_path(db, path, scope, empty, false))
-                {
-                    // It names something, and it is not an implementation.
-                    Ok(res) => {
-                        if let Some(name) = path.ident(db).to_opt() {
-                            diags.push(
-                                PathResDiag::ExpectedImpl(span, name, res.kind_name()).into(),
-                            );
-                        }
+        let span: DynLazySpan<'db> = with.span().operands().operand(index).into();
+        let entry = frame.and_then(|frame| {
+            frame
+                .items(db)
+                .iter()
+                .enumerate()
+                .find_map(|(position, entry)| match entry {
+                    ChoiceEntry::Declared(operand)
+                        if operand.with(db) == with && operand.index(db) as usize == index =>
+                    {
+                        Some((position, *operand))
                     }
-                    // It names nothing: the path is reported as it is anywhere.
-                    Err(error) => diags.extend(
-                        error
-                            .into_diag(db, path, operand_span, ExpectedPathKind::Value)
-                            .map(Into::into),
-                    ),
-                }
-                continue;
-            }
+                    _ => None,
+                })
+        });
+        let Some((position, operand)) = entry else {
+            // No entry: the operand names no implementation, and is
+            // classified as a block would.
+            let outer = frame_before(db, frame, with, index);
+            let meaning = classify_operand(db, scope, with, index, path, outer);
+            diags.extend(refusal_diags(db, scope, with, index, path, meaning));
+            continue;
         };
-
-        let entry = choice
-            .items(db)
-            .last()
-            .and_then(|entry| entry.implementation())
-            .expect("a pushed choice is the last item");
-        let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(current);
-        if let Some((first, goal, possible)) = earlier_answer(db, cx, &listed, entry) {
+        let chosen = declared_choice(db, operand);
+        diags.extend(chosen.diags.iter().cloned());
+        if let Some((first, goal, possible)) = &chosen.duplicate_of {
             diags.push(
                 BodyDiag::DuplicateWithChoice {
-                    primary: span,
-                    first,
-                    goal,
-                    possible,
+                    primary: span.clone(),
+                    first: first.clone(),
+                    goal: *goal,
+                    possible: *possible,
                 }
                 .into(),
             );
-            continue;
         }
-        if let Some(conditions) = conditions {
-            openings.push((choice.items(db).len() - 1, conditions, span.clone()));
+        if chosen.choice.is_some() && !chosen.conditions.is_empty() {
+            openings.push((position, chosen.conditions.clone(), span));
         }
-        listed.push((entry, span));
-        current = Some(choice);
     }
 
     // An opening's conditions are proved once the whole list is read, with the
     // outer frame and every other operand of the declaration, without the
     // opening itself, whatever the order of the operands.
-    if let Some(list_choices) = current {
+    if let Some(list_choices) = frame {
         for (goal, context, span) in opening_contexts(db, list_choices, openings) {
             let cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(context);
             if !goal_holds(db, cx, goal) {
@@ -248,34 +483,7 @@ fn module_choices_query<'db>(
             }
         }
     }
-
-    ModuleChoices {
-        choices: current,
-        diags,
-    }
-}
-
-// A declaration whose resolution needs a value that its own frame decides
-// starts the cycle with a refusal, never a provisional frame.
-fn module_choices_cycle_initial<'db>(
-    db: &'db dyn HirAnalysisDb,
-    _: salsa::Id,
-    key: ModuleKey<'db>,
-) -> ModuleChoices<'db> {
-    let scope = ScopeId::from_item(key.module(db));
-    let span = scope
-        .child_items(db)
-        .find_map(|child| match child {
-            ItemKind::With(declaration) => Some(declaration.span().into()),
-            _ => None,
-        })
-        .unwrap_or_else(DynLazySpan::invalid);
-    ModuleChoices {
-        choices: None,
-        diags: vec![FuncBodyDiag::Ty(
-            TyLowerDiag::TypeLoweringCycle(span).into(),
-        )],
-    }
+    diags
 }
 
 /// The module that `scope` is in: `scope` itself for a module.
@@ -308,6 +516,7 @@ pub(crate) fn frame_may_answer<'db>(
         frame.items(db).iter().any(|entry| match entry {
             ChoiceEntry::Impl(choice) => choice.implementation().trait_(db).def(db) == trait_,
             ChoiceEntry::Provider(opening) => opening.may_offer(db, trait_),
+            ChoiceEntry::Declared(operand) => operand.trait_(db) == trait_,
         })
     })
 }

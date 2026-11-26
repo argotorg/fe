@@ -389,11 +389,7 @@ impl ModuleAnalysisPass for ModuleWithAnalysisPass {
     ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
         std::iter::once(top_mod.scope())
             .chain(top_mod.all_mods(db).iter().map(|module| module.scope()))
-            .flat_map(|module| {
-                ty_check::module_with::module_choices(db, module)
-                    .diags
-                    .iter()
-            })
+            .flat_map(|module| ty_check::module_with::module_with_check(db, module).iter())
             .map(|diag| diag.to_voucher())
             .collect()
     }

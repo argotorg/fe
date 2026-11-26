@@ -2600,6 +2600,8 @@ impl<'db> TyChecker<'db> {
                             .collect(),
                             false,
                         ),
+                        // A block's own entries never hold a declared operand.
+                        ChoiceEntry::Declared(_) => continue,
                         ChoiceEntry::Provider(opening) => match closed_offers(self.db, opening) {
                             Ok(families) => (families, true),
                             Err(problem) => {
@@ -2628,7 +2630,7 @@ impl<'db> TyChecker<'db> {
                             .iter()
                             .find_map(|entry| match entry {
                                 ChoiceEntry::Provider(opening) => Some(*opening),
-                                ChoiceEntry::Impl(_) => None,
+                                ChoiceEntry::Impl(_) | ChoiceEntry::Declared(_) => None,
                             })
                             .expect("provider-containing group");
                         (opening, message)
@@ -2664,7 +2666,8 @@ impl<'db> TyChecker<'db> {
                     super::super::trait_resolution::ChoiceEntry::Provider(opening) => {
                         Some(*opening)
                     }
-                    super::super::trait_resolution::ChoiceEntry::Impl(_) => None,
+                    super::super::trait_resolution::ChoiceEntry::Impl(_)
+                    | super::super::trait_resolution::ChoiceEntry::Declared(_) => None,
                 })
             }) {
                 self.env.generation_demands.refuse(

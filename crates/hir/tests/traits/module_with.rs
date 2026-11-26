@@ -442,15 +442,13 @@ mod m {{
     }
 }
 
-/// Resolving the declaration needs a constant whose body is checked under the
-/// frame being resolved. The cycle ends with the frame's own value (the
-/// constant is 70 under it), never a panic. A constant in a type is refused
-/// once the constant, not the use, decides it (`8-0138`); until then the
-/// declaration is accepted.
-#[test]
-fn a_declaration_that_needs_its_own_modules_constant_reaches_a_fixed_point() {
-    let codes = sorted_codes(&with_picks(
-        r#"
+/// Operand `<Arr<70> as Size>` names an implementation of `Size` for `Arr<K>`,
+/// where `K` is 70 only under the declaration's own `Discount`. The frame is
+/// built without reading `K`; `K` is fixed under `Discount`, and the opening
+/// is chosen afterwards, so the declaration is well founded. A constant in a
+/// type is refused once the constant, not the use, decides it (`8-0138`);
+/// until then the declaration is accepted.
+const SELF_READING: &str = r#"
 pub struct Arr<const N: u256> {}
 pub trait Size { const fn size() -> u256 }
 mod m {
@@ -460,9 +458,141 @@ mod m {
     impl Size for Arr<{ K }> { const fn size() -> u256 { 1 } }
     pub const fn f() -> u256 { Arr<70>::size() }
 }
+const fn f() -> u256 { m::f() }
+"#;
+
+#[test]
+fn a_declaration_whose_opening_reads_its_modules_constant_is_well_founded() {
+    values(&with_picks(SELF_READING), &[("f", 1)]);
+}
+
+/// The same program with a type and a reader of `m::K` before the module:
+/// the entry order changes nothing.
+#[test]
+fn the_order_of_the_readers_of_a_framed_constant_changes_nothing() {
+    values(
+        &with_picks(&format!(
+            "{SELF_READING}\npub struct S {{ pub a: Arr<{{ m::K }}> }}\nconst fn early() -> u256 {{ m::K }}\n"
+        )),
+        &[("early", 70), ("f", 1)],
+    );
+}
+
+/// The frame is built from names and deferred lowering, so the headers
+/// `impl Size for Arr<{ K }>` and `impl Pick for Arr<{ K }>` are not read
+/// while `K = Item::value()` is checked under it. `K` asks a `Pick` goal,
+/// which the `Size` operand never answers.
+#[test]
+fn a_module_frame_is_built_without_evaluating_its_constants() {
+    values(
+        r#"
+pub struct Arr<const N: u256> {}
+pub trait Pick { const fn value() -> u256 }
+pub trait Size { const fn size() -> u256 }
+pub struct Item {}
+impl Pick for Item { const fn value() -> u256 { 100 } }
+pub impl Pick for Item as Seventy { const fn value() -> u256 { 70 } }
+impl Size for Arr<100> { const fn size() -> u256 { 1 } }
+
+pub mod outer {
+    use super::*
+    with (Seventy)
+    pub mod m {
+        use super::*
+        with (<Arr<70> as Size>)
+        pub const K: u256 = Item::value()
+        impl Size for Arr<{ K }> { const fn size() -> u256 { 2 } }
+        impl Pick for Arr<{ K }> { const fn value() -> u256 { 3 } }
+        pub const fn f() -> u256 { Arr<70>::size() }
+    }
+}
+const fn f() -> u256 { outer::m::f() }
 "#,
+        &[("f", 2)],
+    );
+}
+
+/// An implementation header that reads a constant whose own check asks the
+/// operand's trait: with an alternative answer the states alternate. Closed
+/// when a framed constant in an implementation header must be a literal
+/// (specification amendment 5.2); until then a known limit.
+#[test]
+#[ignore = "known limit: a header that reads a constant whose check asks the operand's trait iterates; closed by the framed-constant rule for implementation headers"]
+fn a_header_constant_that_asks_its_own_operand_ends_without_iteration() {
+    let codes = sorted_codes(
+        r#"
+pub struct Arr<const N: u256> {}
+pub trait Pick { const fn value() -> u256 }
+pub trait Size { const fn size() -> u256 }
+pub struct Item {}
+impl Pick for Item { const fn value() -> u256 { 100 } }
+pub impl Size for Arr<70> as S70 { const fn size() -> u256 { 7 } }
+impl Size for Arr<100> { const fn size() -> u256 { 1 } }
+
+pub mod outer {
+    use super::*
+    with (S70)
+    pub mod m {
+        use super::*
+        with (<Arr<70> as Size>)
+        pub const K: u256 = Arr<70>::size()
+        impl Size for Arr<{ K }> { const fn size() -> u256 { 2 } }
+        impl Pick for Arr<{ K }> { const fn value() -> u256 { 3 } }
+    }
+}
+"#,
+    );
+    assert!(!codes.is_empty(), "{codes:?}");
+}
+
+/// A constant of the module is read by the operand that the constant's own
+/// check asks for. The two states alternate (the opening restores the
+/// implementation that made the constant 100), so no meaning exists.
+const ALTERNATING: &str = r#"
+pub struct Arr<const N: u256> {}
+pub trait Pick { const fn value() -> u256 }
+impl Pick for Arr<70> { const fn value() -> u256 { 100 } }
+impl Pick for Arr<100> { const fn value() -> u256 { 100 } }
+pub impl Pick for Arr<70> as Seventy { const fn value() -> u256 { 70 } }
+"#;
+
+#[test]
+#[ignore = "known limit until module operands take literal constant arguments: the constant's check forces the operand that reads the constant"]
+fn an_operand_that_reads_a_constant_of_its_own_check_is_refused() {
+    let codes = sorted_codes(&format!(
+        r#"{ALTERNATING}
+pub mod outer {{
+    use super::*
+    with (Seventy)
+    pub mod m {{
+        use super::*
+        with (<Arr<{{ K }}> as Pick>)
+        pub const K: u256 = Arr<70>::value()
+        pub fn f() -> u256 {{ K }}
+    }}
+}}
+"#
     ));
-    assert!(codes.is_empty(), "{codes:?}");
+    assert_eq!(codes, ["2-0022"]);
+}
+
+#[test]
+#[ignore = "known limit until module operands take literal constant arguments: the constant function's check forces the operand that calls it"]
+fn an_operand_that_calls_a_function_of_its_own_check_is_refused() {
+    let codes = sorted_codes(&format!(
+        r#"{ALTERNATING}
+pub mod outer {{
+    use super::*
+    with (Seventy)
+    pub mod m {{
+        use super::*
+        with (<Arr<{{ kf() }}> as Pick>)
+        pub const fn kf() -> u256 {{ Arr<70>::value() }}
+    }}
+}}
+"#
+    ));
+    assert_eq!(codes, ["2-0022"]);
 }
 
 // The frame of every body
@@ -879,10 +1009,10 @@ fn a_struct_or_implementation_where_condition_is_evaluated_under_the_ordinary_ch
     }
 }
 
-// A known limitation shared by the block form and the module form
+// Both forms accept a bound made concrete by an associated type.
 
-fn bound_made_concrete(frame: &str, body: &str) -> Vec<String> {
-    diagnostics(&format!(
+fn bound_made_concrete(frame: &str, body: &str) -> String {
+    format!(
         r#"
 mod m {{
     pub struct Marker {{}}
@@ -891,22 +1021,34 @@ mod m {{
     {frame}
     pub trait Tr {{
         type A: Copy
-        fn get(self) -> Self::A
+        const fn get(self) -> Self::A
     }}
-    pub fn f<B: Tr<A = u8>>(b: B) -> u8 {body}
+    impl Tr for Marker {{
+        type A = u8
+        const fn get(self) -> u8 {{ 7 }}
+    }}
+    pub const fn f<B: Tr<A = u8>>(b: B) -> u8 {body}
+    pub const fn run() -> u8 {{ f(b: Marker {{}}) }}
 }}
+const fn run() -> u8 {{ m::run() }}
 "#
-    ))
+    )
 }
 
 #[test]
 fn a_bound_made_concrete_by_an_associated_type_is_accepted_in_a_block() {
-    assert!(bound_made_concrete("", "{ with (W) { b.get() } }").is_empty());
+    values(
+        &bound_made_concrete("", "{ with (W) { b.get() } }"),
+        &[("run", 7)],
+    );
 }
 
 #[test]
 fn a_bound_made_concrete_by_an_associated_type_is_accepted_in_a_module() {
-    assert!(bound_made_concrete("with (W)", "{ b.get() }").is_empty());
+    values(
+        &bound_made_concrete("with (W)", "{ b.get() }"),
+        &[("run", 7)],
+    );
 }
 
 // Twins of the concrete-slot and output rules

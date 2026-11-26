@@ -2655,7 +2655,11 @@ fn select_assoc_const_candidate<'db>(
         let solve_cx = TraitSolveCx::new(db, scope, tier)
             .with_assumptions(assumptions)
             .with_choices(choices);
-        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
+        // A declared operand is chosen only when its trait declares the
+        // constant.
+        for choice in chosen.into_iter().filter_map(|entry| {
+            entry.implementation_if(db, |trait_| trait_.const_(db, name).is_some())
+        }) {
             let implementation = choice.implementation();
             let declared = implementation.trait_(db);
             if declared.def(db).const_(db, name).is_none() {
@@ -2742,7 +2746,7 @@ fn select_assoc_const_candidate<'db>(
                     .flat_map(|choices| choices.items(db).iter())
                     .flat_map(|entry| match entry {
                         ChoiceEntry::Provider(opening) => opening.hints(db).traits.as_slice(),
-                        ChoiceEntry::Impl(_) => &[],
+                        ChoiceEntry::Impl(_) | ChoiceEntry::Declared(_) => &[],
                     })
                     .copied(),
             ),
