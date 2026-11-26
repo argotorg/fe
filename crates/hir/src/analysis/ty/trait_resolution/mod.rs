@@ -344,38 +344,43 @@ impl<'db> ChosenImpls<'db> {
         (!items.is_empty()).then(|| Self::intern(db, items, frames))
     }
 
-    pub fn push(
+    /// `outer` with `entry` pushed after its entries.
+    fn push_entry(
         db: &'db dyn HirAnalysisDb,
         outer: Option<Self>,
-        implementation: ImplementorId<'db>,
+        entry: ChoiceEntry<'db>,
     ) -> Self {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChoiceEntry::Impl(ChosenImpl::unapplied(db, implementation)));
+        items.push(entry);
         let frames = outer
             .map(|outer| outer.frames(db).clone())
             .unwrap_or_default();
         Self::intern(db, items, frames)
     }
+
+    pub fn push(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        implementation: ImplementorId<'db>,
+    ) -> Self {
+        let choice = ChosenImpl::unapplied(db, implementation);
+        Self::push_entry(db, outer, ChoiceEntry::Impl(choice))
+    }
+
     pub fn push_applied(
         db: &'db dyn HirAnalysisDb,
         outer: Option<Self>,
         template: ImplementorId<'db>,
         applied: ImplementorId<'db>,
     ) -> Self {
-        let mut items = outer
-            .map(|outer| outer.items(db).clone())
-            .unwrap_or_default();
-        items.push(ChoiceEntry::Impl(ChosenImpl {
+        let choice = ChosenImpl {
             template,
             applied: Some(applied),
             inherited: None,
-        }));
-        let frames = outer
-            .map(|outer| outer.frames(db).clone())
-            .unwrap_or_default();
-        Self::intern(db, items, frames)
+        };
+        Self::push_entry(db, outer, ChoiceEntry::Impl(choice))
     }
 
     pub(crate) fn push_declared(
@@ -383,14 +388,7 @@ impl<'db> ChosenImpls<'db> {
         outer: Option<Self>,
         operand: DeclaredOperand<'db>,
     ) -> Self {
-        let mut items = outer
-            .map(|outer| outer.items(db).clone())
-            .unwrap_or_default();
-        items.push(ChoiceEntry::Declared(operand));
-        let frames = outer
-            .map(|outer| outer.frames(db).clone())
-            .unwrap_or_default();
-        Self::intern(db, items, frames)
+        Self::push_entry(db, outer, ChoiceEntry::Declared(operand))
     }
 
     pub fn push_provider(
@@ -398,14 +396,7 @@ impl<'db> ChosenImpls<'db> {
         outer: Option<Self>,
         opening: generation::ProviderOpening<'db>,
     ) -> Self {
-        let mut items = outer
-            .map(|outer| outer.items(db).clone())
-            .unwrap_or_default();
-        items.push(ChoiceEntry::Provider(opening));
-        let frames = outer
-            .map(|outer| outer.frames(db).clone())
-            .unwrap_or_default();
-        Self::intern(db, items, frames)
+        Self::push_entry(db, outer, ChoiceEntry::Provider(opening))
     }
 }
 
