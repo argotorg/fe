@@ -747,11 +747,13 @@ pub(crate) fn access_diag_depends_on_param_instantiation<'db>(
     diag: &crate::analysis::semantic::diagnostics::SemanticDiagnostic<'db>,
 ) -> bool {
     use crate::analysis::semantic::{SemOrigin, diagnostics::SemanticDiagnosticSpan};
-    let SemanticDiagnosticSpan::Origin {
-        owner: owner @ BodyOwner::AnonConstBody { body, .. },
-        origin: SemOrigin::Expr(expr),
-    } = &diag.primary.span
+    let (SemanticDiagnosticSpan::Origin { owner, origin }
+    | SemanticDiagnosticSpan::OriginWithTemplateFallback { owner, origin, .. }) =
+        &diag.primary.span
     else {
+        return false;
+    };
+    let (BodyOwner::AnonConstBody { body, .. }, SemOrigin::Expr(expr)) = (owner, origin) else {
         return false;
     };
     let Some(ItemKind::Trait(trait_)) = body.scope().parent_item(db) else {
