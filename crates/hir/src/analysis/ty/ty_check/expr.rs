@@ -2420,7 +2420,6 @@ impl<'db> TyChecker<'db> {
                 && let Some(path) = path.to_opt()
             {
                 let site = OperandSite {
-                    kind: SiteKind::Block,
                     scope: self.env.scope(),
                     assumptions: self.env.assumptions(),
                     written_assumptions: self.env.written_assumptions(),
@@ -2469,18 +2468,17 @@ impl<'db> TyChecker<'db> {
                     self.admit_with_operand(&mut list, binding.value, choice, conditions);
                     continue;
                 }
-                Some(OperandMeaning::NotAnImplementation(OperandClass::ProviderType(
-                    provider_ty,
-                    alias_scope,
-                ))) => {
-                    if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
+                Some(OperandMeaning::NotAnImplementation(class)) => {
+                    debug_assert!(SiteKind::Block.accepts(&class));
+                    // A type is a derive provider candidate; any other name
+                    // is checked as an expression.
+                    if let OperandClass::ProviderType(provider_ty, alias_scope) = class
+                        && self.try_open_derive_provider(binding.value, provider_ty, alias_scope)
+                    {
                         continue;
                     }
                 }
-                Some(OperandMeaning::NotAnImplementation(
-                    OperandClass::Value | OperandClass::Other,
-                ))
-                | None => {}
+                None => {}
             }
             let value_prop = self.check_expr_unknown(binding.value);
             // A record literal is also a spelling of a compile-time provider.

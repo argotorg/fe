@@ -44,8 +44,8 @@ use crate::{
 
 use super::BodyOwner;
 use super::with_operand::{
-    BareName, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
-    classify_with_operand,
+    BareName, OperandClass, OperandList, OperandMeaning, OperandSite, OperandValues, SiteKind,
+    classify_with_operand, type_kind_name,
 };
 
 /// The frame of a module: its parent's, extended by its own declaration.
@@ -234,7 +234,6 @@ fn classify_operand<'db>(
 ) -> OperandMeaning<'db> {
     let operand_span = with.span().operands().operand(index);
     let site = OperandSite {
-        kind: SiteKind::Module,
         scope,
         assumptions: PredicateListId::empty_list(db),
         written_assumptions: PredicateListId::empty_list(db),
@@ -282,15 +281,35 @@ fn refusal_diags<'db>(
                 Vec::new()
             }
         }
-        OperandMeaning::NotAnImplementation(_) => {
+        OperandMeaning::NotAnImplementation(class) => {
+            if SiteKind::Module.accepts(&class) {
+                return Vec::new();
+            }
+            let name = path.ident(db).to_opt();
+            let kind = match &class {
+                OperandClass::ProviderType(ty, alias) => {
+                    Some(match type_kind_name(db, scope, *ty) {
+                        "type" if alias.is_some() => "type alias",
+                        kind => kind,
+                    })
+                }
+                OperandClass::Other(Some(res)) => Some(res.kind_name()),
+                // A value, or a name that resolved to nothing as a type: it
+                // is named as an expression would name it.
+                OperandClass::Value | OperandClass::Other(None) => None,
+            };
+            if let Some(kind) = kind {
+                // It names something, and it is not an implementation.
+                return name
+                    .map(|name| PathResDiag::ExpectedImpl(operand_span.into(), name, kind).into())
+                    .into_iter()
+                    .collect();
+            }
             let empty = PredicateListId::empty_list(db);
             match resolve_path(db, path, scope, empty, true)
                 .or_else(|_| resolve_path(db, path, scope, empty, false))
             {
-                // It names something, and it is not an implementation.
-                Ok(res) => path
-                    .ident(db)
-                    .to_opt()
+                Ok(res) => name
                     .map(|name| {
                         PathResDiag::ExpectedImpl(operand_span.into(), name, res.kind_name()).into()
                     })

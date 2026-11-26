@@ -36,7 +36,8 @@ use crate::span::DynLazySpan;
 use crate::{hir_def::IdentId, hir_def::PathId, hir_def::scope_graph::ScopeId};
 
 /// The kind of place an operand is written in. The classifier answers the same
-/// question at every site; the kind says which classes the site can use.
+/// question at every site: what a name is. The kind says which of those
+/// meanings the site can use (`SiteKind::accepts`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SiteKind {
     /// An operand of a `with` block: providers and values are meaningful, and
@@ -46,10 +47,23 @@ pub(super) enum SiteKind {
     Module,
 }
 
+impl SiteKind {
+    /// Whether a site can use a name that is not an implementation. A block
+    /// provides providers and values, and checks any other name as an
+    /// expression, which reports what it is. A module chooses implementations
+    /// only. A site that takes a proof parameter, or a use that supplies a
+    /// proof, adds its class here.
+    pub(super) fn accepts(self, _class: &OperandClass<'_>) -> bool {
+        match self {
+            SiteKind::Block => true,
+            SiteKind::Module => false,
+        }
+    }
+}
+
 /// Where an operand is written: what its names resolve in and what is already
 /// chosen around it.
 pub(super) struct OperandSite<'db> {
-    pub(super) kind: SiteKind,
     pub(super) scope: ScopeId<'db>,
     /// The bounds the operand's names are judged under.
     pub(super) assumptions: PredicateListId<'db>,
@@ -105,14 +119,14 @@ pub(super) trait OperandValues<'db> {
 /// What an operand that names no implementation is.
 pub(super) enum OperandClass<'db> {
     /// A type that a derive provider may serve, with the alias through which
-    /// it was named, if any. Only a site that opens providers has this class.
+    /// it was named, if any. Only a site that opens providers can use it.
     ProviderType(TyId<'db>, Option<ScopeId<'db>>),
     /// A value: a local binding, a function or a constant, which a block
     /// provides as an effect.
     Value,
-    /// A name that is neither: a trait, a module, a type no provider serves,
-    /// or a name that resolves to nothing.
-    Other,
+    /// A name that is neither: a trait, a module, or a name that resolves to
+    /// nothing, with what the name resolved to.
+    Other(Option<PathRes<'db>>),
 }
 
 /// The meaning of an operand.
@@ -231,6 +245,22 @@ fn provider_type<'db>(
         Ok(Some(_))
     )
     .then(|| (ty, ty.as_scope(db).and_then(|scope| scope.name_span(db))))
+}
+
+/// What kind of name a type that no implementation operand names is, for a
+/// site that cannot use it: a derive provider type, or a plain type.
+pub(super) fn type_kind_name<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    ty: TyId<'db>,
+) -> &'static str {
+    let assumptions = PredicateListId::empty_list(db);
+    let ty = normalize_ty(db, ty, scope, assumptions);
+    if matches!(provider_hints(db, scope, assumptions, ty), Ok(Some(_))) {
+        "provider type"
+    } else {
+        "type"
+    }
 }
 
 /// What the operand `path` means, written at `site`. The caller reads the
@@ -532,21 +562,21 @@ fn provider_or_value<'db>(
     path: PathId<'db>,
     values: &dyn OperandValues<'db>,
 ) -> OperandMeaning<'db> {
-    let none = OperandMeaning::NotAnImplementation(OperandClass::Other);
+    let other = |res| OperandMeaning::NotAnImplementation(OperandClass::Other(res));
     let Ok(resolved) = resolve_path(db, path, site.scope, site.assumptions, false) else {
-        return none;
+        return other(None);
     };
     let (provider_ty, alias_scope) = match resolved {
         PathRes::Ty(ty) => (ty, None),
         PathRes::TyAlias(alias, ty) => (ty, Some(alias.alias.scope())),
-        _ => return none,
+        res => return other(Some(res)),
     };
     // A local binding shadows a type of the same name, as it does in any
     // expression. Otherwise an operand that names a value item and a derive
     // provider type has two meanings, and none is chosen silently. A value
     // alone is checked as any other operand.
     if values.shadows_type(path) {
-        return none;
+        return other(None);
     }
     match operand_value(db, site, values, path) {
         Some(value_span) => {
@@ -562,10 +592,10 @@ fn provider_or_value<'db>(
             }
             OperandMeaning::NotAnImplementation(OperandClass::Value)
         }
-        None if site.kind == SiteKind::Block => OperandMeaning::NotAnImplementation(
-            OperandClass::ProviderType(provider_ty, alias_scope),
-        ),
-        None => none,
+        None => OperandMeaning::NotAnImplementation(OperandClass::ProviderType(
+            provider_ty,
+            alias_scope,
+        )),
     }
 }
 
