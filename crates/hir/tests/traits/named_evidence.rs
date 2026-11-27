@@ -5733,10 +5733,40 @@ fn evidence_cycle_with_several_growing_types_is_a_refusal() {
 }
 
 // The generic body reads closed goals of the growing implementation under a
-// choice (the entrance through type checking). The result is an acceptance or
-// a refusal for the cycle alone; it is never a panic.
+// choice (the entrance through type checking). It is never a panic. The value
+// is 2: `with (LN)` names `Leaf: Br` only, so the goals `N1<Leaf>: Br` and
+// `N1<N1<Leaf>>: Br`, which components of the dictionary of `H` answer, read
+// the dictionary that `go` built without a choice (1 and 1). The order is that
+// a `with` that names the goal answers first, then a slot, then a component of
+// the same identity, then ordinary selection.
+const GROWING_ONE_CONST: &str = r#"
+trait Br { type A: Br
+    type B: Br
+    const fn v() -> u256 }
+struct Leaf {}
+impl Br for Leaf { type A = Leaf
+    type B = Leaf
+    const fn v() -> u256 { 1 } }
+impl Br for Leaf as LN { type A = Leaf
+    type B = Leaf
+    const fn v() -> u256 { 2 } }
+struct N1<T> {}
+trait Hb { type O: Br }
+struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = N1<T> }
+impl<T: Br> Br for N1<T> { type A = N1<N1<T>>
+    type B = T
+    const fn v() -> u256 { T::v() } }
+"#;
+
 #[test]
 fn evidence_cycle_during_body_checking_does_not_panic() {
+    values(
+        &format!(
+            "{GROWING_ONE_CONST}\nconst fn g3<H: Hb<O = N1<Leaf>>>() -> u256 {{ with (LN) {{ <N1<N1<Leaf>> as Br>::v() + <N1<Leaf> as Br>::v() }} }}\nconst fn go() -> u256 {{ g3<Bx<Leaf>>() }}\n"
+        ),
+        &[("go", 2)],
+    );
     let source = format!(
         "{GROWING_ONE}\nfn g3<H: Hb<O = N1<Leaf>>>() -> u256 {{ with (LN) {{ <N1<N1<Leaf>> as Br>::v() + <N1<Leaf> as Br>::v() }} }}\nfn go() -> u256 {{ g3<Bx<Leaf>>() }}\n"
     );
@@ -5940,5 +5970,40 @@ fn route_text_route_through_the_goal_itself() {
     assert!(
         report.contains("`End: Chain` receives `E2` through `H: Holder<Out = End>` (the bound on `Out`) and `impl Chain for End` through `H: Holder<Out = End>` (the bound on `Out`, then the bound on `Next` of `End: Chain`), which passes through `End: Chain` itself"),
         "{report}"
+    );
+}
+
+// A goal that a component answers reads the dictionary of the bound that holds
+// it, even under a `with` that names a different goal. `with (LN)` names
+// `Leaf: Br`, which is answered by the `with`; `N1<Leaf>: Br` is a component of
+// the dictionary of `H`, which `go` built without a choice. The order is that a
+// `with` that names the goal answers first, then a slot, then a component of
+// the same identity, then ordinary selection. So the value is 12: 1 * 10 from
+// the component and 2 from the choice.
+#[test]
+fn a_component_answers_a_goal_that_the_choice_does_not_name() {
+    values(
+        r#"
+trait Br { type A: Br
+    type B: Br
+    const fn v() -> u256 }
+struct Leaf {}
+impl Br for Leaf { type A = Leaf
+    type B = Leaf
+    const fn v() -> u256 { 1 } }
+struct N1<T> {}
+trait Hb { type O: Br }
+struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = N1<T> }
+impl Br for Leaf as LN { type A = Leaf
+    type B = Leaf
+    const fn v() -> u256 { 2 } }
+impl<T: Br> Br for N1<T> { type A = T
+    type B = T
+    const fn v() -> u256 { T::v() } }
+const fn g3<H: Hb<O = N1<Leaf>>>() -> u256 { with (LN) { <N1<Leaf> as Br>::v() * 10 + Leaf::v() } }
+const fn go() -> u256 { g3<Bx<Leaf>>() }
+"#,
+        &[("go", 12)],
     );
 }
