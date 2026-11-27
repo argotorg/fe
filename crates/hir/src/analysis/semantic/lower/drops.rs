@@ -4,10 +4,12 @@
 //! A binding belongs to the block or arm that declares it, and a temporary to
 //! the scope it is allocated in: the statement, the block tail, a condition
 //! or an arm. A scope ends where its code falls through, or where `break`,
-//! `continue`, `return`, `?` or a failed condition leaves it; the value a
-//! scope ends with passes to the enclosing scope. A `Drop` is placed for
-//! every owner at each such exit, and drop elaboration decides what of the
-//! owner is still initialized there.
+//! `continue`, `return`, `?` or a failed condition leaves it, or where a
+//! projection's session resumes from a yield in it: one in a `yield`
+//! statement's operand leaves the operand's scopes, any other every scope.
+//! The value a scope ends with passes to the enclosing scope. A `Drop` is
+//! placed for every owner at each such exit, and drop elaboration decides
+//! what of the owner is still initialized there.
 use cranelift_entity::EntityRef;
 
 use super::body::SmirLowerCtxt;
@@ -53,6 +55,16 @@ impl<'db> SmirLowerCtxt<'_, 'db> {
         if !self.is_terminated(self.current) {
             self.destroy(&owners);
         }
+    }
+
+    /// Ends the innermost scope, passing what it holds to the enclosing one.
+    pub(super) fn pass_drop_scope(&mut self) {
+        let owners = self.take_drop_scope();
+        self.drop_scopes
+            .last_mut()
+            .expect("a passed scope lies in the body's scope")
+            .owners
+            .extend(owners);
     }
 
     /// Ends the innermost scope without destroying its owners, which the

@@ -1,0 +1,55 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/alias_missing_args.fe
+---
+error[3-0003]: all type parameters of type alias must be given
+   ┌─ alias_missing_args.fe:22:12
+   │
+13 │ type ByteList<const N: usize> = List<u8, N>
+   │ ------------------------------------------- type alias defined here
+   ·
+22 │     let _: ByteList = List<u8, 4>::new()
+   │            ^^^^^^^^ expected at least 1 arguments here
+
+error[8-0000]: type mismatch
+   ┌─ alias_missing_args.fe:49:5
+   │
+49 │     Doubled::new()
+   │     ^^^^^^^^^^^^^^ expected `Bits<8>`, but `Bits<(_ * 2)>` is given
+
+error[8-0031]: type annotation is needed
+   ┌─ alias_missing_args.fe:17:9
+   │
+17 │     let _ = ByteList::new()
+   │         ^
+   │         │
+   │         type annotation is needed
+   │         consider giving `: List<u8, _>` here
+
+error[8-0031]: type annotation is needed
+   ┌─ alias_missing_args.fe:27:5
+   │
+27 │     ByteList::CAP
+   │     ^^^^^^^^^^^^^
+   │     │
+   │     type annotation is needed
+   │     consider giving `: List<u8, _>` here
+
+error[8-0031]: type annotation is needed
+   ┌─ alias_missing_args.fe:31:5
+   │
+31 │     List::CAP
+   │     ^^^^^^^^^
+   │     │
+   │     type annotation is needed
+   │     consider giving `: List<_, _>` here
+
+error[8-0031]: type annotation is needed
+   ┌─ alias_missing_args.fe:49:5
+   │
+49 │     Doubled::new()
+   │     ^^^^^^^^^^^^
+   │     │
+   │     type annotation is needed
+   │     consider giving `: fn new<(_ * 2)>` here

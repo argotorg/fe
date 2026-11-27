@@ -129,8 +129,8 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
             return self.normalize_empty_body();
         }
 
-        self.classify_roots()?;
         let cfg = RawCfg::new(self.raw);
+        self.classify_roots(Some(&cfg))?;
         self.phi_locals = cfg.phi_locals(self.raw, &self.root_for_local);
         self.blocks = (0..self.raw.blocks.len())
             .map(|_| NBlock {
@@ -191,7 +191,7 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
     }
 
     fn normalize_empty_body(mut self) -> Result<NormalizedArtifacts<'db>, NormalizeError<'db>> {
-        self.classify_roots()?;
+        self.classify_roots(None)?;
         self.blocks.push(NBlock {
             params: Box::default(),
             statements: Vec::new(),
@@ -219,12 +219,37 @@ impl<'a, 'db> NormalizeCx<'a, 'db> {
         })
     }
 
-    fn classify_roots(&mut self) -> Result<(), NormalizeError<'db>> {
+    /// `cfg` is the raw body's, which a body without blocks has none of.
+    fn classify_roots(&mut self, cfg: Option<&RawCfg>) -> Result<(), NormalizeError<'db>> {
+        // A binding that a reachable block reads and nothing defines, a `let`
+        // without a value, is read from a slot, as a `var` is, which the
+        // access checker sees uninitialized.
+        let read_undefined: FxHashSet<_> = cfg
+            .map(|cfg| {
+                let defined: FxHashSet<_> = cfg
+                    .defs
+                    .iter()
+                    .flatten()
+                    .chain(&self.raw.entry_locals)
+                    .copied()
+                    .collect();
+                cfg.uses
+                    .iter()
+                    .zip(&cfg.reachable)
+                    .filter(|(_, reachable)| **reachable)
+                    .flat_map(|(uses, _)| uses)
+                    .filter(|local| !defined.contains(local))
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
         let mut needs_slot = vec![false; self.raw.locals.len()];
         for (index, local) in self.raw.locals.iter().enumerate() {
             let direct_capability = local.ty.as_capability(self.db).is_some();
-            needs_slot[index] =
-                !direct_capability && local.source.is_some_and(|binding| binding.is_mut());
+            needs_slot[index] = !direct_capability
+                && local.source.is_some_and(|binding| {
+                    binding.is_mut() || read_undefined.contains(&SLocalId::new(index))
+                });
         }
         for block in &self.raw.blocks {
             for statement in &block.stmts {
@@ -2784,6 +2809,10 @@ pub(super) fn structural_types_are_boundary_compatible<'db>(
 struct RawCfg {
     successors: Vec<Vec<usize>>,
     reachable: Vec<bool>,
+    /// The locals each block reads before defining them, and those it
+    /// defines (`block_uses_and_defs`).
+    uses: Vec<FxHashSet<SLocalId>>,
+    defs: Vec<FxHashSet<SLocalId>>,
     dom_children: Vec<Vec<usize>>,
     dominance_frontier: Vec<FxHashSet<usize>>,
 }
@@ -2907,9 +2936,12 @@ impl RawCfg {
                 }
             }
         }
+        let (uses, defs) = block_uses_and_defs(body);
         Self {
             successors,
             reachable,
+            uses,
+            defs,
             dom_children,
             dominance_frontier,
         }
@@ -2932,7 +2964,7 @@ impl RawCfg {
         body: &SemanticBody<'_>,
         root_for_local: &[Option<NRootId>],
     ) -> Vec<Vec<SLocalId>> {
-        let (uses, defs) = block_uses_and_defs(body);
+        let (uses, defs) = (&self.uses, &self.defs);
         let mut live_in = vec![FxHashSet::default(); body.blocks.len()];
         let mut live_out = vec![FxHashSet::default(); body.blocks.len()];
         loop {

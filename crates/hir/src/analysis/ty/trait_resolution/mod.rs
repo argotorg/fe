@@ -457,32 +457,28 @@ pub(crate) fn check_ty_wf<'db>(
         | TyData::Invalid(_) => {}
     }
 
-    let constraints = ty_constraints(db, ty);
-    let assumptions = solve_cx.assumptions();
+    check_goals_wf(db, solve_cx, ty_constraints(db, ty).list(db))
+}
 
-    // Normalize constraints to resolve associated types
-    let normalized_constraints = {
-        let scope = solve_cx.origin_scope(db);
-        let normalized_list: Vec<_> = constraints
-            .list(db)
-            .iter()
-            .map(|&goal| goal.normalize(db, scope, assumptions))
-            .collect();
-        PredicateListId::new(db, normalized_list)
-    };
-
-    for &goal in normalized_constraints.list(db) {
-        let mut table = UnificationTable::new(db);
-        let query = CanonicalGoalQuery::new(db, goal, assumptions);
-
-        if let GoalSatisfiability::UnSat(subgoal) = is_goal_query_satisfiable(db, solve_cx, &query)
-        {
-            let subgoal = subgoal.map(|subgoal| query.extract_subgoal(&mut table, subgoal));
-            return WellFormedness::IllFormed { goal, subgoal };
-        }
-    }
-
-    WellFormedness::WellFormed
+/// Whether `goals`, the bounds that a use of a declaration instantiates, hold
+/// under the assumptions of `solve_cx`: the first that does not, with its
+/// associated types normalized, makes the use ill-formed.
+pub(crate) fn check_goals_wf<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goals: &[TraitInstId<'db>],
+) -> WellFormedness<'db> {
+    let scope = solve_cx.origin_scope(db);
+    goals
+        .iter()
+        .find_map(|&goal| {
+            unsatisfied_goal(
+                db,
+                solve_cx,
+                goal.normalize(db, scope, solve_cx.assumptions()),
+            )
+        })
+        .unwrap_or(WellFormedness::WellFormed)
 }
 
 fn check_const_ty_wf<'db>(

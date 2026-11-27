@@ -417,8 +417,8 @@ impl<'db> Unwinder<'_, 'db> {
                 dst: flag,
                 expr: RExpr::ConstScalar(ConstScalar::Bool(false)),
             });
-            for stmt in self.flushes[&copy].clone().iter_mut() {
-                for local in stmt.locals_mut() {
+            for stmt in &self.flushes[&copy] {
+                for local in stmt.locals(&self.body.provider_bindings) {
                     let data = &self.body.locals[local.index()];
                     if let (
                         RuntimeCarrier::Value(class),
@@ -426,11 +426,11 @@ impl<'db> Unwinder<'_, 'db> {
                         | RuntimeLocalRoot::Ref(_)
                         | RuntimeLocalRoot::Ptr { .. },
                     ) = (&data.carrier, &data.root)
-                        && !params.contains(local)
-                        && defined.insert(*local)
+                        && !params.contains(&local)
+                        && defined.insert(local)
                     {
                         inits.push(RStmt::Assign {
-                            dst: *local,
+                            dst: local,
                             expr: RExpr::Placeholder {
                                 class: class.clone(),
                             },

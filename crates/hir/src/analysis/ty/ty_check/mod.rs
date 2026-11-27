@@ -1,5 +1,6 @@
 mod callable;
 mod const_requirements;
+use const_requirements::PathRequirements;
 pub(crate) use const_requirements::check_declared_type_requirements;
 pub use const_requirements::{EvaluationStop, RequirementFailure};
 mod contract;
@@ -98,14 +99,17 @@ use super::{
     trait_def::{TraitInstId, selected_assoc_const_body_template},
     trait_resolution::{
         CanonicalGoalQuery, GoalSatisfiability, PredicateListId, TraitSolveCx, WellFormedness,
-        check_trait_inst_wf_without_self, check_ty_wf, goal_query_has_no_distinct_solution,
-        is_goal_query_satisfiable, is_goal_satisfiable,
+        check_goals_wf, check_trait_inst_wf_without_self, check_ty_wf,
+        goal_query_has_no_distinct_solution, is_goal_query_satisfiable, is_goal_satisfiable,
     },
     ty_def::{
         BorrowKind, InvalidCause, Kind, MAX_INLINE_STRING_BYTES, StringFallback, TyId, TyVarSort,
         int_literal_fits_prim,
     },
-    ty_lower::{CompleteSubst, collect_generic_params, lower_hir_ty, lower_hir_ty_deferred},
+    ty_lower::{
+        CompleteSubst, collect_generic_params, lower_generic_arg_list, lower_hir_ty,
+        lower_hir_ty_deferred,
+    },
     unify::{InferenceKey, Snapshot, UnificationError, UnificationTable},
     unsafe_check::check_unsafe_ops,
 };
@@ -752,7 +756,7 @@ fn predicate_names_a_type<'db>(db: &'db dyn HirAnalysisDb, body: Body<'db>) -> b
     );
     matches!(
         resolved,
-        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) if ty.const_ty_ty(db).is_none()
+        Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) if ty.const_ty_ty(db).is_none()
     )
 }
 
@@ -3302,11 +3306,11 @@ impl<'db> TyChecker<'db> {
         }
 
         let resolution = contract::recv_arm_resolution(self.db, contract, recv_idx, arm_idx);
-        // The arm's pattern doesn't resolve its path again, so the
-        // applications the path passes through are checked from here.
-        self.env.register_path_applications(
+        // The arm's pattern doesn't resolve its path again, so what the path
+        // requires is checked from here.
+        self.env.register_path_requirements(
             arm.pat.span(self.body()).into(),
-            resolution.applications.iter().copied(),
+            resolution.requirements.clone(),
         );
         let Some(variant) = resolution.variant else {
             // Invalid types suppress spurious type mismatch errors when the
@@ -4346,11 +4350,35 @@ impl<'db> TyChecker<'db> {
         site: DynLazySpan<'db>,
         lowering_cx: &LoweringContext<'db>,
     ) -> Result<PathRes<'db>, PathResError<'db>> {
+        let db = self.db;
         let scope = self.env.scope();
+        let assumptions = self.env.assumptions();
+        let table = &mut self.table;
         let mut invisible = None;
-        let mut applications = Vec::new();
-        let mut observe_segment = |path: PathId<'db>, reso: &PathRes<'db>| {
-            applications.extend(const_requirements::constrained_applications(self.db, reso));
+        let mut requirements = PathRequirements::default();
+        let mut observe_segment = |path: PathId<'db>, reso: &mut PathRes<'db>| {
+            // An alias named without all its arguments infers the rest, as a
+            // generic type named without its arguments does.
+            if let PathRes::TyAlias(alias, ty, args) = reso
+                && let Some(InvalidCause::UnboundTypeAliasParam { .. }) = ty.invalid_cause(db)
+            {
+                let given = lower_generic_arg_list(
+                    db,
+                    path.generic_args(db),
+                    scope,
+                    assumptions,
+                    lowering_cx,
+                );
+                // A parameter whose declaration is invalid stands for itself.
+                (*ty, *args) = alias.instantiate(db, &given, lowering_cx, |param| {
+                    Some(if param.invalid_cause(db).is_some() {
+                        param
+                    } else {
+                        table.new_var_from_param(param)
+                    })
+                });
+            }
+            requirements.add(db, reso);
             if invisible.is_some() {
                 return;
             }
@@ -4360,10 +4388,10 @@ impl<'db> TyChecker<'db> {
         };
 
         let res = resolve_path_with_observer_and_minter(
-            self.db,
+            db,
             path,
             scope,
-            self.env.assumptions(),
+            assumptions,
             resolve_tail_as_value,
             &mut observe_segment,
             lowering_cx,
@@ -4401,7 +4429,7 @@ impl<'db> TyChecker<'db> {
         );
         if arg_diags.is_empty()
             && path.generic_args(self.db).is_given(self.db)
-            && let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty)) = res
+            && let Ok(PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _)) = res
         {
             let args_span = span.segment(path.segment_index(self.db)).generic_args();
             arg_diags.extend(emit_invalid_ty_error(self.db, ty, args_span.into()));
@@ -4412,7 +4440,7 @@ impl<'db> TyChecker<'db> {
         }
 
         let res = res?;
-        self.env.register_path_applications(site, applications);
+        self.env.register_path_requirements(site, requirements);
         Ok(res.map_over_ty(|ty| self.instantiate_to_term(ty)))
     }
 
@@ -7623,6 +7651,9 @@ struct TyCheckerFinalizer<'db> {
     direct_call_callees: FxHashSet<ExprId>,
     /// Literals a cast or negation already checked against its type.
     range_checked_literals: FxHashSet<ExprId>,
+    /// The alias bounds that the body's paths require, with inference's
+    /// arguments (`TyCheckEnv::register_path_requirements`).
+    path_bounds: Vec<(DynLazySpan<'db>, TraitInstId<'db>)>,
     diags: Vec<FuncBodyDiag<'db>>,
 }
 
@@ -7704,6 +7735,17 @@ impl<'db> Visitor<'db> for TyCheckerFinalizer<'db> {
             let callable_ty = callable.ty(self.db);
             let span = ctxt.span().unwrap().into_method_call_expr().method_name();
             self.check_unknown(callable_ty, span.into(), false);
+        }
+
+        // An associated constant's receiver is not part of the expression's
+        // type, so inference can leave it unknown, as in `List::CAP`.
+        let receiver_args = match self.body.expr_const_ref(expr) {
+            Some(ConstRef::InherentConst(use_)) => vec![use_.receiver_ty()],
+            Some(ConstRef::TraitConst { use_, .. }) => use_.inst().args(self.db).to_vec(),
+            Some(ConstRef::Const(_)) | None => Vec::new(),
+        };
+        for ty in receiver_args {
+            self.check_unknown(ty, ctxt.span().unwrap().into(), false);
         }
 
         match expr_data {
@@ -7853,6 +7895,13 @@ impl<'db> TyCheckerFinalizer<'db> {
         for (_, _, diag) in std::mem::take(&mut checker.missing_effects) {
             checker.push_diag(diag);
         }
+        let mut prober = env::Prober::new(&mut checker.table, checker.env.scope());
+        let path_bounds = checker
+            .env
+            .take_path_bounds()
+            .into_iter()
+            .map(|(site, bound)| (site, bound.fold_with(checker.db, &mut prober)))
+            .collect();
         let mut body = checker.env.finish(&mut checker.table);
         body.tables_mut().return_borrow_provider = checker.first_return_borrow_provider;
         let direct_call_callees = body.body().map_or_else(FxHashSet::default, |body_id| {
@@ -7886,13 +7935,53 @@ impl<'db> TyCheckerFinalizer<'db> {
             effect_provider_keys: checker.effect_provider_keys,
             direct_call_callees,
             range_checked_literals,
+            path_bounds,
             diags: checker.diags,
         }
     }
 
     fn finish(mut self) -> (Vec<FuncBodyDiag<'db>>, TypedBody<'db>) {
         self.check_unknown_types();
+        self.check_path_bounds();
         (self.diags, self.body)
+    }
+
+    /// A path through an alias meets the bounds of the alias's parameters,
+    /// once per site, as the type of an expression meets those of its
+    /// structs and enums (`check_wf`). The arguments are inference's, so an
+    /// argument it left unknown is reported as any unknown type is.
+    fn check_path_bounds(&mut self) {
+        let db = self.db;
+        let Some(body) = self.body.body() else {
+            return;
+        };
+        let solve_cx = TraitSolveCx::new(db, body.scope()).with_assumptions(self.assumptions);
+        let mut checked = FxHashSet::default();
+        for (site, goal) in std::mem::take(&mut self.path_bounds) {
+            if collect_flags(db, goal).contains(TyFlags::HAS_INVALID)
+                || !checked.insert((site.clone(), goal))
+            {
+                continue;
+            }
+            if let Some(&unknown) = goal
+                .args(db)
+                .iter()
+                .chain(goal.assoc_type_bindings(db).values())
+                .find(|ty| ty.has_var(db))
+            {
+                self.check_unknown(unknown, site, false);
+            } else if let WellFormedness::IllFormed { goal, subgoal } =
+                check_goals_wf(db, solve_cx, &[goal])
+            {
+                let diag = TraitConstraintDiag::TraitBoundNotSat {
+                    span: site,
+                    primary_goal: goal,
+                    unsat_subgoal: subgoal,
+                    required_by: None,
+                };
+                self.diags.push(TyDiagCollection::from(diag).into());
+            }
+        }
     }
 
     fn check_unknown_types(&mut self) {

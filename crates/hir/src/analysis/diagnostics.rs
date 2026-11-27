@@ -4065,6 +4065,14 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 error_code,
             ),
 
+            Self::FieldTypeConstFault { field, fault } => revealed_const_fault(
+                db,
+                fault,
+                "in the type of this field",
+                field,
+                error_code,
+            ),
+
             Self::StaticAssertFailed {
                 primary,
                 comparison,

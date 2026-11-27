@@ -39,6 +39,12 @@ error[16-0011]: invalid yield in `fn in_loop`
 51 │ │     }
    │ ╰─────^ a projection must yield on every path that completes
 
+error[16-0011]: invalid yield in `fn bare_return_in_operand`
+    ┌─ yields.fe:105:17
+    │
+105 │                 return
+    │                 ^^^^^^ a projection must yield on every path that completes
+
 warning[16-0012]: discarded writes in `fn discarded`
    ┌─ yields.fe:56:9
    │
@@ -56,6 +62,12 @@ warning[16-0012]: discarded writes in `fn discarded_value`
    │
 66 │         self.v + 1
    │         ^^^^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
+
+warning[16-0012]: discarded writes in `fn returned_in_operand`
+   ┌─ yields.fe:93:24
+   │
+93 │                 return mut tmp
+   │                        ^^^^^^^ this yields a place of the projection's own frame, and no code after the yield writes it back
 
 error[16-0013]: recursion through a projection in `fn deep`
    ┌─ yields.fe:75:13

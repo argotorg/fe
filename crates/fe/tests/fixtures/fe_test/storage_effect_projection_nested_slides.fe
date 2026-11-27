@@ -1,0 +1,198 @@
+// A projection over a storage effect that yields at several sites, where a
+// site opens a nested projection over the effect. The nested slide writes
+// the provider in storage, or stores back a packed lane's copy, which a
+// halt while the grant is live stores back first. Each test reads back
+// what only the site its path took wrote, and the lanes it did not take
+// keep their values. A run that does not halt stores each copy back once,
+// at the end of its session.
+use std::abi::Sol
+use std::evm::Evm
+use std::evm::storage_bytes::encode_bytes_return_from_calldata
+
+struct Frame { x: u256, log: u256 }
+
+fn noted(_ k: u256) -> mut Frame uses (frame: mut Frame) {
+    yield mut frame
+    frame.log = frame.log * 10 + k
+}
+
+fn two_sites(_ c: bool) -> mut Frame uses (frame: mut Frame) {
+    if c { noted(1) } else { noted(2) }
+}
+
+struct Small { a: u8, b: u8 }
+struct Pair { first: Small, second: Small }
+
+fn lane_a() -> mut u8 uses (small: mut Small) {
+    mut small.a
+}
+
+fn lane_b() -> mut u8 uses (small: mut Small) {
+    mut small.b
+}
+
+fn pick_lane(_ c: bool) -> mut u8 uses (small: mut Small) {
+    if c { lane_a() } else { lane_b() }
+}
+
+// The nested projection's provider is a `with` block of each site.
+fn pick_small(_ c: bool) -> mut u8 uses (pair: mut Pair) {
+    if c {
+        with (Small = mut pair.first) { lane_a() }
+    } else {
+        with (Small = mut pair.second) { lane_a() }
+    }
+}
+
+// A site whose slide never ends the nested session it holds a copy for:
+// only the halt stores the copy back.
+fn loop_slide(_ c: bool) -> mut u8 uses (pair: mut Pair) {
+    if c {
+        with (Small = mut pair.first) {
+            let x = mut lane_a()
+            x = 9
+            yield mut pair.second.a
+            while true {
+                x = 10
+            }
+        }
+    } else {
+        yield mut pair.second.b
+    }
+}
+
+/// Returns the 32 bytes after the selector as ABI `bytes`.
+fn halt() -> ! {
+    encode_bytes_return_from_calldata(data_ptr: 4, len: 32)
+}
+
+fn maybe_halt(_ h: bool) {
+    if h { halt() }
+}
+
+msg Msg {
+    #[selector = 1]
+    Write { c: bool },
+    #[selector = 2]
+    PickLane { c: bool, halts: bool } -> Bytes,
+    #[selector = 3]
+    PickSmall { c: bool, halts: bool } -> Bytes,
+    #[selector = 4]
+    LoopSlide { c: bool } -> Bytes,
+    #[selector = 5]
+    Init {},
+    #[selector = 6]
+    Get -> u256,
+}
+
+pub contract C {
+    mut frame: Frame,
+    mut small: Small,
+    mut pair: Pair,
+
+    recv Msg {
+        Write { c } uses (mut frame) {
+            with (Frame = mut frame) {
+                let f = mut two_sites(c)
+                f.x += 7
+            }
+        }
+        PickLane { c, halts } -> Bytes uses (mut small) {
+            with (mut small) {
+                let q = mut pick_lane(c)
+                q = 5
+                maybe_halt(halts)
+                q += 1
+            }
+            halt()
+        }
+        PickSmall { c, halts } -> Bytes uses (mut pair) {
+            with (mut pair) {
+                let q = mut pick_small(c)
+                q = 5
+                maybe_halt(halts)
+                q += 1
+            }
+            halt()
+        }
+        LoopSlide { c } -> Bytes uses (mut pair) {
+            with (mut pair) {
+                let q = mut loop_slide(c)
+                q = 5
+                maybe_halt(true)
+                q += 1
+            }
+            halt()
+        }
+        Init {} uses (mut small, mut pair) {
+            small = Small { a: 1, b: 2 }
+            pair = Pair { first: Small { a: 3, b: 5 }, second: Small { a: 4, b: 6 } }
+        }
+        Get -> u256 uses (frame, small, pair) {
+            frame.x * 0x1000000000000000 + frame.log * 0x100000000000000
+                + small.a as u256 * 0x10000000000 + small.b as u256 * 0x100000000
+                + pair.first.a as u256 * 0x1000000 + pair.first.b as u256 * 0x10000
+                + pair.second.a as u256 * 0x100 + pair.second.b as u256
+        }
+    }
+}
+
+fn fresh(_ salt: u256) -> Address uses (evm: mut Evm) {
+    let c = evm.create2<C>(value: Wei::zero(), args: (), salt)
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Init {})
+    c
+}
+
+fn get(_ c: Address) -> u256 uses (evm: mut Evm) {
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message: Msg::Get {})
+}
+
+/// `Get` after `Init` and nothing else.
+const INIT: u256 = 0x010203050406
+
+/// Sends `message` and returns what `Get` reads afterwards.
+fn send<M>(_ c: Address, _ message: own M) -> u256
+    uses (evm: mut Evm)
+    where M: MsgVariant<Sol> + Encode<Sol>, M::Return: Decode<Sol> + AbiSize
+{
+    evm.call(addr: c, gas: 10000000, value: Wei::zero(), message)
+    get(c)
+}
+
+#[test]
+fn storage_providers_run_the_slide_taken() uses (evm: mut Evm) {
+    let c = fresh(1)
+    assert(send(c, Msg::Write { c: true }) == 7 * 0x1000000000000000 + 1 * 0x100000000000000 + INIT)
+    assert(send(c, Msg::Write { c: false }) == 14 * 0x1000000000000000 + 12 * 0x100000000000000 + INIT)
+}
+
+#[test]
+fn halts_store_back_the_lane_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickLane { c: true, halts: true }) == INIT + 4 * 0x10000000000)
+    assert(send(fresh(2), Msg::PickLane { c: false, halts: true }) == INIT + 3 * 0x100000000)
+}
+
+#[test]
+fn slides_store_back_the_lane_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickLane { c: true, halts: false }) == INIT + 5 * 0x10000000000)
+    assert(send(fresh(2), Msg::PickLane { c: false, halts: false }) == INIT + 4 * 0x100000000)
+}
+
+#[test]
+fn halts_store_back_through_the_with_provider_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickSmall { c: true, halts: true }) == INIT + 2 * 0x1000000)
+    assert(send(fresh(2), Msg::PickSmall { c: false, halts: true }) == INIT + 1 * 0x100)
+}
+
+#[test]
+fn slides_store_back_through_the_with_provider_taken() uses (evm: mut Evm) {
+    assert(send(fresh(1), Msg::PickSmall { c: true, halts: false }) == INIT + 3 * 0x1000000)
+    assert(send(fresh(2), Msg::PickSmall { c: false, halts: false }) == INIT + 2 * 0x100)
+}
+
+#[test]
+fn halts_store_back_a_copy_no_slide_ends() uses (evm: mut Evm) {
+    // The taken site's copy holds 9, the grant 5.
+    assert(send(fresh(1), Msg::LoopSlide { c: true }) == INIT + 6 * 0x1000000 + 1 * 0x100)
+    assert(send(fresh(2), Msg::LoopSlide { c: false }) == INIT - 1)
+}

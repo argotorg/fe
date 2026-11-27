@@ -1,0 +1,274 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/alias_param_bounds.fe
+---
+error[2-0002]: `Missing` is not found
+   ┌─ alias_param_bounds.fe:74:22
+   │
+74 │ type UnknownBound<P: Missing> = Small
+   │                      ^^^^^^^ `Missing` is not found
+
+error[3-0071]: `mut?` bound of an item without a mode
+   ┌─ alias_param_bounds.fe:76:23
+   │
+76 │ type MaybeMutBound<P: mut? Preset> = Small
+   │                       ^^^^^^^^^^^ only a function or an implementation is used at a mode
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds.fe:85:17
+   │
+85 │ fn param(_ tag: Tagged<bool>) {}
+   │                 ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds.fe:87:13
+   │
+87 │ fn ret() -> Tagged<bool> {
+   │             ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds.fe:92:10
+   │
+92 │     tag: Tagged<bool>,
+   │          ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds.fe:96:12
+   │
+96 │     let _: Tagged<u16> = Small::new()
+   │            ^^^^^^^^^^^ `u16` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds.fe:99:16
+   │
+99 │ impl Other for Tagged<u8> {}
+   │                ^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:101:12
+    │
+101 │ impl Takes<Tagged<u8>> for u8 {}
+    │            ^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:103:22
+    │
+103 │ fn in_bound<T: Takes<Tagged<u8>>>() {}
+    │                      ^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:105:24
+    │
+105 │ fn nested(_ pair: Pair<Tagged<bool>, u8>) {}
+    │                        ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:107:26
+    │
+107 │ fn not_satisfied(_ bits: Doubled<u8>) {}
+    │                          ^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:110:5
+    │
+110 │     Tagged<bool>::new()
+    │     ^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:114:5
+    │
+114 │     Tagged<bool> { len: 0 }
+    │     ^^^^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:118:6
+    │
+118 │     (Tagged<bool>::CAP, Tagged<u8>::new())
+    │      ^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:118:25
+    │
+118 │     (Tagged<bool>::CAP, Tagged<u8>::new())
+    │                         ^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:122:9
+    │
+122 │     let Tagged<bool> { len } = s
+    │         ^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:128:9
+    │
+128 │         Tagged<u8> { len } => len,
+    │         ^^^^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:133:5
+    │
+133 │     Tagged<u8>::CAP
+    │     ^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:136:23
+    │
+136 │ fn assoc_type(_ item: Tagged<u8>::Item) {}
+    │                       ^^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:138:31
+    │
+138 │ fn const_arg(_ holder: Holder<Tagged<u8>::CAP>) {}
+    │                               ^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:140:34
+    │
+140 │ fn param_without_bound<T>(_ tag: Tagged<T>) {}
+    │                                  ^^^^^^^^^ `T` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:143:5
+    │
+143 │     Tagged<T>::CAP
+    │     ^^^^^^^^^^^^^^ `T` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:147:22
+    │
+147 │ type Quadrupled<P> = Doubled<P>
+    │                      ^^^^^^^^^^ `P` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:149:17
+    │
+149 │ type Retagged = Tagged<bool>
+    │                 ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:153:29
+    │
+153 │ fn alias_over_alias(_ bits: Also<u8>) {}
+    │                             ^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:157:29
+    │
+157 │     let _: Pair<bool, u8> = First::make(true, 0)
+    │                             ^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:170:5
+    │
+170 │     WithItem<Small, bool>::make(Small::new(), 0)
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Small` doesn't implement `HasItem<Item = bool>`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:173:28
+    │
+173 │ fn qualified_type(_ item: <Tagged<bool> as HasItem>::Item) {}
+    │                            ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:176:6
+    │
+176 │     <Tagged<bool> as Preset>::N
+    │      ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:181:14
+    │
+181 │     T: Takes<Tagged<bool>>,
+    │              ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:185:5
+    │
+185 │     MaybeTagged<bool>::Nothing
+    │     ^^^^^^^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:190:9
+    │
+190 │         MaybeTagged<u8>::Just(x) => x,
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:191:9
+    │
+191 │         MaybeTagged<u8>::Nothing => 0,
+    │         ^^^^^^^^^^^^^^^^^^^^^^^^ `u8` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:196:5
+    │
+196 │     MaybeTagged::Just(true)
+    │     ^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:199:24
+    │
+199 │ fn effect() uses (tag: Tagged<bool>) {}
+    │                        ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:202:10
+    │
+202 │     Pair<Tagged<bool>, u8>::make(Small::new(), 0)
+    │          ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:206:8
+    │
+206 │     id<Tagged<bool>>(Small::new())
+    │        ^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:209:21
+    │
+209 │ fn defaulted(_ tag: DefaultBad) {}
+    │                     ^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:212:5
+    │
+212 │     DefaultBad::new()
+    │     ^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:215:28
+    │
+215 │ fn both_unsatisfied(_ tag: Both<bool, bool>) -> Small {
+    │                            ^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:216:5
+    │
+216 │     Both<bool, bool>::new()
+    │     ^^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `Preset`
+
+error[6-0003]: trait bound is not satisfied
+    ┌─ alias_param_bounds.fe:216:5
+    │
+216 │     Both<bool, bool>::new()
+    │     ^^^^^^^^^^^^^^^^^^^^^ `bool` doesn't implement `HasItem`
+
+error[8-0031]: type annotation is needed
+    ┌─ alias_param_bounds.fe:161:5
+    │
+161 │     Tagged::new()
+    │     ^^^^^^^^^^^
+    │     │
+    │     type annotation is needed
+    │     consider giving `: Type` here
+
+error[8-0031]: type annotation is needed
+    ┌─ alias_param_bounds.fe:166:5
+    │
+166 │     WithItem::make(Small::new(), 0)
+    │     ^^^^^^^^^^^^^^
+    │     │
+    │     type annotation is needed
+    │     consider giving `: Type` here

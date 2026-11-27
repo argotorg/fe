@@ -1,0 +1,105 @@
+// A generic alias named in an expression without all its arguments infers
+// the rest, as the aliased type does.
+
+struct List<T, const N: usize> {
+    len: usize,
+}
+
+impl<T, const N: usize> List<T, N> {
+    fn new() -> Self {
+        List { len: 0 }
+    }
+
+    fn capacity(self) -> usize {
+        N
+    }
+
+    fn with_len(_ len: usize) -> Self {
+        List { len }
+    }
+}
+
+type ByteList<const N: usize> = List<u8, N>
+
+type Swapped<const N: usize, T> = List<T, N>
+
+type Buffer<T, const N: usize = 4> = List<T, N>
+
+type Bytes<const M: usize> = ByteList<M>
+
+enum Maybe<T> {
+    Nothing,
+    Just(T),
+}
+
+type MaybeByte = Maybe<u8>
+
+type Opt<T> = Maybe<T>
+
+fn bytes4() -> ByteList<4> {
+    ByteList::new()
+}
+
+#[test]
+fn const_param_inferred_from_return_type() {
+    assert!(bytes4().capacity() == 4)
+}
+
+#[test]
+fn const_param_inferred_from_annotation() {
+    let list: ByteList<8> = ByteList::with_len(3)
+    assert!(list.capacity() == 8 && list.len == 3)
+}
+
+#[test]
+fn params_inferred_out_of_order() {
+    let list: List<u16, 2> = Swapped::new()
+    assert!(list.capacity() == 2)
+}
+
+#[test]
+fn trailing_param_inferred_after_given_one() {
+    let list: List<bool, 16> = Swapped<16>::new()
+    assert!(list.capacity() == 16)
+}
+
+#[test]
+fn defaulted_param_inferred_with_the_others() {
+    let list: List<u32, 6> = Buffer::new()
+    assert!(list.capacity() == 6)
+}
+
+#[test]
+fn record_init_through_alias() {
+    let list: ByteList<5> = ByteList { len: 1 }
+    assert!(list.capacity() == 5 && list.len == 1)
+}
+
+#[test]
+fn default_applies_once_earlier_params_are_given() {
+    let list = Buffer<u32>::new()
+    assert!(list.capacity() == 4)
+}
+
+#[test]
+fn alias_of_alias() {
+    let list: List<u8, 3> = Bytes::new()
+    assert!(list.capacity() == 3)
+}
+
+#[test]
+fn record_pattern_through_alias() {
+    let ByteList { len } = ByteList<2>::with_len(5)
+    assert!(len == 5)
+}
+
+#[test]
+fn enum_variants_through_alias() {
+    let value: Maybe<u16> = Opt::Just(3)
+    let found = match value {
+        Opt::Just(x) => x,
+        Opt::Nothing => 0,
+    }
+    let _: MaybeByte = MaybeByte::Nothing
+    assert!(found == 3)
+}

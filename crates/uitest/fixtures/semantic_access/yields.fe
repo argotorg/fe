@@ -83,4 +83,29 @@ impl Cell {
     fn pong(mut self) -> mut u256 {
         self.ping()
     }
+
+    // Warned: a `return` in a `yield` operand yields and returns, so the
+    // slide does not write `tmp` back on its path.
+    fn returned_in_operand(mut self, _ c: bool) -> mut u256 {
+        var tmp = self.v
+        yield {
+            if c {
+                return mut tmp
+            }
+            mut self.v
+        }
+        self.v = tmp
+    }
+
+    // Rejected: a bare `return` in a `yield` operand completes without
+    // yielding.
+    fn bare_return_in_operand(mut self, _ c: bool) -> mut u256 {
+        yield {
+            if c {
+                return
+            }
+            mut self.v
+        }
+        self.depth += 1
+    }
 }

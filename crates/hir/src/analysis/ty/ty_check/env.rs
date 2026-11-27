@@ -21,7 +21,7 @@ use super::owner::BodyOwner;
 use super::{
     BuiltinOp, Callable, ConstIntrinsicKind, ConstRef, SemanticExprLowering, SumShapeOp, TyChecker,
     TypedBody, TypedBodyTables, ValuePathRef, callable::EffectProviderSpecialization,
-    stmt::ForLoopPlan,
+    const_requirements::PathRequirements, stmt::ForLoopPlan,
 };
 use crate::analysis::ty::pattern_ir::{
     PatternAnalysisStatus, PatternStore, ValidatedPat, ValidatedPatId,
@@ -247,6 +247,12 @@ pub(crate) struct TyCheckEnv<'db> {
     /// passed through, each with the span of the expression or pattern whose
     /// path it is.
     path_applications: Vec<(DynLazySpan<'db>, TyId<'db>)>,
+
+    /// The bounds of the alias parameters that resolving the body's paths
+    /// passed through, on their arguments, each with the span of the
+    /// expression or pattern whose path it is. They are checked once
+    /// inference has found the arguments it supplies.
+    path_bounds: Vec<(DynLazySpan<'db>, TraitInstId<'db>)>,
 }
 
 /// A closure expression's parameters and captured bindings, in the order of
@@ -372,6 +378,7 @@ impl<'db> TyCheckEnv<'db> {
             yield_shapes: SecondaryMap::new(),
             for_loop_plans: SecondaryMap::new(),
             path_applications: Vec::new(),
+            path_bounds: Vec::new(),
         };
 
         env.enter_scope(body.expr(db));
@@ -733,16 +740,26 @@ impl<'db> TyCheckEnv<'db> {
         }
     }
 
-    pub(super) fn register_path_applications(
+    pub(super) fn register_path_requirements(
         &mut self,
         site: DynLazySpan<'db>,
-        applications: impl IntoIterator<Item = TyId<'db>>,
+        requirements: PathRequirements<'db>,
     ) {
+        let PathRequirements {
+            applications,
+            bounds,
+        } = requirements;
         self.path_applications.extend(
             applications
                 .into_iter()
                 .map(|application| (site.clone(), application)),
         );
+        self.path_bounds
+            .extend(bounds.into_iter().map(|bound| (site.clone(), bound)));
+    }
+
+    pub(super) fn take_path_bounds(&mut self) -> Vec<(DynLazySpan<'db>, TraitInstId<'db>)> {
+        std::mem::take(&mut self.path_bounds)
     }
 
     pub(super) fn register_for_loop_plan(&mut self, stmt: StmtId, plan: ForLoopPlan<'db>) {

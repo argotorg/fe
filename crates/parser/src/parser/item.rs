@@ -638,7 +638,7 @@ impl super::Parse for EnumScope {
         }
 
         parser.pop_recovery_stack();
-        parse_generic_params_opt(parser, false)?;
+        parse_generic_params_opt(parser)?;
 
         parser.pop_recovery_stack();
         parse_where_clause_opt(parser, ItemBlock::Required)?;
@@ -699,7 +699,7 @@ impl super::Parse for TraitScope {
         }
 
         parser.expect_and_pop_recovery_stack()?;
-        parse_generic_params_opt(parser, false)?;
+        parse_generic_params_opt(parser)?;
 
         parser.expect_and_pop_recovery_stack()?;
         if parser.current_kind() == Some(SyntaxKind::Colon) {
@@ -853,7 +853,7 @@ impl super::Parse for ImplScope {
     fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
         parser.bump_expected(SyntaxKind::ImplKw);
 
-        parse_generic_params_opt(parser, false)?;
+        parse_generic_params_opt(parser)?;
 
         let is_impl_trait = parser.dry_run(|parser| {
             parser.parse(TraitRefScope::default()).is_ok()
@@ -1029,7 +1029,7 @@ impl super::Parse for TypeAliasScope {
         }
 
         parser.pop_recovery_stack();
-        parse_generic_params_opt(parser, true)?;
+        parse_generic_params_opt(parser)?;
 
         if parser.find_and_pop(SyntaxKind::Eq, ExpectedKind::Unspecified)? {
             parser.bump();

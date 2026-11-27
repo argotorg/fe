@@ -583,7 +583,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         if let Some((path, Ok(resolved))) = resolved {
             let is_const_like = match resolved {
                 PathRes::Const(..) | PathRes::TraitConst(..) | PathRes::InherentConst(..) => true,
-                PathRes::Ty(ty) | PathRes::TyAlias(_, ty) => {
+                PathRes::Ty(ty) | PathRes::TyAlias(_, ty, _) => {
                     matches!(ty.data(self.db), TyData::ConstTy(_))
                 }
                 PathRes::EnumVariant(v) => v.ty.is_unit_variant_only_enum(self.db),
@@ -599,7 +599,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
                     // position.
                     let scope = ctxt.scope();
                     let mut invisible = None;
-                    let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+                    let mut check_visibility = |path: PathId<'db>, reso: &mut PathRes<'db>| {
                         if invisible.is_some() {
                             return;
                         }
@@ -721,7 +721,7 @@ impl<'db> Visitor<'db> for HirTyErrVisitor<'db> {
         let path_span = ctxt.span().unwrap();
 
         let mut invisible = None;
-        let mut check_visibility = |path: PathId<'db>, reso: &PathRes<'db>| {
+        let mut check_visibility = |path: PathId<'db>, reso: &mut PathRes<'db>| {
             if invisible.is_some() {
                 return;
             }

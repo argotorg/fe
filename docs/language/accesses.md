@@ -155,6 +155,8 @@ A projection yields once on each path that completes, implicitly at its
 tail or with `yield`. The code after a `yield`, its *slide*, runs when the
 caller's last use of the access has passed. While the caller uses the
 access, the projection's session reserves the places its arguments named.
+`return v` yields `v` and finishes the projection with no slide, even
+inside a `yield` statement's operand; in a slide, a bare `return` ends it.
 
 A yield of a value, such as `-> ref u32 { self.word.low() }`, grants a
 temporary in the projection's frame holding it, as `let tmp = ..; ref tmp`

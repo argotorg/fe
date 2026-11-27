@@ -1,0 +1,37 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/alias_param_bounds_const_arg.fe
+---
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds_const_arg.fe:81:24
+   │
+81 │ fn type_positions(_ n: N, _ pair: Pair<(N, u8), u8>) {}
+   │                        ^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds_const_arg.fe:81:41
+   │
+81 │ fn type_positions(_ n: N, _ pair: Pair<(N, u8), u8>) {}
+   │                                         ^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds_const_arg.fe:83:36
+   │
+83 │ fn assoc_binding<T: HasItem<Item = N>>() {}
+   │                                    ^ `bool` doesn't implement `Gate`
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ alias_param_bounds_const_arg.fe:90:36
+   │
+90 │ fn function_and_alias(_ pair: Pair<M, u8>) {}
+   │                                    ^ `bool` doesn't implement `Gate`
+
+error[8-0093]: const requirement is not satisfied
+   ┌─ alias_param_bounds_const_arg.fe:20:10
+   │
+18 │ struct Positive<const K: usize> where { K > 0 } {}
+   │                                       --------- required by this predicate
+19 │
+20 │ type L = Positive<0>
+   │          ^^^^^^^^^^^ condition evaluated to `false`

@@ -1,3 +1,5 @@
+use std::mem;
+
 use cranelift_entity::EntityRef;
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
@@ -229,8 +231,9 @@ pub(super) struct SmirLowerCtxt<'a, 'db> {
     prepared_receivers: FxHashMap<ExprId, Receiver<'db>>,
     /// How many yield sites enclose the expression being lowered.
     pub(super) yield_depth: u32,
-    /// The slide of the `yield` statement being lowered.
-    slide: Option<SBlockId>,
+    /// The slide of the `yield` statement being lowered, and how many scopes
+    /// enclose the statement.
+    slide: Option<(SBlockId, usize)>,
     /// The components of each unsafe split lowered so far.
     unsafe_splits: Vec<Vec<SValueId>>,
     /// The scopes enclosing the code being lowered, innermost last, with the
@@ -801,7 +804,8 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     /// being lowered, or else returns.
     /// Every scope ends on the path, and the value leaves with it. A
     /// projection's frame outlives its yield: its scopes end where its
-    /// session resumes and returns.
+    /// session resumes, those of a `yield` statement's operand before the
+    /// slide, and every one before it returns.
     fn exit(&mut self, origin: SemOrigin<'db>, value: Option<SOperand>) {
         let Some(value) = value.filter(|_| self.instance.is_projection(self.db)) else {
             self.destroy_scopes_from(0, value.map(|value| value.value));
@@ -815,13 +819,12 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
             STerminatorKind::Yield { value, resume },
         );
         self.switch_to(resume);
-        match self.slide {
-            Some(slide) => self.set_terminator(resume, origin, STerminatorKind::Goto(slide)),
-            None => {
-                self.destroy_scopes_from(0, None);
-                self.set_terminator(resume, origin, STerminatorKind::Return(None));
-            }
-        }
+        let (depth, kind) = match self.slide {
+            Some((slide, depth)) => (depth, STerminatorKind::Goto(slide)),
+            None => (0, STerminatorKind::Return(None)),
+        };
+        self.destroy_scopes_from(depth, None);
+        self.set_terminator(resume, origin, kind);
     }
 
     pub(super) fn set_synthetic_terminator(&mut self, block: SBlockId, kind: STerminatorKind<'db>) {
@@ -1529,7 +1532,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
                 self.unit_value()
             }
-            Expr::Block(stmts, _) => self.lower_block_expr(stmts),
+            Expr::Block(stmts, _) => self.lower_block_expr(expr, stmts),
             Expr::If(cond, then_expr, else_expr) => {
                 self.lower_if_expr(expr, *cond, *then_expr, *else_expr)
             }
@@ -2706,11 +2709,18 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
     }
 
     /// A block's scope holds its bindings and its tail's temporaries; its
-    /// value passes to the enclosing scope.
-    fn lower_block_expr(&mut self, stmts: &[StmtId]) -> SValueId {
+    /// value passes to the enclosing scope. In a compound yield, such as
+    /// `Option::Some({ .. })` or a tuple, the yield comes after a block
+    /// that is a yield site, which passes everything it holds on: the
+    /// projection's locals live until its session resumes.
+    fn lower_block_expr(&mut self, expr: ExprId, stmts: &[StmtId]) -> SValueId {
         self.push_drop_scope(true);
         let value = self.lower_block_stmts(stmts);
-        self.pop_drop_scope(Some(value));
+        if self.yield_depth > 0 && self.typed_body.yield_shape(expr).is_some() {
+            self.pass_drop_scope();
+        } else {
+            self.pop_drop_scope(Some(value));
+        }
         value
     }
 
@@ -2802,7 +2812,13 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 self.destroy_scopes_from(drop_depth, None);
                 self.set_terminator(self.current, origin, STerminatorKind::Goto(break_bb));
             }
+            // A `return` ends the body wherever it is written: in a `yield`
+            // statement's operand no slide follows its yield either, and in
+            // a compound yield, such as `Option::Some({ .. })`, its value
+            // yields on its own.
             Stmt::Return(expr) => {
+                let slide = self.slide.take();
+                let yield_depth = mem::take(&mut self.yield_depth);
                 let value = expr.map(|expr| self.lower_expr_operand(expr));
                 if !self.is_terminated(self.current) {
                     self.exit(
@@ -2812,11 +2828,19 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         }),
                     );
                 }
+                self.yield_depth = yield_depth;
+                self.slide = slide;
             }
+            // The operand's scope holds its temporaries, and the bindings of
+            // an access block in it, until the session resumes.
             Stmt::Yield(expr) => {
                 let slide = self.new_block();
-                let outer = self.slide.replace(slide);
+                let outer = self.slide.replace((slide, self.drop_scopes.len()));
+                let yield_depth = mem::take(&mut self.yield_depth);
+                self.push_drop_scope(true);
                 let _ = self.lower_expr(*expr);
+                self.pop_drop_scope(None);
+                self.yield_depth = yield_depth;
                 self.slide = outer;
                 self.switch_to(slide);
             }

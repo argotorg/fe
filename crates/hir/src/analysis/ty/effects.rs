@@ -186,7 +186,7 @@ pub(crate) fn lower_effect_key_schema<'db>(
             let ty = normalize_from_assumptions(db, ty, scope, assumptions);
             ResolvedEffectKey::Type(TypeKeySchema { carrier: ty })
         }
-        Ok(PathRes::TyAlias(_, ty)) if ty.is_star_kind(db) => {
+        Ok(PathRes::TyAlias(_, ty, _)) if ty.is_star_kind(db) => {
             let schema = TypeKeySchema {
                 carrier: normalize_from_assumptions(db, ty, scope, assumptions),
             };

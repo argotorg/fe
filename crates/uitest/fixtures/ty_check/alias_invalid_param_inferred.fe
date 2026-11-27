@@ -1,0 +1,24 @@
+struct Flag {
+    value: bool,
+}
+
+// The parameter has no name.
+type Unnamed<const : usize> = Flag
+
+// The parameter has no type.
+type Untyped<const N> = Flag
+
+// The parameter's type is not found.
+type Mistyped<const N: Missing> = Flag
+
+fn unnamed() -> Flag {
+    Unnamed { value: true }
+}
+
+fn untyped() -> Flag {
+    Untyped { value: true }
+}
+
+fn mistyped() -> Flag {
+    Mistyped { value: true }
+}
