@@ -1392,6 +1392,31 @@ pub(crate) struct RouteRef<'db> {
     pub(crate) written: bool,
 }
 
+/// The goals along a route, after each of its steps, normalized through
+/// ordinary implementations in `scope`. A goal that cannot be derived is
+/// `None`.
+pub(crate) fn route_goals<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    route: &RouteRef<'db>,
+) -> Vec<Option<TraitInstId<'db>>> {
+    let steps = route
+        .path
+        .map(|path| path.steps(db).clone())
+        .unwrap_or_default();
+    (1..=steps.len())
+        .map(|length| {
+            let goal = component_path_goal(db, route.applied, &steps[..length])?;
+            Some(normalize_trait_inst_preserving_validity(
+                db,
+                goal,
+                scope,
+                PredicateListId::empty_list(db),
+            ))
+        })
+        .collect()
+}
+
 /// The implementation a dictionary selects at its root.
 fn selected_of<'db>(
     db: &'db dyn HirAnalysisDb,

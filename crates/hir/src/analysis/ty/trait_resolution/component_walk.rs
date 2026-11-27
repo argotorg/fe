@@ -73,7 +73,7 @@ fn normalize_below_concrete<'db>(
 /// `root`: the first step is taken from a slot, each later step from a member.
 /// Every reader of a component path derives its goals here, so that they agree
 /// with the walk. Header lowering never calls it.
-pub(crate) fn component_path_goal<'db>(
+pub(in crate::analysis::ty) fn component_path_goal<'db>(
     db: &'db dyn HirAnalysisDb,
     root: TraitInstId<'db>,
     steps: &[BoundStep<'db>],

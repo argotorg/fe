@@ -33,7 +33,7 @@ mod component_walk;
 pub(crate) mod constraint;
 mod table_solver;
 
-pub(crate) use component_walk::component_path_goal;
+pub(in crate::analysis::ty) use component_walk::component_path_goal;
 pub(crate) use table_solver::{
     answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
     match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
@@ -1245,10 +1245,7 @@ impl<'db> PredicateListId<'db> {
     /// with the derivations the walk followed. It is evidence an implementation
     /// proves, never an assumption, so only the projection of an implementation's
     /// own components reads it.
-    pub(crate) fn bound_walk_keeping_concrete(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db BoundWalk<'db> {
+    fn bound_walk_keeping_concrete(self, db: &'db dyn HirAnalysisDb) -> &'db BoundWalk<'db> {
         component_walk::bound_walk_keeping_concrete_query(db, self)
     }
 
@@ -1435,7 +1432,7 @@ fn is_concrete_bound<'db>(db: &'db dyn HirAnalysisDb, bound: TraitInstId<'db>) -
 /// Whether the bounds in `slots` can derive a concrete bound. A concrete
 /// child of a slot needs an associated type that the parent's own equalities
 /// make concrete, so a list in which no bound states an equality has none.
-pub(crate) fn has_concrete_components<'db>(
+pub(in crate::analysis::ty) fn has_concrete_components<'db>(
     db: &'db dyn HirAnalysisDb,
     slots: PredicateListId<'db>,
 ) -> bool {
@@ -1447,7 +1444,7 @@ pub(crate) fn has_concrete_components<'db>(
 
 /// A member of the walk of a list of slots that is not one of the slots.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub(crate) struct Component<'db> {
+pub(in crate::analysis::ty) struct Component<'db> {
     pub(crate) goal: TraitInstId<'db>,
     /// Whether the goal is concrete. Other members only carry a derivation
     /// that continues through them.
@@ -1470,7 +1467,7 @@ pub(crate) struct Component<'db> {
 /// projection commit's rule, applied through the steps that name it), never
 /// by selecting an implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub(crate) struct ComponentTable<'db> {
+pub(in crate::analysis::ty) struct ComponentTable<'db> {
     /// The number of slots; the walk position of `members[0]`.
     pub(crate) slots: u32,
     /// The members of the walk of the slots after the slots, in walk order.
@@ -1553,7 +1550,7 @@ pub(crate) fn same_identity<'db>(
 /// `B: Tr<A = Foo>`), with each member's canonical address, the slot and steps
 /// of its first derivation. Empty unless a slot states an equality.
 #[salsa::tracked(returns(ref), cycle_initial = component_table_cycle_initial)]
-pub(crate) fn concrete_components<'db>(
+pub(in crate::analysis::ty) fn concrete_components<'db>(
     db: &'db dyn HirAnalysisDb,
     slots: PredicateListId<'db>,
 ) -> ComponentTable<'db> {

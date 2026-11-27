@@ -3,12 +3,9 @@
 //! the implementation each route gives.
 
 use super::{
-    evidence::{Cut, Refusal, RouteRef},
+    evidence::{Cut, Refusal, RouteRef, route_goals},
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
-    trait_resolution::{
-        BoundStep, COMPONENT_DEPTH_LIMIT, PredicateListId, component_path_goal,
-        normalize_trait_inst_preserving_validity, same_identity,
-    },
+    trait_resolution::{BoundStep, COMPONENT_DEPTH_LIMIT, same_identity},
 };
 use crate::{analysis::HirAnalysisDb, hir_def::scope_graph::ScopeId};
 
@@ -78,31 +75,6 @@ pub(crate) fn implementation_label<'db>(
     }
 }
 
-/// The goals along a route, after each of its steps, normalized through
-/// ordinary implementations in `scope`. A goal that cannot be derived or
-/// normalized is left as derived.
-fn goals_along<'db>(
-    db: &'db dyn HirAnalysisDb,
-    scope: ScopeId<'db>,
-    route: &RouteRef<'db>,
-) -> Vec<Option<TraitInstId<'db>>> {
-    let steps = route
-        .path
-        .map(|path| path.steps(db).clone())
-        .unwrap_or_default();
-    (1..=steps.len())
-        .map(|length| {
-            let goal = component_path_goal(db, route.applied, &steps[..length])?;
-            Some(normalize_trait_inst_preserving_validity(
-                db,
-                goal,
-                scope,
-                PredicateListId::empty_list(db),
-            ))
-        })
-        .collect()
-}
-
 /// A route as printed: the bound it starts from, as the declaration states it,
 /// and the steps after it.
 fn route_text<'db>(
@@ -118,7 +90,7 @@ fn route_text<'db>(
             root
         };
     };
-    let goals = goals_along(db, scope, route);
+    let goals = route_goals(db, scope, route);
     let steps = path
         .steps(db)
         .iter()
@@ -167,7 +139,7 @@ fn passes_through<'db>(
     route: &RouteRef<'db>,
     goal: TraitInstId<'db>,
 ) -> bool {
-    let goals = goals_along(db, scope, route);
+    let goals = route_goals(db, scope, route);
     goals
         .iter()
         .take(goals.len().saturating_sub(1))
