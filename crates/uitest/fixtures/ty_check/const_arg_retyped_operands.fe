@@ -1,0 +1,29 @@
+const A: u8 = 200
+
+const B: u16 = 2
+
+const NEG: i8 = -1
+
+struct Holder<const N: usize> {}
+
+fn mixed_widths(_ h: Holder<{ A + B }>) {}
+
+fn neg_wraps_to_max(_ h: Holder<{ NEG + 0 }>) {}
+
+fn lit_out_of_range(_ h: Holder<{ A + 256 }>) {}
+
+fn narrow_overflow(_ h: Holder<{ A + A }>) {}
+
+fn mixed_generic<T>(_ h: Holder<{ A + B }>) {}
+
+const HUGE: u256 = 1 << 100
+
+fn lone_narrow(_ h: Holder<{ A }>) {}
+
+fn lone_negative(_ h: Holder<{ NEG }>) {}
+
+fn lone_too_large(_ h: Holder<{ HUGE }>) {}
+
+fn unbraced_negative(_ h: Holder<NEG>) {}
+
+fn unbraced_too_large(_ h: Holder<HUGE>) {}

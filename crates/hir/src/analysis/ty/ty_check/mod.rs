@@ -917,7 +917,10 @@ fn static_assert_bool_value<'db>(
 /// Whether a const body with these diagnostics can still be evaluated: it
 /// has none, or only integer literals whose type inference left open, which
 /// evaluation defaults.
-fn diags_allow_evaluation<'db>(db: &'db dyn HirAnalysisDb, diags: &[FuncBodyDiag<'db>]) -> bool {
+pub(crate) fn diags_allow_evaluation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diags: &[FuncBodyDiag<'db>],
+) -> bool {
     diags.iter().all(|diag| {
         matches!(
             diag,

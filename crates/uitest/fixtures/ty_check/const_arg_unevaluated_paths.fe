@@ -1,0 +1,33 @@
+mod m {
+    pub mod n {}
+
+    pub struct Ty {}
+
+    pub trait Tr {}
+
+    pub const C: usize = 4
+}
+
+struct Holder<const N: usize> {}
+
+fn module_length(_ a: [u8; m::n]) {}
+
+fn braced_module_length(_ a: [u8; { m::n }]) {}
+
+fn type_length(_ a: [u8; m::Ty]) {}
+
+fn braced_type_length(_ a: [u8; { m::Ty }]) {}
+
+fn trait_length(_ a: [u8; m::Tr]) {}
+
+fn braced_trait_length(_ a: [u8; { m::Tr }]) {}
+
+fn module_arg(_ h: Holder<{ m::n }>) {}
+
+fn constant_length(_ a: [u8; m::C]) {}
+
+fn braced_constant_length(_ a: [u8; { m::C }]) {}
+
+fn constant_arg(_ h: Holder<m::C>) {}
+
+fn braced_constant_arg(_ h: Holder<{ m::C }>) {}

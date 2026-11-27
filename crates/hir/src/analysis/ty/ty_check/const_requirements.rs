@@ -13,9 +13,13 @@ use crate::analysis::name_resolution::{
 use crate::analysis::ty::canonical::Canonicalized;
 use crate::analysis::ty::trait_resolution::{constraint::collect_constraints, mentions_ty};
 use crate::analysis::ty::{
-    const_ty::ConstBodyLowering,
+    const_ty::{ConstBodyLowering, ConstTyData, LoweringContext},
     subst::substitute_complete,
-    ty_lower::{CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_type_alias},
+    ty_error::diag_from_invalid_cause,
+    ty_lower::{
+        CompleteSubst, SubstError, lower_hir_ty_with_resolutions, lower_opt_const_body,
+        lower_type_alias,
+    },
 };
 use crate::hir_def::{GenericArg, GenericArgListId, ItemKind, UnOp, scope_graph::ScopeId};
 use crate::semantic::{constraints_for, param_env};
@@ -961,26 +965,59 @@ fn anon_const_position_check<'db>(
     body: Body<'db>,
     expected: TyId<'db>,
 ) -> RequirementCheck<'db> {
-    use crate::analysis::ty::const_ty::{ConstBodyFailure, const_body_failure};
     let owner = BodyOwner::AnonConstBody { body, expected };
     let (diags, typed) = infer_body(db, owner);
     if diags_allow_evaluation(db, diags) {
-        return check_body_requirements(db, owner, typed);
+        // Evaluation defaults an integer literal's open type, but a copied
+        // mutable access is an error all the same.
+        let mut check = check_body_requirements(db, owner, typed);
+        check.diags.extend(
+            diags
+                .iter()
+                .filter(|diag| matches!(diag, FuncBodyDiag::Body(BodyDiag::MutAccessCopied { .. })))
+                .cloned(),
+        );
+        return check;
     }
-    // A lone path to a constant is read as that constant, not checked as a
-    // body, so its failures are reported where the constant is.
+    // The type reports a failure only if the constant lowers to an invalid
+    // one whose error renders, never one of name resolution, of a path's
+    // segments or of its generic arguments; the parser reports a parse error.
+    // A constant that lowers to a valid, evaluated one although its body
+    // failed was read without inference: a lone path as what it names, an
+    // integer expression evaluated directly, either retyped to `expected`,
+    // and the type checks what it read. Then the body's other diagnostics
+    // are the type's or false. A qualified path that names no constant is
+    // left unevaluated for its uses to check, and nothing has validated the
+    // body: then they are all the position's.
     let position = body.scope().parent(db).unwrap_or(body.scope());
-    let mut check = RequirementCheck::default();
-    if !crate::analysis::ty::ty_lower::const_body_names_a_constant(
+    let lowered = lower_opt_const_body(
         db,
-        body,
+        Partial::Present(body),
         position,
         typed.assumptions(),
-    ) && let ConstBodyFailure::AtPosition(_) = const_body_failure(db, body, diags, typed)
-    {
-        check.diags = diags.clone();
+        &LoweringContext::new(),
+    )
+    .evaluate(db, Some(expected));
+    let owns_all = matches!(lowered.data(db), ConstTyData::UnEvaluated { .. })
+        || lowered.ty(db).invalid_cause(db).is_some_and(|cause| {
+            !matches!(cause, InvalidCause::ParseError)
+                && diag_from_invalid_cause(DynLazySpan::invalid(), &cause).is_none()
+        });
+    let diags = diags
+        .iter()
+        .filter(|diag| {
+            owns_all
+                || matches!(
+                    diag,
+                    FuncBodyDiag::NameRes(_) | FuncBodyDiag::Ty(TyDiagCollection::PathRes(_))
+                )
+        })
+        .cloned()
+        .collect();
+    RequirementCheck {
+        diags,
+        ..RequirementCheck::default()
     }
-    check
 }
 
 /// The anonymous constants written directly in `path`'s segments, such as

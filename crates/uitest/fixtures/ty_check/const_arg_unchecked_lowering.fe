@@ -1,0 +1,67 @@
+trait Need {}
+
+struct NoImpl {}
+
+struct Needy<T: Need> {}
+
+impl<T: Need> Needy<T> {
+    pub const N: usize = 4
+}
+
+struct Holder<const N: usize> {}
+
+fn bound_on_impl(_ h: Holder<{ Needy<NoImpl>::N }>) {}
+
+trait Pick<X> {
+    const N: usize
+}
+
+struct Picker {}
+
+impl<X> Pick<X> for Picker {
+    const N: usize = 4
+}
+
+fn unsat_arg_bound(_ h: Holder<{ <Picker as Pick<Needy<NoImpl>>>::N }>) {}
+
+fn unsat_arg_bound_sum(_ h: Holder<{ <Picker as Pick<Needy<NoImpl>>>::N + 0 }>) {}
+
+const NARROW: u8 = 4
+
+fn narrow_braced(_ h: Holder<{ NARROW }>) {}
+
+fn narrow(_ h: Holder<NARROW>) {}
+
+struct Bounded<const N: usize> where N > 0 {}
+
+trait Wide {
+    const K: u256
+}
+
+impl<const N: usize> Wide for Bounded<N> {
+    const K: u256 = 4
+}
+
+fn where_clause(_ a: [u8; { Bounded<0>::K }]) {}
+
+struct Cell { x: usize }
+
+impl Cell {
+    const fn get(mut self) -> mut usize { mut self.x }
+}
+
+fn copied_access(_ h: Holder<{
+    var b = Cell { x: 1 }
+    var y = b.get()
+    y
+}>) {}
+
+fn inner_mismatch_hides_undefined(_ h: Holder<{
+    let _: u8 = true
+    let _ = missing
+    4
+}>) {}
+
+const BAD: MissingTy = 4
+
+fn bad_declared_type(_ h: Holder<BAD>) {}

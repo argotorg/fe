@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_retyped_operands.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_retyped_operands.fe:17:26
+   │
+17 │ fn mixed_generic<T>(_ h: Holder<{ A + B }>) {}
+   │                          ^^^^^^^^^^^^^^^^^ expected `u8` type here, but `u16` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_retyped_operands.fe:25:24
+   │
+25 │ fn lone_too_large(_ h: Holder<{ HUGE }>) {}
+   │                        ^^^^^^^^^^^^^^^^ expected `usize` type here, but `u256` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_retyped_operands.fe:29:28
+   │
+29 │ fn unbraced_too_large(_ h: Holder<HUGE>) {}
+   │                            ^^^^^^^^^^^^ expected `usize` type here, but `u256` is given
+
+error[3-0087]: integer literal out of range
+  ┌─ const_arg_retyped_operands.fe:5:17
+  │
+5 │ const NEG: i8 = -1
+  │                 ^^ `-1` is not representable in `usize`

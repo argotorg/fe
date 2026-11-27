@@ -1,0 +1,40 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_dropped_by_alias.fe
+---
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_dropped_by_alias.fe:21:18
+   │
+21 │ fn mismatch(_ x: Drop<{ 1 + true }>) {}
+   │                  ^^^^^^^^^^^^^^^^^^ expected `{integer}` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_dropped_by_alias.fe:28:23
+   │
+28 │ fn lone_mismatch(_ x: Drop<{ FLAG }>) {}
+   │                       ^^^^^^^^^^^^^^ expected `usize` type here, but `bool` is given
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_dropped_by_alias.fe:34:33
+   │
+34 │ fn qualifier(_ h: Holder<{ Boxed<{ 1 + true }>::K }>) {}
+   │                                 ^^^^^^^^^^^^^^ expected `{integer}` type here, but `bool` is given
+
+error[3-0024]: non-const function call in const context
+   ┌─ const_arg_dropped_by_alias.fe:32:49
+   │
+32 │ fn evaluation(_ x: Drop<{ 1 / 0 }>, _ y: Drop<{ runtime() }>) {}
+   │                                                 ^^^^^^^^^ calls in const context must be `const fn`
+
+error[3-0025]: division by zero in const context
+   ┌─ const_arg_dropped_by_alias.fe:32:27
+   │
+32 │ fn evaluation(_ x: Drop<{ 1 / 0 }>, _ y: Drop<{ runtime() }>) {}
+   │                           ^^^^^ cannot divide by zero
+
+error[8-0012]: undefined variable
+   ┌─ const_arg_dropped_by_alias.fe:24:13
+   │
+24 │     let _ = missing
+   │             ^^^^^^^ undefined variable `missing`

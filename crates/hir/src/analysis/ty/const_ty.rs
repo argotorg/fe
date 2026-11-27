@@ -1425,29 +1425,18 @@ pub(crate) struct ValidatedUnEvaluatedConst<'db> {
     pub body_expected_ty: TyId<'db>,
 }
 
-/// How type lowering reports a constant whose body failed inference.
-pub(crate) enum ConstBodyFailure<'db> {
-    /// Inference succeeded.
-    None,
-    /// The type's error, which renders where the type is written.
-    AtType(InvalidCause<'db>),
-    /// The type's error renders nothing, because the failure has no
-    /// type-level form. An anonymous constant's position then reports the
-    /// body's own diagnostics (`check_declared_type_requirements`,
-    /// `check_body_requirements`); a named constant's declaration reports
-    /// them in any case.
-    AtPosition(InvalidCause<'db>),
-    /// Another check owns the failure: a trait impl's conformance check
-    /// reports its mismatched constants.
-    Elsewhere,
-}
-
+/// Why type lowering rejects a constant whose body failed inference, or
+/// `None` if inference succeeded. Only a type mismatch has a form at the
+/// type. The body's owner, a named constant's declaration or an anonymous
+/// constant's position, reports any other failure and a trait impl's
+/// conformance check its mismatched constants, so their cause is `Other`,
+/// which renders nothing; the parser reports a parse error.
 pub(crate) fn const_body_failure<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
     diags: &[FuncBodyDiag<'db>],
     typed_body: &super::ty_check::TypedBody<'db>,
-) -> ConstBodyFailure<'db> {
+) -> Option<InvalidCause<'db>> {
     if let Some((expected, given)) = diags.iter().find_map(|diag| match diag {
         FuncBodyDiag::Body(BodyDiag::TypeMismatch {
             expected, given, ..
@@ -1455,23 +1444,17 @@ pub(crate) fn const_body_failure<'db>(
         _ => None,
     }) {
         if matches!(body.scope().parent_item(db), Some(ItemKind::ImplTrait(_))) {
-            return ConstBodyFailure::Elsewhere;
+            return Some(InvalidCause::Other);
         }
-        return ConstBodyFailure::AtType(InvalidCause::ConstTyMismatch { expected, given });
+        return Some(InvalidCause::ConstTyMismatch { expected, given });
     }
-    if diags.is_empty() {
-        return ConstBodyFailure::None;
+    if super::ty_check::diags_allow_evaluation(db, diags) {
+        return None;
     }
-    let cause = const_body_result_cause(db, body, typed_body);
-    // The parser reports a parse error.
-    if matches!(cause, InvalidCause::ParseError)
-        || super::ty_error::diag_from_invalid_cause(crate::span::DynLazySpan::invalid(), &cause)
-            .is_some()
-    {
-        ConstBodyFailure::AtType(cause)
-    } else {
-        ConstBodyFailure::AtPosition(cause)
-    }
+    Some(match const_body_result_cause(db, body, typed_body) {
+        InvalidCause::ParseError => InvalidCause::ParseError,
+        _ => InvalidCause::Other,
+    })
 }
 
 fn const_body_result_cause<'db>(
@@ -1523,12 +1506,8 @@ pub(crate) fn validate_unevaluated_const_ty<'db>(
         },
     };
     let (diags, typed_body) = infer_body(db, owner);
-    match const_body_failure(db, *body, diags, typed_body) {
-        ConstBodyFailure::None => {}
-        ConstBodyFailure::AtType(cause) | ConstBodyFailure::AtPosition(cause) => {
-            return Err(cause);
-        }
-        ConstBodyFailure::Elsewhere => return Err(InvalidCause::Other),
+    if let Some(cause) = const_body_failure(db, *body, diags, typed_body) {
+        return Err(cause);
     }
     // A named constant's checked body also rejects an invalid declared type.
     if const_def.is_some_and(|const_def| const_def.ty(db).has_invalid(db)) {

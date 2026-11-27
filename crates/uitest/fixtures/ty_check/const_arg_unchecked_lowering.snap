@@ -1,0 +1,35 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_arg_unchecked_lowering.fe
+---
+error[2-0002]: `N` is not found
+   ┌─ const_arg_unchecked_lowering.fe:13:47
+   │
+13 │ fn bound_on_impl(_ h: Holder<{ Needy<NoImpl>::N }>) {}
+   │                                               ^ `N` is not found
+
+error[2-0002]: `MissingTy` is not found
+   ┌─ const_arg_unchecked_lowering.fe:65:12
+   │
+65 │ const BAD: MissingTy = 4
+   │            ^^^^^^^^^ `MissingTy` is not found
+
+error[3-0011]: given type doesn't match the expected const type
+   ┌─ const_arg_unchecked_lowering.fe:59:40
+   │
+59 │   fn inner_mismatch_hides_undefined(_ h: Holder<{
+   │ ╭────────────────────────────────────────^
+60 │ │     let _: u8 = true
+61 │ │     let _ = missing
+62 │ │     4
+63 │ │ }>) {}
+   │ ╰──^ expected `u8` type here, but `bool` is given
+
+warning[8-0121]: `var` copies a `mut` access
+   ┌─ const_arg_unchecked_lowering.fe:55:9
+   │
+55 │     var y = b.get()
+   │         ^ this binds a copy of the `usize`, so writes to it do not reach its place
+   │
+   = bind it with `let` to write through the access, or call the read projection to copy
