@@ -275,10 +275,22 @@ impl<'db> BoundEvidence<'db> {
             .list(db)
             .get(slot.index as usize)?;
         let mut proof = root;
+        let mut named = false;
         for (position, &step) in path.steps(db).iter().enumerate() {
             let goal = component_path_goal(db, root_goal, &path.steps(db)[..=position])?;
-            proof = project_step(db, proof, step, Some(goal), PredicateListId::empty_list(db))
-                .proof()?;
+            named |= proof.has_named_impl(db);
+            proof = match project_step(db, proof, step, Some(goal), PredicateListId::empty_list(db))
+            {
+                Projection::Proof(next) => next,
+                // A route that cannot be followed gives the dictionary that
+                // ordinary resolution gives, unless a dictionary on it holds
+                // a named implementation.
+                Projection::Unfollowed if !named => ordinary_proof(db, goal)?,
+                Projection::Pending
+                | Projection::Refused
+                | Projection::Conflict(_)
+                | Projection::Unfollowed => return None,
+            };
         }
         Some(proof)
     }
@@ -805,7 +817,7 @@ fn evidence_has_deferred<'db>(db: &'db dyn HirAnalysisDb, proof: EvidenceId<'db>
 
 /// Complete only the obligations explicitly retained by the producer.
 /// This runs at instance finalization, never in generic substitution/folding.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(copy), cycle_result = complete_deferred_evidence_cycle)]
 pub(crate) fn complete_deferred_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
@@ -911,7 +923,7 @@ pub(crate) fn proof_output_mismatch<'db>(
 /// Whether a dictionary holds a named implementation. The one test that decides
 /// whether a refusal that turns on the contents of dictionaries applies: a
 /// component that cannot be read from one (`Refusal::NoComponent`) or a walk
-/// that was cut (`Refusal::TooDeep`). Where no dictionary a check involves
+/// that was cut (`Refusal::Unfollowed`). Where no dictionary a check involves
 /// holds one, the program names no implementation the check could contradict,
 /// and the slot keeps the proof ordinary resolution gives it.
 fn names_impl<'db>(db: &'db dyn HirAnalysisDb, proof: Option<EvidenceId<'db>>) -> bool {
@@ -1354,11 +1366,38 @@ pub(crate) enum Refusal<'db> {
         a: TraitInstId<'db>,
         b: TraitInstId<'db>,
     },
-    /// The goal lies below the limit to which the bounds of associated types
-    /// are followed in the dictionary of `root`, and that dictionary holds a
-    /// named implementation: no value is given where the walk cannot say
-    /// whether they read it.
-    TooDeep { root: TraitInstId<'db> },
+    /// The goal is reached by a route that is not followed, from the dictionary
+    /// of `root`, and that dictionary holds a named implementation: no value is
+    /// given where the walk cannot say whether the route reads it.
+    Unfollowed { root: TraitInstId<'db>, cut: Cut },
+}
+
+impl Refusal<'_> {
+    /// A route that finds no dictionary or no component, or that cannot be
+    /// followed because it returns to a projection still being computed. It
+    /// refuses only where a dictionary on the route holds a named
+    /// implementation.
+    fn is_missing_route(&self) -> bool {
+        matches!(
+            self,
+            Self::NoComponent { .. }
+                | Self::Unfollowed {
+                    cut: Cut::Cycle,
+                    ..
+                }
+        )
+    }
+}
+
+/// Why a route is not followed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) enum Cut {
+    /// The walk of the bounds below the goal stopped at its depth or member
+    /// limit.
+    Depth,
+    /// The derivation returns to a projection that is still being computed (a
+    /// salsa cycle).
+    Cycle,
 }
 
 /// A goal that the dictionaries of a use or an instance refuse, with the reason.
@@ -1536,21 +1575,42 @@ pub(crate) enum Projection<'db> {
     /// The dictionaries a selected implementation holds for its conditions
     /// disagree on the component, for the reason given.
     Conflict(Refusal<'db>),
+    /// The derivation returns to a projection that is still being computed (a
+    /// salsa cycle): the route cannot be followed.
+    Unfollowed,
 }
 
 impl<'db> Projection<'db> {
     pub(crate) fn proof(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proof(proof) => Some(proof),
-            Self::Pending | Self::Refused | Self::Conflict(_) => None,
+            Self::Pending | Self::Refused | Self::Conflict(_) | Self::Unfollowed => None,
         }
     }
+}
+
+/// The proof that ordinary resolution gives `goal`, for a route that cannot be
+/// followed and holds no named implementation. An open goal has none: it is
+/// proved where its parameters are known.
+fn ordinary_proof<'db>(
+    db: &'db dyn HirAnalysisDb,
+    goal: TraitInstId<'db>,
+) -> Option<EvidenceId<'db>> {
+    if !is_closed_goal(db, goal) {
+        return None;
+    }
+    let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+        db,
+        goal.def(db).scope().top_mod(db).ingot(db),
+        goal,
+    );
+    prove(db, TraitSolveCx::new(db, scope), goal)
 }
 
 /// Whether two proofs are one dictionary: the same proof, or the same
 /// implementation at the same arguments (equal after normalization) with the
 /// same dictionary for each condition.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(copy), cycle_result = same_dictionary_cycle)]
 fn same_dictionary<'db>(
     db: &'db dyn HirAnalysisDb,
     a: EvidenceId<'db>,
@@ -1625,6 +1685,8 @@ enum ImplComponent {
     Slot(u32),
     /// A concrete component of the conditions' dictionaries.
     Member(u32),
+    /// The question returns to itself (a salsa cycle): not answered.
+    Unfollowed,
 }
 
 /// A condition whose bound (or a bound it implies, including a bound an
@@ -1634,7 +1696,7 @@ enum ImplComponent {
 /// mode; the reverse does not answer it. A closed one is answered by the
 /// candidate of the same trait and arguments (`same_identity`), the rule by
 /// which a body's goal reads a component, so that both read one dictionary.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(copy), cycle_result = impl_component_cycle)]
 fn impl_component<'db>(
     db: &'db dyn HirAnalysisDb,
     selected: ImplementorId<'db>,
@@ -1670,7 +1732,7 @@ fn impl_component<'db>(
 /// condition that states it or proved where the implementation is declared. A
 /// compiler-provided contract implementation answers where the contract is
 /// declared; any other compiler-provided implementation implies nothing.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked(returns(copy), cycle_result = project_step_cycle)]
 pub(crate) fn project_step<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
@@ -1749,6 +1811,20 @@ pub(crate) fn project_step<'db>(
     // answers it.
     let received = received_conditions(db, proof, assumptions);
     let named = proof.has_named_impl(db);
+    let component = impl_component(db, *selected, declared);
+    // The derivation returns to a projection that is still being computed. A
+    // dictionary that holds a named implementation is not read. Otherwise the
+    // goal has the dictionary that ordinary resolution gives it, except for
+    // an open bound that a condition answers, which the use leaves pending.
+    if received.unfollowed || component == ImplComponent::Unfollowed {
+        if !named
+            && !matches!(component, ImplComponent::Slot(_))
+            && let Some(ordinary) = goal.and_then(|goal| ordinary_proof(db, goal))
+        {
+            return Projection::Proof(ordinary);
+        }
+        return Projection::Unfollowed;
+    }
     let read = |value: Option<EvidenceId<'db>>, pending: bool| match value {
         Some(value) => Projection::Proof(value),
         None => match received.refused.first() {
@@ -1757,7 +1833,8 @@ pub(crate) fn project_step<'db>(
             _ => Projection::Refused,
         },
     };
-    match impl_component(db, *selected, declared) {
+    match component {
+        ImplComponent::Unfollowed => Projection::Unfollowed,
         ImplComponent::Slot(slot) => read(
             received.entries.get(slot as usize).copied().flatten(),
             received
@@ -1776,10 +1853,15 @@ pub(crate) fn project_step<'db>(
             // refused.
             if named
                 && is_closed_goal(db, declared)
-                && received
-                    .refused
-                    .iter()
-                    .any(|refused| matches!(refused.reason, Refusal::TooDeep { .. }))
+                && received.refused.iter().any(|refused| {
+                    matches!(
+                        refused.reason,
+                        Refusal::Unfollowed {
+                            cut: Cut::Depth,
+                            ..
+                        }
+                    )
+                })
             {
                 return Projection::Refused;
             }
@@ -2130,7 +2212,13 @@ fn prove_selected<'db>(
         // dictionaries. Validate their shared implied slots here, while this
         // producer owns the selection, before any body could reconstruct a
         // missing slot with an ordinary proof.
-        if proof.has_named_impl(db) {
+        //
+        // A walk that returned to a projection still being computed
+        // (`Received::unfollowed`) does not make the proof unavailable: the
+        // instance that holds the proof decides, through its projections.
+        if proof.has_named_impl(db)
+            && !received_conditions(db, proof, solve_cx.assumptions()).unfollowed
+        {
             let supplied = condition_evidence(db, proof, solve_cx.assumptions());
             let count = resolved
                 .selected()
@@ -2565,6 +2653,10 @@ pub(crate) struct Received<'db> {
     pub(crate) pending: Vec<bool>,
     /// The goals whose routes refuse the body, the first found first.
     pub(crate) refused: Vec<RefusedGoal<'db>>,
+    /// The derivation returned to a projection that was still being computed (a
+    /// salsa cycle): nothing was read, and the dictionaries that hold this one
+    /// do not follow it. False except in the fallback of the cycle.
+    pub(crate) unfollowed: bool,
 }
 
 impl<'db> Received<'db> {
@@ -2574,6 +2666,7 @@ impl<'db> Received<'db> {
             members: Vec::new(),
             pending: Vec::new(),
             refused: Vec::new(),
+            unfollowed: false,
         }
     }
 }
@@ -2611,7 +2704,7 @@ pub(crate) fn received<'db>(
         let (first, second) = match refused.reason {
             Refusal::Differs { a, b } => (print(a), print(b)),
             Refusal::NoComponent { root } => (root.map(print).unwrap_or_default(), String::new()),
-            Refusal::TooDeep { root } => (print(root), String::new()),
+            Refusal::Unfollowed { root, .. } => (print(root), String::new()),
         };
         (print(refused.goal), first, second)
     });
@@ -2675,14 +2768,24 @@ fn received_in_walk_order<'db>(
     // an assumption of the caller is a placeholder, not a dictionary.
     let differ =
         |a: EvidenceId<'db>, b: EvidenceId<'db>| a.is_closed(db) && b.is_closed(db) && !agree(a, b);
-    // A closed dictionary has no pending slot: it projects or refuses.
-    let project = |proof, step, index: usize| {
-        let projection = project_step(db, proof, step, Some(goal_at(index)), assumptions);
-        debug_assert_ne!(projection, Projection::Pending);
-        projection.proof()
-    };
     let no_component = |parent: usize| Refusal::NoComponent {
         root: Some(goal_at(parent)),
+    };
+    // A route that finds no component, or that cannot be followed.
+    let missing_route = |parent: usize, projection: Projection<'db>| match projection {
+        Projection::Unfollowed => Refusal::Unfollowed {
+            root: goal_at(parent),
+            cut: Cut::Cycle,
+        },
+        _ => no_component(parent),
+    };
+    // A closed dictionary has no pending slot: it projects or refuses.
+    let project = |proof, step, index: usize, parent: usize| {
+        let projection = project_step(db, proof, step, Some(goal_at(index)), assumptions);
+        debug_assert_ne!(projection, Projection::Pending);
+        projection
+            .proof()
+            .ok_or_else(|| missing_route(parent, projection))
     };
     let mut entries: Vec<Option<EvidenceId<'db>>> = vec![None; count];
     let mut pending = vec![false; count];
@@ -2736,7 +2839,8 @@ fn received_in_walk_order<'db>(
                     }
                     continue;
                 };
-                match project_step(db, offered, edge.step, Some(goal), assumptions) {
+                let projection = project_step(db, offered, edge.step, Some(goal), assumptions);
+                match projection {
                     Projection::Proof(projected) => match answer {
                         Some(previous) if differ(previous, projected) => {
                             refusal = Some(Refusal::Differs {
@@ -2750,10 +2854,10 @@ fn received_in_walk_order<'db>(
                     // The dictionary is an assumption of the caller that has
                     // no slot for the goal yet: the instance supplies it.
                     Projection::Pending => {}
-                    Projection::Refused => {
+                    Projection::Refused | Projection::Unfollowed => {
                         blocked = true;
                         if names_impl(db, Some(offered)) || names_impl(db, own[index]) {
-                            refusal = Some(no_component(parent));
+                            refusal = Some(missing_route(parent, projection));
                         }
                     }
                     Projection::Conflict(reason) => refusal = Some(reason),
@@ -2785,8 +2889,9 @@ fn received_in_walk_order<'db>(
             // A closed parent with no dictionary cannot be compared with the
             // other parents: the slot is refused rather than answered by the
             // parents that have one.
-            match entries[parent].and_then(|proof| project(proof, edge.step, index)) {
-                Some(component) => candidates.push((parent, component)),
+            match entries[parent].map(|proof| project(proof, edge.step, index, parent)) {
+                Some(Ok(component)) => candidates.push((parent, component)),
+                Some(Err(reason)) => refusal = refusal.or(Some(reason)),
                 None => refusal = refusal.or(Some(no_component(parent))),
             }
         }
@@ -2820,19 +2925,19 @@ fn received_in_walk_order<'db>(
                 .filter_map(|edge| {
                     let parent = edge.parent as usize;
                     let proof = own[parent].filter(|proof| proof.is_closed(db))?;
-                    closed[parent].then(|| (parent, project(proof, edge.step, index)))
+                    closed[parent].then(|| (parent, project(proof, edge.step, index, parent)))
                 });
             match later.next() {
                 None => entries[index] = prove(db, cx, goal_at(index)),
-                Some((parent, None)) => refusal = Some(no_component(parent)),
-                Some((first_parent, Some(first))) => {
+                Some((_, Err(reason))) => refusal = Some(reason),
+                Some((first_parent, Ok(first))) => {
                     refusal = later.find_map(|(parent, other)| match other {
-                        None => Some(no_component(parent)),
-                        Some(other) if differ(first, other) => Some(Refusal::Differs {
+                        Err(reason) => Some(reason),
+                        Ok(other) if differ(first, other) => Some(Refusal::Differs {
                             a: goal_at(first_parent),
                             b: goal_at(parent),
                         }),
-                        Some(_) => None,
+                        Ok(_) => None,
                     });
                     entries[index] = refusal.is_none().then_some(first);
                 }
@@ -2844,7 +2949,7 @@ fn received_in_walk_order<'db>(
         // that implies it. Otherwise the slot keeps the proof it would have
         // had without implied-bound agreement, and a goal no proof answers is
         // reported where it is used.
-        let ordinary = matches!(refusal, Some(Refusal::NoComponent { .. })) && {
+        let ordinary = refusal.is_some_and(|reason| reason.is_missing_route()) && {
             let implying = edges
                 .iter()
                 .filter(|edge| edge.child as usize == index)
@@ -2883,6 +2988,7 @@ fn received_in_walk_order<'db>(
             members: Vec::new(),
             pending,
             refused,
+            unfollowed: false,
         };
     }
     // The dictionary a slot offers to the bounds it implies.
@@ -2905,22 +3011,22 @@ fn received_in_walk_order<'db>(
             let (Some(source), Some(entry)) = (source_of(parent, &entries), entries[child]) else {
                 continue;
             };
-            let reason =
-                match project_step(db, source, edge.step, Some(goal_at(child)), assumptions) {
-                    Projection::Refused
-                        if names_impl(db, Some(source)) || names_impl(db, Some(entry)) =>
-                    {
-                        Some(no_component(parent))
-                    }
-                    Projection::Proof(component) if differ(component, entry) => {
-                        Some(Refusal::Differs {
-                            a: goal_at(parent),
-                            b: goal_at(child),
-                        })
-                    }
-                    Projection::Conflict(reason) => Some(reason),
-                    _ => None,
-                };
+            let projection = project_step(db, source, edge.step, Some(goal_at(child)), assumptions);
+            let reason = match projection {
+                Projection::Refused | Projection::Unfollowed
+                    if names_impl(db, Some(source)) || names_impl(db, Some(entry)) =>
+                {
+                    Some(missing_route(parent, projection))
+                }
+                Projection::Proof(component) if differ(component, entry) => {
+                    Some(Refusal::Differs {
+                        a: goal_at(parent),
+                        b: goal_at(child),
+                    })
+                }
+                Projection::Conflict(reason) => Some(reason),
+                _ => None,
+            };
             if let Some(reason) = reason {
                 entries[child] = None;
                 refuse_goal(&mut refused, goal_at(child), reason);
@@ -2964,7 +3070,7 @@ fn received_in_walk_order<'db>(
         // A derivation that finds no dictionary or no component refuses only a
         // member read from a dictionary that holds a named implementation.
         let applies = |member: &Component<'db>, reason: &Refusal<'db>| {
-            !matches!(reason, Refusal::NoComponent { .. }) || roots(member).into_iter().any(named)
+            !reason.is_missing_route() || roots(member).into_iter().any(named)
         };
         // The dictionary a derivation entering `member` from `parent` gives.
         let derive = |values: &[Option<EvidenceId<'db>>],
@@ -2996,6 +3102,10 @@ fn received_in_walk_order<'db>(
                 Projection::Pending => Ok(None),
                 Projection::Refused => Err(Refusal::NoComponent {
                     root: Some(root_goal(parent)),
+                }),
+                Projection::Unfollowed => Err(Refusal::Unfollowed {
+                    root: root_goal(parent),
+                    cut: Cut::Cycle,
                 }),
                 Projection::Conflict(reason) => Err(reason),
             }
@@ -3088,8 +3198,9 @@ fn received_in_walk_order<'db>(
                 refuse_goal(
                     &mut refused,
                     member.goal,
-                    Refusal::TooDeep {
+                    Refusal::Unfollowed {
                         root: goal_at(root),
+                        cut: Cut::Depth,
                     },
                 );
             }
@@ -3101,6 +3212,7 @@ fn received_in_walk_order<'db>(
             members: values,
             pending,
             refused,
+            unfollowed: false,
         };
     }
     // Pass 3: one dictionary for each goal. The slots and the members of one
@@ -3175,6 +3287,7 @@ fn received_in_walk_order<'db>(
         members: values,
         pending,
         refused,
+        unfollowed: false,
     }
 }
 
@@ -3183,7 +3296,7 @@ fn received_in_walk_order<'db>(
 /// implementation's own proofs of its conditions (`conds`) are what it
 /// received. The same agreement rule holds one level down: each of its
 /// conditions, and the bounds they imply, give one dictionary to a goal.
-#[salsa::tracked(returns(ref))]
+#[salsa::tracked(returns(ref), cycle_result = received_conditions_cycle)]
 pub(crate) fn received_conditions<'db>(
     db: &'db dyn HirAnalysisDb,
     proof: EvidenceId<'db>,
@@ -3319,6 +3432,69 @@ impl<'db> UseEvidence<'db> {
                     .and_then(|bounds| bounds.entries.unresolved_component(db))
             })
     }
+}
+
+// Cycle recovery of the agreement recursion. A projection reads the dictionaries
+// an implementation received, which are projections of the dictionaries it
+// holds, and an associated type that grows the type reaches a goal whose
+// derivation passes through the same query again. Each query on that loop
+// returns an immediate fallback (`FallbackImmediate`, which gives every
+// participant of the cycle the fallback, so the result does not depend on
+// which query is reached first): the route cannot be followed. A reader
+// refuses only where a dictionary on the route holds a named implementation,
+// and otherwise takes the proof that ordinary resolution gives.
+
+/// A proof whose completion returns to itself is left as it is.
+fn complete_deferred_evidence_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    proof: EvidenceId<'db>,
+) -> Option<EvidenceId<'db>> {
+    Some(proof)
+}
+
+fn project_step_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _proof: EvidenceId<'db>,
+    _step: BoundStep<'db>,
+    _goal: Option<TraitInstId<'db>>,
+    _assumptions: PredicateListId<'db>,
+) -> Projection<'db> {
+    Projection::Unfollowed
+}
+
+fn received_conditions_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _proof: EvidenceId<'db>,
+    _assumptions: PredicateListId<'db>,
+) -> Received<'db> {
+    Received {
+        unfollowed: true,
+        ..Received::none()
+    }
+}
+
+fn impl_component_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _selected: ImplementorId<'db>,
+    _declared: TraitInstId<'db>,
+) -> ImplComponent {
+    ImplComponent::Unfollowed
+}
+
+/// Two dictionaries that cannot be compared are two dictionaries: `agree`
+/// still accepts them when neither holds a named implementation.
+fn same_dictionary_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _a: EvidenceId<'db>,
+    _b: EvidenceId<'db>,
+    _assumptions: PredicateListId<'db>,
+) -> bool {
+    false
 }
 
 fn prove_cycle_initial<'db>(

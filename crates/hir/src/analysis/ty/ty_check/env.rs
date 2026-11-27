@@ -1771,7 +1771,7 @@ impl<'db> TyCheckEnv<'db> {
                     },
                 ),
             ),
-            Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
+            Refusal::NoComponent { .. } | Refusal::Unfollowed { .. } => {
                 failed_proof(refused.goal, span)
             }
         };

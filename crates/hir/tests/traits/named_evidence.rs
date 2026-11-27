@@ -5650,3 +5650,130 @@ const fn demand() -> u256 {{ relay<V<Foo>, V<Bar>>() }}
     assert!(foo_first.starts_with("`Bar: Show`"), "{foo_first}");
     assert!(foo_first.contains("also `Foo: Show`"), "{foo_first}");
 }
+
+// A route that returns to a projection that is still being computed cannot be
+// followed (a salsa cycle in the evidence recursion). It refuses only where a
+// dictionary on it selects a named implementation, and it never panics.
+fn access_report(source: &str) -> String {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("named_cycle.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let mut passes = AnalysisPassManager::new();
+    passes.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+    format_diagnostics(&db, &passes.run_on_module(&db, module))
+}
+
+fn checked_clean(source: &str) {
+    let codes = diagnostics(source);
+    assert!(codes.is_empty(), "{codes:?}");
+    let report = access_report(source);
+    assert!(report.trim().is_empty(), "{report}");
+}
+
+const GROWING_ONE: &str = r#"
+pub trait Br { type A: Br
+    type B: Br
+    fn v() -> u256 }
+pub struct Leaf {}
+impl Br for Leaf { type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 1 } }
+impl Br for Leaf as LN { type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 2 } }
+pub struct N1<T> {}
+pub trait Hb { type O: Br }
+pub struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = N1<T> }
+fn g<H: Hb<O = N1<Leaf>>>() -> u256 { <H::O as Br>::v() }
+impl<T: Br> Br for N1<T> { type A = N1<N1<T>>
+    type B = T
+    fn v() -> u256 { T::v() } }
+"#;
+
+const GROWING_TWO: &str = r#"
+pub trait Br { type A: Br
+    type B: Br
+    fn v() -> u256 }
+pub struct Leaf {}
+impl Br for Leaf { type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 1 } }
+impl Br for Leaf as LN { type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 2 } }
+pub struct N1<T> {}
+pub struct N2<T> {}
+impl<T: Br> Br for N1<T> { type A = N1<N1<T>>
+    type B = N2<N1<T>>
+    fn v() -> u256 { T::v() } }
+impl<T: Br> Br for N2<T> { type A = N1<N2<T>>
+    type B = N2<N2<T>>
+    fn v() -> u256 { T::v() } }
+pub trait Hb { type O: Br }
+pub struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = N1<T> }
+fn g<H: Hb<O = N1<Leaf>>>() -> u256 { <H::O as Br>::v() }
+"#;
+
+#[test]
+fn evidence_cycle_at_instance_admission_is_a_refusal() {
+    let source = format!("{GROWING_ONE}\nfn named() -> u256 {{ with (LN) {{ g<Bx<Leaf>>() }} }}\n");
+    let report = access_report(&source);
+    assert!(report.contains("error[16-0019]"), "{report}");
+}
+
+#[test]
+fn evidence_cycle_with_several_growing_types_is_a_refusal() {
+    let source = format!(
+        "{GROWING_TWO}\nfn named() -> u256 {{ with (LN) {{ g<Bx<Leaf>>() }} }}\nfn plain() -> u256 {{ g<Bx<Leaf>>() }}\n"
+    );
+    let report = access_report(&source);
+    assert!(report.contains("error[16-0019]"), "{report}");
+}
+
+// The generic body reads closed goals of the growing implementation under a
+// choice (the entrance through type checking). The result is an acceptance or
+// a refusal for the cycle alone; it is never a panic.
+#[test]
+fn evidence_cycle_during_body_checking_does_not_panic() {
+    let source = format!(
+        "{GROWING_ONE}\nfn g3<H: Hb<O = N1<Leaf>>>() -> u256 {{ with (LN) {{ <N1<N1<Leaf>> as Br>::v() + <N1<Leaf> as Br>::v() }} }}\nfn go() -> u256 {{ g3<Bx<Leaf>>() }}\n"
+    );
+    let codes = diagnostics(&source);
+    assert!(codes.is_empty(), "{codes:?}");
+    let report = access_report(&source);
+    assert!(
+        report.trim().is_empty() || report.contains("error[16-0019]"),
+        "{report}"
+    );
+}
+
+// The entrance through the use: a concrete use under a choice of a callee whose
+// bound is pinned through the growing implementation.
+#[test]
+fn evidence_cycle_at_the_use_does_not_panic() {
+    let source = format!(
+        "{GROWING_ONE}\nfn g4<T: Br<A = N1<N1<Leaf>>, B = Leaf>, U: Hb<O = T>>() -> u256 {{ T::v() + <T::A as Br>::v() }}\nfn go() -> u256 {{ with (LN) {{ g4<N1<Leaf>, Bx<Leaf>>() }} }}\n"
+    );
+    let report = access_report(&source);
+    assert!(report.contains("error[16-0019]"), "{report}");
+}
+
+#[test]
+fn evidence_cycle_without_a_choice_is_accepted() {
+    let source = format!("{GROWING_ONE}\nfn plain() -> u256 {{ g<Bx<Leaf>>() }}\n");
+    checked_clean(&source);
+}
+
+// No named implementation is declared and no choice is written: the program
+// uses nothing of the feature, and it is accepted.
+#[test]
+fn evidence_cycle_without_any_named_implementation_is_accepted() {
+    let source = format!(
+        "{}\nfn plain() -> u256 {{ g<Bx<Leaf>>() }}\n",
+        GROWING_TWO.replace("impl Br for Leaf as LN { type A = Leaf\n    type B = Leaf\n    fn v() -> u256 { 2 } }\n", "")
+    );
+    assert!(!source.contains("as LN"), "{source}");
+    checked_clean(&source);
+}

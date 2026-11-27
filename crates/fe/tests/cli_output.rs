@@ -6239,6 +6239,7 @@ fn concrete_component_runtime() {
         "concrete_component_closure_item.fe",
         "concrete_component_loop_plan.fe",
         "concrete_component_entry_codec.fe",
+        "concrete_component_growing_associated_types.fe",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")

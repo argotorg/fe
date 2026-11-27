@@ -31,7 +31,7 @@ use crate::{
                 rows::{RowExpansion, RowKey, expand_rows},
             },
             evidence::{
-                EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
+                Cut, EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
             },
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
@@ -2379,8 +2379,18 @@ impl<'db> SemanticInstance<'db> {
                 Refusal::NoComponent { root: None } => {
                     format!("`{goal}`: no dictionary supplies it")
                 }
-                Refusal::TooDeep { root } => format!(
+                Refusal::Unfollowed {
+                    root,
+                    cut: Cut::Depth,
+                } => format!(
                     "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
+                    root.pretty_print(db, true)
+                ),
+                Refusal::Unfollowed {
+                    root,
+                    cut: Cut::Cycle,
+                } => format!(
+                    "`{goal}`: a derivation from the dictionary of `{}` returns to a dictionary that is still being formed",
                     root.pretty_print(db, true)
                 ),
             };
