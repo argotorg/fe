@@ -2260,11 +2260,7 @@ impl<'db> TyChecker<'db> {
                 self.env
                     .generation_demands
                     .refuse(key, "scoped derive provider path is not visible");
-                if !matches!(
-                    value.data(self.db, body),
-                    Partial::Present(Expr::RecordInit(..))
-                ) && let Some(name) = scope.name(self.db)
-                {
+                if let Some(name) = scope.name(self.db) {
                     self.push_diag(PathResDiag::Invisible(
                         value.span(body).into(),
                         name,
@@ -2277,8 +2273,7 @@ impl<'db> TyChecker<'db> {
             }
         }
         // The types written in the operand's path are checked where they are
-        // written, as in any other path. A record literal's path is checked
-        // with the literal.
+        // written, as in any other path.
         if let Partial::Present(Expr::Path(Partial::Present(path))) = value.data(self.db, body) {
             let diags = super::super::ty_error::path_generic_arg_diags(
                 self.db,
@@ -2318,20 +2313,6 @@ impl<'db> TyChecker<'db> {
                 return true;
             }
         };
-        if let Partial::Present(Expr::RecordInit(_, fields)) = value.data(self.db, body)
-            && !fields.is_empty()
-        {
-            let message = "scoped derive provider literals must have no fields; provider values are not evaluated";
-            self.env.generation_demands.refuse(key, message);
-            self.push_diag(BodyDiag::CompileTimePhase {
-                primary: value.span(body).into(),
-                message: message.into(),
-                label: BodyDiag::REFUSED_OPENING_LABEL,
-            });
-            self.env.named_impl_operands.insert(value);
-            self.env.type_expr(value, ExprProp::invalid(self.db));
-            return true;
-        }
         let opening = ProviderOpening::new(self.db, key, provider_ty, hints, self.env.scope());
         self.env.provider_openings.push(opening);
         self.env.choices = Some(ChosenImpls::push_provider(
@@ -2886,42 +2867,9 @@ impl<'db> TyChecker<'db> {
                 }
             }
             let value_prop = self.check_expr_unknown(binding.value);
-            // A record literal is also a spelling of a compile-time provider.
-            // Its type is owned by ordinary expression checking, not re-resolved
-            // from the constructor's source spelling.
-            let provider_ty = self.table.fold_ty(self.db, value_prop.ty);
-            if binding.key_path.is_none()
-                && let Partial::Present(Expr::RecordInit(path, _)) =
-                    binding.value.data(self.db, self.body())
-            {
-                let (resolved_ty, alias_scope) = path
-                    .to_opt()
-                    .and_then(|path| {
-                        crate::analysis::name_resolution::resolve_path(
-                            self.db,
-                            path,
-                            self.env.scope(),
-                            self.env.assumptions(),
-                            false,
-                        )
-                        .ok()
-                    })
-                    .map_or((None, None), |resolved| match resolved {
-                        crate::analysis::name_resolution::PathRes::Ty(ty) => (Some(ty), None),
-                        crate::analysis::name_resolution::PathRes::TyAlias(alias, ty) => {
-                            (Some(ty), Some(alias.alias.scope()))
-                        }
-                        _ => (None, None),
-                    });
-                let provider_ty = if provider_ty.has_invalid(self.db) {
-                    resolved_ty.unwrap_or(provider_ty)
-                } else {
-                    provider_ty
-                };
-                if self.try_open_derive_provider(binding.value, provider_ty, alias_scope) {
-                    continue;
-                }
-            }
+            // An operand that is not a type path is an ordinary value, whether
+            // or not its type implements `Derive`: only a type path names a
+            // derive provider.
             // A provider confers authority over its place for the body; it
             // opens no access.
             self.consume_access(binding.value);
