@@ -95,6 +95,25 @@ This also applies when the supertrait is explicitly repeated: a call under
 selects `Wholesale`. Choosing either silently would make dispatch depend on
 bound order. Distinct, explicitly qualified evidence paths are deferred.
 
+Agreement is between routes to one goal of the callee as its signature
+declares it. Two bounds that the signature does not identify are two goals,
+even when a call makes their types equal, and may receive different
+implementations:
+
+```fe
+trait Holder { type Out: Pick }
+impl Holder for Fixed { type Out = Item }
+fn target<H: Holder<Out = Item>, T: Pick>() -> u256 {
+    <H::Out as Pick>::value() * 10 + T::value()
+}
+```
+
+Here `Pick::value` is 1 for `Item` and 2 for the named implementation `Alt`.
+`with (Alt) { target<Fixed, Item>() }` returns 12: `T: Pick` is chosen at
+the call, and the `Item: Pick` that `H` implies is fixed where
+`impl Holder for Fixed` is declared. Written as `H: Holder<Out = T>`, the
+signature makes the two one goal, and the same call is rejected.
+
 The same agreement applies transitively through implementation conditions,
 including private prerequisites of an implementation whose public trait has
 no supertraits. Calls, implementation methods and associated-constant bodies
@@ -105,6 +124,22 @@ A bound that a trait declares on an associated type, such as `type Cursor: Copy`
 is implied in the same way: its dictionary comes from the proof of the
 implementation that defines the type, made where that implementation is
 declared, with the actual dictionaries of its conditions.
+
+A dictionary also holds the dictionaries of the bounds on its own associated
+types, proved where its implementation is declared. When an associated type
+leads back to the same bound, that bound is reached twice. With
+`trait Chain { type Next: Chain }` and `impl Chain for End as E2 { type Next = End }`,
+a function `fn g<H: Holder<Out = End>>()` called as `with (E2) { g<Bx<End>>() }`
+receives `End: Chain` both as `E2` and as the ordinary implementation that `E2`
+holds for `Next`, and the call is rejected. Receiving the bound through a type
+parameter, as `fn f<T: Chain>()` called as `with (E2) { f<End>() }`, is accepted
+and uses `E2`.
+
+Bounds on associated types are followed for four levels below a bound that an
+equality makes concrete, each level fixed by the implementation that defines
+it. If a dictionary that holds a named implementation has bounds below that
+limit, the call is rejected, even when only one route reaches them. A level
+whose bounds lead only to bounds already reached is followed completely.
 
 ## Opening the ordinary implementation
 

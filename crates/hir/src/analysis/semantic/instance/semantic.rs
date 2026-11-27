@@ -32,9 +32,7 @@ use crate::{
                 EffectKeyKind, instantiate_trait_effect_key, place_effect_provider_param_index_map,
                 rows::{RowExpansion, RowKey, expand_rows},
             },
-            evidence::{
-                EvidenceId, EvidenceList, Refusal, instance_evidence, proof_output_mismatch,
-            },
+            evidence::{EvidenceId, EvidenceList, instance_evidence, proof_output_mismatch},
             fold::{TyFoldable, TyFolder},
             instantiate_trait_self,
             normalize::{
@@ -45,15 +43,15 @@ use crate::{
                 AddressSpace, ProviderKind, RootProviderRegistration, RootProviderScope,
                 provider_semantics_for_specialized_call,
             },
+            route_text::{implementation_label, refusal_label},
             shape::Shape,
             subst::substitute_complete,
             trait_def::{
-                ImplementorId, ImplementorOrigin, MethodArgMapError, NamedOutputMismatch,
-                ResolvedImplInstance, TraitInstId,
+                ImplementorOrigin, MethodArgMapError, NamedOutputMismatch, ResolvedImplInstance,
+                TraitInstId,
             },
             trait_resolution::{
-                COMPONENT_DEPTH_LIMIT, GoalSatisfiability, PredicateListId, TraitSolveCx,
-                is_goal_satisfiable,
+                GoalSatisfiability, PredicateListId, TraitSolveCx, is_goal_satisfiable,
             },
             ty_check::{
                 BodyOwner, Callable, ConstIntrinsicKind, EffectArg, EffectArgTarget,
@@ -1044,69 +1042,6 @@ fn callee_output_disagreement_cycle_initial<'db>(
     None
 }
 
-/// The header of an implementation as written, `impl<T: Marker> Foo for T`:
-/// its parameters with the bounds on them, then the other bounds in a `where`
-/// clause. The trait is printed without the associated types the
-/// implementation defines.
-fn implementation_header<'db>(
-    db: &'db dyn HirAnalysisDb,
-    implementor: ImplementorId<'db>,
-) -> String {
-    let params = implementor.params(db);
-    let bounds = implementor.constraints(db).list(db);
-    let generics = params
-        .iter()
-        .map(|&param| {
-            let name = param.pretty_print(db).to_string();
-            let own = bounds
-                .iter()
-                .filter(|bound| bound.self_ty(db) == param)
-                .map(|bound| bound.pretty_print(db, false))
-                .collect::<Vec<_>>();
-            if own.is_empty() {
-                name
-            } else {
-                format!("{name}: {}", own.join(" + "))
-            }
-        })
-        .collect::<Vec<_>>();
-    let generics = if generics.is_empty() {
-        String::new()
-    } else {
-        format!("<{}>", generics.join(", "))
-    };
-    let others = bounds
-        .iter()
-        .filter(|bound| !params.contains(&bound.self_ty(db)))
-        .map(|bound| bound.pretty_print(db, true))
-        .collect::<Vec<_>>();
-    let clause = if others.is_empty() {
-        String::new()
-    } else {
-        format!(" where {}", others.join(", "))
-    };
-    let header = implementor.trait_(db).without_assoc_bindings(db);
-    format!(
-        "impl{generics} {} for {}{clause}",
-        header.pretty_print(db, false),
-        header.self_ty(db).pretty_print(db)
-    )
-}
-
-/// How an implementation is named in a message: its name, or its header.
-fn implementation_label<'db>(
-    db: &'db dyn HirAnalysisDb,
-    implementor: ImplementorId<'db>,
-) -> String {
-    match implementor.origin(db) {
-        ImplementorOrigin::Hir(implementation) => match implementation.selection_name(db) {
-            Some(name) => format!("`{}`", name.data(db)),
-            None => format!("`{}`", implementation_header(db, implementor)),
-        },
-        _ => format!("`{}`", implementor.trait_(db).pretty_print(db, true)),
-    }
-}
-
 fn output_disagreement_diagnostic<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
@@ -1125,8 +1060,11 @@ fn output_disagreement_diagnostic<'db>(
             .unwrap_or_else(|| "its implementation".to_string())
     };
     let message = match mismatch {
-        NamedOutputMismatch::NoOrdinaryOutputs => format!(
+        NamedOutputMismatch::NoOrdinary => format!(
             "`{goal}` is answered here by {answers}, but no ordinary implementation defines its associated outputs at `{goal}`"
+        ),
+        NamedOutputMismatch::AmbiguousOrdinary => format!(
+            "`{goal}` is answered here by {answers}, but more than one ordinary implementation may define its associated outputs at `{goal}`"
         ),
         NamedOutputMismatch::AssocType {
             with,
@@ -2478,24 +2416,23 @@ impl<'db> SemanticInstance<'db> {
     ) -> Result<(), SemanticBodyAdmissionError<'db>> {
         let typed_body = self.key(db).typed_body(db);
         if let Some(refused) = typed_body.refused_bound() {
-            let goal = refused.goal.pretty_print(db, true);
-            let message = match refused.reason {
-                Refusal::Differs { a, b } | Refusal::ConditionsDiffer { a, b } => format!(
-                    "`{goal}`: `{}` and `{}` supply different implementations",
-                    a.pretty_print(db, true),
-                    b.pretty_print(db, true)
+            let message = refusal_label(
+                db,
+                self.normalization_scope(db),
+                refused.goal,
+                refused.reason,
+            );
+            let message = match refused.others {
+                Some(others) => format!(
+                    "{message}; also {}",
+                    others
+                        .list(db)
+                        .iter()
+                        .map(|other| format!("`{}`", other.pretty_print(db, true)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ),
-                Refusal::NoComponent { root: Some(root) } => format!(
-                    "`{goal}`: the dictionary of `{}` has no such component",
-                    root.pretty_print(db, true)
-                ),
-                Refusal::NoComponent { root: None } => {
-                    format!("`{goal}`: no dictionary supplies it")
-                }
-                Refusal::TooDeep { root } => format!(
-                    "`{goal}`: bounds below this one in the dictionary of `{}` are not followed (limit: {COMPONENT_DEPTH_LIMIT} associated-type levels)",
-                    root.pretty_print(db, true)
-                ),
+                None => message,
             };
             return Err(SemanticBodyAdmissionError::InvalidConcreteType(
                 SemanticDiagnosticId::new(

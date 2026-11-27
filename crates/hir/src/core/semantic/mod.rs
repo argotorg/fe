@@ -5197,7 +5197,8 @@ impl<'db> ImplTrait<'db> {
                     use crate::analysis::ty::trait_def::NamedOutputMismatch;
                     diags.push(
                         match mismatch {
-                            NamedOutputMismatch::NoOrdinaryOutputs => {
+                            NamedOutputMismatch::NoOrdinary
+                            | NamedOutputMismatch::AmbiguousOrdinary => {
                                 TraitLowerDiag::NamedOutputsNeedOrdinary { primary: self }
                             }
                             NamedOutputMismatch::AssocType {

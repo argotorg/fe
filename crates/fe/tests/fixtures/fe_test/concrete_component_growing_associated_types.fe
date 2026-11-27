@@ -1,0 +1,23 @@
+// Two associated types that grow the type, in a program with no named implementation and no choice: the instance evidence recurses through the growing implementation, and the route that returns to a projection still being computed is not followed. The program is accepted and reads the ordinary dictionaries.
+pub trait Br { type A: Br
+    type B: Br
+    fn v() -> u256 }
+pub struct Leaf {}
+impl Br for Leaf { type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 1 } }
+pub struct N1<T> {}
+pub struct N2<T> {}
+impl<T: Br> Br for N1<T> { type A = N1<N1<T>>
+    type B = N2<N1<T>>
+    fn v() -> u256 { T::v() } }
+impl<T: Br> Br for N2<T> { type A = N1<N2<T>>
+    type B = N2<N2<T>>
+    fn v() -> u256 { T::v() } }
+pub trait Hb { type O: Br }
+pub struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = N1<T> }
+fn g<H: Hb<O = N1<Leaf>>>() -> u256 { <H::O as Br>::v() }
+fn plain() -> u256 { g<Bx<Leaf>>() }
+#[test]
+fn p1() { assert(plain() == 1) }

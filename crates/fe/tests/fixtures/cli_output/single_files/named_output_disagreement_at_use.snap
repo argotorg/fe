@@ -1,0 +1,20 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/named_output_disagreement_at_use.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/named_output_disagreement_at_use.fe
+
+error[16-0020]: implementation outputs disagree in `fn gen`
+   ┌─ named_output_disagreement_at_use.fe:11:42
+   │  
+ 5 │ ╭ impl<T: Marker> Foo for T { type Out = u256
+ 6 │ │     fn make() -> u256 { 1 } }
+   │ ╰─────────────────────────────' the implementation that answers here
+   · │
+11 │   fn gen<T: Marker>() -> <T as Foo>::Out { <T as Foo>::make() }
+   │                                            ^^^^^^^^^^^^^^^^^^ `S: Foo` is answered here by `impl<T: Marker> Foo for T`, whose `Out` is `u256`, but ordinary normalization of `S: Foo` gives `u8` (from `impl Foo for S`)
+
+
+=== EXIT CODE: 1 ===

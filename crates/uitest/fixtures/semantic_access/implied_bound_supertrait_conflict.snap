@@ -4,7 +4,9 @@ expression: "diagnostics(db, fixture.path(), fixture.content())"
 input_file: fixtures/semantic_access/implied_bound_supertrait_conflict.fe
 ---
 error[16-0019]: conflicting implementations of a bound in `fn target`
-   ┌─ implied_bound_supertrait_conflict.fe:11:4
+   ┌─ implied_bound_supertrait_conflict.fe:12:52
    │
 11 │ fn target<T: Sub + Price>() -> u256 { T::price() }
-   │    ^^^^^^ `Item: Price`: `Item: Sub` and `Item: Price` supply different implementations
+   │    ------ the instance of this function that the call builds is refused
+12 │ fn relay<T: Sub>() -> u256 { with (Wholesale<T>) { target<T>() } }
+   │                                                    ^^^^^^^^^^^ `Item: Price` receives `Wholesale` through `T: Price` and `impl Price for Item` through `T: Sub` (its supertrait `Price`)

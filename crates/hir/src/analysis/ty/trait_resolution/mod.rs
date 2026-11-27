@@ -30,10 +30,12 @@ use constraint::collect_constraints;
 use rustc_hash::FxHashSet;
 use salsa::SalsaValue;
 
+mod component_walk;
 pub(crate) mod constraint;
 pub(crate) mod derive;
 mod table_solver;
 
+pub(in crate::analysis::ty) use component_walk::component_path_goal;
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
     match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
@@ -1398,11 +1400,8 @@ impl<'db> PredicateListId<'db> {
     /// with the derivations the walk followed. It is evidence an implementation
     /// proves, never an assumption, so only the projection of an implementation's
     /// own components reads it.
-    pub(crate) fn bound_walk_keeping_concrete(
-        self,
-        db: &'db dyn HirAnalysisDb,
-    ) -> &'db BoundWalk<'db> {
-        bound_walk_keeping_concrete_query(db, self)
+    fn bound_walk_keeping_concrete(self, db: &'db dyn HirAnalysisDb) -> &'db BoundWalk<'db> {
+        component_walk::bound_walk_keeping_concrete_query(db, self)
     }
 
     /// The derivations among the members of this list, as positions in it:
@@ -1414,7 +1413,12 @@ impl<'db> PredicateListId<'db> {
         implied_edges_query(db, self)
     }
 
-    fn walk_bounds(self, db: &'db dyn HirAnalysisDb, keep_concrete: bool) -> BoundWalk<'db> {
+    fn walk_bounds(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        components: Option<component_walk::Components>,
+    ) -> BoundWalk<'db> {
+        let keep_concrete = components.is_some();
         let mut all_predicates: IndexSet<TraitInstId<'db>> =
             self.list(db).iter().copied().collect();
         let mut edges: Vec<BoundEdge<'db>> = Vec::new();
@@ -1443,6 +1447,14 @@ impl<'db> PredicateListId<'db> {
                 .get_index_of(&pred)
                 .and_then(|index| u32::try_from(index).ok())
                 .expect("a predicate on the worklist is in the list");
+            // The plain walk reads no implementation. Only the walk that keeps
+            // concrete bounds holds the value that lets a step below a concrete
+            // member do so.
+            let parent_is_member = parent as usize >= slots;
+            let derive = |step| match &components {
+                None => step_bound(db, pred, step),
+                Some(components) => components.child(db, pred, parent_is_member, step),
+            };
             let mut record = |child: usize, step: BoundStep<'db>| {
                 let edge = BoundEdge {
                     parent,
@@ -1456,7 +1468,7 @@ impl<'db> PredicateListId<'db> {
             // 1. Collect super traits
             for index in 0..hir_trait.super_traits(db).len() {
                 let step = BoundStep::Super(index as u32);
-                let Some(inst) = step_bound(db, pred, step) else {
+                let Some(inst) = derive(step) else {
                     continue;
                 };
                 if predicate_has_recursive_assoc_projection(db, inst) {
@@ -1474,16 +1486,36 @@ impl<'db> PredicateListId<'db> {
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
             if below_concrete && depth >= COMPONENT_DEPTH_LIMIT {
-                // The bounds below this one are not followed. A program whose
+                // The bounds below this one are derived as below, but one that
+                // is not a member yet is not added. A member is cut exactly
+                // when following it would add a member: a program whose
                 // dictionaries hold a named implementation is refused for it.
-                if hir_trait.assoc_types(db).any(|trait_type| {
-                    trait_type.name(db).is_some_and(|assoc| {
-                        TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc)
-                            .assoc_type_bounds(db, trait_type)
-                            .count()
-                            > 0
-                    })
-                }) {
+                // A member whose bounds lead only to members already present
+                // is followed completely, and its derivations are recorded.
+                let mut cut = false;
+                for trait_type in hir_trait.assoc_types(db) {
+                    let Some(assoc) = trait_type.name(db) else {
+                        continue;
+                    };
+                    let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+                    for index in 0..assoc_ty.assoc_type_bounds(db, trait_type).count() {
+                        let step = BoundStep::AssocBound {
+                            assoc,
+                            index: index as u32,
+                        };
+                        let Some(trait_inst) = derive(step) else {
+                            continue;
+                        };
+                        if predicate_has_recursive_assoc_projection(db, trait_inst) {
+                            continue;
+                        }
+                        match all_predicates.get_index_of(&trait_inst) {
+                            Some(child) => record(child, step),
+                            None => cut = true,
+                        }
+                    }
+                }
+                if cut {
                     truncated.push(parent);
                 }
                 continue;
@@ -1499,7 +1531,7 @@ impl<'db> PredicateListId<'db> {
                         assoc,
                         index: index as u32,
                     };
-                    let Some(trait_inst) = step_bound(db, pred, step) else {
+                    let Some(trait_inst) = derive(step) else {
                         continue;
                     };
                     // An equality can make the bound a concrete one,
@@ -1555,7 +1587,7 @@ fn is_concrete_bound<'db>(db: &'db dyn HirAnalysisDb, bound: TraitInstId<'db>) -
 /// Whether the bounds in `slots` can derive a concrete bound. A concrete
 /// child of a slot needs an associated type that the parent's own equalities
 /// make concrete, so a list in which no bound states an equality has none.
-pub(crate) fn has_concrete_components<'db>(
+pub(in crate::analysis::ty) fn has_concrete_components<'db>(
     db: &'db dyn HirAnalysisDb,
     slots: PredicateListId<'db>,
 ) -> bool {
@@ -1567,7 +1599,7 @@ pub(crate) fn has_concrete_components<'db>(
 
 /// A member of the walk of a list of slots that is not one of the slots.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub(crate) struct Component<'db> {
+pub(in crate::analysis::ty) struct Component<'db> {
     pub(crate) goal: TraitInstId<'db>,
     /// Whether the goal is concrete. Other members only carry a derivation
     /// that continues through them.
@@ -1590,7 +1622,7 @@ pub(crate) struct Component<'db> {
 /// projection commit's rule, applied through the steps that name it), never
 /// by selecting an implementation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
-pub(crate) struct ComponentTable<'db> {
+pub(in crate::analysis::ty) struct ComponentTable<'db> {
     /// The number of slots; the walk position of `members[0]`.
     pub(crate) slots: u32,
     /// The members of the walk of the slots after the slots, in walk order.
@@ -1604,7 +1636,7 @@ pub(crate) struct ComponentTable<'db> {
 }
 
 impl<'db> ComponentTable<'db> {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             slots: 0,
             members: Vec::new(),
@@ -1619,11 +1651,6 @@ impl<'db> ComponentTable<'db> {
         self.members
             .iter()
             .filter(|member| member.concrete && !member.path.is_empty())
-    }
-
-    /// The concrete members of each trait, as positions in `members`.
-    pub(crate) fn buckets(&self) -> impl Iterator<Item = &[u32]> {
-        self.by_trait.iter().map(|(_, members)| members.as_slice())
     }
 
     /// The concrete members of `trait_`, in walk order.
@@ -1678,7 +1705,7 @@ pub(crate) fn same_identity<'db>(
 /// `B: Tr<A = Foo>`), with each member's canonical address, the slot and steps
 /// of its first derivation. Empty unless a slot states an equality.
 #[salsa::tracked(returns(ref), cycle_initial = component_table_cycle_initial)]
-pub(crate) fn concrete_components<'db>(
+pub(in crate::analysis::ty) fn concrete_components<'db>(
     db: &'db dyn HirAnalysisDb,
     slots: PredicateListId<'db>,
 ) -> ComponentTable<'db> {
@@ -1797,11 +1824,6 @@ pub(crate) struct BoundWalk<'db> {
 }
 
 impl<'db> BoundWalk<'db> {
-    /// Whether any bound's associated-type bounds were left unfollowed.
-    pub(crate) fn is_truncated(&self) -> bool {
-        self.capped || !self.truncated.is_empty()
-    }
-
     /// The steps from the first predicate to the member at `target`, along
     /// the shortest chain of recorded derivations.
     pub(crate) fn path_to(
@@ -1846,7 +1868,7 @@ impl<'db> BoundWalk<'db> {
 /// arguments, normalized by `pred`'s own equalities. The walk and every
 /// projection read a derivation through this one computation. A bound that an
 /// equality makes concrete is returned as it is: dropping it is the walk's
-/// decision.
+/// decision. Reads no implementation: header lowering reaches it.
 pub(crate) fn step_bound<'db>(
     db: &'db dyn HirAnalysisDb,
     pred: TraitInstId<'db>,
@@ -1896,15 +1918,7 @@ fn bound_walk_query<'db>(
     db: &'db dyn HirAnalysisDb,
     predicates: PredicateListId<'db>,
 ) -> BoundWalk<'db> {
-    predicates.walk_bounds(db, false)
-}
-
-#[salsa::tracked(returns(ref), cycle_initial = bound_walk_cycle_initial)]
-fn bound_walk_keeping_concrete_query<'db>(
-    db: &'db dyn HirAnalysisDb,
-    predicates: PredicateListId<'db>,
-) -> BoundWalk<'db> {
-    predicates.walk_bounds(db, true)
+    predicates.walk_bounds(db, None)
 }
 
 fn bound_walk_cycle_initial<'db>(
@@ -2662,5 +2676,115 @@ fn probe<T: Picks>() {}
             solve.select_impl(&db, goal),
             Selection::Ambiguous(_)
         ));
+    }
+
+    /// The plain walk is a function of the predicates and the trait
+    /// declarations alone: it reads no implementation, so a closed bound's
+    /// associated-type bound stays a projection, however an implementation
+    /// defines the type.
+    #[test]
+    fn plain_walk_of_a_closed_bound_reads_no_implementation() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone(
+            "plain_walk_closed.fe".into(),
+            r#"
+trait Show {}
+trait Hold { type A: Show }
+struct Foo {}
+impl Show for Foo {}
+struct X {}
+impl Hold for X { type A = Foo }
+"#,
+        );
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let (x, foo) = (
+            named_struct_ty(&db, top_mod, "X"),
+            named_struct_ty(&db, top_mod, "Foo"),
+        );
+        let hold = TraitInstId::new(
+            &db,
+            named_trait(&db, top_mod, "Hold"),
+            vec![x],
+            IndexMap::new(),
+            crate::hir_def::ModeMarker::None,
+        );
+        let show = named_trait(&db, top_mod, "Show");
+        let walked = PredicateListId::new(&db, vec![hold]).extend_all_bounds(&db);
+        let shows: Vec<_> = walked
+            .list(&db)
+            .iter()
+            .filter(|bound| bound.def(&db) == show)
+            .collect();
+        assert!(
+            shows
+                .iter()
+                .any(|bound| bound.args(&db)[0].has_projection(&db)),
+            "`<X as Hold>::A: Show` is derived"
+        );
+        assert!(
+            !shows.iter().any(|bound| bound.args(&db)[0] == foo),
+            "`Foo: Show` needs the implementation of `Hold` for `X`"
+        );
+    }
+
+    const LIMIT_CHAIN: &str = r#"
+pub trait Chain { type Next: Chain }
+pub struct End0 {}
+impl Chain for End0 { type Next = End0 }
+pub struct E {}
+impl Chain for E { type Next = End0 }
+pub struct L<T> {}
+impl<T: Chain> Chain for L<T> { type Next = T }
+pub trait Holder { type Out: Chain }
+pub struct Bx<T> {}
+impl<T: Chain> Holder for Bx<T> { type Out = L<L<L<T>>> }
+fn g<H: Holder<Out = L<L<L<E>>>>>() {}
+fn h<H: Holder<Out = L<L<L<L<E>>>>>>() {}
+"#;
+
+    /// A member at the depth limit is cut exactly when following it would add
+    /// a member. `End0: Chain` has `Next = End0`, so its bounds lead only to
+    /// itself: it is followed completely, and its derivation from itself is
+    /// recorded. In the longer chain the member at the limit is `E: Chain`,
+    /// whose `Next` is the new member `End0: Chain`, and the cut is real.
+    #[test]
+    fn a_member_at_the_limit_whose_bounds_are_members_is_not_cut() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("limit_chain.fe".into(), LIMIT_CHAIN);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let chain = |name: &str| {
+            let signature = crate::analysis::ty::ty_check::func_signature(
+                &db,
+                find_func(&db, top_mod, name),
+                None,
+            );
+            signature.bound_walk_keeping_concrete(&db)
+        };
+        let end0 = |walk: &super::BoundWalk<'_>| {
+            walk.list
+                .list(&db)
+                .iter()
+                .position(|bound| bound.pretty_print(&db, true) == "End0: Chain")
+        };
+        let short = chain("g");
+        assert!(short.truncated.is_empty() && !short.capped);
+        let end0_at = end0(short).expect("`End0: Chain` is a member") as u32;
+        assert!(
+            short
+                .edges
+                .iter()
+                .any(|edge| edge.parent == end0_at && edge.child == end0_at),
+            "`End0: Chain` is derived from itself"
+        );
+        let long = chain("h");
+        let e_at = long
+            .list
+            .list(&db)
+            .iter()
+            .position(|bound| bound.pretty_print(&db, true) == "E: Chain")
+            .expect("`E: Chain` is a member") as u32;
+        assert_eq!(long.truncated, vec![e_at]);
     }
 }

@@ -1180,10 +1180,11 @@ pub(crate) fn selected_assoc_const_body_template<'db>(
 /// implementation of its slot.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum NamedOutputMismatch<'db> {
-    /// No ordinary implementation defines the outputs. This covers an
-    /// ambiguous selection of the ordinary implementation as well as none, so
-    /// the message does not say which of the two it is.
-    NoOrdinaryOutputs,
+    /// No ordinary implementation defines the outputs.
+    NoOrdinary,
+    /// More than one ordinary implementation may define them, and no proof
+    /// of the goal selects one.
+    AmbiguousOrdinary,
     /// An associated type; `with` is the implementation compared with.
     /// `possible` is set when the headers only may overlap, as an unresolved
     /// associated type or constant leaves open.
@@ -1274,19 +1275,19 @@ pub(crate) fn named_output_mismatch<'db>(
     // implementation proved at the named declaration's own header.
     let representative_context = context.with_assumptions(candidate.constraints(db));
     let Selection::Unique(template) = representative_context.select_impl(db, goal) else {
-        return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        return Some(NamedOutputMismatch::NoOrdinary);
     };
     let ImplementorOrigin::Hir(representative) = template.origin(db) else {
-        return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        return Some(NamedOutputMismatch::NoOrdinary);
     };
     if representative.selection_name(db).is_some() {
-        return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        return Some(NamedOutputMismatch::NoOrdinary);
     }
     let choice = ChosenImpl::unapplied(db, template);
     let Some(ordinary_at_goal) =
         instantiate_selected_choice(db, representative_context, choice, goal)
     else {
-        return Some(NamedOutputMismatch::NoOrdinaryOutputs);
+        return Some(NamedOutputMismatch::NoOrdinary);
     };
     let named_at_goal = ResolvedImplInstance {
         selected: candidate,
@@ -1445,32 +1446,45 @@ pub(crate) fn concrete_goal_output_mismatch<'db>(
     if !trait_def.has_assoc_outputs(db) && trait_def.assoc_consts(db).next().is_none() {
         return None;
     }
-    match resolve_trait_impl_instance(db, TraitSolveCx::new(db, scope, Tier::All), goal) {
-        Selection::Unique(ordinary) => {
-            if ordinary.selected() == own.selected()
-                && ordinary.instantiated() == own.instantiated()
-            {
-                return None;
-            }
-            let ImplementorOrigin::Hir(with) = ordinary.selected().origin(db) else {
-                return None;
-            };
-            outputs_mismatch(
-                db,
-                scope,
-                PredicateListId::empty_list(db),
-                own,
-                ordinary,
-                with,
-                false,
-            )
-        }
-        // An ambiguous selection is reported as "no ordinary implementation"
-        // too (see `NamedOutputMismatch::NoOrdinaryOutputs`).
-        Selection::Ambiguous(_) | Selection::NotFound => {
-            Some(NamedOutputMismatch::NoOrdinaryOutputs)
-        }
+    // The ordinary implementation is looked up for the goal without the
+    // outputs the answering implementation binds: those are what is compared,
+    // and bound they would select that implementation itself. It is the one
+    // the ordinary proof of the goal selects, with its conditions; the table
+    // resolver tells none from several.
+    let cx = TraitSolveCx::new(db, scope, Tier::All);
+    let goal = goal.without_assoc_bindings(db);
+    let ordinary = match crate::analysis::ty::evidence::prove(db, cx, goal)
+        .map(|proof| proof.data(db).clone())
+    {
+        Some(crate::analysis::ty::evidence::Evidence::Impl {
+            selected,
+            instantiated,
+            ..
+        }) => ResolvedImplInstance::new(selected, instantiated, instantiated.trait_inst(db)),
+        // No ordinary proof: the table resolver says whether there is one
+        // implementation (a compiler-provided one is no representative), none,
+        // or several.
+        _ => match resolve_trait_impl_instance(db, cx, goal) {
+            Selection::Unique(ordinary) => ordinary,
+            Selection::Ambiguous(_) => return Some(NamedOutputMismatch::AmbiguousOrdinary),
+            Selection::NotFound => return Some(NamedOutputMismatch::NoOrdinary),
+        },
+    };
+    if ordinary.selected() == own.selected() && ordinary.instantiated() == own.instantiated() {
+        return None;
     }
+    let ImplementorOrigin::Hir(with) = ordinary.selected().origin(db) else {
+        return None;
+    };
+    outputs_mismatch(
+        db,
+        scope,
+        PredicateListId::empty_list(db),
+        own,
+        ordinary,
+        with,
+        false,
+    )
 }
 
 fn concrete_goal_output_mismatch_cycle_initial<'db>(
