@@ -1,0 +1,32 @@
+// Saturating arithmetic and `size_of<T>()` fold in const contexts.
+use core::intrinsic::size_of
+
+const SAT_ADD: u8 = (255 as u8).saturating_add(1)
+const SAT_SUB: u8 = (0 as u8).saturating_sub(1)
+const SAT_MUL: u8 = (200 as u8).saturating_mul(2)
+const SAT_NEG: i8 = i8::min().saturating_sub(1)
+
+const fn sat_sum(_ a: u16, _ b: u16) -> u16 {
+    a.saturating_add(b)
+}
+
+const fn words<T>() -> usize {
+    size_of<T>()
+}
+
+const WORD: usize = words<u256>()
+
+static_assert(SAT_ADD == 255)
+static_assert(SAT_SUB == 0)
+static_assert(SAT_MUL == 255)
+static_assert(SAT_NEG == i8::min())
+static_assert(sat_sum(65535, 1) == 65535)
+static_assert(WORD == 32)
+
+#[test]
+fn const_fn_saturating_size_of_values() {
+    let buf: [u8; words<u256>()] = [0; words<u256>()]
+    assert!(buf.len() == 32)
+    assert!(SAT_ADD == 255)
+    assert!(sat_sum(1, 2) == 3)
+}

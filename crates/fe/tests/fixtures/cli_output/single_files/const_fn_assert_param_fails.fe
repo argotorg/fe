@@ -1,0 +1,6 @@
+const fn checked(_ x: u256) -> u256 {
+    assert(x < 10)
+    x
+}
+
+const BAD: u256 = checked(30)

@@ -1,0 +1,47 @@
+// `assert` on parameters and simple `Option` methods in `const fn`.
+
+const fn checked(_ x: u256) -> u256 {
+    assert(x < 10)
+    x
+}
+
+const fn or_seven(_ o: Option<u256>) -> u256 {
+    o.unwrap_or(default: 7)
+}
+
+const fn present(_ o: Option<u256>) -> bool {
+    o.is_some() && !o.is_none()
+}
+
+const fn unwrapped(_ o: Option<u256>) -> u256 {
+    o.unwrap()
+}
+
+const fn ok_value(_ o: Option<u256>) -> u256 {
+    match o.ok_or(0) {
+        Result::Ok(x) => x
+        Result::Err(e) => e
+    }
+}
+
+const CHECKED: u256 = checked(3)
+const DEFAULTED: u256 = or_seven(Option::None)
+const KEPT: u256 = or_seven(Option::Some(2))
+
+static_assert(CHECKED == 3)
+static_assert(DEFAULTED == 7)
+static_assert(KEPT == 2)
+static_assert(present(Option::Some(1)))
+static_assert(!present(Option::None))
+static_assert(unwrapped(Option::Some(5)) == 5)
+static_assert(ok_value(Option::Some(9)) == 9)
+static_assert(ok_value(Option::None) == 0)
+
+#[test]
+fn const_fn_checks_and_option_values() {
+    assert!(CHECKED == 3)
+    assert!(DEFAULTED == 7)
+    assert!(KEPT == 2)
+    assert!(checked(9) == 9)
+    assert!(or_seven(Option::None) == 7)
+}
