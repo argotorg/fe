@@ -36,12 +36,12 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            CallSiteId, SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget,
+            CallSiteId, SConst, SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget,
             SemanticInstance, SemanticInstanceKey,
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
-                SemanticDiagnosticKind, SemanticDiagnosticSpan, SemanticNormalizationFailure,
-                checker_name,
+                SemanticDiagnosticKind, SemanticDiagnosticLabel, SemanticDiagnosticSpan,
+                SemanticNormalizationFailure, checker_name,
             },
             identity_semantic_instance_key,
             normalized::{
@@ -56,10 +56,10 @@ use crate::{
             ty_check::{
                 AssocConstBody, BodyOwner, ForLoopStep, ReturnProjectionStep, assoc_const_bodies_of,
             },
-            ty_def::TyId,
+            ty_def::{TyBase, TyData, TyId},
         },
     },
-    hir_def::{Contract, ExprId, ItemKind, StmtId, TopLevelMod},
+    hir_def::{CallableDef, Contract, Expr, ExprId, ItemKind, Partial, StmtId, TopLevelMod},
 };
 
 use self::{
@@ -499,13 +499,15 @@ fn collect_semantic_access_with_blocked<'db>(
     }
     let trust = UnsafeTrust::for_root(db, top_mod);
     // Each instance carries the call in the module's own code that reached
-    // it, `None` for the module's own bodies. Code that a provider of an
-    // untrusted package wrote is that package's, although preparation
-    // published it into this module. It is checked like the module's own
-    // bodies, but a call is judged only when it comes from code that a
-    // trusted package wrote, and is judged at that call: the walk from the
-    // trusted bodies comes first, and the untrusted ones are checked after it,
-    // for what it did not reach.
+    // it, `None` for the module's own bodies, the call that built it, which a
+    // refusal of the instance is reported at, and the call through a callable
+    // bound that made it, which a refusal names as a secondary label. Code
+    // that a provider of an untrusted package wrote is that package's,
+    // although preparation published it into this module. It is checked like
+    // the module's own bodies, but a call is judged only when it comes from
+    // code that a trusted package wrote, and is judged at that call: the walk
+    // from the trusted bodies comes first, and the untrusted ones are checked
+    // after it, for what it did not reach.
     let (trusted, untrusted): (Vec<_>, Vec<_>) = owners.into_iter().partition(|owner| {
         trust
             .as_ref()
@@ -535,6 +537,8 @@ fn collect_semantic_access_with_blocked<'db>(
                         (
                             SemanticInstance::new(db, key),
                             None::<SemanticDiagnosticSpan>,
+                            None::<SemanticDiagnosticSpan>,
+                            None::<SemanticDiagnosticSpan>,
                             live,
                         )
                     })
@@ -544,7 +548,8 @@ fn collect_semantic_access_with_blocked<'db>(
     // A body that runs without a call (see `entry_kind`) runs when `fe test`
     // or a build runs it, though no call names it. One with an untrusted
     // contributor, a generated one, is a use of that contributor's code,
-    // judged at the body.
+    // judged at the body. No call built it: a refusal of its own instance is
+    // reported as for any of the module's bodies.
     let entry_uses: Vec<_> = trust
         .iter()
         .flat_map(|_| {
@@ -559,7 +564,7 @@ fn collect_semantic_access_with_blocked<'db>(
     let own: FxHashSet<_> = trusted
         .iter()
         .chain(&untrusted)
-        .map(|(instance, _, _)| *instance)
+        .map(|(instance, ..)| *instance)
         .collect();
     let mut entry_calls = FxHashMap::default();
     for (owner, kind) in entry_uses {
@@ -569,16 +574,23 @@ fn collect_semantic_access_with_blocked<'db>(
         };
         entry_calls.insert(call.clone(), kind);
         let key = identity_semantic_instance_key(db, owner);
-        trusted.push_back((SemanticInstance::new(db, key), Some(call.clone()), false));
-        trusted.push_back((SemanticInstance::new(db, key), Some(call), true));
+        trusted.push_back((
+            SemanticInstance::new(db, key),
+            Some(call.clone()),
+            None,
+            None,
+            false,
+        ));
+        trusted.push_back((SemanticInstance::new(db, key), Some(call), None, None, true));
     }
     let mut seen = FxHashSet::default();
     let mut seen_diags = FxHashSet::default();
     let mut seen_inherited_sites = FxHashSet::default();
+    let mut seen_at_use = FxHashSet::default();
     let mut seen_untrusted = FxHashSet::default();
     let mut diags: Vec<Box<dyn DiagnosticVoucher + 'db>> = Vec::new();
     for (mut pending, judge) in [(trusted, trust.as_ref()), (untrusted, None)] {
-        while let Some((instance, call, live)) = pending.pop_front() {
+        while let Some((instance, call, built_by, through, live)) = pending.pop_front() {
             if !seen.insert((instance, live)) {
                 continue;
             }
@@ -626,6 +638,8 @@ fn collect_semantic_access_with_blocked<'db>(
                             .as_ref()
                             .is_none_or(|running| running.contains(&site))
                     };
+                    // The calls of this body, each with its origin in this
+                    // body and whether it is a call through a callable bound.
                     let calls =
                         instance
                             .call_sites(db)
@@ -633,10 +647,12 @@ fn collect_semantic_access_with_blocked<'db>(
                             .enumerate()
                             .filter_map(|(idx, site)| {
                                 let expr = ExprId::new(idx);
+                                let site = site.as_ref()?;
                                 Some((
-                                    site.as_ref()?.callee?.key,
+                                    site.callee?.key,
                                     CallSiteId::Expr(expr),
                                     SemOrigin::Expr(expr),
+                                    site.drops_receiver,
                                 ))
                             });
                     let loops = instance
@@ -651,23 +667,62 @@ fn collect_semantic_access_with_blocked<'db>(
                                         sites.site(step).callee?.key,
                                         CallSiteId::ForLoop(stmt, step),
                                         SemOrigin::Stmt(stmt),
+                                        false,
                                     ))
                                 })
                             })
                         });
                     let at = |origin| SemanticDiagnosticSpan::Origin { owner, origin };
+                    // The body's own calls count as the use only where the
+                    // body is in the analyzed module.
+                    let in_module = owner.scope().top_mod(db) == top_mod;
+                    // The call that built this instance, where the body is the
+                    // callee of a callable bound.
+                    let built = built_by.clone().unwrap_or_else(|| {
+                        call.clone()
+                            .unwrap_or(SemanticDiagnosticSpan::ItemName { owner })
+                    });
                     let callees: Vec<_> = calls
                         .chain(loops)
-                        .filter(|&(_, site, _)| runs(site))
-                        .map(|(key, _, origin)| (key, origin))
-                        .chain(edges.callees)
-                        .map(|(key, origin)| (key, call.clone().unwrap_or_else(|| at(origin))))
+                        .filter(|&(_, site, _, _)| runs(site))
+                        .map(|(key, _, origin, through_bound)| (key, origin, through_bound))
+                        .chain(
+                            edges
+                                .callees
+                                .into_iter()
+                                .map(|(key, origin)| (key, origin, false)),
+                        )
+                        .map(|(key, origin, through_bound)| {
+                            let span = at(origin);
+                            let Some(call) = &call else {
+                                return (key, span.clone(), span, None);
+                            };
+                            // A call made through a callable bound, `g()` for
+                            // `g: G` with `G: Fn() -> u256`, is reported at the
+                            // call in the module's own code that led to it, on
+                            // the argument that is the function item where
+                            // there is one, and names the callable call.
+                            let (at_use, through) = match (in_module, through_bound) {
+                                (true, true) => (
+                                    function_item_argument(db, &built, key.owner(db))
+                                        .unwrap_or_else(|| built.clone()),
+                                    Some(span),
+                                ),
+                                (true, false) => (span, None),
+                                (false, _) => (call.clone(), None),
+                            };
+                            (key, call.clone(), at_use, through)
+                        })
                         .collect();
-                    pending.extend(
-                        callees
-                            .into_iter()
-                            .map(|(key, call)| (SemanticInstance::new(db, key), Some(call), live)),
-                    );
+                    pending.extend(callees.into_iter().map(|(key, call, at_use, through)| {
+                        (
+                            SemanticInstance::new(db, key),
+                            Some(call),
+                            Some(at_use),
+                            through,
+                            live,
+                        )
+                    }));
                 }
                 SemanticAccessCheckResult::Blocked(body) if !live => blocked.push(body.clone()),
                 SemanticAccessCheckResult::Err(diag)
@@ -676,6 +731,22 @@ fn collect_semantic_access_with_blocked<'db>(
                         diag.diag(db),
                     ) => {}
                 SemanticAccessCheckResult::Err(diag) if !live => {
+                    // The refusal of an instance is reported at the use that
+                    // built it, with the callee's own label kept as a
+                    // secondary.
+                    let at_use = built_by.filter(|_| {
+                        matches!(
+                            diag.diag(db).kind,
+                            SemanticDiagnosticKind::ConflictingDictionaries
+                                | SemanticDiagnosticKind::ChoiceOutputDisagreement
+                        )
+                    });
+                    if let Some(at_use) = at_use {
+                        if seen_at_use.insert((*diag, at_use.clone())) {
+                            diags.push(Box::new(refused_at_use(db, *diag, at_use, through)));
+                        }
+                        continue;
+                    }
                     // The body of a default is walked once for each
                     // implementation that inherits it, and its text is one:
                     // an error in it is reported once, where the trait wrote
@@ -705,6 +776,64 @@ fn collect_semantic_access_with_blocked<'db>(
     diags
 }
 
+/// The refusal `diag` of an instance, reported at the call `at_use` that built
+/// the instance. The label that named the callee stays, as a secondary.
+fn refused_at_use<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diag: SemanticDiagnosticId<'db>,
+    at_use: SemanticDiagnosticSpan<'db>,
+    through: Option<SemanticDiagnosticSpan<'db>>,
+) -> SemanticDiagnostic<'db> {
+    let diag = diag.diag(db).clone();
+    let mut moved = diag.clone();
+    moved.primary.span = at_use;
+    moved.secondaries = std::iter::once(SemanticDiagnosticLabel {
+        message: "the instance of this function that the call builds is refused".to_string(),
+        span: diag.primary.span,
+    })
+    .chain(through.map(|span| SemanticDiagnosticLabel {
+        message: "called here through a callable bound".to_string(),
+        span,
+    }))
+    .chain(diag.secondaries)
+    .collect();
+    moved
+}
+
+/// The argument of the call `call` whose type is the function item type of
+/// `callee`, where the call passes the function as a value.
+fn function_item_argument<'db>(
+    db: &'db dyn HirAnalysisDb,
+    call: &SemanticDiagnosticSpan<'db>,
+    callee: BodyOwner<'db>,
+) -> Option<SemanticDiagnosticSpan<'db>> {
+    let SemanticDiagnosticSpan::Origin {
+        owner,
+        origin: SemOrigin::Expr(expr),
+    } = call
+    else {
+        return None;
+    };
+    let BodyOwner::Func(func, _) = callee else {
+        return None;
+    };
+    let body = owner.body(db)?;
+    let Partial::Present(Expr::Call(_, args)) = expr.data(db, body) else {
+        return None;
+    };
+    let typed = identity_semantic_instance_key(db, *owner).typed_body(db);
+    args.iter().find_map(|arg| {
+        matches!(
+            typed.expr_ty(db, arg.expr).base_ty(db).data(db),
+            TyData::TyBase(TyBase::Func(CallableDef::Func(item))) if *item == func
+        )
+        .then_some(SemanticDiagnosticSpan::HirExpr {
+            body,
+            expr: arg.expr,
+        })
+    })
+}
+
 /// A contract's bodies: its `init` and each recv arm.
 fn contract_bodies<'db>(
     db: &'db dyn HirAnalysisDb,
@@ -725,12 +854,47 @@ fn contract_bodies<'db>(
     iter::once(BodyOwner::ContractInit { contract }).chain(arms)
 }
 
+/// The constants a body reads, each with the origin of the read. A read of a
+/// constant is evaluated at compile time, which turns a refused instance of the
+/// constant into an internal failure at code generation: the walk reaches the
+/// instance here, so that its admission is reported at the read.
+fn constant_reads<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+    let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
+        return Vec::new();
+    };
+    let mut reads = Vec::new();
+    for statement in admitted
+        .body(db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+    {
+        if let NStatementKind::Define {
+            expr: NExpr::Const(SConst::Ref(constant)),
+            ..
+        } = &statement.kind
+        {
+            let read = (constant.instance(db), constant.origin(db));
+            if !reads.contains(&read) {
+                reads.push(read);
+            }
+        }
+    }
+    reads
+}
+
 /// The instances the compiler runs for `instance` that no semantic call site
 /// records, each with the statement, expression, pattern or body that makes it
 /// run. This is the one list of such edges; the trust walk follows only it and
 /// the call sites:
 /// - for each constant the body reads, in an expression or a pattern, the
-///   constant's initializer, which evaluating the constant runs;
+///   constant's initializer, which evaluating the constant runs, and the
+///   instance of it that the normalized body reads, with this instance's
+///   dictionaries (`constant_reads`, outside a `live` walk), whose refusal is
+///   reported at the read;
 /// - for each call of `panic_with_value`, the `Encode` implementation that
 ///   builds the revert data of the value (`panic_payload_revert_key`);
 /// - for a contract's `init` and each `recv` arm, the dispatcher's decode of
@@ -777,6 +941,12 @@ fn run_edges<'db>(
     } else {
         instance.implicit_dependencies_with_origins(db)
     });
+    // The trust walk also follows the instance of each constant that the
+    // normalized body reads, with this instance's dictionaries, so that a
+    // refusal of it is reported at the read.
+    if !live {
+        callees.extend(constant_reads(db, instance));
+    }
     // A panic that no statement which runs makes builds no revert data.
     let running = if live {
         running_call_sites(db, instance)

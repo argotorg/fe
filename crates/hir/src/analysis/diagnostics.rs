@@ -6903,36 +6903,10 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }
             }
 
-            Self::ConditionsDiffer {
-                span,
-                primary_goal,
-                a,
-                b,
-            } => primary_diag(
+            Self::ImplementationDiffers { span, label } => primary_diag(
                 severity,
                 "trait bound is not satisfied",
-                format!(
-                    "`{}`: `{}` and `{}` supply different implementations",
-                    primary_goal.pretty_print(db, true),
-                    a.pretty_print(db, true),
-                    b.pretty_print(db, true)
-                ),
-                span.resolve(db),
-                error_code,
-            ),
-
-            Self::ImplementationDiffers {
-                span,
-                primary_goal,
-                root,
-            } => primary_diag(
-                severity,
-                "trait bound is not satisfied",
-                format!(
-                    "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
-                    primary_goal.pretty_print(db, true),
-                    root.pretty_print(db, true)
-                ),
+                label.clone(),
                 span.resolve(db),
                 error_code,
             ),

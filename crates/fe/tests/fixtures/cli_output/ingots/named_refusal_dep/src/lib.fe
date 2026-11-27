@@ -1,0 +1,15 @@
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+pub impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+pub trait Tr2 { type A: Show
+    fn via2() -> u256 }
+impl<T: Show> Tr2 for V<T> { type A = T
+    fn via2() -> u256 { T::show() } }
+pub fn f<B: Tr<A = Foo>, C: Tr2<A = Foo>>() -> u256 { 5 }

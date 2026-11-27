@@ -7927,11 +7927,13 @@ fn concrete_component_runtime() {
     // iteration, and an indexing read and a call read one lane codec.
     for fixture in [
         "concrete_component_call_bound.fe",
+        "concrete_component_through_implementation.fe",
         "concrete_component_impl_method.fe",
         "concrete_component_pinned_named_condition.fe",
         "concrete_component_closure_item.fe",
         "concrete_component_loop_plan.fe",
         "concrete_component_entry_codec.fe",
+        "concrete_component_growing_associated_types.fe",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")

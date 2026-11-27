@@ -1,0 +1,14 @@
+// The pull request's example of rule 3, verbatim. Claimed: refused with 16-0020.
+trait Marker {}
+trait Foo { type Out
+    fn make() -> Self::Out }
+impl<T: Marker> Foo for T { type Out = u256
+    fn make() -> u256 { 1 } }
+struct S {}
+impl Foo for S { type Out = u8
+    fn make() -> u8 { 2 } }
+impl Marker for S as Fake {}
+fn gen<T: Marker>() -> <T as Foo>::Out { <T as Foo>::make() }
+fn boom() -> u8 { with (Fake) { gen<S>() } }  // `Fake` routes `S: Foo` to the blanket impl (`u256`); ordinary resolution says `u8`
+#[test]
+fn t() { assert(boom() == 2) }

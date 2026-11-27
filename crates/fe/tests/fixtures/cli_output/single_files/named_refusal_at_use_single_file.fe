@@ -1,0 +1,27 @@
+// p08_two_roots with a body that reads nothing (rule 4: refused even if unused). Expect 16-0019.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub trait Tr {
+    type A: Show
+    fn via() -> u256
+}
+impl<T: Show> Tr for W<T> {
+    type A = T
+    fn via() -> u256 { T::show() }
+}
+pub trait Tr2 {
+    type A: Show
+    fn via2() -> u256
+}
+impl<T: Show> Tr2 for V<T> {
+    type A = T
+    fn via2() -> u256 { T::show() }
+}
+fn f<B: Tr<A = Foo>, C: Tr2<A = Foo>>() -> u256 { 5 }
+fn relay<C: Tr2<A = Foo>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }
+#[test]
+fn d5() { assert(relay<V<Foo>>() == 5) }
