@@ -1943,21 +1943,12 @@ pub enum TraitConstraintDiag<'db> {
         actual: TyId<'db>,
     },
 
-    /// The goal is implemented, but the implementation chosen at this use is not
-    /// the one the dictionary of `root` holds for it.
+    /// The goal is implemented, but two routes to it supply different
+    /// implementations. `label` names each route and the implementation it
+    /// gives.
     ImplementationDiffers {
         span: DynLazySpan<'db>,
-        primary_goal: TraitInstId<'db>,
-        root: TraitInstId<'db>,
-    },
-
-    /// The goal is implemented, but two conditions of the implementation chosen
-    /// for the bound hold it from different dictionaries.
-    ConditionsDiffer {
-        span: DynLazySpan<'db>,
-        primary_goal: TraitInstId<'db>,
-        a: TraitInstId<'db>,
-        b: TraitInstId<'db>,
+        label: String,
     },
 
     TraitBoundNotSat {
@@ -1980,9 +1971,7 @@ impl TraitConstraintDiag<'_> {
             Self::KindMismatch { .. } => 0,
             Self::TraitArgNumMismatch { .. } => 1,
             Self::TraitArgKindMismatch { .. } => 2,
-            Self::TraitBoundNotSat { .. }
-            | Self::ImplementationDiffers { .. }
-            | Self::ConditionsDiffer { .. } => 3,
+            Self::TraitBoundNotSat { .. } | Self::ImplementationDiffers { .. } => 3,
             Self::InfiniteBoundRecursion(..) => 4,
             Self::ConcreteTypeBound(..) => 5,
             Self::ConstTyBound(..) => 6,

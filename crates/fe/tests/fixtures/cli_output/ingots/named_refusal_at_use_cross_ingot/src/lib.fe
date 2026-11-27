@@ -1,0 +1,7 @@
+// The dependency's `f` receives two dictionaries that disagree on `Foo: Show`:
+// `W<Foo>` is built under the choice and `C` arrives from outside. The refusal
+// is reported at the call in this ingot.
+use dep::{Foo, Loud, W, V, Tr2, f}
+fn relay<C: Tr2<A = Foo>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }
+#[test]
+fn d5() { assert(relay<V<Foo>>() == 5) }
