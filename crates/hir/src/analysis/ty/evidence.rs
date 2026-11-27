@@ -920,14 +920,17 @@ pub(crate) fn proof_output_mismatch<'db>(
         .find_map(|&cond| proof_output_mismatch(db, scope, cond))
 }
 
-/// Whether a dictionary holds a named implementation. The one test that decides
-/// whether a refusal that turns on the contents of dictionaries applies: a
-/// component that cannot be read from one (`Refusal::NoComponent`) or a walk
-/// that was cut (`Refusal::Unfollowed`). Where no dictionary a check involves
-/// holds one, the program names no implementation the check could contradict,
-/// and the slot keeps the proof ordinary resolution gives it.
-fn names_impl<'db>(db: &'db dyn HirAnalysisDb, proof: Option<EvidenceId<'db>>) -> bool {
-    proof.is_some_and(|proof| proof.has_named_impl(db))
+/// Whether a dictionary on a route holds a named implementation. The one test
+/// that decides whether a refusal that turns on the contents of dictionaries
+/// applies: a component that cannot be read from a dictionary, a route that is
+/// not followed (`Refusal::NoComponent`, `Refusal::Unfollowed`), or a walk that
+/// was cut. Where no dictionary a check involves holds one, the program names
+/// no implementation the check could contradict, and the slot keeps the proof
+/// ordinary resolution gives it.
+fn refuses<'db>(db: &'db dyn HirAnalysisDb, dictionaries: &[Option<EvidenceId<'db>>]) -> bool {
+    dictionaries
+        .iter()
+        .any(|proof| proof.is_some_and(|proof| proof.has_named_impl(db)))
 }
 
 #[salsa::tracked(returns(copy))]
@@ -2798,6 +2801,14 @@ fn received_in_walk_order<'db>(
             pending[index] = goals[index].is_none();
             continue;
         }
+        // The first pass has two bodies, one for a use or the conditions of an
+        // implementation and one for an instance. They apply one slot rule and
+        // differ in the preference among the candidates, in the reading of a
+        // declared bound that stands after the bound it implies, and in where a
+        // missing root is proved. Where a missing route is unnamed, the use keeps
+        // the answer of another route and the instance gives the slot its own
+        // proof or the ordinary one, so the two bodies stay apart. `refuses` is
+        // the one test for where a missing route refuses.
         if !matches!(fallback, Fallback::Instance) {
             // A use or the conditions of an implementation.
             let goal = goal_at(index);
@@ -2832,7 +2843,7 @@ fn received_in_walk_order<'db>(
                     // yet, or none that can be.
                     let unreadable = parent_declared || !pending[parent];
                     blocked |= unreadable;
-                    if unreadable && names_impl(db, own[index]) {
+                    if unreadable && refuses(db, &[own[index]]) {
                         refusal = Some(Refusal::NoComponent {
                             root: Some(parent_goal),
                         });
@@ -2856,7 +2867,7 @@ fn received_in_walk_order<'db>(
                     Projection::Pending => {}
                     Projection::Refused | Projection::Unfollowed => {
                         blocked = true;
-                        if names_impl(db, Some(offered)) || names_impl(db, own[index]) {
+                        if refuses(db, &[Some(offered), own[index]]) {
                             refusal = Some(missing_route(parent, projection));
                         }
                     }
@@ -2955,15 +2966,16 @@ fn received_in_walk_order<'db>(
                 .filter(|edge| edge.child as usize == index)
                 .map(|edge| edge.parent as usize)
                 .filter(|&parent| parent != index && closed[parent]);
-            !names_impl(db, own[index])
-                && !implying.into_iter().any(|parent| {
-                    let dictionary = if parent < index {
+            let dictionaries: Vec<_> = std::iter::once(own[index])
+                .chain(implying.map(|parent| {
+                    if parent < index {
                         entries[parent]
                     } else {
                         own[parent]
-                    };
-                    names_impl(db, dictionary)
-                })
+                    }
+                }))
+                .collect();
+            !refuses(db, &dictionaries)
         };
         if ordinary {
             entries[index] = own[index].or_else(|| prove(db, cx, goal_at(index)));
@@ -2978,8 +2990,8 @@ fn received_in_walk_order<'db>(
     // read, whatever they are.
     let active = inputs
         .iter()
-        .any(|input| names_impl(db, input.own) || names_impl(db, input.offer))
-        || rows.iter().any(|row| names_impl(db, row.proof))
+        .any(|input| refuses(db, &[input.own, input.offer]))
+        || rows.iter().any(|row| refuses(db, &[row.proof]))
         || matches!(fallback, Fallback::Use { chosen: true });
     let reads_components = matches!(fallback, Fallback::Conditions);
     if !active && !reads_components {
@@ -3014,7 +3026,7 @@ fn received_in_walk_order<'db>(
             let projection = project_step(db, source, edge.step, Some(goal_at(child)), assumptions);
             let reason = match projection {
                 Projection::Refused | Projection::Unfollowed
-                    if names_impl(db, Some(source)) || names_impl(db, Some(entry)) =>
+                    if refuses(db, &[Some(source), Some(entry)]) =>
                 {
                     Some(missing_route(parent, projection))
                 }
@@ -3066,7 +3078,7 @@ fn received_in_walk_order<'db>(
                 )
                 .collect::<Vec<_>>()
         };
-        let named = |slot: usize| closed[slot] && names_impl(db, entries[slot]);
+        let named = |slot: usize| closed[slot] && refuses(db, &[entries[slot]]);
         // A derivation that finds no dictionary or no component refuses only a
         // member read from a dictionary that holds a named implementation.
         let applies = |member: &Component<'db>, reason: &Refusal<'db>| {
@@ -3193,7 +3205,7 @@ fn received_in_walk_order<'db>(
                 continue;
             }
             let root = roots(member).into_iter().find(|&root| named(root));
-            let value_named = names_impl(db, values[position]);
+            let value_named = refuses(db, &[values[position]]);
             if let Some(root) = root.or_else(|| value_named.then_some(member.root as usize)) {
                 refuse_goal(
                     &mut refused,
