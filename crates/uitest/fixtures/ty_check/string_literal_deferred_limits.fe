@@ -1,0 +1,70 @@
+// A call whose method name several traits give is deferred as for a receiver
+// of a known type, and keeps the limits of such a deferred call: a closure
+// argument has no expected type, a closure's effects are known only after its
+// body, and a bound on a generic parameter does not rule a trait out.
+use core::abi::DynString
+struct Log {
+    n: u256,
+}
+trait A1 {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E
+}
+trait A2 {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E
+}
+impl<const N: usize> A1 for String<N> {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E {
+        f(1)
+    }
+}
+impl A2 for DynString {
+    fn ap<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E {
+        f(2)
+    }
+}
+trait B1 {
+    fn bp<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E
+}
+trait B2 {
+    fn bp(self, _ x: u8) -> u8
+}
+impl<const N: usize> B1 for String<N> {
+    fn bp<F: Fn(u8) -> u8>(self, _ f: F) -> u8 uses F::E {
+        f(1)
+    }
+}
+impl B2 for DynString {
+    fn bp(self, _ x: u8) -> u8 {
+        x
+    }
+}
+trait N1 {
+    fn note(self) -> u256 uses (log: Log)
+}
+trait N2 {
+    fn note(self) -> u256 uses (log: Log)
+}
+impl<const N: usize> N1 for String<N> {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + 2
+    }
+}
+impl N2 for DynString {
+    fn note(self) -> u256 uses (log: Log) {
+        log.n + 1000
+    }
+}
+fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E {
+    f()
+}
+fn closure_argument() -> u8 {
+    "ab".ap(|x| x + 10)
+}
+fn number_for_closure_bound() -> u8 {
+    "ab".bp(7)
+}
+fn effect_in_closure() -> u256 {
+    with (Log = Log { n: 5 }) {
+        apply(|| "ab".note())
+    }
+}

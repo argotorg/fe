@@ -1,0 +1,63 @@
+// Two literals whose method results meet in an `if`: each literal takes its
+// default, so the branches disagree, whichever call is written first.
+use core::abi::DynString
+trait P {
+    type Out
+    fn p(self) -> Self::Out
+}
+impl<const N: usize> P for String<N> {
+    type Out = u8
+    fn p(self) -> u8 {
+        1
+    }
+}
+impl P for DynString {
+    type Out = u16
+    fn p(self) -> u16 {
+        2
+    }
+}
+trait Q {
+    type Out
+    fn q(self) -> Self::Out
+}
+impl<const N: usize> Q for String<N> {
+    type Out = u16
+    fn q(self) -> u16 {
+        3
+    }
+}
+impl Q for DynString {
+    type Out = u8
+    fn q(self) -> u8 {
+        4
+    }
+}
+trait W {
+    fn w(self) -> u256
+}
+impl W for u8 {
+    fn w(self) -> u256 {
+        8
+    }
+}
+impl W for u16 {
+    fn w(self) -> u256 {
+        16
+    }
+}
+fn width<T: W>(_ t: own T) -> u256 {
+    t.w()
+}
+fn pq(_ c: bool) -> u256 {
+    let x = "ab".p()
+    let y = "cd".q()
+    let z = if c { x } else { y }
+    width(z)
+}
+fn qp(_ c: bool) -> u256 {
+    let y = "cd".q()
+    let x = "ab".p()
+    let z = if c { x } else { y }
+    width(z)
+}

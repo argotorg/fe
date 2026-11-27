@@ -35,10 +35,7 @@ use crate::analysis::{
         trait_resolution::{
             TraitSolveCx, check_trait_inst_wf, constraint::collect_func_decl_constraints,
         },
-        ty_def::{
-            BorrowKind, InvalidCause, Kind, ShapeCon, StringFallback, TyBase, TyData, TyFlags,
-            TyId, TyVarSort,
-        },
+        ty_def::{BorrowKind, InvalidCause, Kind, ShapeCon, TyBase, TyData, TyFlags, TyId},
         ty_error::emit_invalid_ty_error,
         ty_lower::{CompleteSubst, collect_generic_params, lower_generic_arg_list},
         visitor::{TyVisitable, TyVisitor, collect_flags},
@@ -925,31 +922,7 @@ impl<'db> Callable<'db> {
             // `take<Pair>(p.at())` passes `Pair`'s step.
             let shape = param.shape.map_tys(db, &mut |ty| tc.normalize_ty(ty));
             let expected = tc.normalize_ty(shape.erased_ty(db));
-            let given_ty = tc.normalize_ty(given.expr_prop.ty);
-            let given_string_source_ty = given.expr_prop.binding.map_or(given_ty, |binding| {
-                tc.normalize_ty(tc.env.lookup_binding_ty(&binding))
-            });
-            let mut actual = if matches!(self.callable_def, CallableDef::Func(func) if func.is_const(db))
-                && expected.is_ty_var(db)
-                && let TyData::TyVar(var) = given_string_source_ty.base_ty(db).data(db)
-                && let TyVarSort::String {
-                    min_len,
-                    fallback: StringFallback::Fixed,
-                } = var.sort
-            {
-                let fixed_string_ty = TyId::string_with_len(db, min_len);
-                if let Some(binding) = given.expr_prop.binding {
-                    tc.equate_ty(
-                        tc.env.lookup_binding_ty(&binding),
-                        fixed_string_ty,
-                        given.expr_span.clone(),
-                    );
-                }
-                tc.equate_ty(given.expr_prop.ty, fixed_string_ty, given.expr_span.clone());
-                fixed_string_ty
-            } else {
-                given.expr_prop.ty
-            };
+            let mut actual = given.expr_prop.ty;
 
             let is_receiver = has_receiver && i == 0;
             let diagnosed = check_param_arg(tc, &mut given, &shape, is_receiver);

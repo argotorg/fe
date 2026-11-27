@@ -1,0 +1,12 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_inherent_signatures_differ.fe
+---
+error[8-0014]: type must be known
+   ┌─ string_literal_inherent_signatures_differ.fe:12:8
+   │
+12 │     "".is_empty()
+   │     -- ^^^^^^^^ the type of this string literal is needed here
+   │     │
+   │     annotate this literal as `String<N>` or `DynString`

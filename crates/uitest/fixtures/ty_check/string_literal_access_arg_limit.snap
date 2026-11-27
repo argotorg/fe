@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_access_arg_limit.fe
+---
+error[8-0070]: an access is not a value
+   ┌─ string_literal_access_arg_limit.fe:39:13
+   │
+39 │     "ab".rr(ref v)
+   │     ----    ^^^^^ this access is used as a value
+   │     │
+   │     the call waits for the type of this literal; annotate it as `String<N>` or `DynString`
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection
+
+error[8-0070]: an access is not a value
+   ┌─ string_literal_access_arg_limit.fe:43:13
+   │
+43 │     "ab".bm(mut c)
+   │     ----    ^^^^^ this access is used as a value
+   │     │
+   │     the call waits for the type of this literal; annotate it as `String<N>` or `DynString`
+   │
+   = bind an access with `let`, pass it to a `mut` or view parameter, or yield it from a projection

@@ -1,0 +1,13 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_effect_missing.fe
+---
+error[8-0036]: missing effect `Log` required by `apply`
+   ┌─ string_literal_effect_missing.fe:24:5
+   │
+24 │     apply(|| "ab".note())
+   │     ^^^^^^^^^^^^^^^^^^^^^ `apply` requires effect `Log` to be in scope
+   │
+   = require it in this function's signature with `uses Log`, so that its callers provide it
+   = or provide it to a block of this function with `with (Log = value) { .. }`

@@ -29,13 +29,49 @@ A literal takes the type its context expects:
 - `[u8; N]`, the literal's bytes, when the context expects a byte array.
 
 When the context leaves the type open, a literal of up to 31 bytes is a
-`String<N>` of its own length and a longer one is a `DynString`. Literals that
-must have one type, such as the branches of an `if`, take the type of the
-longest.
+`String<N>` of its own length and a longer one is a `DynString`. So is a
+literal that begins with a zero byte, since `String<N>` drops leading zero bytes
+from its length; a context that needs a `String<N>` still gives it one.
+Literals that must have one type, such as the branches of an `if`, take the type
+of the longest.
 
 An operator's operand takes the type the operator's impl needs, on either side:
 in `"x" == s`, the literal is a `String<N>` when `s` is one and a `DynString`
 when `s` is one. When impls for both types fit, the default above decides.
+
+A method call on a literal follows the same rule. A trait method is that
+trait's method on the literal, as `Width::width("ab")` is for the trait below:
+its arguments, effects and result come from the trait, and the context, or
+else the default, decides the literal. When several traits give the method
+name, the argument types and the literal's type choose among them once the
+whole body is checked, as for a receiver of a known type. An inherent method
+only one string type has makes the literal that type. A method that one type has
+inherently and the other gets from a trait is refused while the literal's type
+is open, because the two are not the same function; annotate the literal.
+`len` and `byte_at`, which both types have through the trait `StringBytes`, are
+trait methods like any other: the default decides when nothing else does, so
+`"ab".len()` uses `String<2>`. A result whose type
+depends on the literal's type, such as an associated type that differs between
+the two, cannot be cast, called, indexed, matched, iterated, negated or used in
+an operator or a field access until the literal's type is decided; annotate the
+literal. Whether the function a literal is passed to is `const` does not change
+its type.
+
+```fe
+trait Width {
+    fn width(self) -> usize
+}
+impl<const N: usize> Width for String<N> {
+    fn width(self) -> usize { N }
+}
+impl Width for DynString {
+    fn width(self) -> usize { 1000 }
+}
+
+let w = "ab".width()                  // 2: the default, String<2>
+let d: DynString = "ab"
+let v = d.width()                     // 1000
+```
 
 ```fe
 let short = "hello"                 // String<5>

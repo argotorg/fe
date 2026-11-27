@@ -1,0 +1,22 @@
+// The result of a call whose method name two traits give is not known until
+// the literal's type is: a cast of it at once names the literal.
+use core::abi::DynString
+trait R1 {
+    fn rv(self) -> u8
+}
+trait R2 {
+    fn rv(self) -> u16
+}
+impl<const N: usize> R1 for String<N> {
+    fn rv(self) -> u8 {
+        1
+    }
+}
+impl R2 for DynString {
+    fn rv(self) -> u16 {
+        2
+    }
+}
+fn f() -> u256 {
+    "ab".rv() as u256
+}

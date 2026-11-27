@@ -1,0 +1,28 @@
+// The method name comes from two traits, and no trait takes the argument on
+// either string type: no method fits, which is reported where the call is.
+use core::abi::DynString
+trait T1 {
+    fn foo(self, _ x: u8) -> usize
+}
+trait T2 {
+    fn foo(self, _ x: u16) -> usize
+}
+impl<const N: usize> T1 for String<N> {
+    fn foo(self, _ x: u8) -> usize {
+        10 + N
+    }
+}
+impl<const N: usize> T2 for String<N> {
+    fn foo(self, _ x: u16) -> usize {
+        20 + N
+    }
+}
+impl T1 for DynString {
+    fn foo(self, _ x: u8) -> usize {
+        100
+    }
+}
+fn f() -> usize {
+    let x: u32 = 5
+    "ab".foo(x)
+}

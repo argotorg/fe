@@ -1,0 +1,290 @@
+// A string literal's type comes from its context alone, also as a method
+// receiver: a method only one of `String<N>` and `DynString` has fixes the
+// literal to that type, and where both have it the context decides, else the
+// default (`String<len>` up to 31 bytes). Whether a callee is `const` does not
+// matter.
+use core::abi::DynString
+use core::ops::Eq
+use core::text::Text
+
+trait Kind {
+    fn kind(self) -> usize
+}
+impl<const N: usize> Kind for String<N> {
+    fn kind(self) -> usize {
+        N
+    }
+}
+impl Kind for DynString {
+    fn kind(self) -> usize {
+        1000
+    }
+}
+
+trait KindI {
+    fn kind_i(self) -> usize
+}
+impl<const N: usize> KindI for String<N> {
+    fn kind_i(self) -> usize {
+        N
+    }
+}
+
+trait KindD {
+    fn kind_d(self) -> usize
+}
+impl KindD for DynString {
+    fn kind_d(self) -> usize {
+        1000
+    }
+}
+
+trait KindC {
+    const fn kind_c(self) -> usize
+}
+impl<const N: usize> KindC for String<N> {
+    const fn kind_c(self) -> usize {
+        N
+    }
+}
+impl KindC for DynString {
+    const fn kind_c(self) -> usize {
+        1000
+    }
+}
+
+trait Conv {
+    type Out
+    fn conv(self) -> Self::Out
+}
+impl<const N: usize> Conv for String<N> {
+    type Out = u8
+    fn conv(self) -> u8 {
+        1
+    }
+}
+impl Conv for DynString {
+    type Out = u16
+    fn conv(self) -> u16 {
+        1000
+    }
+}
+
+fn kind_of<T: Kind>(_ x: own T) -> usize {
+    x.kind()
+}
+fn kind_of_d<T: KindD>(_ x: own T) -> usize {
+    x.kind_d()
+}
+fn kind_of_i<T: KindI>(_ x: own T) -> usize {
+    x.kind_i()
+}
+
+const fn pass<T>(_ x: own T) -> T {
+    x
+}
+fn npass<T>(_ x: own T) -> T {
+    x
+}
+
+const L: usize = "abc".len()
+const K: usize = "ab".kind_c()
+
+fn two_step_dyn() -> usize {
+    let s = "abc"
+    let n = s.len()
+    let d: DynString = s
+    n + d.len()
+}
+
+fn two_step_widen() -> usize {
+    let s = "ab"
+    let n = s.len()
+    let t: String<16> = s
+    n + t.len()
+}
+
+fn as_bytes_len() -> usize {
+    let b = "ab".as_bytes()
+    b.len()
+}
+
+fn clone_to_dyn() -> usize {
+    let d: DynString = "abc".clone()
+    d.len()
+}
+
+fn clone_to_inline() -> usize {
+    let x: String<3> = "abc".clone()
+    x.len()
+}
+
+fn const_fn_widen() -> usize {
+    let s = pass("ab")
+    let t: String<16> = s
+    t.len()
+}
+
+fn plain_fn_widen() -> usize {
+    let s = npass("ab")
+    let t: String<16> = s
+    t.len()
+}
+
+fn const_fn_to_dyn() -> usize {
+    let d: DynString = pass("ab")
+    d.len()
+}
+
+fn binding_into_const_fn() -> usize {
+    let s = "ab"
+    let u = pass(s)
+    let t: String<16> = s
+    t.len()
+}
+
+fn closure_widened_after() -> usize {
+    let s = "ab"
+    let k = || s.len()
+    let t: String<16> = s
+    k() + t.len()
+}
+
+fn receiver_then_dyn_bound() -> usize {
+    let s = "ab"
+    let n = s.len()
+    kind_of_d(s) + n
+}
+
+fn receiver_then_both_bound() -> usize {
+    let s = "ab"
+    let n = s.len()
+    kind_of(s) + n
+}
+
+fn result_u8() -> u8 {
+    "ab".conv()
+}
+
+fn result_u16() -> u16 {
+    "ab".conv()
+}
+
+fn ok_or_widens() -> Result<String<16>, u256> {
+    Some(5).ok_or("no")
+}
+
+#[test]
+fn bare_receiver_takes_default() {
+    assert!("ab".kind() == 2)
+}
+
+#[test]
+fn plain_fn_receiver_takes_default() {
+    assert!(npass("ab").kind() == 2)
+}
+
+#[test]
+fn const_fn_receiver_takes_default() {
+    assert!(pass("ab").kind() == 2)
+}
+
+#[test]
+fn later_annotation_to_dyn() {
+    assert!(two_step_dyn() == 6)
+}
+
+#[test]
+fn later_widening() {
+    assert!(two_step_widen() == 4)
+}
+
+#[test]
+fn inline_only_method() {
+    assert!(as_bytes_len() == 2)
+    assert!("ab".kind_i() == 2)
+}
+
+#[test]
+fn dyn_only_method() {
+    assert!(!"ab".is_empty())
+    assert!("ab".span().len() == 2)
+    assert!("abc".slice(start: 1, len: 2).len() == 2)
+    assert!("ab".kind_d() == 1000)
+}
+
+#[test]
+fn short_receiver_same_value() {
+    assert!("abc".len() == 3)
+    assert!("ab".byte_at(1) == 0x62)
+    assert!("abc".text_len() == 3)
+}
+
+#[test]
+fn clone_takes_context() {
+    assert!(clone_to_dyn() == 3)
+    assert!(clone_to_inline() == 3)
+    assert!("abc".clone().len() == 3)
+    assert!("abc".clone().span().len() == 3)
+}
+
+#[test]
+fn receiver_in_closure_widened_after() {
+    assert!(closure_widened_after() == 4)
+}
+
+#[test]
+fn const_fn_does_not_fix_literal() {
+    assert!(const_fn_widen() == 2)
+    assert!(plain_fn_widen() == 2)
+    assert!(const_fn_to_dyn() == 2)
+    assert!(binding_into_const_fn() == 2)
+}
+
+#[test]
+fn named_constant_receivers() {
+    assert!(L == 3)
+    assert!(K == 2)
+}
+
+#[test]
+fn bound_decides_dyn() {
+    assert!(kind_of_d("ab") == 1000)
+    assert!(receiver_then_dyn_bound() == 1002)
+}
+
+#[test]
+fn bound_both_takes_default() {
+    assert!(kind_of("ab") == 2)
+    assert!(receiver_then_both_bound() == 4)
+}
+
+#[test]
+fn bound_inline_only() {
+    assert!(kind_of_i("ab") == 2)
+}
+
+#[test]
+fn result_decides() {
+    assert!(result_u8() == 1)
+    assert!(result_u16() == 1000)
+}
+
+#[test]
+fn method_form_eq() {
+    assert!("ab".eq("ab"))
+    assert!("ab" == "ab")
+}
+
+#[test]
+fn long_literal_receiver() {
+    assert!("0123456789012345678901234567890123456789".len() == 40)
+}
+
+#[test]
+fn literal_through_generic_method_widens() {
+    match ok_or_widens() {
+        Result::Ok(v) => assert!(v == 5)
+        Result::Err(_) => assert!(false)
+    }
+}

@@ -4,7 +4,7 @@ use ingot::clone::Clone
 use ingot::hash::{Hash, Hasher, hash_bytes}
 use ingot::mem::forget
 use ingot::num::{IntDowncast, WordValue, from_be, to_be, word_to_usize}
-use ingot::ptr
+use ingot::{ptr, string::StringBytes}
 use ingot::ops::{Drop, Eq, Ord}
 
 /// Errors returned by ABI decoding/encoding helpers.
@@ -1038,10 +1038,6 @@ impl DynString {
         }
     }
 
-    pub fn len(self) -> usize {
-        self.len
-    }
-
     pub fn is_empty(self) -> bool {
         self.len == 0
     }
@@ -1064,8 +1060,14 @@ impl DynString {
     pub fn encoded_span(self) -> ref ptr::MemSpan {
         unsafe { ptr::MemSpan::from_raw_parts(ptr: self.data, len: word_to_usize(self.size)) }
     }
+}
 
-    pub fn byte_at(self, _ index: usize) -> u8 {
+impl StringBytes for DynString {
+    const fn len(self) -> usize {
+        self.len
+    }
+
+    fn byte_at(self, _ index: usize) -> u8 {
         self.span().byte_at(index)
     }
 }

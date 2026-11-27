@@ -1,0 +1,10 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_trait_not_chosen.fe
+---
+error[2-0010]: no method named `foo` found for String `String`
+   ┌─ string_literal_trait_not_chosen.fe:27:10
+   │
+27 │     "ab".foo(x)
+   │          ^^^ method not found in `String`

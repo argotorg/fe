@@ -20,6 +20,7 @@ use crate::{
     core::semantic::ZeroInvalidReason,
     hir_def::TypeAlias,
 };
+use common::diagnostics::Severity;
 use either::Either;
 use salsa::SalsaValue;
 use smallvec1::SmallVec;
@@ -33,6 +34,15 @@ pub enum FuncBodyDiag<'db> {
 }
 
 impl<'db> FuncBodyDiag<'db> {
+    /// How serious this is: the severity its completed diagnostic has. Only a
+    /// body diagnostic can be a warning.
+    pub(crate) fn severity(&self) -> Severity {
+        match self {
+            Self::Body(diag) => diag.severity(),
+            Self::Ty(_) | Self::NameRes(_) => Severity::Error,
+        }
+    }
+
     pub(super) fn to_voucher(&self) -> Box<dyn DiagnosticVoucher + 'db> {
         match self {
             Self::Ty(diag) => diag.to_voucher(),
@@ -725,6 +735,8 @@ pub enum BodyDiag<'db> {
         key: HirTypeId<'db>,
         is_mut: bool,
         closure: DynLazySpan<'db>,
+        /// Where the string literal the call waits on is written, if it does.
+        literal: Option<DynLazySpan<'db>>,
     },
 
     EffectTypeMismatch {
@@ -783,6 +795,13 @@ pub enum BodyDiag<'db> {
     },
 
     TypeMustBeKnown(DynLazySpan<'db>),
+    /// An operation needs the type of a string literal that its context has not
+    /// decided: see `waits_on_open_string_literal`.
+    StringLiteralTypeNeeded {
+        primary: DynLazySpan<'db>,
+        /// Where the literal is written, if known.
+        literal: Option<DynLazySpan<'db>>,
+    },
     TypeSizeOverflow {
         primary: DynLazySpan<'db>,
         ty: TyId<'db>,
@@ -982,6 +1001,8 @@ pub enum BodyDiag<'db> {
     /// `ref p`, `mut p`, or a tuple or sum yield shape used as a value.
     AccessNotValue {
         primary: DynLazySpan<'db>,
+        /// Where the string literal the call waits on is written, if it does.
+        literal: Option<DynLazySpan<'db>>,
     },
 
     /// An `if` or `match` outside a projection's yield whose branches end in
@@ -1470,6 +1491,15 @@ pub enum BodyDiag<'db> {
 }
 
 impl<'db> BodyDiag<'db> {
+    /// How serious this is. Every body diagnostic is an error except the ones
+    /// listed here; the voucher and every other consumer take it from here.
+    pub(crate) fn severity(&self) -> Severity {
+        match self {
+            Self::MutAccessCopied { .. } => Severity::Warning,
+            _ => Severity::Error,
+        }
+    }
+
     pub(super) fn unit_variant_expected(
         db: &'db dyn HirAnalysisDb,
         primary: DynLazySpan<'db>,
@@ -1585,6 +1615,7 @@ impl<'db> BodyDiag<'db> {
             Self::AmbiguousEffect { .. } => 40,
             Self::ReturnedTypeMismatch { .. } => 13,
             Self::TypeMustBeKnown(..) => 14,
+            Self::StringLiteralTypeNeeded { .. } => 14,
             Self::TypeSizeOverflow { .. } => 88,
             Self::NoStorageLayout { .. } => 128,
             Self::InvalidCast { .. } => 55,

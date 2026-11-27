@@ -1,0 +1,28 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_mixed_inherent_trait.fe
+---
+error[8-0014]: type must be known
+   ┌─ string_literal_mixed_inherent_trait.fe:30:15
+   │
+29 │     let s = ""
+   │             -- annotate this literal as `String<N>` or `DynString`
+30 │     let e = s.is_empty()
+   │               ^^^^^^^^ the type of this string literal is needed here
+
+error[8-0014]: type must be known
+   ┌─ string_literal_mixed_inherent_trait.fe:40:15
+   │
+39 │     let s = ""
+   │             -- annotate this literal as `String<N>` or `DynString`
+40 │     let e = s.is_empty()
+   │               ^^^^^^^^ the type of this string literal is needed here
+
+error[8-0014]: type must be known
+   ┌─ string_literal_mixed_inherent_trait.fe:44:8
+   │
+44 │     "".is_empty()
+   │     -- ^^^^^^^^ the type of this string literal is needed here
+   │     │
+   │     annotate this literal as `String<N>` or `DynString`

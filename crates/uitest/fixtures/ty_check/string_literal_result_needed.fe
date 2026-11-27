@@ -1,0 +1,114 @@
+// A result whose type depends on the literal's type, used at once by a cast, a
+// method call, an index or an operator, needs an annotation on the literal.
+use core::abi::DynString
+trait Conv {
+    type Out
+    fn conv(self) -> Self::Out
+}
+impl<const N: usize> Conv for String<N> {
+    type Out = u8
+    fn conv(self) -> u8 {
+        1
+    }
+}
+impl Conv for DynString {
+    type Out = u16
+    fn conv(self) -> u16 {
+        1000
+    }
+}
+trait P {
+    type Out
+    fn p(self) -> Self::Out
+}
+impl<const N: usize> P for String<N> {
+    type Out = u8
+    fn p(self) -> u8 {
+        1
+    }
+}
+impl P for DynString {
+    type Out = u16
+    fn p(self) -> u16 {
+        2
+    }
+}
+trait W {
+    fn w(self) -> u256
+}
+impl W for u8 {
+    fn w(self) -> u256 {
+        8
+    }
+}
+impl W for u16 {
+    fn w(self) -> u256 {
+        16
+    }
+}
+trait Arr {
+    type Out
+    fn arr(self) -> Self::Out
+}
+impl<const N: usize> Arr for String<N> {
+    type Out = [u8; N]
+    fn arr(self) -> [u8; N] {
+        [0; N]
+    }
+}
+impl Arr for DynString {
+    type Out = [u8; 2]
+    fn arr(self) -> [u8; 2] {
+        [1; 2]
+    }
+}
+trait A {
+    type Out
+    fn a(self) -> Self::Out
+}
+trait B {
+    type Out
+    fn b(self) -> Self::Out
+}
+impl<const N: usize> A for String<N> {
+    type Out = u8
+    fn a(self) -> u8 {
+        1
+    }
+}
+impl A for DynString {
+    type Out = u16
+    fn a(self) -> u16 {
+        2
+    }
+}
+impl<const N: usize> B for String<N> {
+    type Out = u8
+    fn b(self) -> u8 {
+        10
+    }
+}
+impl B for DynString {
+    type Out = u16
+    fn b(self) -> u16 {
+        20
+    }
+}
+fn cast_needed() -> u256 {
+    "ab".conv() as u256
+}
+fn call_needed() -> u256 {
+    "ab".p().w()
+}
+fn index_needed(_ c: bool) -> u8 {
+    let s = "ab"
+    let a = s.arr()
+    let z = if c { s } else { "abcd" }
+    a[0]
+}
+fn operator_needed() -> bool {
+    let s = "ab"
+    let x: u16 = s.a()
+    let y = s.b()
+    y == 20
+}

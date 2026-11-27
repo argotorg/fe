@@ -1,0 +1,24 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/string_literal_deferred_no_candidate.fe
+---
+error[2-0010]: no method named `m` found for struct `S`
+   ┌─ string_literal_deferred_no_candidate.fe:32:7
+   │
+32 │     s.m(true)
+   │       ^ method not found in `S`
+
+error[2-0010]: no method named `m` found for struct `S`
+   ┌─ string_literal_deferred_no_candidate.fe:38:7
+   │
+38 │     s.m(true)
+   │       ^ method not found in `S`
+
+warning[8-0121]: `var` copies a `mut` access
+   ┌─ string_literal_deferred_no_candidate.fe:35:9
+   │
+35 │     var w = cell.get_mut()
+   │         ^ this binds a copy of the `u256`, so writes to it do not reach its place
+   │
+   = bind it with `let` to write through the access, or call the read projection to copy

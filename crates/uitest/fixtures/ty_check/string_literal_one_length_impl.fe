@@ -1,0 +1,16 @@
+// A trait implemented for one inline length only: a literal of another length
+// does not satisfy it, and the call is refused as an unsatisfied bound.
+trait Only4 {
+    fn only4(self) -> usize
+}
+impl Only4 for String<4> {
+    fn only4(self) -> usize {
+        44
+    }
+}
+fn shorter() -> usize {
+    "ab".only4()
+}
+fn longer() -> usize {
+    "abcde".only4()
+}

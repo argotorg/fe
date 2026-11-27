@@ -1571,6 +1571,28 @@ impl<'db> TyCheckEnv<'db> {
         self.deferred.push(DeferredTask::Method(pending))
     }
 
+    /// The goals of the trait obligations that still wait.
+    pub(super) fn pending_obligation_goals(&self) -> Vec<TraitInstId<'db>> {
+        self.deferred
+            .iter()
+            .filter_map(|task| match task {
+                DeferredTask::Obligation(obligation) => Some(obligation.goal),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The retained type equalities that still wait.
+    pub(super) fn pending_type_equalities(&self) -> Vec<TypeEquality<'db>> {
+        self.deferred
+            .iter()
+            .filter_map(|task| match task {
+                DeferredTask::TypeEquality(equality) => Some(equality.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(super) fn register_pending_effects(&mut self, pending: PendingEffects<'db>) {
         self.deferred.push(DeferredTask::Effects(pending))
     }
@@ -2639,6 +2661,21 @@ impl<'db, 'a> Prober<'db, 'a> {
     }
 }
 
+/// The type a string literal of `min_len` bytes takes when nothing else decides
+/// it: its inline `String`, or a `DynString` if its fallback says so.
+pub(super) fn string_literal_default_ty<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    min_len: usize,
+    fallback: StringFallback,
+) -> TyId<'db> {
+    match fallback {
+        StringFallback::Dynamic => resolve_lib_type_path(db, scope, "core::abi::DynString")
+            .unwrap_or_else(|| TyId::string_with_len(db, min_len)),
+        StringFallback::Fixed => TyId::string_with_len(db, min_len),
+    }
+}
+
 impl<'db> TyFolder<'db> for Prober<'db, '_> {
     fn fold_ty(&mut self, db: &'db dyn HirAnalysisDb, ty: TyId<'db>) -> TyId<'db> {
         let ty = self.table.fold_ty(db, ty);
@@ -2660,13 +2697,7 @@ impl<'db> TyFolder<'db> for Prober<'db, '_> {
 
         // String type variable fallback.
         if let TyVarSort::String { min_len, fallback } = var.sort {
-            match fallback {
-                StringFallback::Dynamic => {
-                    resolve_lib_type_path(db, self.scope, "core::abi::DynString")
-                        .unwrap_or_else(|| TyId::string_with_len(db, min_len))
-                }
-                StringFallback::Fixed => TyId::string_with_len(db, min_len),
-            }
+            string_literal_default_ty(db, self.scope, min_len, fallback)
         } else {
             ty.super_fold_with(db, self)
         }
@@ -2711,6 +2742,9 @@ pub(super) struct PendingMethodCandidate<'db> {
     pub inst: TraitInstId<'db>,
     pub method: Func<'db>,
     pub needs_confirmation: bool,
+    /// Its `Self` is an open string literal: it fits only a type that
+    /// implements the trait.
+    pub literal_self: bool,
 }
 
 /// `-inner`, at `expr`, on an integer whose type is not yet known.

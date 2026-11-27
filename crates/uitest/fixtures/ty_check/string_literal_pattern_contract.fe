@@ -1,0 +1,34 @@
+// The result of a method on an open string literal as a `match` scrutinee in
+// a contract handler is refused when it is checked, not when it is built.
+use core::abi::DynString
+use std::abi::sol
+trait P {
+    type Out
+    fn p(self) -> Self::Out
+}
+impl<const N: usize> P for String<N> {
+    type Out = u8
+    fn p(self) -> u8 {
+        1
+    }
+}
+impl P for DynString {
+    type Out = u16
+    fn p(self) -> u16 {
+        2
+    }
+}
+msg M {
+    #[selector = sol("f()")]
+    F -> u256,
+}
+pub contract C {
+    recv M {
+        F -> u256 {
+            match "ab".p() {
+                1 => 10
+                _ => 20
+            }
+        }
+    }
+}

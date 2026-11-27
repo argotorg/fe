@@ -1,0 +1,120 @@
+// A result whose type depends on an open string literal, taken apart by a
+// pattern, iterated by `for` or negated: the literal's type is needed.
+use core::abi::DynString
+trait P {
+    type Out
+    fn p(self) -> Self::Out
+}
+impl<const N: usize> P for String<N> {
+    type Out = u8
+    fn p(self) -> u8 {
+        1
+    }
+}
+impl P for DynString {
+    type Out = u16
+    fn p(self) -> u16 {
+        2
+    }
+}
+trait Pt {
+    type Out
+    fn pt(self) -> Self::Out
+}
+impl<const N: usize> Pt for String<N> {
+    type Out = (u8, u8)
+    fn pt(self) -> (u8, u8) {
+        (1, 3)
+    }
+}
+impl Pt for DynString {
+    type Out = (u16, u16)
+    fn pt(self) -> (u16, u16) {
+        (2, 4)
+    }
+}
+trait Arr {
+    type Out
+    fn arr(self) -> Self::Out
+}
+impl<const N: usize> Arr for String<N> {
+    type Out = [u8; 2]
+    fn arr(self) -> [u8; 2] {
+        [1; 2]
+    }
+}
+impl Arr for DynString {
+    type Out = [u16; 2]
+    fn arr(self) -> [u16; 2] {
+        [2; 2]
+    }
+}
+trait Sg {
+    type Out
+    fn sg(self) -> Self::Out
+}
+impl<const N: usize> Sg for String<N> {
+    type Out = i8
+    fn sg(self) -> i8 {
+        1
+    }
+}
+impl Sg for DynString {
+    type Out = i16
+    fn sg(self) -> i16 {
+        2
+    }
+}
+trait Fl {
+    type Out
+    fn fl(self) -> Self::Out
+}
+impl<const N: usize> Fl for String<N> {
+    type Out = bool
+    fn fl(self) -> bool {
+        true
+    }
+}
+impl Fl for DynString {
+    type Out = u8
+    fn fl(self) -> u8 {
+        2
+    }
+}
+fn match_method_form() -> u256 {
+    match "ab".p() {
+        1 => 10
+        _ => 20
+    }
+}
+fn match_path_form() -> u256 {
+    match P::p("ab") {
+        1 => 10
+        _ => 20
+    }
+}
+fn match_after_let() -> u256 {
+    let v = "ab".p()
+    match v {
+        1 => 10
+        _ => 20
+    }
+}
+fn let_tuple() -> u8 {
+    let (_a, b) = "ab".pt()
+    b
+}
+fn for_loop() -> u256 {
+    var t: u256 = 0
+    for _x in "ab".arr() {
+        t += 1
+    }
+    t
+}
+fn negate() -> i16 {
+    let _v = -"ab".sg()
+    0
+}
+fn not() -> bool {
+    !"ab".fl()
+}
