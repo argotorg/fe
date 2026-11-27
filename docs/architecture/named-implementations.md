@@ -90,7 +90,9 @@ where no proof supplied to the body selects one. A component below a concrete
 bound the walk added is fixed by the implementation that defines the associated
 type, read through ordinary normalization (`component_walk`); the walk of
 assumptions (`extend_all_bounds`) reads no implementation, because the
-implementations are found by lowering headers that read it.
+implementations are found by lowering headers that read it. A refusal names each
+route by the bound it starts from and the steps after it (`RouteRef`), and the
+implementation each route gives.
 
 ## Instances
 
@@ -153,10 +155,17 @@ premise can change when the element becomes packed.
 - There are no evidence values, `prove` expressions or constraint kinds in
   the language.
 - Implied bounds are followed four associated-type levels below a bound that
-  an equality fixes, each level fixed by the implementation that defines it.
-  Beyond that, a program whose dictionaries involve a named
-  implementation is refused (16-0019); a program that involves none is
-  unaffected.
+  an equality fixes, each level fixed by the implementation that defines it. A
+  program whose dictionaries involve a named implementation is refused
+  (16-0019) when a bound below that limit would add a new member, even along a
+  single route; a program that involves none is unaffected.
+- A route that returns to a goal through that goal's own dictionary counts as a
+  second route: a named implementation whose associated type leads back to its
+  own bound is refused wherever it is received as a concrete component.
+- A derivation that returns to a projection still being computed is not
+  followed (a salsa cycle in `project_step`, `received_conditions`,
+  `impl_component` or `same_dictionary`); it refuses only where a dictionary on
+  it selects a named implementation.
 - A function item takes the choices in force where it is passed to a callable
   bound, not where the item is written: after
   `let f = with (Alt) { helper<u256> }`, `run(f)` uses the ordinary

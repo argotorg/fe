@@ -125,6 +125,22 @@ is implied in the same way: its dictionary comes from the proof of the
 implementation that defines the type, made where that implementation is
 declared, with the actual dictionaries of its conditions.
 
+A dictionary also holds the dictionaries of the bounds on its own associated
+types, proved where its implementation is declared. When an associated type
+leads back to the same bound, that bound is reached twice. With
+`trait Chain { type Next: Chain }` and `impl Chain for End as E2 { type Next = End }`,
+a function `fn g<H: Holder<Out = End>>()` called as `with (E2) { g<Bx<End>>() }`
+receives `End: Chain` both as `E2` and as the ordinary implementation that `E2`
+holds for `Next`, and the call is rejected. Receiving the bound through a type
+parameter, as `fn f<T: Chain>()` called as `with (E2) { f<End>() }`, is accepted
+and uses `E2`.
+
+Bounds on associated types are followed for four levels below a bound that an
+equality makes concrete, each level fixed by the implementation that defines
+it. If a dictionary that holds a named implementation has bounds below that
+limit, the call is rejected, even when only one route reaches them. A level
+whose bounds lead only to bounds already reached is followed completely.
+
 ## Opening the ordinary implementation
 
 A named implementation's methods see their own implementation. A default
