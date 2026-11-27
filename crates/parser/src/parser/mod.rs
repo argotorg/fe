@@ -79,7 +79,8 @@ pub struct Parser<S: TokenStream> {
 /// its outcome can be reused at the same position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ProbeKind {
-    /// `<Type as Trait>`, as opposed to a comparison or shift.
+    /// `<Type as Trait>`, or `<Type>` before a `::`, as opposed to a
+    /// comparison or shift.
     QualifiedType,
     /// `<<` opening generic arguments whose first argument is a qualified
     /// path, as opposed to a left shift.

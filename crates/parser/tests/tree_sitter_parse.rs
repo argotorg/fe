@@ -215,9 +215,39 @@ fn tree_sitter_parse_newline_lt_continuations() {
             false,
         ),
     ];
+    assert_parse_outcomes(&mut parser, &cases);
+}
 
-    for (name, source, should_error) in cases {
-        let errors = parse_errors(&mut parser, source);
+/// A qualified path names its trait, as the compiler requires: a record's
+/// path may be one, and `<T>::item` is rejected.
+#[test]
+fn tree_sitter_parse_qualified_paths_name_their_trait() {
+    let mut parser = new_parser();
+    let cases = [
+        (
+            "record",
+            "fn f() {\n    <T as Tr>::Assoc { x: 1 }\n}\n",
+            false,
+        ),
+        ("impl", "impl <T as Tr>::Assoc {}\n", false),
+        ("impl_trait_ref", "impl <P as Tr> for P {}\n", true),
+        ("traitless_call", "fn f() {\n    <S>::f()\n}\n", true),
+        (
+            "traitless_record",
+            "fn f() {\n    <T>::Assoc { x: 1 }\n}\n",
+            true,
+        ),
+        ("traitless_type", "fn half() -> <(u8, u8)>::Half {}\n", true),
+        ("traitless_impl", "impl <T>::Assoc {}\n", true),
+    ];
+    assert_parse_outcomes(&mut parser, &cases);
+}
+
+/// Checks that each `(name, source, should_error)` case parses with errors
+/// exactly when `should_error` is set.
+fn assert_parse_outcomes(parser: &mut Parser, cases: &[(&str, &str, bool)]) {
+    for &(name, source, should_error) in cases {
+        let errors = parse_errors(parser, source);
         if should_error {
             assert!(
                 !errors.is_empty(),

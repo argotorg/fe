@@ -113,14 +113,23 @@ impl super::Parse for QualifiedTypeScope {
                 ));
             }
         }
-        if !parser.bump_if(SyntaxKind::AsKw) {
+        if parser.bump_if(SyntaxKind::AsKw) {
+            parser.parse(TraitRefScope::default())?;
+        } else if parser.current_kind() == Some(SyntaxKind::Gt) {
+            // `<T>::item` is read as a qualified path that lacks its trait, so
+            // the error is that, and the rest of the path still parses.
+            parser.add_error(ParseError::Msg(
+                "missing `as Trait` in qualified path; write `<T as Trait>::item`, or `T::item` if `T` is a named type"
+                    .into(),
+                TextRange::empty(parser.end_of_prev_token),
+            ));
+        } else {
             return Err(ParseError::expected(
                 &[SyntaxKind::AsKw],
                 None,
                 parser.end_of_prev_token,
             ));
         }
-        parser.parse(TraitRefScope::default())?;
         if parser.bump_if(SyntaxKind::Gt) {
             Ok(())
         } else {
@@ -180,11 +189,15 @@ pub(super) fn lshift_opens_generic_args<S: TokenStream>(parser: &mut Parser<S>) 
     })
 }
 
+/// Whether a qualified type starts here: `<T as Trait>`, or `<T>` and a `::`,
+/// which lacks its trait and is reported where it is parsed.
 pub(super) fn is_qualified_type<S: TokenStream>(parser: &mut Parser<S>) -> bool {
     parser.probe(ProbeKind::QualifiedType, |parser| {
         parser.bump_if(SyntaxKind::Lt)
             && parse_type(parser, None).is_ok()
-            && parser.current_kind() == Some(SyntaxKind::AsKw)
+            && (parser.current_kind() == Some(SyntaxKind::AsKw)
+                || (parser.bump_if(SyntaxKind::Gt)
+                    && parser.current_kind() == Some(SyntaxKind::Colon2)))
     })
 }
 

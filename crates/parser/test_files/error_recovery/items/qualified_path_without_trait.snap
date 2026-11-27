@@ -1,0 +1,46 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/qualified_path_without_trait.fe
+---
+Root@0..33
+  ItemList@0..32
+    Item@0..32
+      Func@0..32
+        FnKw@0..2 "fn"
+        WhiteSpace@2..3 " "
+        FuncSignature@3..29
+          Ident@3..7 "half"
+          FuncParamList@7..9
+            LParen@7..8 "("
+            RParen@8..9 ")"
+          WhiteSpace@9..10 " "
+          Arrow@10..12 "->"
+          WhiteSpace@12..13 " "
+          PathType@13..29
+            Path@13..29
+              PathSegment@13..23
+                QualifiedType@13..23
+                  Lt@13..14 "<"
+                  TupleType@14..22
+                    LParen@14..15 "("
+                    PathType@15..17
+                      Path@15..17
+                        PathSegment@15..17
+                          Ident@15..17 "u8"
+                    Comma@17..18 ","
+                    WhiteSpace@18..19 " "
+                    PathType@19..21
+                      Path@19..21
+                        PathSegment@19..21
+                          Ident@19..21 "u8"
+                    RParen@21..22 ")"
+                  Gt@22..23 ">"
+              Colon2@23..25 "::"
+              PathSegment@25..29
+                Ident@25..29 "Half"
+        WhiteSpace@29..30 " "
+        BlockExpr@30..32
+          LBrace@30..31 "{"
+          RBrace@31..32 "}"
+  Newline@32..33 "\n"

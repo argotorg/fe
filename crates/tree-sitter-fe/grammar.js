@@ -1021,7 +1021,8 @@ module.exports = grammar({
     ),
 
     record_expression: $ => prec.dynamic(-1, seq(
-      field('type', $.path),
+      // A record's path may be a qualified type, as a pattern's may.
+      field('type', choice($.path, $.qualified_path_type)),
       optional(field('type_arguments', $.generic_arg_list)),
       field('body', $.record_field_list),
     )),

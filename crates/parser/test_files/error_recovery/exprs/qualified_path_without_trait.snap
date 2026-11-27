@@ -1,0 +1,64 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/exprs/qualified_path_without_trait.fe
+---
+Root@0..35
+  CallExpr@0..25
+    PathExpr@0..23
+      Path@0..23
+        PathSegment@0..17
+          QualifiedType@0..17
+            Lt@0..1 "<"
+            ArrayType@1..16
+              LBracket@1..2 "["
+              PathType@2..4
+                Path@2..4
+                  PathSegment@2..4
+                    Ident@2..4 "u8"
+              SemiColon@4..5 ";"
+              WhiteSpace@5..6 " "
+              BlockExpr@6..15
+                LBrace@6..7 "{"
+                WhiteSpace@7..8 " "
+                ExprStmt@8..13
+                  BinExpr@8..13
+                    PathExpr@8..9
+                      Path@8..9
+                        PathSegment@8..9
+                          Ident@8..9 "N"
+                    WhiteSpace@9..10 " "
+                    Plus@10..11 "+"
+                    WhiteSpace@11..12 " "
+                    LitExpr@12..13
+                      Lit@12..13
+                        Int@12..13 "1"
+                WhiteSpace@13..14 " "
+                RBrace@14..15 "}"
+              RBracket@15..16 "]"
+            Gt@16..17 ">"
+        Colon2@17..19 "::"
+        PathSegment@19..23
+          Ident@19..23 "zero"
+    CallArgList@23..25
+      LParen@23..24 "("
+      RParen@24..25 ")"
+  Newline@25..26 "\n"
+  CallExpr@26..34
+    PathExpr@26..32
+      Path@26..32
+        PathSegment@26..29
+          QualifiedType@26..29
+            Lt@26..27 "<"
+            PathType@27..28
+              Path@27..28
+                PathSegment@27..28
+                  Ident@27..28 "S"
+            Gt@28..29 ">"
+        Colon2@29..31 "::"
+        PathSegment@31..32
+          Ident@31..32 "f"
+    CallArgList@32..34
+      LParen@32..33 "("
+      RParen@33..34 ")"
+  Newline@34..35 "\n"
