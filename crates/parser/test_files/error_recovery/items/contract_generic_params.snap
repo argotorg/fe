@@ -1,0 +1,152 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/contract_generic_params.fe
+---
+Root@0..216
+  ItemList@0..215
+    Item@0..44
+      Trait@0..44
+        PubKw@0..3 "pub"
+        WhiteSpace@3..4 " "
+        TraitKw@4..9 "trait"
+        WhiteSpace@9..10 " "
+        Ident@10..15 "Rules"
+        WhiteSpace@15..16 " "
+        TraitItemList@16..44
+          LBrace@16..17 "{"
+          Newline@17..18 "\n"
+          WhiteSpace@18..22 "    "
+          Func@22..42
+            FnKw@22..24 "fn"
+            WhiteSpace@24..25 " "
+            FuncSignature@25..42
+              Ident@25..32 "initial"
+              FuncParamList@32..34
+                LParen@32..33 "("
+                RParen@33..34 ")"
+              WhiteSpace@34..35 " "
+              Arrow@35..37 "->"
+              WhiteSpace@37..38 " "
+              PathType@38..42
+                Path@38..42
+                  PathSegment@38..42
+                    Ident@38..42 "u256"
+          Newline@42..43 "\n"
+          RBrace@43..44 "}"
+    Newline@44..46 "\n\n"
+    Item@46..106
+      Contract@46..106
+        PubKw@46..49 "pub"
+        WhiteSpace@49..50 " "
+        ContractKw@50..58 "contract"
+        WhiteSpace@58..59 " "
+        Ident@59..71 "GenericMatch"
+        Error@71..81
+          GenericParamList@71..81
+            Lt@71..72 "<"
+            TypeGenericParam@72..80
+              Ident@72..73 "G"
+              TypeBoundList@73..80
+                Colon@73..74 ":"
+                WhiteSpace@74..75 " "
+                TypeBound@75..80
+                  TraitRef@75..80
+                    Path@75..80
+                      PathSegment@75..80
+                        Ident@75..80 "Rules"
+            Gt@80..81 ">"
+        WhiteSpace@81..82 " "
+        LBrace@82..83 "{"
+        Newline@83..84 "\n"
+        WhiteSpace@84..88 "    "
+        ContractFields@88..104
+          RecordFieldDef@88..103
+            MutKw@88..91 "mut"
+            WhiteSpace@91..92 " "
+            Ident@92..97 "state"
+            Colon@97..98 ":"
+            WhiteSpace@98..99 " "
+            PathType@99..103
+              Path@99..103
+                PathSegment@99..103
+                  Ident@99..103 "u256"
+          Comma@103..104 ","
+        Newline@104..105 "\n"
+        RBrace@105..106 "}"
+    Newline@106..108 "\n\n"
+    Item@108..179
+      Contract@108..179
+        ContractKw@108..116 "contract"
+        WhiteSpace@116..117 " "
+        Ident@117..125 "WithUses"
+        Error@125..143
+          GenericParamList@125..143
+            Lt@125..126 "<"
+            TypeGenericParam@126..127
+              Ident@126..127 "T"
+            Comma@127..128 ","
+            WhiteSpace@128..129 " "
+            ConstGenericParam@129..142
+              ConstKw@129..134 "const"
+              WhiteSpace@134..135 " "
+              Ident@135..136 "N"
+              Colon@136..137 ":"
+              WhiteSpace@137..138 " "
+              PathType@138..142
+                Path@138..142
+                  PathSegment@138..142
+                    Ident@138..142 "u256"
+            Gt@142..143 ">"
+        WhiteSpace@143..144 " "
+        UsesClause@144..159
+          UsesKw@144..148 "uses"
+          WhiteSpace@148..149 " "
+          UsesParamList@149..159
+            LParen@149..150 "("
+            UsesParam@150..158
+              Ident@150..153 "ctx"
+              Colon@153..154 ":"
+              WhiteSpace@154..155 " "
+              PathType@155..158
+                Path@155..158
+                  PathSegment@155..158
+                    Ident@155..158 "Ctx"
+            RParen@158..159 ")"
+        WhiteSpace@159..160 " "
+        LBrace@160..161 "{"
+        Newline@161..162 "\n"
+        WhiteSpace@162..166 "    "
+        ContractFields@166..177
+          RecordFieldDef@166..177
+            Ident@166..171 "count"
+            Colon@171..172 ":"
+            WhiteSpace@172..173 " "
+            PathType@173..177
+              Path@173..177
+                PathSegment@173..177
+                  Ident@173..177 "u256"
+        Newline@177..178 "\n"
+        RBrace@178..179 "}"
+    Newline@179..181 "\n\n"
+    Item@181..215
+      Contract@181..215
+        ContractKw@181..189 "contract"
+        WhiteSpace@189..190 " "
+        Ident@190..195 "Plain"
+        WhiteSpace@195..196 " "
+        LBrace@196..197 "{"
+        Newline@197..198 "\n"
+        WhiteSpace@198..202 "    "
+        ContractFields@202..213
+          RecordFieldDef@202..213
+            Ident@202..207 "value"
+            Colon@207..208 ":"
+            WhiteSpace@208..209 " "
+            PathType@209..213
+              Path@209..213
+                PathSegment@209..213
+                  Ident@209..213 "u256"
+        Newline@213..214 "\n"
+        RBrace@214..215 "}"
+  Newline@215..216 "\n"

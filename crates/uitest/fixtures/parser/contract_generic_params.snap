@@ -1,0 +1,16 @@
+---
+source: crates/uitest/tests/parser.rs
+expression: diags
+input_file: fixtures/parser/contract_generic_params.fe
+---
+error[1-0001]: contracts cannot have generic parameters
+  ┌─ contract_generic_params.fe:5:26
+  │
+5 │ pub contract GenericMatch<G: Rules> {
+  │                          ^^^^^^^^^^ contracts cannot have generic parameters
+
+error[1-0001]: contracts cannot have generic parameters
+  ┌─ contract_generic_params.fe:9:18
+  │
+9 │ contract WithUses<T, const N: u256> uses (ctx: Ctx) {
+  │                  ^^^^^^^^^^^^^^^^^^ contracts cannot have generic parameters

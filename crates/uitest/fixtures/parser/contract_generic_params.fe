@@ -1,0 +1,15 @@
+pub trait Rules {
+    fn initial() -> u256
+}
+
+pub contract GenericMatch<G: Rules> {
+    mut state: u256,
+}
+
+contract WithUses<T, const N: u256> uses (ctx: Ctx) {
+    count: u256
+}
+
+contract Plain {
+    value: u256
+}

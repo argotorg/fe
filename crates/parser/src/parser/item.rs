@@ -17,7 +17,7 @@ use super::{
     use_tree::{UsePathScope, UseTreeScope},
 };
 use crate::{
-    ExpectedKind, SyntaxKind,
+    ExpectedKind, ParseError, SyntaxKind, TextRange,
     parser::{
         func::{FuncScope, UsesClauseScope},
         pat::parse_recv_arm_pat,
@@ -354,6 +354,22 @@ impl super::Parse for ContractScope {
 
         if parser.find_and_pop(SyntaxKind::Ident, ExpectedKind::Name(SyntaxKind::Contract))? {
             parser.bump();
+        }
+
+        // Contracts have no generic parameters. Report a written list as such
+        // and parse it into an error node, so the body still parses instead of
+        // failing with "contract definition requires a body".
+        if parser.current_kind() == Some(SyntaxKind::Lt) {
+            parser.bump_trivias();
+            let start = parser.current_pos;
+            let checkpoint = parser.enter::<super::ErrorScope>(None);
+            let result = parse_generic_params_opt(parser);
+            parser.leave(checkpoint);
+            parser.add_error(ParseError::Msg(
+                "contracts cannot have generic parameters".into(),
+                TextRange::new(start, parser.end_of_prev_token),
+            ));
+            result?;
         }
 
         // Optional `uses` clause after the contract name
