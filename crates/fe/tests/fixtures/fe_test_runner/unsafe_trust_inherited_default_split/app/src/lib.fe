@@ -1,0 +1,7 @@
+use t::Magic
+use u::S
+
+#[test]
+fn reads_inherited_const_from_untrusted_unsafe_impl() {
+    assert(<S as Magic>::C == 7)
+}

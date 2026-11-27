@@ -6356,6 +6356,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 const_name,
                 assoc_types,
                 inner,
+                evaluation,
             } => {
                 let name = const_name.data(db);
                 let with = if assoc_types.is_empty() {
@@ -6394,16 +6395,26 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: label.span.clone(),
                     });
                 }
+                let (message, note) = if *evaluation {
+                    (
+                        format!(
+                            "the default value of `{name}` cannot be evaluated for this implementation"
+                        ),
+                        "the default is checked and evaluated for each implementation that inherits it, with the types of that implementation",
+                    )
+                } else {
+                    (
+                        format!(
+                            "the default value of `{name}` does not type-check for this implementation"
+                        ),
+                        "the default is checked for each implementation that inherits it, with the types of that implementation",
+                    )
+                };
                 CompleteDiagnostic {
                     severity,
-                    message: format!(
-                        "the default value of `{name}` does not type-check for this implementation"
-                    ),
+                    message,
                     sub_diagnostics,
-                    notes: vec![format!(
-                        "the default is checked for each implementation that inherits it, with the types of that implementation: {}",
-                        inner.message
-                    )],
+                    notes: vec![format!("{note}: {}", inner.message)],
                     error_code,
                 }
             }

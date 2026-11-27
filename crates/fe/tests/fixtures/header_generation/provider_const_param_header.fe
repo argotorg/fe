@@ -1,0 +1,21 @@
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tag<const N: usize> {
+    const fn tag() -> usize
+}
+
+struct Gen {}
+impl<const M: usize> Derive<trait Tag<M>> for Gen {
+    const fn derive(_ r: Record) -> Code<Item> {
+        quote { const fn tag() -> usize { ${M} } }
+    }
+}
+
+struct S { a: u256 }
+impl<const K: usize> Tag<K> for S with (Gen)
+
+#[test]
+fn const_param_trait_header() {
+    assert(<S as Tag<7>>::tag() == 7)
+}

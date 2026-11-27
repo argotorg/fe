@@ -121,9 +121,9 @@ fn quoted_import_scope<'db>(
         ast::UsePathSegmentKind::Ident(name)
             if ctxt.quote_names_resolve_at_producer()
                 && !quote_name_is_bound(
+                    ctxt,
                     first.syntax(),
                     name.text(),
-                    frame.is_sub_quote,
                     Some(import.syntax()),
                 ) =>
         {

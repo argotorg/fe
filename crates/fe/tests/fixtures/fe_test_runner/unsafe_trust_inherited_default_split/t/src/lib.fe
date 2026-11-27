@@ -1,0 +1,4 @@
+pub unsafe trait Magic {
+    type X
+    const C: Self::X = 7
+}

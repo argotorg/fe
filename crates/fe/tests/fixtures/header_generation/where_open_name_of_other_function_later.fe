@@ -1,0 +1,18 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, Where}
+struct T {}
+impl core::ops::Eq for T { fn eq(self, _ other: Self) -> bool { true } }
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let w: Code<Where> = quote(T) { where T: core::ops::Eq }
+        quote(T) {
+            pub fn b(_ x: u256) -> u256 where ${w} { x }
+            pub fn a<T>(_ x: T) -> u256 { 1 }
+        }
+    }
+}
+struct S {}
+impl S with (P)
+#[test]
+fn t() { assert(S::b(5) == 5) }

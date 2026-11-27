@@ -70,7 +70,7 @@ The returned code is the body of the implementation that the header names: funct
 
 ## Writing code
 
-`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template.
+`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template. In an expression, `quote` followed by `{`, or by a parenthesized list of names and `{`, is always a quotation. A struct named `quote` cannot be built with the record literal `quote { x: 42 }`, which is read as a quotation, so it is constructed another way or renamed.
 
 ```fe
 use core::derive::{Derive, DeriveInherent}
@@ -155,6 +155,8 @@ A name that a template takes from the place where it is spliced is listed in par
 ```
 undefined variable `other`
 ```
+
+The same list decides what the items that a statement `${items}` splices into a block mean to the template. In `quote(bump) { ${items} bump() }` the call reaches the `bump` that `items` declares. Without `(bump)` the call is resolved where the template is written, whatever `items` declares.
 
 ## Enums
 
@@ -428,6 +430,10 @@ impl Derive<trait Reading> for ReadsCell {
 The package `app` depends on `dep`, implements `Reading` for a type `Cell` with `impl Reading for Cell with (ReadsCell)` and calls `read()` in a test. `fe test` in `app` is refused with ``error[16-0015]: call reaches unsafe code in `dep`, which is not allowed to use it``. The error labels the call and the `unsafe` block that `dep` wrote, and names `allow_unsafe = true` as the way to trust `dep`. With `dep = { path = "../dep", allow_unsafe = true }` in the `fe.toml` of `app` the test passes.
 
 The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to. It also follows the initializer of each constant that a body reads, in an expression or a pattern, the condition of each `static_assert` of a package being checked, and the `Encode` implementation that a panic with a value, such as `Result::unwrap` on an error, runs to build the revert data. An `unsafe impl` that an untrusted package wrote is refused where code that runs relies on it: a bound that it proves, a method or constant of it, or a default method of its trait.
+
+In `unsafe impl Tr for S with (Provider)`, the package that writes the header asserts the contract of `Tr` for the members that the provider generates, so that package is the one that must be trusted; the provider's package needs trust only for the `unsafe` blocks, and the operations that need them, in its own text.
+
+A provider that runs `unsafe` code while it is evaluated, in `derive` or in a compile-time function that `derive` calls, is judged in the same way. A provider of a package that is not trusted is refused with the same error, reported at the header that runs the provider, also where the header is written in a dependency.
 
 ## What is refused
 

@@ -1,0 +1,13 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, Where}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let w: Code<Where> = quote(T) { where T: core::ops::Eq }
+        quote(T) { pub fn same<T>(_ a: T, _ b: T) -> bool where ${w} { a == b } }
+    }
+}
+struct S {}
+impl S with (P)
+#[test]
+fn t() { assert(S::same<u256>(1, 1) && !S::same<u256>(1, 2)) }

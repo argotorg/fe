@@ -113,3 +113,14 @@ error[8-0156]: failed to evaluate constant pattern
     │
 116 │         A::O => 1
     │         ^^^^ this constant's definition is invalid or depends on this pattern
+
+error[8-0167]: the default value of `D` cannot be evaluated for this implementation
+   ┌─ const_pattern_unsupported.fe:91:6
+   │
+89 │     const D: Self::X = 1 / 0
+   │                        ----- cannot divide by zero
+90 │ }
+91 │ impl Typed for A {
+   │      ^^^^^ `D` is inherited here, with `X = u256`
+   │
+   = the default is checked and evaluated for each implementation that inherits it, with the types of that implementation: division by zero in const context
