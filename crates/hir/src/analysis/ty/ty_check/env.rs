@@ -48,6 +48,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
+        route_text::{normalized_goal, refusal_label},
         shape::Shape,
         subst::substitute_complete,
         trait_def::TraitInstId,
@@ -1868,30 +1869,36 @@ impl<'db> TyCheckEnv<'db> {
                 super::super::diagnostics::BodyDiag::unprepared_provider(span),
             )
         };
+        let (db, scope) = (self.db, prober.scope);
         let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
         {
-            Refusal::Differs { a, .. } => super::super::diagnostics::FuncBodyDiag::from(
+            Refusal::Differs { .. } => super::super::diagnostics::FuncBodyDiag::from(
                 super::super::diagnostics::TyDiagCollection::from(
                     super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
                         span,
-                        primary_goal: refused.goal,
-                        root: a,
+                        label: refusal_label(db, scope, refused.goal, refused.reason),
                     },
                 ),
             ),
-            Refusal::ConditionsDiffer { a, b } => super::super::diagnostics::FuncBodyDiag::from(
-                super::super::diagnostics::TyDiagCollection::from(
-                    super::super::diagnostics::TraitConstraintDiag::ConditionsDiffer {
-                        span,
-                        primary_goal: refused.goal,
-                        a,
-                        b,
-                    },
-                ),
-            ),
-            Refusal::NoComponent { .. } | Refusal::TooDeep { .. } => {
-                failed_proof(refused.goal, span)
+            // A route that cannot be followed, or a dictionary with no such
+            // component, is said with the route: the goal itself may well be
+            // implemented.
+            Refusal::Unfollowed { .. } | Refusal::NoComponent { route: Some(_) } => {
+                super::super::diagnostics::FuncBodyDiag::from(
+                    super::super::diagnostics::TyDiagCollection::from(
+                        super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
+                            span,
+                            label: refusal_label(
+                                db,
+                                scope,
+                                normalized_goal(db, scope, refused.goal),
+                                refused.reason,
+                            ),
+                        },
+                    ),
+                )
             }
+            Refusal::NoComponent { route: None } => failed_proof(refused.goal, span),
         };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.

@@ -77,6 +77,23 @@ becomes an absent one that another implementation could answer. A
 supertrait dictionary is a projection of its subtrait's proof, and every
 path to one bound must give the same dictionary.
 
+One function, `received`, fills and checks the proofs a body receives: the
+proofs of an instance (`instance_evidence`), of a call's declared bounds
+(`declared_bound_evidence_from`) and of a selected implementation's conditions
+(`received_conditions`). A goal of the body is a slot of its layout (the bounds
+it opens, `opened_bounds`) or a concrete component that the slots'
+dictionaries hold (`concrete_components`). Two goals are one goal when
+`same_identity` equates them in the coordinates of the declaration, and each
+goal receives one dictionary. Two dictionaries agree when `same_dictionary`
+says so or when neither selects a named implementation, so nothing is compared
+where no proof supplied to the body selects one. A component below a concrete
+bound the walk added is fixed by the implementation that defines the associated
+type, read through ordinary normalization (`component_walk`); the walk of
+assumptions (`extend_all_bounds`) reads no implementation, because the
+implementations are found by lowering headers that read it. A refusal names each
+route by the bound it starts from and the steps after it (`RouteRef`), and the
+implementation each route gives.
+
 ## Instances
 
 `SemanticInstanceKey::of` keeps the supplied proofs that select a named
@@ -140,9 +157,17 @@ premise can change when the element becomes packed.
   `Constraint` kind and trait families (`trait Name`) describe goals as type
   arguments and have no values.
 - Implied bounds are followed four associated-type levels below a bound that
-  an equality fixes. Beyond that, a program whose dictionaries involve a named
-  implementation is refused (16-0019); a program that involves none is
-  unaffected.
+  an equality fixes, each level fixed by the implementation that defines it. A
+  program whose dictionaries involve a named implementation is refused
+  (16-0019) when a bound below that limit would add a new member, even along a
+  single route; a program that involves none is unaffected.
+- A route that returns to a goal through that goal's own dictionary counts as a
+  second route: a named implementation whose associated type leads back to its
+  own bound is refused wherever it is received as a concrete component.
+- A derivation that returns to a projection still being computed is not
+  followed (a salsa cycle in `project_step`, `received_conditions`,
+  `impl_component` or `same_dictionary`); it refuses only where a dictionary on
+  it selects a named implementation.
 - A function item takes the choices in force where it is passed to a callable
   bound, not where the item is written: after
   `let f = with (Alt) { helper<u256> }`, `run(f)` uses the ordinary
@@ -151,9 +176,9 @@ premise can change when the element becomes packed.
 - Inside a call cycle, which of several real disagreements in the callees is
   reported can depend on the order in which they are checked.
 - The message "no ordinary implementation defines its associated outputs" is
-  also given where the ordinary implementation of the goal is ambiguous, in
-  the check at a concrete goal and in the check of a named implementation's
-  header.
+  also given, in the check of a named implementation's header, where the
+  ordinary implementation of the goal is ambiguous. The check at a concrete
+  goal tells the two apart.
 - The runtime lowering error "runtime call requires a selected implementation"
   is not attributed to a callee whose outputs disagree with ordinary
   normalization.

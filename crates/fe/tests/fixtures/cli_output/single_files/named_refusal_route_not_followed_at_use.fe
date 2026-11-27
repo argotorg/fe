@@ -1,0 +1,21 @@
+// A growing associated type received as a plain bound under a choice. The use cannot say whether the dictionary of `N1<Leaf>: Br` reads the chosen implementation, so it is refused, and the label names the route and the implementation, not an implementation that is missing.
+pub trait Br { type A: Br
+    type B: Br
+    fn v() -> u256 }
+pub struct Leaf {}
+pub struct Leaf2 {}
+impl Br for Leaf2 { type A = Leaf2
+    type B = Leaf2
+    fn v() -> u256 { 5 } }
+impl Br for Leaf { type A = Leaf2
+    type B = Leaf2
+    fn v() -> u256 { 1 } }
+impl Br for Leaf as LN { type A = Leaf2
+    type B = Leaf2
+    fn v() -> u256 { 2 } }
+pub struct N1<T> {}
+impl<T: Br> Br for N1<T> { type A = N1<N1<T>>
+    type B = Leaf2
+    fn v() -> u256 { T::v() } }
+fn s<T: Br>() -> u256 { T::v() }
+fn go() -> u256 { with (LN) { s<N1<Leaf>>() } }

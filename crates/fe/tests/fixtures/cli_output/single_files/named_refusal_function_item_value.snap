@@ -1,0 +1,20 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/named_refusal_function_item_value.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/named_refusal_function_item_value.fe
+
+error[16-0019]: conflicting implementations of a bound in `fn f`
+   ┌─ named_refusal_function_item_value.fe:22:60
+   │
+20 │ fn f<B: Tr<A = Foo>, C: Tr2<A = U<Foo>>>() -> u256 { Foo::show() * 1000000 + B::via() * 1000 + C::via2() }
+   │    - the instance of this function that the call builds is refused
+21 │ fn run<G: Fn() -> u256>(_ g: G) -> u256 uses G::E { g() }
+   │                                                     --- called here through a callable bound
+22 │ fn relay<C: Tr2<A = U<Foo>>>() -> u256 { with (Loud) { run(f<W<Foo>, C>) } }
+   │                                                            ^^^^^^^^^^^^ `Foo: Show` receives `Loud` through `B: Tr<A = Foo>` (the bound on `A`) and `impl Show for Foo` through `C: Tr2<A = U<Foo>>` (the bound on `A`, then the bound on `A` of `U<Foo>: Tr`)
+
+
+=== EXIT CODE: 1 ===
