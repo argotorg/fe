@@ -1334,16 +1334,36 @@ impl<'db> PredicateListId<'db> {
             let formal_trait =
                 TraitInstId::new_simple(db, hir_trait, hir_trait.params(db).to_vec());
             if below_concrete && depth >= COMPONENT_DEPTH_LIMIT {
-                // The bounds below this one are not followed. A program whose
+                // The bounds below this one are derived as below, but one that
+                // is not a member yet is not added. A member is cut exactly
+                // when following it would add a member: a program whose
                 // dictionaries hold a named implementation is refused for it.
-                if hir_trait.assoc_types(db).any(|trait_type| {
-                    trait_type.name(db).is_some_and(|assoc| {
-                        TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc)
-                            .assoc_type_bounds(db, trait_type)
-                            .count()
-                            > 0
-                    })
-                }) {
+                // A member whose bounds lead only to members already present
+                // is followed completely, and its derivations are recorded.
+                let mut cut = false;
+                for trait_type in hir_trait.assoc_types(db) {
+                    let Some(assoc) = trait_type.name(db) else {
+                        continue;
+                    };
+                    let assoc_ty = TyId::assoc_ty(db, formal_trait.trait_ref(db), assoc);
+                    for index in 0..assoc_ty.assoc_type_bounds(db, trait_type).count() {
+                        let step = BoundStep::AssocBound {
+                            assoc,
+                            index: index as u32,
+                        };
+                        let Some(trait_inst) = derive(step) else {
+                            continue;
+                        };
+                        if predicate_has_recursive_assoc_projection(db, trait_inst) {
+                            continue;
+                        }
+                        match all_predicates.get_index_of(&trait_inst) {
+                            Some(child) => record(child, step),
+                            None => cut = true,
+                        }
+                    }
+                }
+                if cut {
                     truncated.push(parent);
                 }
                 continue;
@@ -2541,5 +2561,65 @@ impl Hold for X { type A = Foo }
             !shows.iter().any(|bound| bound.args(&db)[0] == foo),
             "`Foo: Show` needs the implementation of `Hold` for `X`"
         );
+    }
+
+    const LIMIT_CHAIN: &str = r#"
+pub trait Chain { type Next: Chain }
+pub struct End0 {}
+impl Chain for End0 { type Next = End0 }
+pub struct E {}
+impl Chain for E { type Next = End0 }
+pub struct L<T> {}
+impl<T: Chain> Chain for L<T> { type Next = T }
+pub trait Holder { type Out: Chain }
+pub struct Bx<T> {}
+impl<T: Chain> Holder for Bx<T> { type Out = L<L<L<T>>> }
+fn g<H: Holder<Out = L<L<L<E>>>>>() {}
+fn h<H: Holder<Out = L<L<L<L<E>>>>>>() {}
+"#;
+
+    /// A member at the depth limit is cut exactly when following it would add
+    /// a member. `End0: Chain` has `Next = End0`, so its bounds lead only to
+    /// itself: it is followed completely, and its derivation from itself is
+    /// recorded. In the longer chain the member at the limit is `E: Chain`,
+    /// whose `Next` is the new member `End0: Chain`, and the cut is real.
+    #[test]
+    fn a_member_at_the_limit_whose_bounds_are_members_is_not_cut() {
+        let mut db = HirAnalysisTestDb::default();
+        let file = db.new_stand_alone("limit_chain.fe".into(), LIMIT_CHAIN);
+        let (top_mod, _) = db.top_mod(file);
+        db.assert_no_diags(top_mod);
+        let chain = |name: &str| {
+            let signature = crate::analysis::ty::ty_check::func_signature(
+                &db,
+                find_func(&db, top_mod, name),
+                None,
+            );
+            signature.bound_walk_keeping_concrete(&db)
+        };
+        let end0 = |walk: &super::BoundWalk<'_>| {
+            walk.list
+                .list(&db)
+                .iter()
+                .position(|bound| bound.pretty_print(&db, true) == "End0: Chain")
+        };
+        let short = chain("g");
+        assert!(short.truncated.is_empty() && !short.capped);
+        let end0_at = end0(short).expect("`End0: Chain` is a member") as u32;
+        assert!(
+            short
+                .edges
+                .iter()
+                .any(|edge| edge.parent == end0_at && edge.child == end0_at),
+            "`End0: Chain` is derived from itself"
+        );
+        let long = chain("h");
+        let e_at = long
+            .list
+            .list(&db)
+            .iter()
+            .position(|bound| bound.pretty_print(&db, true) == "E: Chain")
+            .expect("`E: Chain` is a member") as u32;
+        assert_eq!(long.truncated, vec![e_at]);
     }
 }

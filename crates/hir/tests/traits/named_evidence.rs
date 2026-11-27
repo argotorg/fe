@@ -5777,3 +5777,34 @@ fn evidence_cycle_without_any_named_implementation_is_accepted() {
     assert!(!source.contains("as LN"), "{source}");
     checked_clean(&source);
 }
+
+// A member at the depth limit whose bounds lead only to members already
+// reached is followed completely, so three levels below an equality, ending in
+// a member whose own `Next` is itself, are accepted and read the chosen
+// implementation.
+#[test]
+fn agreement_member_at_the_limit_followed() {
+    values(
+        r#"
+trait Chain { type Next: Chain
+    const fn v() -> u256 }
+struct End0 {}
+impl Chain for End0 { type Next = End0
+    const fn v() -> u256 { 9 } }
+struct E {}
+impl Chain for E { type Next = End0
+    const fn v() -> u256 { 0 } }
+impl Chain for E as E3 { type Next = End0
+    const fn v() -> u256 { 5 } }
+struct L<T> {}
+impl<T: Chain> Chain for L<T> { type Next = T
+    const fn v() -> u256 { T::v() + 1 } }
+trait Holder { type Out: Chain }
+struct Bx<T> {}
+impl<T: Chain> Holder for Bx<T> { type Out = L<L<L<T>>> }
+const fn g<H: Holder<Out = L<L<L<E>>>>>() -> u256 { <H::Out as Chain>::v() }
+const fn go() -> u256 { with (E3) { g<Bx<E>>() } }
+"#,
+        &[("go", 8)],
+    );
+}
