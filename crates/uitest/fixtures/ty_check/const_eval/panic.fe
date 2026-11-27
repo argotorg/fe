@@ -1,0 +1,35 @@
+// The aborting functions stop constant evaluation.
+use std::evm::effects::revert_empty
+
+const fn checked(_ word: u256) -> u256 {
+    if word > 255 {
+        panic()
+    }
+    word
+}
+
+const fn checked_value(_ word: u256) -> u256 {
+    if word > 255 {
+        core::panic_with_value(word)
+    }
+    word
+}
+
+const fn unfinished(_ word: u256) -> u256 {
+    if word > 255 {
+        todo()
+    }
+    word
+}
+
+const fn reverting(_ word: u256) -> u256 {
+    if word > 255 {
+        revert_empty()
+    }
+    word
+}
+
+const SMALL: u256 = checked(7) + checked_value(7) + unfinished(7) + reverting(7)
+const BIG: u256 = checked(256)
+const BIG_VALUE: u256 = checked_value(256)
+const UNFINISHED: u256 = unfinished(256)

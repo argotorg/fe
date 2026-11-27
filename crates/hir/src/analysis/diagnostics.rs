@@ -2769,10 +2769,10 @@ impl DiagnosticVoucher for TyLowerDiag<'_> {
                 error_code,
             },
 
-            Self::ConstEvalPanicked { span, code } => primary_diag(
+            Self::ConstEvalAborted { span, abort } => primary_diag(
                 Severity::Error,
-                "panic in const context",
-                format!("panics with code {code:#x}"),
+                abort.headline(),
+                abort.label(db),
                 span.resolve(db),
                 error_code,
             ),

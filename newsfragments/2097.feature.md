@@ -1,0 +1,1 @@
+The aborting functions `core::panic`, `core::panic_with_value`, `core::todo`, `core::assert`, `std::evm::assert` and `std::evm::effects::revert_empty` are `const fn`s. A `const fn` can call them, and one reached during constant evaluation is a compile error, such as "panic in const context". Called at run time, they abort as before.

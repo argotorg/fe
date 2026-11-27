@@ -33,8 +33,8 @@ use crate::{
             const_check::const_effects_supported,
             const_ty::{ConstTyData, ConstTyId},
             corelib::{
-                CtfeExternIntrinsic, NumericExternIntrinsic, OverflowArithmetic, concrete_usize,
-                ctfe_extern_intrinsic_kind,
+                AbortIntrinsic, CtfeExternIntrinsic, NumericExternIntrinsic, OverflowArithmetic,
+                concrete_usize, ctfe_extern_intrinsic_kind,
             },
             evidence::EvidenceList,
             normalize::normalize_ty,
@@ -43,7 +43,7 @@ use crate::{
                 BodyOwner, EffectParamSite, LocalBinding, ParamSite, infer_body,
                 inference_met_lowering_cycle,
             },
-            ty_def::{InvalidCause, TyData, TyId},
+            ty_def::{ConstAbort, InvalidCause, TyData, TyId},
         },
     },
     core::semantic::storage_slot_span,
@@ -81,10 +81,10 @@ pub enum CtfeError<'db> {
         origin: SemOrigin<'db>,
         message: Option<String>,
     },
-    /// `core::panic_code(code)` was reached.
-    Panicked {
+    /// An aborting call was reached.
+    Aborted {
         origin: SemOrigin<'db>,
-        code: U256,
+        abort: ConstAbort<'db>,
     },
     InvalidOperation {
         origin: SemOrigin<'db>,
@@ -1816,12 +1816,20 @@ impl<'db, 'body> CtfeMachine<'db, 'body> {
             Some(CtfeExternIntrinsic::TrailingZeros) => {
                 self.eval_bit_count(false, result_ty, args, origin)
             }
-            Some(CtfeExternIntrinsic::PanicCode) => {
-                let [code] = args else {
-                    return Err(CtfeError::NotConstEvaluable { origin }.into());
+            Some(CtfeExternIntrinsic::Abort(kind)) => {
+                let abort = match (kind, args) {
+                    (AbortIntrinsic::Panic, []) => ConstAbort::Panic,
+                    (AbortIntrinsic::PanicCode, [code]) => {
+                        ConstAbort::PanicCode(self.expect_u256_const(code, origin)?)
+                    }
+                    (AbortIntrinsic::PanicWithValue, [value]) => {
+                        ConstAbort::PanicWithValue(value.ty(self.db))
+                    }
+                    (AbortIntrinsic::Todo, []) => ConstAbort::Todo,
+                    (AbortIntrinsic::RevertEmpty, []) => ConstAbort::RevertEmpty,
+                    _ => return Err(CtfeError::NotConstEvaluable { origin }.into()),
                 };
-                let code = self.expect_u256_const(code, origin)?;
-                Err(CtfeError::Panicked { origin, code })
+                Err(CtfeError::Aborted { origin, abort })
             }
             Some(CtfeExternIntrinsic::SizeOf) => {
                 return self.eval_intrinsic_size_of(instance, result_ty, args, origin);

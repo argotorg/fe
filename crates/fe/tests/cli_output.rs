@@ -3823,6 +3823,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "code_struct_field_offsets",
     "coin",
     "composed_abi_decoder",
+    "const_fn_panic",
     "const_trait_provider_contract",
     "contract_field_explicit_slot",
     "contract_field_mut_borrow_matrix",

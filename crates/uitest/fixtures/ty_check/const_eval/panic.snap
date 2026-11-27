@@ -1,0 +1,31 @@
+---
+source: crates/uitest/tests/ty_check.rs
+expression: diags
+input_file: fixtures/ty_check/const_eval/panic.fe
+---
+error[3-0073]: panic in const context
+   ┌─ panic.fe:33:19
+   │
+ 6 │         panic()
+   │         ------- panics here
+   ·
+33 │ const BIG: u256 = checked(256)
+   │                   ^^^^^^^^^^^^ while evaluating this
+
+error[3-0073]: panic in const context
+   ┌─ panic.fe:34:25
+   │
+13 │         core::panic_with_value(word)
+   │         ---------------------------- panics with a value of type `u256`
+   ·
+34 │ const BIG_VALUE: u256 = checked_value(256)
+   │                         ^^^^^^^^^^^^^^^^^^ while evaluating this
+
+error[3-0073]: panic in const context
+   ┌─ panic.fe:35:26
+   │
+20 │         todo()
+   │         ------ reaches `todo()`
+   ·
+35 │ const UNFINISHED: u256 = unfinished(256)
+   │                          ^^^^^^^^^^^^^^^ while evaluating this

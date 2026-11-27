@@ -299,7 +299,17 @@ pub(crate) enum CtfeExternIntrinsic {
     MulMod,
     LeadingZeros,
     TrailingZeros,
+    Abort(AbortIntrinsic),
+}
+
+/// An aborting function: constant evaluation stops with an error at a call.
+#[derive(Clone, Copy)]
+pub(crate) enum AbortIntrinsic {
+    Panic,
     PanicCode,
+    PanicWithValue,
+    Todo,
+    RevertEmpty,
 }
 
 pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
@@ -318,7 +328,21 @@ pub(crate) fn ctfe_extern_intrinsic_kind<'db>(
         Some(RuntimeBuiltinFuncKind::TrailingZeros) => {
             return Some(CtfeExternIntrinsic::TrailingZeros);
         }
-        Some(RuntimeBuiltinFuncKind::PanicCode) => return Some(CtfeExternIntrinsic::PanicCode),
+        Some(RuntimeBuiltinFuncKind::Panic) => {
+            return Some(CtfeExternIntrinsic::Abort(AbortIntrinsic::Panic));
+        }
+        Some(RuntimeBuiltinFuncKind::PanicCode) => {
+            return Some(CtfeExternIntrinsic::Abort(AbortIntrinsic::PanicCode));
+        }
+        Some(RuntimeBuiltinFuncKind::PanicWithValue) => {
+            return Some(CtfeExternIntrinsic::Abort(AbortIntrinsic::PanicWithValue));
+        }
+        Some(RuntimeBuiltinFuncKind::Todo) => {
+            return Some(CtfeExternIntrinsic::Abort(AbortIntrinsic::Todo));
+        }
+        Some(RuntimeBuiltinFuncKind::RevertEmpty) => {
+            return Some(CtfeExternIntrinsic::Abort(AbortIntrinsic::RevertEmpty));
+        }
         _ => {}
     }
     if lib_func_matches(db, func, "core::intrinsic::size_of") {

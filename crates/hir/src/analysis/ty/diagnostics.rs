@@ -5,7 +5,7 @@ use super::{
     shape::Shape,
     trait_def::TraitInstId,
     ty_check::{RecordLike, TraitOps},
-    ty_def::{BorrowKind, Kind, TyData, TyId},
+    ty_def::{BorrowKind, ConstAbort, Kind, TyData, TyId},
 };
 use crate::visitor::prelude::*;
 use crate::{analysis::HirAnalysisDb, hir_def::Trait};
@@ -21,7 +21,6 @@ use crate::{
     hir_def::TypeAlias,
 };
 use either::Either;
-use ruint::aliases::U256;
 use salsa::SalsaValue;
 use smallvec1::SmallVec;
 use thin_vec::ThinVec;
@@ -274,9 +273,9 @@ pub enum TyLowerDiag<'db> {
         span: DynLazySpan<'db>,
         message: Option<String>,
     },
-    ConstEvalPanicked {
+    ConstEvalAborted {
         span: DynLazySpan<'db>,
-        code: U256,
+        abort: ConstAbort<'db>,
     },
     ConstEvalNonConstCall(DynLazySpan<'db>),
     ConstEvalDivisionByZero(DynLazySpan<'db>),
@@ -457,7 +456,7 @@ impl TyLowerDiag<'_> {
             Self::InvalidConstTyExpr(_) => 15,
             Self::ConstEvalUnsupported(_) => 23,
             Self::ConstEvalAssertionFailed { .. } => 36,
-            Self::ConstEvalPanicked { .. } => 72,
+            Self::ConstEvalAborted { .. } => 72,
             Self::ConstEvalNonConstCall(_) => 24,
             Self::ConstEvalDivisionByZero(_) => 25,
             Self::ConstEvalOutOfBounds(_) => 50,

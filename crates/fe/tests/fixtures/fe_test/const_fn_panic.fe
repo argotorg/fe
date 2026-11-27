@@ -1,0 +1,88 @@
+// A `const fn` that aborts is a compile error only when it is evaluated at
+// compile time. Called at run time, it traps or reverts.
+use std::evm::Evm
+use std::evm::effects::revert_empty
+
+const fn checked(_ word: u256) -> u256 {
+    if word > 255 {
+        panic()
+    }
+    word
+}
+
+const fn checked_value(_ word: u256) -> u256 {
+    if word > 255 {
+        core::panic_with_value(word)
+    }
+    word
+}
+
+const fn unfinished(_ word: u256) -> u256 {
+    if word > 255 {
+        todo()
+    }
+    word
+}
+
+const fn asserted(_ word: u256) -> u256 {
+    core::assert(word <= 255)
+    word
+}
+
+const fn asserted_evm(_ word: u256) -> u256 {
+    assert(word <= 255)
+    word
+}
+
+const fn reverting(_ word: u256) -> u256 {
+    if word > 255 {
+        revert_empty()
+    }
+    word
+}
+
+const SUM: u256 = checked(1) + checked_value(2) + unfinished(3) + asserted(4) + asserted_evm(5) + reverting(6)
+
+msg CheckMsg {
+    #[selector = 0x01]
+    Fits -> u256,
+    #[selector = 0x02]
+    Panics -> u256,
+    #[selector = 0x03]
+    PanicsWithValue -> u256,
+    #[selector = 0x04]
+    Unfinished -> u256,
+    #[selector = 0x05]
+    Asserts -> u256,
+    #[selector = 0x06]
+    AssertsEvm -> u256,
+    #[selector = 0x07]
+    Reverts -> u256,
+}
+
+pub contract Checker {
+    recv CheckMsg {
+        Fits {} -> u256 {
+            checked(255) + checked_value(255) + unfinished(255) + asserted(255) + asserted_evm(255) + reverting(255)
+        }
+        Panics {} -> u256 { checked(256) }
+        PanicsWithValue {} -> u256 { checked_value(256) }
+        Unfinished {} -> u256 { unfinished(256) }
+        Asserts {} -> u256 { asserted(256) }
+        AssertsEvm {} -> u256 { asserted_evm(256) }
+        Reverts {} -> u256 { reverting(256) }
+    }
+}
+
+#[test]
+fn const_fn_aborts_at_run_time() uses (evm: mut Evm) {
+    assert!(SUM == 21)
+    let checker = evm.create2<Checker>(value: Wei::zero(), args: (), salt: 0)
+    assert!(evm.call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::Fits {}) == 1530)
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::Panics {}).success())
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::PanicsWithValue {}).success())
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::Unfinished {}).success())
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::Asserts {}).success())
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::AssertsEvm {}).success())
+    assert!(!evm.try_call(addr: checker, gas: 1000000, value: Wei::zero(), message: CheckMsg::Reverts {}).success())
+}
