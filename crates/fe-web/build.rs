@@ -1,5 +1,6 @@
 //! Build script for fe-web: rebuilds tree-sitter-fe.wasm when grammar inputs change.
 
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -9,8 +10,12 @@ const FNV1A64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV1A64_PRIME: u64 = 0x100000001b3;
 
 fn main() {
-    let grammar_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tree-sitter-fe");
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    // Read when the script runs: a compiled script can be reused for another
+    // checkout of the crate, where a path fixed at compile time would name
+    // the first one's files.
+    let manifest_dir =
+        PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR"));
+    let grammar_dir = manifest_dir.join("../tree-sitter-fe");
     let vendor_wasm = manifest_dir.join("vendor/tree-sitter-fe.wasm");
     let stamp_file = manifest_dir.join("vendor/tree-sitter-fe.wasm.inputs");
     let inputs = tree_sitter_inputs(&grammar_dir);
