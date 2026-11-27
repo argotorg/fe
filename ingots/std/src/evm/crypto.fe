@@ -4,10 +4,11 @@
 /// Raw memory goes through `core::ptr` and `core::abi` under `unsafe`; calls
 /// go through the effects system (`Call`, `Ctx`).
 ///
-/// Fixed-output precompile wrappers assume the addressed precompile exists on
-/// the active fork and intentionally do not check returndata length on the hot
-/// path. Use `Call.raw_staticcall` for fork probing or explicit handling of
-/// absent precompiles.
+/// Fixed-output precompile wrappers require the call to succeed and to return
+/// exactly the output length of the precompile. A call to an address with no
+/// precompile on the active fork succeeds with empty returndata, so it is
+/// reported as `PrecompileError::CallFailed` instead of an all-zero result.
+/// Use `Call.raw_staticcall` for explicit handling of absent precompiles.
 
 use core::intrinsic
 use core::option::Option
@@ -96,9 +97,10 @@ fn staticcall_memory(
     Result::Ok(out)
 }
 
-// Shared fixed-output precompile call helper. The typed wrappers that use this
-// helper trade fork-probing diagnostics for gas by trusting the known output
-// length of existing precompiles.
+// Shared fixed-output precompile call helper. The output must be exactly `N`
+// bytes: a successful call that returns less means the address holds no
+// precompile on the active fork (an empty account succeeds with no returndata),
+// and the zeroed buffer must not be read as a result.
 #[inline(always)]
 fn staticcall_fixed<const N: usize>(
     addr: u256,
@@ -116,11 +118,35 @@ fn staticcall_fixed<const N: usize>(
         )
     }
 
-    if ok == 0 {
+    if ok == 0 || ops::returndatasize() != N as u256 {
         return Result::Err(PrecompileError::CallFailed)
     }
 
     Result::Ok(out)
+}
+
+// As `staticcall_fixed`, but for a precompile that reports a negative answer
+// with empty returndata (RIP-7212 `p256_verify`). The returndata length is
+// the caller's to inspect.
+#[inline(always)]
+fn staticcall_word_any_len(addr: u256, args: MemSpan) -> Result<PrecompileError, u256> {
+    let out = FixedMemBuffer<32>::alloc()
+    let ok: u256 = unsafe {
+        ops::staticcall_precompile(
+            gas: ops::gas(),
+            addr,
+            args_offset: args.ptr(),
+            args_len: args.len() as u256,
+            ret_offset: out.ptr(),
+            ret_len: out.len() as u256,
+        )
+    }
+
+    if ok == 0 {
+        return Result::Err(PrecompileError::CallFailed)
+    }
+
+    Result::Ok(unsafe { ops::mload(out.ptr()) })
 }
 
 fn staticcall_word(addr: u256, args: MemSpan) -> Result<PrecompileError, u256> {
@@ -509,7 +535,7 @@ pub fn p256_verify(_ data: MemSpan) -> Result<PrecompileError, bool> {
     if !valid_exact_len(data, expected: P256VERIFY_INPUT_LEN) {
         return Result::Err(PrecompileError::InvalidInputLength)
     }
-    match staticcall_word(addr: P256VERIFY_ADDRESS, args: data) {
+    match staticcall_word_any_len(addr: P256VERIFY_ADDRESS, args: data) {
         Result::Ok(word) => Result::Ok(ops::returndatasize() != 0 && word != 0),
         Result::Err(err) => Result::Err(err),
     }

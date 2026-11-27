@@ -244,6 +244,33 @@ uses (evm: Evm)
     unsafe { assert(load_word(ret.ptr()) == 0) }
 }
 
+// A fixed-output wrapper must report an error, never an all-zero `Ok`, when the
+// precompile rejects its input. On a fork that lacks the precompile the call
+// succeeds with empty returndata, and the wrapper must also report an error.
+#[test]
+fn test_fixed_output_wrappers_report_rejected_input_as_error()
+uses (evm: mut Evm)
+{
+    let ptr = ptr::alloc_bytes(256)
+    zero_memory(ptr, len: 256)
+
+    match kzg_point_evaluation(buffer(ptr, 192)) {
+        Result::Ok(_) => assert(false),
+        Result::Err(_) => (),
+    }
+
+    // G1 point with x = 0, y = 1 is not on the curve y^2 = x^3 + 4.
+    unsafe { store_word(ptr: ptr::offset_bytes(ptr, 96), value: 1) }
+    match bls12_g1_add(buffer(ptr, 256)) {
+        Result::Ok(_) => assert(false),
+        Result::Err(_) => (),
+    }
+
+    // RIP-7212 reports an invalid signature as empty returndata: `Ok(false)`.
+    zero_memory(ptr, len: 256)
+    assert(!expect_bool(p256_verify(buffer(ptr, 160))))
+}
+
 #[test]
 fn test_new_fixed_buffer_wrappers_do_not_bubble_failure()
 uses (evm: mut Evm)
