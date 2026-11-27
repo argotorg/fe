@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/named_refusal_at_constant_read.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/named_refusal_at_constant_read.fe
+
+error[16-0019]: conflicting implementations of a bound in `<anon const>`
+   ┌─ named_refusal_at_constant_read.fe:36:57
+   │
+35 │ impl<B: CT<A = Foo>, C: CT2<A = U<Foo>>> HasK for P<B, C> { const K: u256 = Foo::cs() * 1000000 + B::cv() * 1000 + C::cv2() }
+   │                                                                             ----------------------------------------------- the instance of this function that the call builds is refused
+36 │ fn relay<C: CT2<A = U<Foo>>>() -> u256 { with (LoudC) { <P<W<Foo>, C> as HasK>::K } }
+   │                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^ `Foo: CS`: `W<Foo>: CT<A = Foo>` and `V<U<Foo>>: CT2<A = U<Foo>>` supply different implementations
+
+
+=== EXIT CODE: 1 ===

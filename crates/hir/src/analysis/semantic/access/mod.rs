@@ -34,7 +34,7 @@ use crate::{
         analysis_pass::ModuleAnalysisPass,
         diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         semantic::{
-            SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
+            SConst, SemOrigin, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticInstance,
             SemanticInstanceKey,
             diagnostics::{
                 BlockedSemanticBody, SemanticDiagnostic, SemanticDiagnosticId,
@@ -508,7 +508,14 @@ fn collect_semantic_access_with_blocked<'db>(
                 let generated = generated_callees(db, instance)
                     .into_iter()
                     .map(|(key, origin)| (key, at(origin)));
-                let sites: Vec<_> = calls.chain(loops).chain(generated).collect();
+                let constants = constant_reads(db, instance)
+                    .into_iter()
+                    .map(|(key, origin)| (key, at(origin)));
+                let sites: Vec<_> = calls
+                    .chain(loops)
+                    .chain(generated)
+                    .chain(constants)
+                    .collect();
                 // The body's own calls count as the use only where the body is
                 // in the analyzed module.
                 let in_module = owner.scope().top_mod(db) == top_mod;
@@ -522,6 +529,7 @@ fn collect_semantic_access_with_blocked<'db>(
                                 .into_iter()
                                 .map(|(key, _)| key),
                         )
+                        .chain(constant_reads(db, instance).into_iter().map(|(key, _)| key))
                         .map(|key| {
                             let at_use = in_module
                                 .then(|| {
@@ -610,6 +618,38 @@ fn contract_bodies<'db>(
             })
         });
     iter::once(BodyOwner::ContractInit { contract }).chain(arms)
+}
+
+/// The constants a body reads, each with the origin of the read. A read of a
+/// constant is evaluated at compile time, which turns a refused instance of the
+/// constant into an internal failure at code generation: the walk reaches the
+/// instance here, so that its admission is reported at the read.
+fn constant_reads<'db>(
+    db: &'db dyn HirAnalysisDb,
+    instance: SemanticInstance<'db>,
+) -> Vec<(SemanticInstanceKey<'db>, SemOrigin<'db>)> {
+    let SemanticBodyAdmission::Ready(admitted) = semantic_body_admission(db, instance) else {
+        return Vec::new();
+    };
+    let mut reads = Vec::new();
+    for statement in admitted
+        .body(db)
+        .blocks
+        .iter()
+        .flat_map(|block| &block.statements)
+    {
+        if let NStatementKind::Define {
+            expr: NExpr::Const(SConst::Ref(constant)),
+            ..
+        } = &statement.kind
+        {
+            let read = (constant.instance(db), constant.origin(db));
+            if !reads.contains(&read) {
+                reads.push(read);
+            }
+        }
+    }
+    reads
 }
 
 /// The instances the compiler runs for `instance` that no semantic call site
