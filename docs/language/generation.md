@@ -70,7 +70,7 @@ The returned code is the body of the implementation that the header names: funct
 
 ## Writing code
 
-`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template.
+`quote { .. }` makes code a value of type `Code<K>`. The kind `K` is `Item` for functions, constants, associated types and implementations, and `Expr`, `Pat`, `Arm` or `Where` for the fragments that are put together into them. `${..}` splices a value, a field or other code into a template. In an expression, `quote` followed by `{`, or by a parenthesized list of names and `{`, is always a quotation. A struct named `quote` cannot be built with the record literal `quote { x: 42 }`, which is read as a quotation, so it is constructed another way or renamed.
 
 ```fe
 use core::derive::{Derive, DeriveInherent}
@@ -156,6 +156,8 @@ A name that a template takes from the place where it is spliced is listed in par
 undefined variable `other`
 ```
 
+The same list decides what the items that a statement `${items}` splices into a block mean to the template. In `quote(bump) { ${items} bump() }` the call reaches the `bump` that `items` declares. Without `(bump)` the call is resolved where the template is written, whatever `items` declares.
+
 ## Enums
 
 `variant(record, i)` selects one variant. `binders(variant, group)` makes a pattern that binds every field of that variant, and `pattern.at(field)` is the expression for the field that the pattern binds, within the arm that uses the pattern. Two patterns for the same variant in one arm need different group numbers, here 0 and 1. Using the same number twice is refused: `binder group already bound in an enclosing pattern`.
@@ -218,6 +220,8 @@ fn variants_and_payloads_are_compared() {
 - `impl Type with (Provider)` adds inherent members. The provider implements `DeriveInherent`.
 - `impl Trait for Type with (Provider)` implements a trait, including its associated constants and types. The trait may be one of the package, of `core`, of `std` or of a dependency. The provider implements `Derive<trait Trait>`.
 - `with (Provider) { .. }` provides the trait implementation for the goals that the block proves, and only inside it. The provider implements `Derive<trait Trait>`. The trait and the concrete target record must both be declared in the package that contains the block. Lookup matches the complete trait application, including its arguments and defaults. Two providers in the same opening list that match one goal cause an ambiguity before either provider runs. If all scoped openings are inapplicable, ordinary lookup proceeds. A selected provider whose prerequisites fail reports an error. Method lookup in the block does not consider a provider's trait for a receiver the provider cannot serve when another method applies; probing a candidate never runs a provider.
+
+In a `with` list a provider is named only by its type path, as in `with (Provider)`. Any other operand is an ordinary value that supplies an effect, whether or not its type implements `Derive`: `with (Provider {})` and `with (Provider { n: 1 })` provide a `Provider` value and open no provider. A local binding named like the type takes the place of the type, as in any expression.
 
 A header may be generic, as in `impl<T> Wrapper<T> with (Width)`. Its target is a struct or an enum; a header for another type is refused. A request may be written in any module, provided every field and every variant of its target is visible there; in the module that defines the type, its private fields are visible. Otherwise the request is refused:
 
@@ -426,6 +430,10 @@ impl Derive<trait Reading> for ReadsCell {
 The package `app` depends on `dep`, implements `Reading` for a type `Cell` with `impl Reading for Cell with (ReadsCell)` and calls `read()` in a test. `fe test` in `app` is refused with ``error[16-0015]: call reaches unsafe code in `dep`, which is not allowed to use it``. The error labels the call and the `unsafe` block that `dep` wrote, and names `allow_unsafe = true` as the way to trust `dep`. With `dep = { path = "../dep", allow_unsafe = true }` in the `fe.toml` of `app` the test passes.
 
 The check also follows code that runs without a written call. A `Drop` implementation that `dep` generates, with an `unsafe` block, is refused at the binding whose value goes out of scope. The same holds for the `Decode` and `Encode` implementations that a contract's dispatcher applies to the arguments and return values of `recv` arms and to the arguments of `init`, and for a `#[test]` function that an untrusted package contributed to. It also follows the initializer of each constant that a body reads, in an expression or a pattern, the condition of each `static_assert` of a package being checked, and the `Encode` implementation that a panic with a value, such as `Result::unwrap` on an error, runs to build the revert data. An `unsafe impl` that an untrusted package wrote is refused where code that runs relies on it: a bound that it proves, a method or constant of it, or a default method of its trait.
+
+In `unsafe impl Tr for S with (Provider)`, the package that writes the header asserts the contract of `Tr` for the members that the provider generates, so that package is the one that must be trusted; the provider's package needs trust only for the `unsafe` blocks, and the operations that need them, in its own text.
+
+A provider that runs `unsafe` code while it is evaluated, in `derive` or in a compile-time function that `derive` calls, is judged in the same way. A provider of a package that is not trusted is refused with the same error, reported at the header that runs the provider, also where the header is written in a dependency.
 
 ## What is refused
 

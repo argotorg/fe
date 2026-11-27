@@ -1,0 +1,7 @@
+struct quote { x: u256 }
+
+#[test]
+fn construct_struct_named_quote() {
+    let q = quote { x: 42 }
+    assert(q.x == 42)
+}

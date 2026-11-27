@@ -1,0 +1,15 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record}
+const fn check() -> u256 { 1 }
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let a = u::items()
+        quote { pub const fn run() -> u256 { ${a}
+            check() } }
+    }
+}
+struct S {}
+impl S with (P)
+#[test]
+fn template_calls_its_own_check() { assert(S::run() == 1) }

@@ -1,0 +1,3 @@
+use t::S
+#[test]
+fn t() { assert(S::answer() == 42) }

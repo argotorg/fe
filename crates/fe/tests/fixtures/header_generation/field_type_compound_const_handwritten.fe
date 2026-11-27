@@ -1,0 +1,6 @@
+struct S<const N: usize> { f: [u8; N + 1] }
+impl<const M: usize> S<M> {
+    pub fn get(own self) -> [u8; M + 1] { self.f }
+}
+#[test]
+fn t() { assert(S<2> { f: [1, 2, 3] }.get()[1] == 2) }

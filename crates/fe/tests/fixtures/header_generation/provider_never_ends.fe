@@ -1,0 +1,13 @@
+use core::derive::DeriveInherent
+use core::meta::{Record, Code, Item}
+
+struct Loop {}
+impl DeriveInherent for Loop {
+    const fn derive(_ r: Record) -> Code<Item> {
+        while true {}
+        quote { pub const fn f() -> u256 { 0 } }
+    }
+}
+
+struct S { a: u256 }
+impl S with (Loop)

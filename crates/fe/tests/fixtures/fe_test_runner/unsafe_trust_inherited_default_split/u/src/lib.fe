@@ -1,0 +1,4 @@
+pub struct S {}
+unsafe impl t::Magic for S {
+    type X = u256
+}
