@@ -1,0 +1,12 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Expr, Item, Record}
+const fn body() -> Code<Expr> { quote { other } }
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let e = body()
+        quote(other) { pub fn value(self, _ other: u256) -> u256 { ${e} } }
+    }
+}
+struct S {}
+impl S with (P)

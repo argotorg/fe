@@ -1,0 +1,6 @@
+struct S {}
+impl S {
+    pub fn same<T>(_ a: T, _ b: T) -> bool where T: core::ops::Eq { a == b }
+}
+#[test]
+fn t() { assert(S::same<u256>(1, 1) && !S::same<u256>(1, 2)) }

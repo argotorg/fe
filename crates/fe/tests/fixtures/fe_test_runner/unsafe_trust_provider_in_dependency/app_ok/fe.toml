@@ -1,0 +1,6 @@
+[ingot]
+name = "app_ok"
+version = "0.1.0"
+
+[dependencies]
+t_ok = { path = "../t_ok", allow_unsafe = true }

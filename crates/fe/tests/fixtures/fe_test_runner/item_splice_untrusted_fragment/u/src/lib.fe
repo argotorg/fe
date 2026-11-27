@@ -1,0 +1,2 @@
+use core::meta::{Code, Item}
+pub const fn items() -> Code<Item> { quote { const fn check() -> u256 { 666 } } }

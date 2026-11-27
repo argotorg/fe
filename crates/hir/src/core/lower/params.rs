@@ -29,6 +29,14 @@ impl<'db> GenericParamListId<'db> {
             .into_iter()
             .map(|param| GenericParam::lower_ast(ctxt, param))
             .collect::<Vec<_>>();
+        // A generic parameter is a binder of the template that declares it, as a
+        // function parameter is, for the open names of the template and of the
+        // fragments spliced into it.
+        for param in &params {
+            if let Partial::Present(name) = param.name() {
+                ctxt.record_bound_name(name.data(ctxt.db()));
+            }
+        }
         Self::new(ctxt.db(), params)
     }
 
@@ -101,7 +109,7 @@ impl<'db> WhereClauseId<'db> {
     pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WhereClause) -> Self {
         let mut const_idx = 0;
         let mut predicates = Vec::new();
-        Self::lower_ast_into(ctxt, ast, &mut const_idx, &mut predicates);
+        Self::lower_ast_into(ctxt, ast, &mut const_idx, &mut predicates, None);
         Self::new(ctxt.db(), predicates)
     }
 
@@ -110,6 +118,7 @@ impl<'db> WhereClauseId<'db> {
         ast: ast::WhereClause,
         const_idx: &mut usize,
         out: &mut Vec<WhereClausePredicate<'db>>,
+        binders: Option<&rustc_hash::FxHashSet<String>>,
     ) {
         for pred in ast.iter() {
             match pred.kind() {
@@ -134,12 +143,24 @@ impl<'db> WhereClauseId<'db> {
                     if let Some(common::generation::FrozenHoleValue::Code(code)) =
                         ctxt.current_hole(hole.syntax().text_range())
                     {
+                        // The generic parameters that enclose this hole in the
+                        // template, which a fragment inside a fragment shares.
+                        let enclosing;
+                        let binders = match binders {
+                            Some(binders) => binders,
+                            None => {
+                                enclosing =
+                                    super::path::enclosing_generic_param_names(hole.syntax());
+                                &enclosing
+                            }
+                        };
                         Self::lower_code_into(
                             ctxt,
                             &code,
                             hole.syntax().text_range(),
                             const_idx,
                             out,
+                            binders,
                         );
                     } else {
                         ctxt.record_generation_error(
@@ -158,6 +179,7 @@ impl<'db> WhereClauseId<'db> {
         origin_range: parser::TextRange,
         const_idx: &mut usize,
         out: &mut Vec<WhereClausePredicate<'db>>,
+        binders: &rustc_hash::FxHashSet<String>,
     ) {
         use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
         use parser::ast::prelude::*;
@@ -171,7 +193,7 @@ impl<'db> WhereClauseId<'db> {
                 producer_block,
                 holes,
             } => {
-                let (quote, frame) = ctxt.resolve_quote_template(
+                let (quote, mut frame) = ctxt.resolve_quote_template(
                     quote_file,
                     *quote_range,
                     *producer_module,
@@ -179,16 +201,24 @@ impl<'db> WhereClauseId<'db> {
                     true,
                     holes.clone(),
                 );
+                // An open name is taken from the template that splices the
+                // fragment: it must be a generic parameter that encloses the
+                // hole, and it names that parameter where the fragment is
+                // spliced. No other binder of the template counts.
                 for (name, range) in &frame.open_names {
-                    ctxt.file_scoped_error(
-                        frame.quote_top_mod.file(ctxt.db()),
-                        *range,
-                        format!("quoted open name `{name}` has no enclosing binder"),
-                    );
+                    if binders.contains(name) {
+                        frame.destination_names.insert(name.clone());
+                    } else {
+                        ctxt.file_scoped_error(
+                            frame.quote_top_mod.file(ctxt.db()),
+                            *range,
+                            format!("quoted open name `{name}` has no enclosing binder"),
+                        );
+                    }
                 }
                 ctxt.quote_frames.push(frame);
                 if let Some(where_clause) = quote.where_clause().and_then(|w| w.clause()) {
-                    Self::lower_ast_into(ctxt, where_clause, const_idx, out);
+                    Self::lower_ast_into(ctxt, where_clause, const_idx, out, Some(binders));
                 } else if let Some(block) = quote.body() {
                     for stmt in block.stmts() {
                         if let ast::StmtKind::Expr(expr_stmt) = stmt.kind()
@@ -203,6 +233,7 @@ impl<'db> WhereClauseId<'db> {
                                 hole.syntax().text_range(),
                                 const_idx,
                                 out,
+                                binders,
                             );
                         } else {
                             ctxt.record_generation_error(

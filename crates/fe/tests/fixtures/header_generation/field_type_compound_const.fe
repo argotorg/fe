@@ -1,0 +1,13 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, field, field_type}
+struct S<const N: usize> { f: [u8; N + 1] }
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let t = field_type(field(r, 0))
+        quote { pub fn get(own self) -> ${t} { self.f } }
+    }
+}
+impl<const M: usize> S<M> with (P)
+#[test]
+fn t() { assert(S<2> { f: [1, 2, 3] }.get()[1] == 2) }

@@ -1742,8 +1742,15 @@ impl<'db> ItemCode<'db> {
                                     index: field.index(),
                                 };
                                 // A type written without the record's parameters keeps its
-                                // written form; one over them is the instantiated type.
-                                if field.ty(db) != authored_field.ty(db) {
+                                // written form. A type over them is the declared field type,
+                                // which lowering instantiates at the arguments of the
+                                // implementation around the splice (`lower_authored_field`),
+                                // so a projection or a constant expression over a parameter is
+                                // not frozen here. A ground instance means the same
+                                // everywhere and is the instantiated type.
+                                if field.ty(db) != authored_field.ty(db)
+                                    && !field.ty(db).has_param(db)
+                                {
                                     let ty = crate::analysis::ty::normalize::normalize_ty(
                                         db,
                                         field.ty(db),

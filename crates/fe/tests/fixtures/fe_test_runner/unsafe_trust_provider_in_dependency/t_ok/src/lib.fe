@@ -1,0 +1,3 @@
+use u::Evil
+pub struct S { a: u256 }
+impl S with (Evil)

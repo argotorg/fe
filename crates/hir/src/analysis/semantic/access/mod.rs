@@ -407,6 +407,40 @@ pub fn collect_semantic_access_diagnostic_vouchers<'db>(
     collect_semantic_access_with_blocked(db, top_mod, &mut Vec::new())
 }
 
+/// The unsafe trust of the build, for the bodies that evaluating a provider
+/// runs: the same judgment that the walk makes of a body that a call reaches
+/// (`UnsafeTrust::untrusted_site`), built once for the evaluation. It applies to
+/// a header in any package of the dependency graph, since no walk from a trust
+/// root reaches a provider's compile-time evaluation later.
+pub struct EvaluationTrust<'db>(UnsafeTrust<'db>);
+
+impl<'db> EvaluationTrust<'db> {
+    /// The trust for the evaluation of a provider that the header in `top_mod`
+    /// runs.
+    pub fn new(db: &'db dyn HirAnalysisDb, top_mod: TopLevelMod<'db>) -> Self {
+        Self(UnsafeTrust::for_build(db, top_mod))
+    }
+
+    /// The diagnostic for `instance`, a body that the evaluation runs, if it
+    /// holds unsafe code that a package the build does not trust contributed to.
+    pub fn untrusted_use(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+        instance: SemanticInstance<'db>,
+    ) -> Option<Box<dyn DiagnosticVoucher + 'db>> {
+        let (site, author) = self.0.untrusted_site(db, instance)?;
+        let user = instance.key(db).owner(db);
+        Some(Box::new(UntrustedUnsafeUse {
+            root: self.0.root(),
+            call: SemanticDiagnosticSpan::ItemName { owner: user },
+            entry: None,
+            user,
+            site,
+            author,
+        }))
+    }
+}
+
 /// Returns blocked bodies reached by the module's semantic access analysis.
 /// Drivers use their owning modules to recover otherwise suppressed HIR errors.
 pub fn collect_blocked_semantic_bodies<'db>(
@@ -636,6 +670,11 @@ fn collect_semantic_access_with_blocked<'db>(
                     );
                 }
                 SemanticAccessCheckResult::Blocked(body) if !live => blocked.push(body.clone()),
+                SemanticAccessCheckResult::Err(diag)
+                    if crate::analysis::ty::ty_check::access_diag_depends_on_param_instantiation(
+                        db,
+                        diag.diag(db),
+                    ) => {}
                 SemanticAccessCheckResult::Err(diag) if !live => {
                     // The body of a default is walked once for each
                     // implementation that inherits it, and its text is one:

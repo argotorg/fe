@@ -1,0 +1,9 @@
+use u_safe::Good
+
+struct S { a: u256 }
+impl S with (Good)
+
+#[test]
+fn uses_provider_without_unsafe() {
+    assert(S::answer() == 42)
+}

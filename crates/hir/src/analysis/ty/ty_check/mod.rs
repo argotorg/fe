@@ -409,7 +409,10 @@ pub(crate) fn inherited_assoc_const_bodies<'db>(
 /// (`inherited_assoc_const_bodies`). A trait's default whose declared type
 /// mentions a parameter is held only when its own check has no diagnostics at
 /// all: a deferred mismatch is found through the implementations' bodies, which
-/// have no invalid type in them.
+/// have no invalid type in them. What the semantic access walk finds in such a
+/// default when the parameter is abstract and depends on what an implementation
+/// makes of it is left to the implementations
+/// (`access_diag_depends_on_param_instantiation`).
 pub(crate) fn assoc_const_bodies_of<'db>(
     db: &'db dyn HirAnalysisDb,
     item: ItemKind<'db>,
@@ -491,18 +494,28 @@ pub fn check_impl_trait_const_bodies<'db>(
                 origin: origin.to_string(),
             });
             diags.extend(
-                const_body_ctfe_diags_with_context(db, body, expected_ty, policy, context)
-                    .into_iter()
-                    .filter(|diag| {
-                        // ImplTrait::diags_assoc_const_evaluability owns the
-                        // dedicated cycle diagnostic for these declarations.
-                        !matches!(
-                            diag,
-                            FuncBodyDiag::Ty(TyDiagCollection::Ty(
-                                TyLowerDiag::ConstEvalRecursiveConst(_)
-                            ))
-                        )
-                    }),
+                const_body_ctfe_diags_with_context(
+                    db,
+                    BodyOwner::AnonConstBody {
+                        body,
+                        expected: expected_ty,
+                    },
+                    body,
+                    expected_ty,
+                    policy,
+                    context,
+                )
+                .into_iter()
+                .filter(|diag| {
+                    // ImplTrait::diags_assoc_const_evaluability owns the
+                    // dedicated cycle diagnostic for these declarations.
+                    !matches!(
+                        diag,
+                        FuncBodyDiag::Ty(TyDiagCollection::Ty(
+                            TyLowerDiag::ConstEvalRecursiveConst(_)
+                        ))
+                    )
+                }),
             );
         }
     }
@@ -728,6 +741,36 @@ fn diag_depends_on_param_instantiation<'db>(
         FuncBodyDiag::Body(BodyDiag::TypeAnnotationNeeded { .. }) => true,
         _ => false,
     }
+}
+
+/// Whether an access diagnostic of the default of a trait's constant could be
+/// an artifact of walking it with the trait's parameter abstract, as
+/// `diag_depends_on_param_instantiation` decides it for a type diagnostic: the
+/// default is one that is checked per implementation, and the value the
+/// diagnostic is about has a type that mentions a parameter. A copy of a
+/// `Self::X`, which an implementation with a `Copy` `X` makes valid, is such a
+/// diagnostic; a copy of a value of a type that does not depend on the
+/// implementation is not.
+pub(crate) fn access_diag_depends_on_param_instantiation<'db>(
+    db: &'db dyn HirAnalysisDb,
+    diag: &crate::analysis::semantic::diagnostics::SemanticDiagnostic<'db>,
+) -> bool {
+    use crate::analysis::semantic::{SemOrigin, diagnostics::SemanticDiagnosticSpan};
+    let (SemanticDiagnosticSpan::Origin { owner, origin }
+    | SemanticDiagnosticSpan::OriginWithTemplateFallback { owner, origin, .. }) =
+        &diag.primary.span
+    else {
+        return false;
+    };
+    let (BodyOwner::AnonConstBody { body, .. }, SemOrigin::Expr(expr)) = (owner, origin) else {
+        return false;
+    };
+    let Some(ItemKind::Trait(trait_)) = body.scope().parent_item(db) else {
+        return false;
+    };
+    trait_.assoc_consts(db).any(|constant| {
+        constant.default_body(db) == Some(*body) && default_checked_per_implementation(db, constant)
+    }) && infer_body(db, *owner).1.expr_ty(db, *expr).has_param(db)
 }
 
 /// Ground predicates are declaration obligations. Ordinary generic functions
@@ -1684,7 +1727,27 @@ pub(crate) fn const_body_ctfe_diags<'db>(
     expected: TyId<'db>,
     policy: ConstUsePolicy,
 ) -> Vec<FuncBodyDiag<'db>> {
-    const_body_ctfe_diags_with_context(db, body, expected, policy, None)
+    let owner = BodyOwner::AnonConstBody { body, expected };
+    const_body_ctfe_diags_with_context(db, owner, body, expected, policy, None)
+}
+
+/// The CTFE diagnostics of the default of a trait constant as `owner`, an
+/// implementation that inherits it, would hold it: the same as for a constant
+/// that the implementation writes.
+pub(super) fn inherited_const_ctfe_diags<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
+    body: Body<'db>,
+    expected: TyId<'db>,
+) -> Vec<FuncBodyDiag<'db>> {
+    const_body_ctfe_diags_with_context(
+        db,
+        owner,
+        body,
+        expected,
+        ConstUsePolicy::AllowDependent,
+        None,
+    )
 }
 
 struct ConstDiagContext {
@@ -1694,6 +1757,7 @@ struct ConstDiagContext {
 
 fn const_body_ctfe_diags_with_context<'db>(
     db: &'db dyn HirAnalysisDb,
+    owner: BodyOwner<'db>,
     body: Body<'db>,
     expected: TyId<'db>,
     policy: ConstUsePolicy,
@@ -1702,7 +1766,6 @@ fn const_body_ctfe_diags_with_context<'db>(
     if expected.has_invalid(db) {
         return Vec::new();
     }
-    let owner = BodyOwner::AnonConstBody { body, expected };
     let mut diags = Vec::new();
     let require_value = match policy {
         ConstUsePolicy::AllowDependent => false,

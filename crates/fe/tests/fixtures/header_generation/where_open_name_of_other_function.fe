@@ -1,0 +1,19 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, Where}
+struct T {}
+trait Tr<Q> {}
+struct S<X> { x: X }
+impl<X> Tr<T> for S<X> {}
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let w: Code<Where> = quote(T) { where Self: Tr<T> }
+        quote(T) {
+            pub fn a<T>(_ x: T) -> u256 { 1 }
+            pub fn b(own self) -> u256 where ${w} { 7 }
+        }
+    }
+}
+impl<X> S<X> with (P)
+#[test]
+fn t() { assert(S<u256> { x: 1 }.b() == 7) }

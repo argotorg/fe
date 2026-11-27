@@ -1,0 +1,7 @@
+[ingot]
+name = "app_trusted"
+version = "0.1.0"
+
+[dependencies]
+t = { path = "../t", allow_unsafe = true }
+u = { path = "../u", allow_unsafe = true }

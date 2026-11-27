@@ -1,0 +1,25 @@
+use core::derive::DeriveInherent
+use core::meta::{Record, Code, Item, Arm, binders, field, variant}
+
+struct BadEnum {}
+impl DeriveInherent for BadEnum {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let v0 = variant(r, 0)
+        let v1 = variant(r, 1)
+        let p0 = binders(v0, 0)
+        let f1 = field(v1, 0)
+        let e = p0.at(f1)
+        let arms: Code<Arm> = quote {
+            ${p0} => ${e}
+            _ => 0
+        }
+        quote {
+            pub fn bad(self) -> u256 {
+                match self { ${arms} }
+            }
+        }
+    }
+}
+
+enum E { A(u256), B(bool) }
+impl E with (BadEnum)
