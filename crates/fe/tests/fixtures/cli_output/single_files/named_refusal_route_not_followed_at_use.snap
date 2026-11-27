@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/named_refusal_route_not_followed_at_use.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/named_refusal_route_not_followed_at_use.fe
+
+error[6-0003]: trait bound is not satisfied
+   ┌─ named_refusal_route_not_followed_at_use.fe:21:31
+   │
+21 │ fn go() -> u256 { with (LN) { s<N1<Leaf>>() } }
+   │                               ^^^^^^^^^^^^^ `Leaf2: Br` is reached through `T: Br` (the bound on `A`, then the bound on `B` of `N1<N1<Leaf>>: Br`) by a derivation that returns to a dictionary still being formed, and that dictionary holds `LN`
+
+
+=== EXIT CODE: 1 ===

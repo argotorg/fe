@@ -57,6 +57,7 @@ pub mod pattern_analysis;
 pub mod pattern_ir;
 pub mod pattern_types;
 pub mod provider;
+pub(crate) mod route_text;
 pub(crate) mod scratch;
 pub mod shape;
 pub(crate) mod sol_codec;

@@ -1,0 +1,37 @@
+// A constant of an implementation whose conditions reach one goal by two routes with different implementations, read under a choice. The refusal is reported by `fe check` at the read, not at code generation.
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+impl Show for Foo as Quiet { fn show() -> u256 { 30 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+pub trait Tr2 { type A: Tr
+    fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    fn via2() -> u256 { T::via() } }
+pub struct U<T> {}
+impl<T: Show> Tr for U<T> { type A = T
+    fn via() -> u256 { T::show() + 1 } }
+pub trait CS { const fn cs() -> u256 }
+impl CS for Foo { const fn cs() -> u256 { 100 } }
+impl CS for Foo as LoudC { const fn cs() -> u256 { 70 } }
+pub trait CT { type A: CS
+    const fn cv() -> u256 }
+impl<T: CS> CT for W<T> { type A = T
+    const fn cv() -> u256 { T::cs() } }
+impl<T: CS> CT for U<T> { type A = T
+    const fn cv() -> u256 { T::cs() + 1 } }
+pub trait CT2 { type A: CT
+    const fn cv2() -> u256 }
+impl<T: CT> CT2 for V<T> { type A = T
+    const fn cv2() -> u256 { T::cv() } }
+pub trait HasK { const K: u256 }
+pub struct P<B, C> {}
+impl<B: CT<A = Foo>, C: CT2<A = U<Foo>>> HasK for P<B, C> { const K: u256 = Foo::cs() * 1000000 + B::cv() * 1000 + C::cv2() }
+fn relay<C: CT2<A = U<Foo>>>() -> u256 { with (LoudC) { <P<W<Foo>, C> as HasK>::K } }
+fn top() -> u256 { relay<V<U<Foo>>>() }

@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/named_refusal_at_use_single_file.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/named_refusal_at_use_single_file.fe
+
+error[16-0019]: conflicting implementations of a bound in `fn f`
+   ┌─ named_refusal_at_use_single_file.fe:25:53
+   │
+24 │ fn f<B: Tr<A = Foo>, C: Tr2<A = Foo>>() -> u256 { 5 }
+   │    - the instance of this function that the call builds is refused
+25 │ fn relay<C: Tr2<A = Foo>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }
+   │                                                     ^^^^^^^^^^^^^^ `Foo: Show` receives `Loud` through `B: Tr<A = Foo>` (the bound on `A`) and `impl Show for Foo` through `C: Tr2<A = Foo>` (the bound on `A`)
+
+
+=== EXIT CODE: 1 ===
