@@ -9,4 +9,4 @@ error[16-0019]: conflicting implementations of a bound in `fn target`
 11 │ fn target<T: Sub + Price>() -> u256 { T::price() }
    │    ------ the instance of this function that the call builds is refused
 12 │ fn relay<T: Sub>() -> u256 { with (Wholesale<T>) { target<T>() } }
-   │                                                    ^^^^^^^^^^^ `Item: Price`: `Item: Sub` and `Item: Price` supply different implementations
+   │                                                    ^^^^^^^^^^^ `Item: Price` receives `Wholesale` through `T: Price` and `impl Price for Item` through `T: Sub` (its supertrait `Price`)

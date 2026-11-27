@@ -46,6 +46,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
+        route_text::refusal_label,
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{
@@ -1759,15 +1760,14 @@ impl<'db> TyCheckEnv<'db> {
                 ),
             )
         };
+        let (db, scope) = (self.db, prober.scope);
         let refused_proof = |refused: RefusedGoal<'db>, span: DynLazySpan<'db>| match refused.reason
         {
-            Refusal::Differs { a, b } => super::super::diagnostics::FuncBodyDiag::from(
+            Refusal::Differs { .. } => super::super::diagnostics::FuncBodyDiag::from(
                 super::super::diagnostics::TyDiagCollection::from(
                     super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
                         span,
-                        primary_goal: refused.goal,
-                        a,
-                        b,
+                        label: refusal_label(db, scope, refused.goal, refused.reason),
                     },
                 ),
             ),

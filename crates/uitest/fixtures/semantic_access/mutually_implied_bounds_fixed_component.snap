@@ -7,4 +7,4 @@ error[6-0003]: trait bound is not satisfied
    ┌─ mutually_implied_bounds_fixed_component.fe:14:36
    │
 14 │ fn chosen() -> u256 { with (Alt) { call<L, R>() } }
-   │                                    ^^^^^^^^^^^^ `R: Right<Back = L>` is implemented; the implementation chosen here differs from the one in the dictionary of `L: Left<Out = R>`
+   │                                    ^^^^^^^^^^^^ `R: Right<Back = L>` receives `Alt` through `U: Right<Back = T>`, as chosen here, and `impl Right for R` through `T: Left<Out = U>` (the bound on `Out`)

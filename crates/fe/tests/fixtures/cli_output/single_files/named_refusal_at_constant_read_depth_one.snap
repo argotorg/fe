@@ -12,7 +12,7 @@ error[16-0019]: conflicting implementations of a bound in `<anon const>`
 35 │ impl<B: CT<A = Foo>, C: CT<A = Foo>> HasK for P<B, C> { const K: u256 = Foo::cs() * 1000000 + B::cv() * 1000 + C::cv() }
    │                                                                         ---------------------------------------------- the instance of this function that the call builds is refused
 36 │ fn relay<C: CT<A = Foo>>() -> u256 { with (LoudC) { <P<W<Foo>, C> as HasK>::K } }
-   │                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^ `Foo: CS`: `W<Foo>: CT<A = Foo>` and `W<Foo>: CT<A = Foo>` supply different implementations
+   │                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^ `Foo: CS` receives `LoudC` through `B: CT<A = Foo>` (the bound on `A`) and `impl CS for Foo` through `C: CT<A = Foo>` (the bound on `A`)
 
 
 === EXIT CODE: 1 ===

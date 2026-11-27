@@ -5636,7 +5636,7 @@ const fn demand() -> u256 {{ relay<V<Foo>, V<Bar>>() }}
         let report = format_diagnostics(&db, &passes.run_on_module(&db, module));
         report
             .lines()
-            .find(|line| line.contains("supply different implementations"))
+            .find(|line| line.contains(" receives "))
             .map(|line| line.split('^').next_back().unwrap_or("").trim().to_string())
             .unwrap_or_else(|| panic!("no refusal in {report}"))
     };
@@ -5806,5 +5806,139 @@ const fn g<H: Holder<Out = L<L<L<E>>>>>() -> u256 { <H::Out as Chain>::v() }
 const fn go() -> u256 { with (E3) { g<Bx<E>>() } }
 "#,
         &[("go", 8)],
+    );
+}
+
+// Route text: a refusal names each route by the bound it starts from and the
+// steps after it, and the implementation each route gives.
+fn messages(source: &str) -> String {
+    let mut db = HirAnalysisTestDb::default();
+    let file = db.new_stand_alone("named_route_text.fe".into(), source);
+    let (module, _) = db.top_mod(file);
+    let diagnostics = fe_hir::analysis::initialize_analysis_pass().run_on_module(&db, module);
+    let mut passes = AnalysisPassManager::new();
+    passes.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+    format!(
+        "{}{}",
+        format_diagnostics(&db, &diagnostics),
+        format_diagnostics(&db, &passes.run_on_module(&db, module))
+    )
+}
+
+const ROUTES_A01: &str = r#"
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+impl Show for Foo as Quiet { fn show() -> u256 { 30 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+pub trait Tr2 { type A: Tr
+    fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    fn via2() -> u256 { T::via() } }
+pub struct U<T> {}
+impl<T: Show> Tr for U<T> { type A = T
+    fn via() -> u256 { T::show() + 1 } }
+pub trait Mk { type Out }
+pub struct X {}
+impl Mk for X { type Out = U<Foo> }
+fn f<B: Tr<A = Foo>, C: Tr2<A = <X as Mk>::Out>>() -> u256 { Foo::show() * 1000000 + B::via() * 1000 + C::via2() }
+fn relay<C: Tr2<A = <X as Mk>::Out>>() -> u256 { with (Loud) { f<W<Foo>, C>() } }
+fn disagree() -> u256 { relay<V<U<Foo>>>() }
+"#;
+
+const ROUTES_A10: &str = r#"
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+impl Show for Foo as Quiet { fn show() -> u256 { 30 } }
+pub struct W<T> {}
+pub struct V<T> {}
+pub trait Tr { type A: Show
+    fn via() -> u256 }
+impl<T: Show> Tr for W<T> { type A = T
+    fn via() -> u256 { T::show() } }
+pub trait Tr2 { type A: Tr
+    fn via2() -> u256 }
+impl<T: Tr> Tr2 for V<T> { type A = T
+    fn via2() -> u256 { T::via() } }
+pub struct U<T> {}
+impl<T: Show> Tr for U<T> { type A = T
+    fn via() -> u256 { T::show() + 1 } }
+pub trait Mk { type Out }
+pub struct X {}
+impl Mk for X { type Out = U<Foo> }
+fn f<C: Tr2<A = <X as Mk>::Out>, B: Tr<A = Foo>>() -> u256 { Foo::show() * 1000000 + B::via() * 1000 + C::via2() }
+fn relay<C: Tr2<A = <X as Mk>::Out>>() -> u256 { with (Loud) { f<C, W<Foo>>() } }
+fn disagree() -> u256 { relay<V<U<Foo>>>() }
+"#;
+
+const ROUTES_T05: &str = r#"
+pub trait Chain { type Next: Chain
+    fn v() -> u256 }
+pub struct End {}
+impl Chain for End { type Next = End
+    fn v() -> u256 { 0 } }
+impl Chain for End as E2 { type Next = End
+    fn v() -> u256 { 5 } }
+pub struct L<T> {}
+impl<T: Chain> Chain for L<T> { type Next = T
+    fn v() -> u256 { T::v() + 1 } }
+pub trait Holder { type Out: Chain }
+pub struct Bx<T> {}
+impl<T: Chain> Holder for Bx<T> { type Out = T }
+fn g<H: Holder<Out = End>>() -> u256 { <H::Out as Chain>::v() + End::v() * 100 }
+fn go() -> u256 { with (E2) { g<Bx<End>>() } }
+"#;
+
+#[test]
+fn route_text_names_each_implementation() {
+    let report = messages(ROUTES_A01);
+    assert!(
+        report.contains("`Foo: Show` receives `Loud` through `B: Tr<A = Foo>` (the bound on `A`) and `impl Show for Foo` through `C: Tr2<A = X::Out>` (the bound on `A`, then the bound on `A` of `U<Foo>: Tr`)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn route_text_written_route_is_chosen_here() {
+    let report = messages(&format!(
+        r#"{MUTUAL}
+const fn call<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ T::l() * 10 + U::r() }}
+const fn relay<T: Left<Out = U>, U: Right<Back = T>>() -> u256 {{ call<T, U>() }}
+const fn go() -> u256 {{ with (BigA) {{ relay<A, B>() }} }}
+"#
+    ));
+    assert!(
+        report.contains("`A: Left` receives `BigA` through `T: Left<Out = U>`, as chosen here, and `impl Left for A` through `U: Right<Back = T>` (the bound on `Back`)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn route_text_is_independent_of_bound_order() {
+    let label = |source: &str| {
+        messages(source)
+            .lines()
+            .find(|line| line.contains("receives"))
+            .map(|line| line.split('^').next_back().unwrap_or("").trim().to_string())
+            .unwrap_or_else(|| panic!("no refusal in {source}"))
+    };
+    let (first, second) = (label(ROUTES_A01), label(ROUTES_A10));
+    assert_eq!(first, second);
+}
+
+#[test]
+fn route_text_route_through_the_goal_itself() {
+    let report = messages(&format!("{ROUTES_T05}\nfn go2() -> u256 {{ go() }}\n"));
+    assert!(
+        report.contains("`End: Chain` receives `E2` through `H: Holder<Out = End>` (the bound on `Out`) and `impl Chain for End` through `H: Holder<Out = End>` (the bound on `Out`, then the bound on `Next` of `End: Chain`), which passes through `End: Chain` itself"),
+        "{report}"
     );
 }

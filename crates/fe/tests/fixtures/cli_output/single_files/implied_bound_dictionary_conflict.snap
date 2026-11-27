@@ -12,7 +12,7 @@ error[16-0019]: conflicting implementations of a bound in `fn target`
 17 │ fn target<B: Tr<A = X>, X: Pick>() -> u256 { X::val() * 1000 + B::via() }
    │    ------ the instance of this function that the call builds is refused
 18 │ fn relay<B: Tr<A = X>, X: Pick>() -> u256 { with (Named<X>) { target<B, X>() } }
-   │                                                               ^^^^^^^^^^^^^^ `Item: Pick`: `Wrap<Item>: Tr<A = Item>` and `Item: Pick` supply different implementations
+   │                                                               ^^^^^^^^^^^^^^ `Item: Pick` receives `impl Pick for Item` through `B: Tr<A = X>` (the bound on `A`) and `Named` through `X: Pick`
 
 
 === EXIT CODE: 1 ===

@@ -1837,13 +1837,11 @@ pub enum TraitConstraintDiag<'db> {
     },
 
     /// The goal is implemented, but two routes to it supply different
-    /// implementations: the dictionaries of the bounds `a` and `b`, or the
-    /// implementation chosen at this use and the dictionary of `b`.
+    /// implementations. `label` names each route and the implementation it
+    /// gives.
     ImplementationDiffers {
         span: DynLazySpan<'db>,
-        primary_goal: TraitInstId<'db>,
-        a: TraitInstId<'db>,
-        b: TraitInstId<'db>,
+        label: String,
     },
 
     TraitBoundNotSat {

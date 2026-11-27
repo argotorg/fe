@@ -706,7 +706,7 @@ impl<'db> Callable<'db> {
                 .into_iter()
                 .map(|goal| RefusedGoal {
                     goal,
-                    reason: Refusal::NoComponent { root: None },
+                    reason: Refusal::NoComponent { route: None },
                     others: None,
                 }),
         );

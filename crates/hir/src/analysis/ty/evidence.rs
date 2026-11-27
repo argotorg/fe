@@ -1358,21 +1358,71 @@ fn prove_outcome_in<'db>(
 /// Why a goal is refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub(crate) enum Refusal<'db> {
-    /// No proof of the goal can be had, or the dictionary of `root` (when
-    /// known) has no such component.
-    NoComponent { root: Option<TraitInstId<'db>> },
+    /// No proof of the goal can be had (`None`), or the dictionary given
+    /// through `route` has no such component.
+    NoComponent { route: Option<RouteRef<'db>> },
     /// The goal is implemented, but two routes to it supply different
-    /// implementations: `a` and `b` are the bounds the routes start from (or a
-    /// proof written for the goal, `b`). Inside a selected implementation they
-    /// are its conditions, as it states them at the call's types.
-    Differs {
-        a: TraitInstId<'db>,
-        b: TraitInstId<'db>,
+    /// implementations. Inside a selected implementation the routes start from
+    /// its conditions, as it states them at the call's types.
+    Differs { a: RouteRef<'db>, b: RouteRef<'db> },
+    /// The goal is reached by `route`, which is not followed, and the
+    /// dictionary it starts from holds the named implementation `named`: no
+    /// value is given where the walk cannot say whether the route reads it.
+    Unfollowed {
+        route: RouteRef<'db>,
+        cut: Cut,
+        named: Option<ImplementorId<'db>>,
     },
-    /// The goal is reached by a route that is not followed, from the dictionary
-    /// of `root`, and that dictionary holds a named implementation: no value is
-    /// given where the walk cannot say whether the route reads it.
-    Unfollowed { root: TraitInstId<'db>, cut: Cut },
+}
+
+/// A route to a goal: a root of the layout (a slot no edge enters, which is a
+/// bound the signature or the implementation states) and the steps after it.
+/// It carries the root as the declaration states it and as the use or the
+/// instance instantiates it, so that a message can print it wherever the
+/// refusal travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
+pub(crate) struct RouteRef<'db> {
+    pub(crate) root: u32,
+    pub(crate) declared: TraitInstId<'db>,
+    pub(crate) applied: TraitInstId<'db>,
+    pub(crate) path: Option<ComponentPath<'db>>,
+    /// The dictionary this route gives, where it is a selected implementation.
+    pub(crate) selects: Option<ImplementorId<'db>>,
+    /// The route is the proof written for the goal at this use under a choice.
+    pub(crate) written: bool,
+}
+
+/// The implementation a dictionary selects at its root.
+fn selected_of<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: Option<EvidenceId<'db>>,
+) -> Option<ImplementorId<'db>> {
+    match proof?.data(db) {
+        Evidence::Impl { selected, .. } => Some(*selected),
+        Evidence::Assumption(_) | Evidence::DeferredSolCodec { .. } => None,
+    }
+}
+
+/// The first named implementation `proof` holds, at any depth.
+fn first_named_impl<'db>(
+    db: &'db dyn HirAnalysisDb,
+    proof: Option<EvidenceId<'db>>,
+) -> Option<ImplementorId<'db>> {
+    let proof = proof?;
+    let Evidence::Impl {
+        selected, conds, ..
+    } = proof.data(db)
+    else {
+        return None;
+    };
+    match selected.origin(db) {
+        ImplementorOrigin::Hir(implementation) if implementation.selection_name(db).is_some() => {
+            Some(*selected)
+        }
+        _ => conds
+            .iter()
+            .find_map(|&cond| first_named_impl(db, Some(cond))),
+    }
 }
 
 impl Refusal<'_> {
@@ -2674,6 +2724,15 @@ impl<'db> Received<'db> {
     }
 }
 
+/// A key that orders refusals without reference to the order of the bounds.
+fn route_key<'db>(db: &'db dyn HirAnalysisDb, route: RouteRef<'db>) -> String {
+    let steps = route
+        .path
+        .map(|path| format!("{:?}", path.steps(db)))
+        .unwrap_or_default();
+    format!("{}{steps}", route.declared.pretty_print(db, true))
+}
+
 /// Record a refused goal once, in the order the routes were followed.
 fn refuse_goal<'db>(
     refused: &mut Vec<RefusedGoal<'db>>,
@@ -2705,9 +2764,12 @@ pub(crate) fn received<'db>(
     received.refused.sort_by_cached_key(|refused| {
         let print = |goal: TraitInstId<'db>| goal.pretty_print(db, true);
         let (first, second) = match refused.reason {
-            Refusal::Differs { a, b } => (print(a), print(b)),
-            Refusal::NoComponent { root } => (root.map(print).unwrap_or_default(), String::new()),
-            Refusal::Unfollowed { root, .. } => (print(root), String::new()),
+            Refusal::Differs { a, b } => (route_key(db, a), route_key(db, b)),
+            Refusal::NoComponent { route } => (
+                route.map(|route| route_key(db, route)).unwrap_or_default(),
+                String::new(),
+            ),
+            Refusal::Unfollowed { route, .. } => (route_key(db, route), String::new()),
         };
         (print(refused.goal), first, second)
     });
@@ -2771,14 +2833,83 @@ fn received_in_walk_order<'db>(
     // an assumption of the caller is a placeholder, not a dictionary.
     let differ =
         |a: EvidenceId<'db>, b: EvidenceId<'db>| a.is_closed(db) && b.is_closed(db) && !agree(a, b);
+    // The steps from a root of the layout to a slot: the first derivation that
+    // enters it, back to a slot no edge enters.
+    let slot_steps = |slot: usize| -> (usize, Vec<BoundStep<'db>>) {
+        let mut steps = Vec::new();
+        let mut at = slot;
+        while steps.len() < count {
+            // A bound the callee declares is a root, whatever derives it: its
+            // dictionary is the proof written at the use. So is a stated
+            // condition of an implementation.
+            if (matches!(fallback, Fallback::Use { .. }) && inputs[at].declared)
+                || (matches!(fallback, Fallback::Conditions) && inputs[at].own.is_some())
+            {
+                break;
+            }
+            let entering = || {
+                edges
+                    .iter()
+                    .filter(move |edge| edge.child as usize == at && edge.parent as usize != at)
+            };
+            let Some(edge) = entering()
+                .find(|edge| (edge.parent as usize) < at)
+                .or_else(|| entering().next())
+            else {
+                break;
+            };
+            steps.push(edge.step);
+            at = edge.parent as usize;
+        }
+        steps.reverse();
+        (at, steps)
+    };
+    // The route from the root of `steps`, then `then`, where the dictionary
+    // `dict` is given.
+    let route_of = |(root, mut steps): (usize, Vec<BoundStep<'db>>),
+                    then: Option<BoundStep<'db>>,
+                    dict: Option<EvidenceId<'db>>,
+                    written: bool| {
+        steps.extend(then);
+        // A root with no steps whose dictionary is the proof written at the use
+        // for a bound the callee declares.
+        let written = written
+            || (steps.is_empty()
+                && matches!(fallback, Fallback::Use { .. })
+                && inputs[root].declared
+                && inputs[root].own.is_some());
+        let declared = layout.list(db)[root];
+        RouteRef {
+            root: root as u32,
+            declared,
+            applied: goals[root].unwrap_or(declared),
+            path: (!steps.is_empty()).then(|| ComponentPath::new(db, steps)),
+            selects: selected_of(db, dict),
+            written,
+        }
+    };
+    let slot_route =
+        |slot: usize,
+         then: Option<BoundStep<'db>>,
+         dict: Option<EvidenceId<'db>>,
+         written: bool| route_of(slot_steps(slot), then, dict, written);
+    // The route of the proof supplied for a slot: the slot itself, whatever
+    // derives it.
+    let own_route = |slot: usize, dict: Option<EvidenceId<'db>>, written: bool| {
+        route_of((slot, Vec::new()), None, dict, written)
+    };
     let no_component = |parent: usize| Refusal::NoComponent {
-        root: Some(goal_at(parent)),
+        route: Some(slot_route(parent, None, None, false)),
     };
     // A route that finds no component, or that cannot be followed.
-    let missing_route = |parent: usize, projection: Projection<'db>| match projection {
+    let missing_route = |parent: usize,
+                         step: BoundStep<'db>,
+                         source: Option<EvidenceId<'db>>,
+                         projection: Projection<'db>| match projection {
         Projection::Unfollowed => Refusal::Unfollowed {
-            root: goal_at(parent),
+            route: slot_route(parent, Some(step), source, false),
             cut: Cut::Cycle,
+            named: first_named_impl(db, source),
         },
         _ => no_component(parent),
     };
@@ -2788,7 +2919,7 @@ fn received_in_walk_order<'db>(
         debug_assert_ne!(projection, Projection::Pending);
         projection
             .proof()
-            .ok_or_else(|| missing_route(parent, projection))
+            .ok_or_else(|| missing_route(parent, step, Some(proof), projection))
     };
     let mut entries: Vec<Option<EvidenceId<'db>>> = vec![None; count];
     let mut pending = vec![false; count];
@@ -2813,6 +2944,15 @@ fn received_in_walk_order<'db>(
             // A use or the conditions of an implementation.
             let goal = goal_at(index);
             let mut answer = own[index];
+            // The route that gave the answer: the proof written for a declared
+            // bound, or the first derivation that reached it.
+            let mut answer_route = own[index].map(|_| {
+                own_route(
+                    index,
+                    own[index],
+                    matches!(fallback, Fallback::Use { .. }) && inputs[index].declared,
+                )
+            });
             let mut refusal = None;
             let mut blocked = false;
             if matches!(fallback, Fallback::Use { .. })
@@ -2820,7 +2960,7 @@ fn received_in_walk_order<'db>(
                 && answer.is_none()
             {
                 // A declared bound that no proof can be had for.
-                refusal = Some(Refusal::NoComponent { root: None });
+                refusal = Some(Refusal::NoComponent { route: None });
             }
             for edge in edges.iter().filter(|edge| edge.child as usize == index) {
                 let parent = edge.parent as usize;
@@ -2830,9 +2970,9 @@ fn received_in_walk_order<'db>(
                 if refusal.is_some() || parent == index || (parent > index && !parent_declared) {
                     continue;
                 }
-                let Some(parent_goal) = goals[parent] else {
+                if goals[parent].is_none() {
                     continue;
-                };
+                }
                 let offered = if parent_declared {
                     inputs[parent].offer
                 } else {
@@ -2844,9 +2984,7 @@ fn received_in_walk_order<'db>(
                     let unreadable = parent_declared || !pending[parent];
                     blocked |= unreadable;
                     if unreadable && refuses(db, &[own[index]]) {
-                        refusal = Some(Refusal::NoComponent {
-                            root: Some(parent_goal),
-                        });
+                        refusal = Some(no_component(parent));
                     }
                     continue;
                 };
@@ -2855,12 +2993,16 @@ fn received_in_walk_order<'db>(
                     Projection::Proof(projected) => match answer {
                         Some(previous) if differ(previous, projected) => {
                             refusal = Some(Refusal::Differs {
-                                a: parent_goal,
-                                b: goal,
+                                a: answer_route.expect("an answer has a route"),
+                                b: slot_route(parent, Some(edge.step), Some(projected), false),
                             });
                         }
                         Some(_) => {}
-                        None => answer = Some(projected),
+                        None => {
+                            answer = Some(projected);
+                            answer_route =
+                                Some(slot_route(parent, Some(edge.step), Some(projected), false));
+                        }
                     },
                     // The dictionary is an assumption of the caller that has
                     // no slot for the goal yet: the instance supplies it.
@@ -2868,7 +3010,8 @@ fn received_in_walk_order<'db>(
                     Projection::Refused | Projection::Unfollowed => {
                         blocked = true;
                         if refuses(db, &[Some(offered), own[index]]) {
-                            refusal = Some(missing_route(parent, projection));
+                            refusal =
+                                Some(missing_route(parent, edge.step, Some(offered), projection));
                         }
                     }
                     Projection::Conflict(reason) => refusal = Some(reason),
@@ -2883,7 +3026,7 @@ fn received_in_walk_order<'db>(
             }
             continue;
         }
-        let mut candidates: Vec<(usize, EvidenceId<'db>)> = Vec::new();
+        let mut candidates: Vec<(usize, BoundStep<'db>, EvidenceId<'db>)> = Vec::new();
         let mut refusal = None;
         let mut open_parent = false;
         for edge in edges
@@ -2901,27 +3044,27 @@ fn received_in_walk_order<'db>(
             // other parents: the slot is refused rather than answered by the
             // parents that have one.
             match entries[parent].map(|proof| project(proof, edge.step, index, parent)) {
-                Some(Ok(component)) => candidates.push((parent, component)),
+                Some(Ok(component)) => candidates.push((parent, edge.step, component)),
                 Some(Err(reason)) => refusal = refusal.or(Some(reason)),
                 None => refusal = refusal.or(Some(no_component(parent))),
             }
         }
         if refusal.is_some() {
             entries[index] = None;
-        } else if let Some(&(first_parent, first)) = candidates.first() {
+        } else if let Some(&(first_parent, first_step, first)) = candidates.first() {
             // A proof supplied for the goal, such as an explicit bound under a
             // choice, must be the one the implying dictionaries hold.
             let differing = candidates[1..]
                 .iter()
-                .find(|&&(_, other)| differ(first, other))
-                .map(|&(parent, _)| goal_at(parent))
+                .find(|&&(_, _, other)| differ(first, other))
+                .map(|&(parent, step, other)| slot_route(parent, Some(step), Some(other), false))
                 .or_else(|| {
                     own[index]
                         .filter(|&other| differ(first, other))
-                        .map(|_| goal_at(index))
+                        .map(|other| own_route(index, Some(other), false))
                 });
             refusal = differing.map(|b| Refusal::Differs {
-                a: goal_at(first_parent),
+                a: slot_route(first_parent, Some(first_step), Some(first), false),
                 b,
             });
             entries[index] = refusal.is_none().then_some(first);
@@ -2936,17 +3079,18 @@ fn received_in_walk_order<'db>(
                 .filter_map(|edge| {
                     let parent = edge.parent as usize;
                     let proof = own[parent].filter(|proof| proof.is_closed(db))?;
-                    closed[parent].then(|| (parent, project(proof, edge.step, index, parent)))
+                    closed[parent]
+                        .then(|| (parent, edge.step, project(proof, edge.step, index, parent)))
                 });
             match later.next() {
                 None => entries[index] = prove(db, cx, goal_at(index)),
-                Some((_, Err(reason))) => refusal = Some(reason),
-                Some((first_parent, Ok(first))) => {
-                    refusal = later.find_map(|(parent, other)| match other {
+                Some((_, _, Err(reason))) => refusal = Some(reason),
+                Some((first_parent, first_step, Ok(first))) => {
+                    refusal = later.find_map(|(parent, step, other)| match other {
                         Err(reason) => Some(reason),
                         Ok(other) if differ(first, other) => Some(Refusal::Differs {
-                            a: goal_at(first_parent),
-                            b: goal_at(parent),
+                            a: slot_route(first_parent, Some(first_step), Some(first), false),
+                            b: slot_route(parent, Some(step), Some(other), false),
                         }),
                         Ok(_) => None,
                     });
@@ -3028,12 +3172,12 @@ fn received_in_walk_order<'db>(
                 Projection::Refused | Projection::Unfollowed
                     if refuses(db, &[Some(source), Some(entry)]) =>
                 {
-                    Some(missing_route(parent, projection))
+                    Some(missing_route(parent, edge.step, Some(source), projection))
                 }
                 Projection::Proof(component) if differ(component, entry) => {
                     Some(Refusal::Differs {
-                        a: goal_at(parent),
-                        b: goal_at(child),
+                        a: slot_route(parent, Some(edge.step), Some(component), false),
+                        b: slot_route(child, None, Some(entry), false),
                     })
                 }
                 Projection::Conflict(reason) => Some(reason),
@@ -3056,6 +3200,20 @@ fn received_in_walk_order<'db>(
         concrete_components(db, layout)
     };
     let mut values: Vec<Option<EvidenceId<'db>>> = vec![None; table.members.len()];
+    // The route to a node, which is a slot or a member: the route of the root
+    // of its walk, then the member's path.
+    let node_route = |node: usize, then: Option<BoundStep<'db>>, dict: Option<EvidenceId<'db>>| {
+        let (root, mut steps) = if node < count {
+            slot_steps(node)
+        } else {
+            let member = &table.members[node - count];
+            let (root, mut steps) = slot_steps(member.root as usize);
+            steps.extend(member.path.iter().copied());
+            (root, steps)
+        };
+        steps.extend(then);
+        route_of((root, steps), None, dict, false)
+    };
     if refused.is_empty() {
         // The slot a derivation entering `parent` starts from.
         let root_of = |parent: usize| {
@@ -3065,7 +3223,6 @@ fn received_in_walk_order<'db>(
                 table.members[parent - count].root as usize
             }
         };
-        let root_goal = |parent: usize| goal_at(root_of(parent));
         // The slots whose dictionaries `member` is read from: the root of its
         // walk and the root of each derivation that enters it.
         let roots = |member: &Component<'db>| {
@@ -3099,7 +3256,7 @@ fn received_in_walk_order<'db>(
                     None if pending[parent] => return Ok(None),
                     None => {
                         return Err(Refusal::NoComponent {
-                            root: Some(goal_at(parent)),
+                            route: Some(node_route(parent, None, None)),
                         });
                     }
                 }
@@ -3113,11 +3270,12 @@ fn received_in_walk_order<'db>(
                 Projection::Proof(proof) => Ok(Some(proof)),
                 Projection::Pending => Ok(None),
                 Projection::Refused => Err(Refusal::NoComponent {
-                    root: Some(root_goal(parent)),
+                    route: Some(node_route(parent, None, Some(source))),
                 }),
                 Projection::Unfollowed => Err(Refusal::Unfollowed {
-                    root: root_goal(parent),
+                    route: node_route(parent, Some(step), Some(source)),
                     cut: Cut::Cycle,
+                    named: first_named_impl(db, entries[root_of(parent)]),
                 }),
                 Projection::Conflict(reason) => Err(reason),
             }
@@ -3128,7 +3286,7 @@ fn received_in_walk_order<'db>(
             if !member.concrete {
                 continue;
             }
-            let mut agreed: Option<(EvidenceId<'db>, u32)> = None;
+            let mut agreed: Option<(EvidenceId<'db>, u32, BoundStep<'db>)> = None;
             let mut failed = false;
             for &(parent, step) in &member.entering {
                 if parent as usize >= count && (parent as usize - count) >= position {
@@ -3142,27 +3300,31 @@ fn received_in_walk_order<'db>(
                     }
                     Err(_) | Ok(None) => {}
                     Ok(Some(proof)) => match agreed {
-                        Some((first, first_parent)) if differ(first, proof) => {
+                        Some((first, first_parent, first_step)) if differ(first, proof) => {
                             refuse_goal(
                                 &mut refused,
                                 member.goal,
                                 Refusal::Differs {
-                                    a: root_goal(first_parent as usize),
-                                    b: root_goal(parent as usize),
+                                    a: node_route(
+                                        first_parent as usize,
+                                        Some(first_step),
+                                        Some(first),
+                                    ),
+                                    b: node_route(parent as usize, Some(step), Some(proof)),
                                 },
                             );
                             failed = true;
                             break;
                         }
                         Some(_) => {}
-                        None => agreed = Some((proof, parent)),
+                        None => agreed = Some((proof, parent, step)),
                     },
                 }
             }
             values[position] = if failed {
                 None
             } else {
-                agreed.map(|(proof, _)| proof)
+                agreed.map(|(proof, _, _)| proof)
             };
         }
         // A derivation from a member that comes later in the walk must agree
@@ -3184,8 +3346,12 @@ fn received_in_walk_order<'db>(
                             &mut refused,
                             member.goal,
                             Refusal::Differs {
-                                a: root_goal(member.entering[0].0 as usize),
-                                b: root_goal(parent as usize),
+                                a: node_route(
+                                    member.entering[0].0 as usize,
+                                    Some(member.entering[0].1),
+                                    Some(value),
+                                ),
+                                b: node_route(parent as usize, Some(step), Some(proof)),
                             },
                         );
                     }
@@ -3211,8 +3377,10 @@ fn received_in_walk_order<'db>(
                     &mut refused,
                     member.goal,
                     Refusal::Unfollowed {
-                        root: goal_at(root),
+                        route: node_route(count + position, None, values[position]),
                         cut: Cut::Depth,
+                        named: first_named_impl(db, entries[root])
+                            .or_else(|| first_named_impl(db, values[position])),
                     },
                 );
             }
@@ -3257,13 +3425,6 @@ fn received_in_walk_order<'db>(
             None => by_trait.push((trait_, vec![node])),
         }
     }
-    let root_slot = |node: usize| {
-        if node < count {
-            node
-        } else {
-            table.members[node - count].root as usize
-        }
-    };
     for (_, nodes) in &by_trait {
         let mut seen: Vec<usize> = Vec::new();
         for &node in nodes {
@@ -3282,8 +3443,8 @@ fn received_in_walk_order<'db>(
                     &mut refused,
                     at,
                     Refusal::Differs {
-                        a: goal_at(root_slot(first)),
-                        b: goal_at(root_slot(node)),
+                        a: node_route(first, None, Some(other)),
+                        b: node_route(node, None, Some(value)),
                     },
                 );
                 if node < count {
@@ -3402,7 +3563,20 @@ impl<'db> EvidenceId<'db> {
                 is_closed_goal(db, root).then_some(())?;
                 Some(RefusedGoal {
                     goal: component_goal(db, *slot)?,
-                    reason: Refusal::NoComponent { root: Some(root) },
+                    reason: Refusal::NoComponent {
+                        route: Some(RouteRef {
+                            root: slot.index,
+                            declared: *slot
+                                .schema
+                                .basis_slots(db)
+                                .list(db)
+                                .get(slot.index as usize)?,
+                            applied: root,
+                            path: None,
+                            selects: None,
+                            written: false,
+                        }),
+                    },
                     others: None,
                 })
             }
@@ -3750,11 +3924,13 @@ fn ctx<V: Sub>() {}
             .refused
             .expect("a named implementation is refused");
         assert_eq!(refused.goal, base);
-        assert_eq!(
-            refused.reason,
-            Refusal::NoComponent {
-                root: Some(goals.list(&db)[0])
-            }
+        assert!(
+            matches!(
+                refused.reason,
+                Refusal::NoComponent { route: Some(route) } if route.applied == goals.list(&db)[0]
+            ),
+            "{:?}",
+            refused.reason
         );
     }
 
@@ -3966,11 +4142,13 @@ fn plain<B: Tr>() {}
             .unresolved_component(&db)
             .expect("a closed slot's reference is refused");
         assert_eq!(refused.goal.pretty_print(&db, true), "Foo: Show");
-        assert_eq!(
-            refused.reason,
-            Refusal::NoComponent {
-                root: Some(closed.list(&db)[0])
-            }
+        assert!(
+            matches!(
+                refused.reason,
+                Refusal::NoComponent { route: Some(route) } if route.applied == closed.list(&db)[0]
+            ),
+            "{:?}",
+            refused.reason
         );
         // Under an implementation's conditions it is found as well.
         let goal = TraitInstId::new_simple(&db, trait_named(&db, module, "Tr"), vec![w_foo]);
