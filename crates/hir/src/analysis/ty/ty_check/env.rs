@@ -46,7 +46,7 @@ use crate::analysis::{
         fold::{TyFoldable, TyFolder},
         normalize::normalize_ty,
         provider::AddressSpace,
-        route_text::refusal_label,
+        route_text::{normalized_goal, refusal_label},
         shape::Shape,
         trait_def::TraitInstId,
         trait_resolution::{
@@ -1771,9 +1771,25 @@ impl<'db> TyCheckEnv<'db> {
                     },
                 ),
             ),
-            Refusal::NoComponent { .. } | Refusal::Unfollowed { .. } => {
-                failed_proof(refused.goal, span)
+            // A route that cannot be followed, or a dictionary with no such
+            // component, is said with the route: the goal itself may well be
+            // implemented.
+            Refusal::Unfollowed { .. } | Refusal::NoComponent { route: Some(_) } => {
+                super::super::diagnostics::FuncBodyDiag::from(
+                    super::super::diagnostics::TyDiagCollection::from(
+                        super::super::diagnostics::TraitConstraintDiag::ImplementationDiffers {
+                            span,
+                            label: refusal_label(
+                                db,
+                                scope,
+                                normalized_goal(db, scope, refused.goal),
+                                refused.reason,
+                            ),
+                        },
+                    ),
+                )
             }
+            Refusal::NoComponent { route: None } => failed_proof(refused.goal, span),
         };
         // Each trait goal a call or constant uses is now final: prove it once,
         // here, for every later stage.

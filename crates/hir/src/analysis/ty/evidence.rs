@@ -2370,7 +2370,7 @@ pub(crate) fn instantiated_selection<'db>(
 /// implementation's extended conditions, including their implied dictionary
 /// slots, followed by the assumptions `nominal`'s body is checked
 /// under, as the call proves them. Absent for a method of no implementation.
-#[salsa::tracked]
+#[salsa::tracked(cycle_result = impl_method_evidence_cycle)]
 pub(crate) fn impl_method_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Func<'db>,
@@ -2429,7 +2429,7 @@ pub(crate) fn impl_method_evidence<'db>(
 /// assumptions it is checked under from the implementation's conditions, as
 /// a proof selecting the implementation proves them. Absent for a body of no
 /// implementation.
-#[salsa::tracked]
+#[salsa::tracked(cycle_result = impl_const_evidence_cycle)]
 pub(crate) fn impl_const_evidence<'db>(
     db: &'db dyn HirAnalysisDb,
     body: Body<'db>,
@@ -3654,6 +3654,25 @@ impl<'db> UseEvidence<'db> {
 // which query is reached first): the route cannot be followed. A reader
 // refuses only where a dictionary on the route holds a named implementation,
 // and otherwise takes the proof that ordinary resolution gives.
+
+/// An adaptation that is asked for while it is being built is absent.
+fn impl_method_evidence_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _body: Func<'db>,
+    _nominal: Func<'db>,
+    _mode: Option<BorrowKind>,
+) -> Option<BoundAdaptation<'db>> {
+    None
+}
+
+fn impl_const_evidence_cycle<'db>(
+    _db: &'db dyn HirAnalysisDb,
+    _: salsa::Id,
+    _body: Body<'db>,
+) -> Option<BoundAdaptation<'db>> {
+    None
+}
 
 /// A proof whose completion returns to itself is left as it is.
 fn complete_deferred_evidence_cycle<'db>(

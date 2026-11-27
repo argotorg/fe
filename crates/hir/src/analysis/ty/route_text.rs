@@ -5,7 +5,10 @@
 use super::{
     evidence::{Cut, Refusal, RouteRef, route_goals},
     trait_def::{ImplementorId, ImplementorOrigin, TraitInstId},
-    trait_resolution::{BoundStep, COMPONENT_DEPTH_LIMIT, same_identity},
+    trait_resolution::{
+        BoundStep, COMPONENT_DEPTH_LIMIT, PredicateListId,
+        normalize_trait_inst_preserving_validity, same_identity,
+    },
 };
 use crate::{analysis::HirAnalysisDb, hir_def::scope_graph::ScopeId};
 
@@ -145,6 +148,16 @@ fn passes_through<'db>(
         .take(goals.len().saturating_sub(1))
         .flatten()
         .any(|&through| same_identity(db, scope, through, goal))
+}
+
+/// `goal` with its projections normalized through ordinary implementations in
+/// `scope`, as a message names it.
+pub(crate) fn normalized_goal<'db>(
+    db: &'db dyn HirAnalysisDb,
+    scope: ScopeId<'db>,
+    goal: TraitInstId<'db>,
+) -> TraitInstId<'db> {
+    normalize_trait_inst_preserving_validity(db, goal, scope, PredicateListId::empty_list(db))
 }
 
 /// The message of a refusal of `goal`, in the coordinates of the instance or
