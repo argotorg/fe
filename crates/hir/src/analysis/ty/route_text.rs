@@ -201,10 +201,14 @@ pub(crate) fn refusal_label<'db>(
                 implementation_of(db, second.selects),
             )
         }
-        Refusal::NoComponent { route: Some(route) } => format!(
-            "`{printed}`: the dictionary given through {} has no such component",
-            route_text(db, scope, &route)
-        ),
+        Refusal::NoComponent { route: Some(route) } => {
+            // A route written at the use ends a clause: "as chosen here,".
+            let comma = if route.written { "," } else { "" };
+            format!(
+                "`{printed}`: the dictionary given through {}{comma} has no such component",
+                route_text(db, scope, &route)
+            )
+        }
         Refusal::NoComponent { route: None } => format!("`{printed}`: no dictionary supplies it"),
         Refusal::Unfollowed {
             route,
