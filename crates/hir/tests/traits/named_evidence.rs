@@ -4848,7 +4848,7 @@ fn chosen() -> u256 { with (Named) { read<Pair<Wrap<Item>, Fixed>>() } }
     assert!(report.contains("error[6-0003]"), "{report}");
     assert!(
         report.contains(
-            "`Wrap<Item>: Holder<V = Item>` and `Fixed: Holder<V = Item>` supply different implementations"
+            "receives `Named` through `T: Holder<V = Item>` (the bound on `V`) and `impl Pick for Item` through `U: Holder<V = Item>` (the bound on `V`)"
         ),
         "{report}"
     );
