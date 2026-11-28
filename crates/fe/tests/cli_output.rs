@@ -4218,6 +4218,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "recv_field_patterns",
     "recv_ref_fields",
     "recv_ref_fields_wide",
+    "recv_ref_nested",
     "recv_short_calldata_selector_guard",
     "reentrancy_mutex",
     "reentrancy_mutex_storage_map",
