@@ -586,7 +586,14 @@ pub fn prepare_ingots(
     let mut seals = vec![Vec::new(); plans.len()];
     let mut additions = vec![Vec::new(); plans.len()];
     let mut opening_files = vec![Vec::new(); plans.len()];
-    let mut last = None;
+    // The one working database of this call: a copy of the authored inputs,
+    // made when a view is first needed and moved to the input view of each
+    // ingot and each retry. The scan of an ingot that needs no view stays on
+    // the authored `db`.
+    let mut working: Option<DriverDataBase> = None;
+    // The requests of the most recent completed transaction, which its output
+    // view holds.
+    let mut last: Option<Vec<FrozenGenerationRequest>> = None;
     for (index, plan) in plans.iter().enumerate() {
         // A first look at the text decides which ingots can need preparing
         // before any view is copied.
@@ -632,12 +639,17 @@ pub fn prepare_ingots(
             let sealed = sealed_dependencies(plan, &seals, &additions);
             let writes_headers = syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
             let wants_view = !sealed.is_empty() || writes_headers;
-            let input_db = wants_view.then(|| {
-                let mut view = copy_view(db, &ViewBasis::Package);
-                enter_input_view(&mut view, &sealed);
-                view
-            });
-            let scanned_in = input_db.as_ref().unwrap_or(db);
+            // A database left in the output view by an earlier transaction or
+            // retry is moved back to the input view over this ingot's seals.
+            if wants_view {
+                let view = working.get_or_insert_with(|| copy_view(db, &ViewBasis::Package));
+                enter_input_view(view, &sealed);
+            }
+            let scanned_in = if wants_view {
+                working.as_ref().expect("the working database exists")
+            } else {
+                db
+            };
             let pending = if opening_files[index].is_empty() && dependency_openings.is_empty() {
                 Vec::new()
             } else {
@@ -659,13 +671,10 @@ pub fn prepare_ingots(
                 if !writes_headers && pending.is_empty() {
                     break;
                 }
-                let mut input_db = input_db.unwrap_or_else(|| {
-                    let mut view = copy_view(db, &ViewBasis::Package);
-                    enter_input_view(&mut view, &sealed);
-                    view
-                });
+                let input_db = working.get_or_insert_with(|| copy_view(db, &ViewBasis::Package));
+                enter_input_view(input_db, &sealed);
                 let (own, sites) = {
-                    let input = &input_db;
+                    let input = &*input_db;
                     let found_requests = syntaxes
                         .iter()
                         .filter(|(_, syntax)| syntax.has_requests)
@@ -686,10 +695,13 @@ pub fn prepare_ingots(
                         .collect::<Result<Vec<_>, _>>()?;
                     run_authored_requests(input, &found_requests)?
                 };
-                match serve_rounds(&mut input_db, &transaction, sealed, own, sites)? {
+                // The requests of the output view the transaction ends in.
+                let mut view_requests = sealed.clone();
+                match serve_rounds(input_db, &transaction, sealed, own, sites)? {
                     Preparation::Complete(own) => {
+                        view_requests.extend(own.iter().cloned());
                         seals[index] = own;
-                        last = Some(input_db);
+                        last = Some(view_requests);
                         break;
                     }
                     Preparation::NeedsDependencies(waiting) => waiting,
@@ -710,19 +722,22 @@ pub fn prepare_ingots(
     if total == 0 {
         return Ok(None);
     }
-    // The last view holds the output of its own ingot and of the ones it
-    // depends on. Other ingots (several roots) need a view of everything.
-    if let Some(output) = last
-        && output.generation_inputs().requests(&output).len() == total
+    // The last transaction's view holds the output of its own ingot and of the
+    // ones it depends on. Other ingots (several roots) need a view of
+    // everything. Later ingots and retries may have moved the working database
+    // to an input view, so the output view is entered again.
+    let mut view = working.unwrap_or_else(|| copy_view(db, &ViewBasis::Package));
+    if let Some(requests) = last
+        && requests.len() == total
     {
-        return Ok(Some(output));
+        enter_output_view(&mut view, &requests);
+        return Ok(Some(view));
     }
     let mut everything = Vec::new();
     for (seal, extra) in seals.into_iter().zip(additions) {
         everything.extend(seal);
         everything.extend(extra);
     }
-    let mut view = copy_view(db, &ViewBasis::Package);
     enter_output_view(&mut view, &everything);
     Ok(Some(view))
 }
