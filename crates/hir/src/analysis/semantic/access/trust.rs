@@ -19,6 +19,7 @@ use common::{
         CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
     },
     ingot::{Ingot, IngotKind},
+    stdlib::is_embedded_builtin,
 };
 use url::Url;
 
@@ -38,14 +39,18 @@ pub(super) struct UnsafeTrust {
 }
 
 impl UnsafeTrust {
-    /// The trust for a walk from `top_mod`, if its ingot is a trust root.
+    /// The trust for a walk from `top_mod`, if its ingot is a trust root. A
+    /// walk from an embedded library reaches only `core` and `std`, which need
+    /// no trust, so it does not read the dependency graph.
     pub(super) fn for_root(db: &dyn HirAnalysisDb, top_mod: TopLevelMod<'_>) -> Option<Self> {
+        let base = top_mod.ingot(db).base(db);
+        if is_embedded_builtin(base) {
+            return None;
+        }
         let graph = db.dependency_graph();
-        graph
-            .is_trust_root(db, top_mod.ingot(db).base(db))
-            .then(|| Self {
-                trusted: graph.trusted_ingots(db),
-            })
+        graph.is_trust_root(db, base).then(|| Self {
+            trusted: graph.trusted_ingots(db),
+        })
     }
 
     fn allows(&self, db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {

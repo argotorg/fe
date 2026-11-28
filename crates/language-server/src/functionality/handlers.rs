@@ -338,7 +338,7 @@ pub async fn initialized(
     // can be large and delay workspace diagnostics).
     let mut seen_ingots = FxHashSet::default();
     let mut emitted_any = false;
-    for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+    for (url, _file) in backend.db.workspace().all_files(&backend.db) {
         if url.scheme() != "file" || !url.path().ends_with(".fe") {
             continue;
         }
@@ -367,7 +367,7 @@ pub async fn initialized(
     }
 
     if !emitted_any {
-        for (url, _file) in backend.db.workspace().all_files(&backend.db).iter() {
+        for (url, _file) in backend.db.workspace().all_files(&backend.db) {
             let _ = backend.client.emit(NeedsDiagnostics(url.clone()));
         }
     }
@@ -662,7 +662,7 @@ fn load_ingot_files(
 
 fn emit_workspace_diagnostics(backend: &Backend) {
     // Embedded libraries are compiler-owned; source replacements still need checks.
-    for (url, _) in backend.db.workspace().all_files(&backend.db).iter() {
+    for (url, _) in backend.db.workspace().all_files(&backend.db) {
         if !is_embedded_builtin(&url) {
             let _ = backend.client.emit(NeedsDiagnostics(url));
         }
