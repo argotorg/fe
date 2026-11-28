@@ -130,8 +130,11 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| "Library path escaped root".to_string())?;
+            // A builtin URL's scheme is not special, so `\` in a Windows path
+            // would not separate its segments.
+            let segments: Vec<_> = relative.components().map(|c| c.as_str()).collect();
             let url = base
-                .join(relative.as_str())
+                .join(&segments.join("/"))
                 .map_err(|_| "Failed to join library path".to_string())?;
             let content = fs::read_to_string(path.as_std_path())
                 .map_err(|err| format!("Failed to read {path}: {err}"))?;
