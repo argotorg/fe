@@ -2297,6 +2297,21 @@ pub(crate) fn evaluate_const_ty<'db>(
     }
 }
 
+/// The diagnostic that constant evaluation reports for the root cause of
+/// `error`, a failure of the body of `owner` (through any callee chain). This
+/// is the user-facing wording of a failure; `None` where the failure has no
+/// diagnostic of its own.
+pub fn ctfe_error_diagnostic<'db>(
+    db: &'db dyn HirAnalysisDb,
+    owner: crate::analysis::ty::ty_check::BodyOwner<'db>,
+    error: &CtfeError<'db>,
+) -> Option<super::diagnostics::TyDiagCollection<'db>> {
+    let (root_owner, _, _) = root_ctfe_error(db, owner, error);
+    let body = root_owner.body(db)?;
+    TyId::invalid(db, invalid_cause_from_ctfe_error(db, owner, error.clone()))
+        .emit_diag(db, body.span().into())
+}
+
 pub(crate) fn invalid_cause_from_ctfe_error<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: crate::analysis::ty::ty_check::BodyOwner<'db>,

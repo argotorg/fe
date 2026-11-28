@@ -1,0 +1,126 @@
+// A `recv` arm that puts `ref` on one field of its message and binds another
+// field by a nested pattern. The pattern decodes its field in full when it
+// binds a name, and does not read the field when it binds no name.
+use core::abi::store_word
+use core::ptr::{self, MemBuffer, MemSpan}
+use std::abi::{DynArray, Sol}
+use std::evm::{Address, Call, Evm}
+
+#[abi]
+pub struct Inner { pub x: u256, pub y: bool }
+
+msg Shop {
+    #[selector = 0x01]
+    Tup { items: DynArray<Inner>, pair: (u256, u256) } -> u256,
+    #[selector = 0x02]
+    Rec { items: DynArray<Inner>, pair: Inner } -> u256,
+    #[selector = 0x03]
+    Half { items: DynArray<Inner>, pair: (u256, u256) } -> u256,
+    #[selector = 0x04]
+    Blank { items: DynArray<Inner>, pair: (u256, u256) } -> u256,
+    #[selector = 0x05]
+    RecHalf { items: DynArray<Inner>, pair: Inner } -> u256,
+    #[selector = 0x06]
+    NoName { items: DynArray<Inner>, pair: Inner } -> u256,
+}
+
+pub contract Nested {
+    recv Shop {
+        Tup { ref items, pair: (a, b) } -> u256 {
+            a + b * 1000 + items[1].x * 1000000
+        }
+        Rec { ref items, pair: Inner { x, y } } -> u256 {
+            x + (if y { 1000 } else { 0 }) + items[1].x * 1000000
+        }
+        Half { ref items, pair: (a, _) } -> u256 {
+            a + items[1].x * 1000000
+        }
+        Blank { ref items, pair: (_, _) } -> u256 {
+            items[1].x
+        }
+        RecHalf { ref items, pair: Inner { x, .. } } -> u256 {
+            x + items[1].x * 1000000
+        }
+        NoName { ref items, pair: Inner { .. } } -> u256 {
+            items[1].x
+        }
+    }
+}
+
+struct MemInput { ptr: *u8, len: u256 }
+
+fn payload<const N: usize>(_ words: [u256; N]) -> MemInput {
+    let data = ptr::alloc_bytes(N * 32)
+    var i: usize = 0
+    while i < N {
+        unsafe { store_word(ptr: ptr::offset_bytes(data, i * 32), value: words[i]) }
+        i += 1
+    }
+    MemInput { ptr: data, len: (N * 32) as u256 }
+}
+
+// cast abi-encode "f((uint256,bool)[],(uint256,uint256))" "[(5,false),(9,true)]" "(7,8)"
+// The head is words 0 to 2 (offset of `items`, then `pair`), `items` is words 3 to 7.
+fn tup() -> MemInput {
+    payload([0x60, 7, 8, 2, 5, 0, 9, 1])
+}
+
+// cast abi-encode "f((uint256,bool)[],(uint256,bool))" "[(5,false),(9,true)]" "(7,true)"
+fn rec() -> MemInput {
+    payload([0x60, 7, 1, 2, 5, 0, 9, 1])
+}
+
+// As `rec`, with `y` of `pair` set to 2, which is not a `bool`.
+fn rec_bad() -> MemInput {
+    payload([0x60, 7, 2, 2, 5, 0, 9, 1])
+}
+
+struct Outcome { success: bool, ret_len: u256, word0: u256 }
+
+fn call_raw(_ addr: Address, selector: u256, payload: MemInput) -> Outcome
+uses (evm: mut Evm)
+{
+    let len = 4 + payload.len
+    let data = MemBuffer::new((len + 32).downcast_unchecked())
+    unsafe {
+        store_word(ptr: data.ptr(), value: selector << 224)
+        ptr::copy_raw(ptr::offset_bytes(data.ptr(), 4), source: payload.ptr, len: payload.len.downcast_unchecked())
+    }
+    var ret = MemBuffer::new(64)
+    let outcome = evm
+        .raw_call(
+            addr: addr,
+            gas: 1000000,
+            value: Wei::zero(),
+            args: unsafe { MemSpan::from_raw_parts(ptr: data.ptr(), len: len.downcast_unchecked()) },
+            ret: mut ret,
+        )
+    let rlen = outcome.returndata_len()
+    Outcome {
+        success: outcome.success(),
+        ret_len: rlen,
+        word0: if rlen >= 32 {
+            ret.span().word_at(0)
+        } else {
+            0
+        },
+    }
+}
+
+fn returns(_ o: Outcome, _ value: u256) -> bool {
+    o.success && o.ret_len == 32 && o.word0 == value
+}
+
+#[test]
+fn a_nested_pattern_that_binds_a_name_decodes_its_field() uses (evm: mut Evm) {
+    let c = evm.create2<Nested>(value: Wei::zero(), args: (), salt: 1)
+    assert!(returns(call_raw(c, selector: 1, payload: tup()), 9008007))
+    assert!(returns(call_raw(c, selector: 2, payload: rec()), 9001007))
+    assert!(returns(call_raw(c, selector: 3, payload: tup()), 9000007))
+    assert!(returns(call_raw(c, selector: 4, payload: tup()), 9))
+    assert!(returns(call_raw(c, selector: 5, payload: rec()), 9000007))
+    // A pattern that binds no name does not read its field; one that binds a name decodes it in full.
+    assert!(returns(call_raw(c, selector: 6, payload: rec_bad()), 9))
+    assert!(!call_raw(c, selector: 5, payload: rec_bad()).success)
+    assert!(!call_raw(c, selector: 2, payload: rec_bad()).success)
+}

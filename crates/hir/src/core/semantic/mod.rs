@@ -1928,29 +1928,47 @@ impl<'db> RecvArmView<'db> {
             }
             _ => None,
         };
-        let is_ref = |pat: PatId| name_marker(pat) == Some(BindingMarker::Ref);
-        let in_place = bindings.iter().any(|binding| is_ref(binding.pat));
+        // How the dispatcher reads each field the pattern names. This is the
+        // one place that decides it: `decoded` and `fields` below are both
+        // derived from it, so they cannot disagree.
+        //
+        // The record pattern of a well-formed arm has only names or patterns
+        // that bind no name as its fields: `lower_field_lets` has bound every
+        // nested pattern that binds a name by a plain name of its own and
+        // moved the pattern into a `let` of the body. A nested pattern that
+        // binds a name (`FieldRead::Nested`) is therefore reached only by an
+        // arm the parser has already rejected, a tuple-form arm that is kept
+        // for recovery, and such an arm keeps the reading it was given before.
+        let read_of = |pat: PatId| match name_marker(pat) {
+            Some(BindingMarker::Ref) => FieldRead::InPlace,
+            Some(_) => FieldRead::Named,
+            None if pat_binds_name(db, hir_arm.body, pat) => FieldRead::Nested,
+            None => FieldRead::Unread,
+        };
+        let reads: Vec<(&ArgBinding<'db>, FieldRead)> = bindings
+            .iter()
+            .map(|binding| (binding, read_of(binding.pat)))
+            .collect();
+        let in_place = reads.iter().any(|(_, read)| *read == FieldRead::InPlace);
         let field_tys = variant_ty.field_types(db);
         // The fields the arm decodes in full: every field of a message that is
         // read whole, else the fields bound by a plain name or by a pattern
         // that binds a name. A `ref` name reads its field where it lies and a
         // field that binds no name is not read.
         let decoded: Vec<u32> = if in_place {
-            bindings
+            reads
                 .iter()
-                .filter(|binding| match name_marker(binding.pat) {
-                    Some(marker) => marker != BindingMarker::Ref,
-                    None => pat_binds_name(db, hir_arm.body, binding.pat),
-                })
-                .map(|binding| binding.tuple_index)
+                .filter(|(_, read)| matches!(read, FieldRead::Named | FieldRead::Nested))
+                .map(|(binding, _)| binding.tuple_index)
                 .collect()
         } else {
             (0..field_tys.len() as u32).collect()
         };
-        let fields = bindings
+        // The fields the dispatcher reads one by one, each by a name.
+        let fields = reads
             .iter()
-            .filter(|binding| name_marker(binding.pat).is_some())
-            .map(|binding| RecvFieldReading {
+            .filter(|(_, read)| matches!(read, FieldRead::InPlace | FieldRead::Named))
+            .map(|(binding, read)| RecvFieldReading {
                 pat: binding.pat,
                 tuple_index: binding.tuple_index,
                 field_ty: binding.ty,
@@ -1958,7 +1976,7 @@ impl<'db> RecvArmView<'db> {
                     db,
                     &field_tys[..binding.tuple_index as usize],
                 ),
-                in_place: in_place && is_ref(binding.pat),
+                in_place: *read == FieldRead::InPlace,
                 binding_ty: binding.ty,
             })
             .collect::<Vec<_>>();
@@ -2273,7 +2291,11 @@ pub struct RecvArmReading<'db> {
     /// `<H as core::contracts::ContractHost>::Input` of the arm's host `H`,
     /// when the arm reads in place and has a host.
     pub input_ty: Option<TyId<'db>>,
-    /// One entry for each field the pattern binds, in the pattern's order.
+    /// One entry for each field the pattern binds by a name, in the pattern's
+    /// order. `RecvArmView::input` plans one read for each entry and no other,
+    /// and so do the trust walk and the dispatcher built from it. A pattern
+    /// that binds a name inside a field is bound by a plain name of its own
+    /// before it gets here (see `BodyCtxt::lower_field_lets`).
     pub fields: Vec<RecvFieldReading<'db>>,
     /// The tuple indices of the fields the arm decodes in full, so that each
     /// needs `Decode<Sol>`: all fields of a message read whole; else the
@@ -3532,6 +3554,22 @@ fn contract_effect_resolutions_canonical<'db>(
             })
         })
         .collect()
+}
+
+/// How the dispatcher of a recv arm reads one field that the arm's pattern
+/// names (see `RecvArmView::reading`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldRead {
+    /// Bound by `ref name`: read where it lies.
+    InPlace,
+    /// Bound by a plain name: decoded in full.
+    Named,
+    /// Bound by a nested pattern that binds a name: decoded in full. A
+    /// well-formed arm has none (see `RecvArmView::reading`).
+    Nested,
+    /// Bound to no name (`_`, `..`, or a nested pattern without a name): not
+    /// read.
+    Unread,
 }
 
 /// Whether `pat` binds a name, whatever its marker: a name, or a pattern with
