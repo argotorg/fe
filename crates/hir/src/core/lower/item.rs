@@ -4,7 +4,8 @@ use parser::ast::{self, WhereClauseOwner, prelude::*};
 use super::{
     FileLowerCtxt,
     attr::{
-        AttrForm, AttrRule, AttrTarget, cfg_holds, report_unsupported_attr, validate_attr_rules,
+        AttrForm, AttrRule, AttrTarget, cfg_holds, report_unknown_attrs, report_unsupported_attr,
+        validate_attr_rules,
     },
 };
 use crate::{
@@ -112,12 +113,18 @@ const POINTER_FORM: AttrForm = AttrForm::SingleArg {
     allow_bare: false,
     allowed_args: &["storage", "transient", "calldata"],
 };
+/// `fe test` reads these keys; it checks their values when it runs the test.
+const TEST_FORM: AttrForm = AttrForm::Keys {
+    allowed_keys: &["should_revert", "panic", "selector", "balance"],
+};
 
 const ARITHMETIC_EXPECTED: &str = "`#[arithmetic(checked)]` or `#[arithmetic(unchecked)]`";
 const INLINE_EXPECTED: &str = "`#[inline]`, `#[inline(always)]`, or `#[inline(never)]`";
 const MUST_USE_EXPECTED: &str = "`#[must_use]`";
 const POINTER_EXPECTED: &str =
     "`#[pointer(storage)]`, `#[pointer(transient)]`, or `#[pointer(calldata)]`";
+const TEST_EXPECTED: &str = "`#[test]`, or `#[test(..)]` with arguments among `should_revert`, \
+                             `panic = ..`, `selector = ..` and `balance = ..`";
 
 const ARITHMETIC_TARGETS: &str = "functions and modules";
 const EVENT_TARGETS: &str = "structs";
@@ -137,12 +144,23 @@ fn target(kind: &'static str, name: Option<String>) -> AttrTarget {
     AttrTarget::new(kind, name)
 }
 
+/// Reports unknown attributes in `attrs`, then checks it against `rules`.
+fn validate_item_attr_rules<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    target: AttrTarget,
+    rules: &[AttrRule],
+) {
+    report_unknown_attrs(ctxt, attrs.clone(), target.clone());
+    validate_attr_rules(ctxt, attrs, target, rules);
+}
+
 fn validate_mod_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
     name: Option<String>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("mod", name),
@@ -164,7 +182,7 @@ pub(super) fn validate_module_inner_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("module", None),
@@ -216,7 +234,7 @@ fn validate_func_attrs<'db>(
             CFG_TARGETS,
         );
     }
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target(target_kind, name),
@@ -227,6 +245,7 @@ fn validate_func_attrs<'db>(
             AttrRule::supported("must_use", BARE_FORM, MUST_USE_EXPECTED),
             AttrRule::supported("raw_place", BARE_FORM, "`#[raw_place]`"),
             AttrRule::supported("cold", BARE_FORM, "`#[cold]`"),
+            AttrRule::supported("test", TEST_FORM, TEST_EXPECTED),
             AttrRule::unsupported("view", VIEW_TARGETS),
             AttrRule::unsupported("event", EVENT_TARGETS),
             AttrRule::unsupported("error", ERROR_TARGETS),
@@ -241,7 +260,7 @@ fn validate_struct_attrs<'db>(
     attrs: Option<ast::AttrList>,
     name: Option<String>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("struct", name),
@@ -265,7 +284,7 @@ fn validate_enum_attrs<'db>(
     attrs: Option<ast::AttrList>,
     name: Option<String>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("enum", name),
@@ -296,7 +315,7 @@ fn validate_type_alias_attrs<'db>(
     } else {
         AttrRule::unsupported("pointer", POINTER_TARGETS)
     };
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("type alias", name),
@@ -321,7 +340,7 @@ fn validate_unsupported_item_attrs<'db>(
     kind: &'static str,
     name: Option<String>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target(kind, name),
@@ -361,7 +380,7 @@ pub(super) fn validate_for_loop_attrs<'db>(
     ctxt: &mut FileLowerCtxt<'db>,
     attrs: Option<ast::AttrList>,
 ) {
-    validate_attr_rules(
+    validate_item_attr_rules(
         ctxt,
         attrs,
         target("for loop", None),
@@ -371,6 +390,17 @@ pub(super) fn validate_for_loop_attrs<'db>(
             AttrRule::unsupported("cfg", CFG_TARGETS),
         ],
     );
+}
+
+/// Reports unknown attributes, and `payable` and `cfg`, on a field or variant.
+pub(super) fn validate_member_attrs<'db>(
+    ctxt: &mut FileLowerCtxt<'db>,
+    attrs: Option<ast::AttrList>,
+    kind: &'static str,
+    name: Option<String>,
+) {
+    report_unknown_attrs(ctxt, attrs.clone(), target(kind, name.clone()));
+    report_unsupported_member_attrs(ctxt, attrs, kind, name);
 }
 
 /// Reports `payable` and `cfg` on a field, variant or other part of an item.
@@ -1322,7 +1352,7 @@ impl<'db> FieldDef<'db> {
         ast: ast::RecordFieldDef,
         field_kind: &'static str,
     ) -> Self {
-        report_unsupported_member_attrs(ctxt, ast.attr_list(), "field", None);
+        validate_member_attrs(ctxt, ast.attr_list(), "field", None);
         report_unsupported_attr(
             ctxt,
             ast.attr_list(),
@@ -1361,7 +1391,7 @@ impl<'db> VariantDefListId<'db> {
 
 impl<'db> VariantDef<'db> {
     fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::VariantDef) -> Self {
-        report_unsupported_member_attrs(ctxt, ast.attr_list(), "variant", None);
+        validate_member_attrs(ctxt, ast.attr_list(), "variant", None);
         let attributes = AttrListId::lower_ast_opt(ctxt, ast.attr_list());
         let name = IdentId::lower_token_partial(ctxt, ast.name());
         let kind = match ast.kind() {
