@@ -432,6 +432,15 @@ impl<'ctxt, 'db> BodyCtxt<'ctxt, 'db> {
     /// body begins with. The arm's pattern binds such a field by its `%` name
     /// (see `FuncParamName::destructured_field`), so the arm receives each
     /// field it binds from whole.
+    ///
+    /// After this, each field of the arm's record pattern is a lone name, or
+    /// binds no name at all (`_`, `..`, a literal or a nested pattern without
+    /// a name).
+    /// `RecvArmView::reading` relies on it: it takes a field that is a lone
+    /// name to be read, and any other to be left unread, and so
+    /// `RecvArmView::input`, the trust walk of the arm and the dispatcher
+    /// (`crates/mir/src/runtime/synthetic.rs`) read the fields that `reading`
+    /// lists and no others.
     pub(super) fn lower_field_lets(
         &mut self,
         arm_pat: PatId,

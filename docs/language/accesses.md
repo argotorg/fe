@@ -89,11 +89,12 @@ it, or make plain names write through.
 
 In a `recv` arm, `ref` on a field of the message, as in `Cancel { ref orders }`,
 reads that field where it lies in the input instead of decoding it, and the arm
-then reads only the fields it names. A plain name, or a nested pattern that
-binds a name, decodes its field in full. A `ref` name binds the field read in
-place: a one-word field is its value, a record or an array is an `Encoded`
-handle, and `Bytes` or a string is a view. A field whose pattern binds no name
-(`_`, `..`, or a nested pattern of `_` and `..` only) is not read. Every field
+then reads only the fields it names, whichever field carries the `ref`. A plain
+name, or a nested pattern that binds a name, decodes its field in full. A `ref`
+name binds the field read in place: a one-word field is its value, a record or
+an array is an `Encoded` handle, and `Bytes` or a string is a view. A field
+whose pattern binds no name (`_`, a field covered by `..`, or a nested pattern
+of `_` and `..` only) is neither read nor validated. Every field
 the arm names is read before the body runs, whether the body uses it or not.
 An arm with no `ref` on a field of its message decodes the whole message, as
 before, and a `ref` inside the pattern of a field keeps its ordinary meaning, a
