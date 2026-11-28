@@ -644,6 +644,32 @@ fn a_faulting_dependency_provider_refuses_the_package_without_publishing() {
     assert_authored_unchanged(&db, &files);
 }
 
+const PANICKING_HELPER_LIB: &str = "use core::derive::DeriveInherent\nuse core::meta::{Code, Item, Record}\n\nstruct Good {}\nimpl DeriveInherent for Good {\n    const fn derive(_ r: Record) -> Code<Item> {\n        quote { pub const fn g() -> u256 { 0 } }\n    }\n}\n\npub struct L {\n    pub a: u256,\n}\nimpl L with (Good)\n";
+
+const PANICKING_HELPER_APP: &str = "use core::derive::DeriveInherent\nuse core::meta::{Code, Item, Record}\n\nconst fn fail() -> u256 {\n    core::panic_code(1)\n}\n\nstruct Boom {}\nimpl DeriveInherent for Boom {\n    const fn derive(_ r: Record) -> Code<Item> {\n        let _ = fail()\n        quote { pub const fn f() -> u256 { 0 } }\n    }\n}\n\npub struct S {\n    pub a: u256,\n}\nimpl S with (Boom)\n";
+
+#[test]
+fn a_provider_helper_that_panics_is_described_without_internal_ids() {
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", PANICKING_HELPER_LIB),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/lib.fe", PANICKING_HELPER_APP),
+    ];
+    let db = project(&files);
+    let error = prepare_ingots(&db, &[url("app/")])
+        .err()
+        .expect("a provider fault refuses preparation");
+    assert_eq!(error.file, url("app/src/lib.fe"), "{error}");
+    assert!(error.cause.contains("`lib::fail`"), "{error}");
+    assert!(error.cause.contains("panic in const context"), "{error}");
+    assert!(error.cause.contains("0x1"), "{error}");
+    for internal in ["Id(", "SemanticInstance", "CalleeError", "PhantomData"] {
+        assert!(!error.cause.contains(internal), "{error}");
+    }
+    assert_authored_unchanged(&db, &files);
+}
+
 #[test]
 fn a_prepared_package_view_refuses_a_second_preparation() {
     let files = same_ingot_files();

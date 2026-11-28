@@ -209,9 +209,20 @@ fn diagnostic_error(
         fallback.file = span.file.url(db).unwrap_or(fallback.file);
         fallback.range = span.range;
     }
-    // Labels carry expected/given types even when a source transition lacks a
-    // printable span. Do not let terminal rendering erase the original cause.
-    let details = diagnostics
+    fallback.cause = format!(
+        "{}: {}\n{}",
+        fallback.cause,
+        diagnostic_details(diagnostics),
+        db.format_complete_diagnostics(diagnostics)
+    );
+    fallback
+}
+
+/// The messages, labels and notes of `diagnostics` in one line. Labels carry
+/// expected/given types even when a source transition lacks a printable span.
+/// Do not let terminal rendering erase the original cause.
+fn diagnostic_details(diagnostics: &[common::diagnostics::CompleteDiagnostic]) -> String {
+    diagnostics
         .iter()
         .flat_map(|diagnostic| {
             std::iter::once(diagnostic.message.clone())
@@ -225,14 +236,7 @@ fn diagnostic_error(
         })
         .filter(|message| !message.is_empty())
         .collect::<Vec<_>>()
-        .join("; ");
-    fallback.cause = format!(
-        "{}: {}\n{}",
-        fallback.cause,
-        details,
-        db.format_complete_diagnostics(diagnostics)
-    );
-    fallback
+        .join("; ")
 }
 
 fn body_errors(
@@ -330,7 +334,27 @@ fn evaluation_error<'db>(
         CtfeError::RecursionLimitExceeded { origin } => {
             (*origin, "existing CTFE recursion limit exceeded".into())
         }
-        _ => return fallback,
+        // The other failures are worded as constant evaluation words them
+        // everywhere else, and name the function whose body failed.
+        CtfeError::Panicked { origin, .. }
+        | CtfeError::AssertionFailed { origin, .. }
+        | CtfeError::NegativeExponent { origin }
+        | CtfeError::VariantMismatch { origin }
+        | CtfeError::UninitializedLocal { origin } => {
+            let Some(diagnostic) =
+                hir::analysis::ty::const_ty::ctfe_error_diagnostic(db, owner, error)
+            else {
+                return fallback;
+            };
+            let details = diagnostic_details(&[diagnostic.to_complete(db)]);
+            let cause = match owner.scope().pretty_path(db) {
+                Some(path) => format!("{details} (in `{path}`)"),
+                None => details,
+            };
+            (*origin, cause)
+        }
+        // A failure is a chain of calls ending in one of the failures above.
+        CtfeError::CalleeError { .. } => return fallback,
     };
     let (owner, origin) = match library_call {
         Some(call) if in_embedded_library(db, owner) => call,
@@ -400,6 +424,9 @@ pub fn prepare_file(
 /// the view is prepared in the database itself and the handle is `file`;
 /// otherwise a copy is prepared and replaces the database. Without output, and
 /// on every error, the database is in the authored view.
+///
+/// The caller must hold the only handle to the database: a second live handle
+/// would block the first change of view.
 pub fn prepare_file_in_place(db: &mut DriverDataBase, file: File) -> Result<File, GenerationError> {
     let url = file.url(db).expect("indexed generation input");
     let holds_only_the_file = db
@@ -726,7 +753,7 @@ fn prepare_ingots_with(
     let mut last: Option<Vec<FrozenGenerationRequest>> = None;
     for (index, plan) in plans.iter().enumerate() {
         // A first look at the text decides which ingots can need preparing
-        // before any view is copied.
+        // before any view is entered.
         let mut syntaxes = Vec::new();
         let db = working.current();
         for url in &plan.files {
@@ -973,6 +1000,9 @@ fn prepare_dependency_requests(
 /// Prepare `roots` in the caller's database when they request generation, so
 /// every later consumer reads the generated program. Without output, and on
 /// every error, the database is in the authored view.
+///
+/// The caller must hold the only handle to the database: a second live handle
+/// would block the first change of view.
 pub fn prepare_ingots_in_place(
     db: &mut DriverDataBase,
     roots: &[url::Url],
@@ -2686,10 +2716,19 @@ fn run_provider_instance<'db>(
     ) {
         EvalOutcome::Ready(value) => value.value(),
         EvalOutcome::Failed(cause) => {
-            let fallback = error(range, format!("provider evaluation failed: {cause:?}"));
+            // A failure with no wording of its own says so without printing
+            // the evaluator's internal structure, which holds database ids.
             return Err(match &cause {
-                EvalFailure::Ctfe(cause) => evaluation_error(db, owner, cause, fallback),
-                _ => fallback,
+                EvalFailure::Ctfe(cause) => evaluation_error(
+                    db,
+                    owner,
+                    cause,
+                    error(range, "provider evaluation failed".into()),
+                ),
+                EvalFailure::Invariant { message, .. } => error(
+                    range,
+                    format!("provider evaluation failed on a compiler invariant: {message}"),
+                ),
             });
         }
         EvalOutcome::Blocked(_) => {
