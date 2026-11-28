@@ -2,7 +2,10 @@
 //! its provider: methods, constants and associated types, admitted by the
 //! same conformance checks as a handwritten implementation body.
 use common::InputDb;
-use fe_driver::{DriverDataBase, generation::prepare_file};
+use fe_driver::{
+    DriverDataBase,
+    generation::{prepare_file, prepare_file_in_place},
+};
 use hir::analysis::{
     semantic::{EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const},
     ty::ty_check::BodyOwner,
@@ -2219,4 +2222,149 @@ const fn run() -> usize { <Packet as Match>::score(Packet {}) }
         cause.contains("has no `impl Derive<trait Match>` that applies"),
         "{cause}"
     );
+}
+
+fn authored_view_holds(db: &DriverDataBase) -> bool {
+    db.generation_inputs().functions(db).is_empty()
+        && db.generation_inputs().requests(db).is_empty()
+        && !db.generation_inputs().declared_headers(db)
+}
+
+fn input_file(source: &str) -> (DriverDataBase, common::file::File) {
+    let mut db = DriverDataBase::default();
+    let file = db
+        .workspace()
+        .touch(&mut db, Url::parse(URL).unwrap(), Some(source.into()));
+    (db, file)
+}
+
+fn program_text(db: &DriverDataBase) -> String {
+    let file = db.workspace().get(db, &Url::parse(URL).unwrap()).unwrap();
+    db.run_on_top_mod(db.top_mod(file)).format_diags(db)
+}
+
+/// Preparation in the caller's database gives the program that `prepare_file`
+/// builds in a copy: the same requests and diagnostics, and the same handle.
+#[test]
+fn standalone_in_place_matches_prepare_file() {
+    let source = format!(
+        "{EXPANDED_TYPE_HEADERS}\nmsg M {{\n    #[selector = 0x11111111]\n    Ping {{ v: u256 }} -> u256,\n}}\n"
+    );
+    let (db, file) = input_file(&source);
+    let copied = prepare_file(&db, file).unwrap().expect("a prepared view");
+    assert!(authored_view_holds(&db));
+
+    let (mut in_place, in_place_file) = input_file(&source);
+    let handle = prepare_file_in_place(&mut in_place, in_place_file).unwrap();
+    assert_eq!(handle, in_place_file);
+    assert_eq!(
+        in_place.generation_inputs().requests(&in_place),
+        copied.generation_inputs().requests(&copied)
+    );
+    assert!(!in_place.generation_inputs().requests(&in_place).is_empty());
+    assert!(!in_place.generation_inputs().declared_headers(&in_place));
+    assert_eq!(program_text(&in_place), program_text(&copied));
+    assert_eq!(eval(&in_place, "copied"), "6");
+    assert_eq!(eval(&copied, "copied"), "6");
+}
+
+const FAULTING_PROVIDER: &str = r#"use core::derive::Derive
+use core::meta::{Code, Item, Record}
+
+trait Value { const fn value() -> usize }
+struct Provider {}
+impl Derive<trait Value> for Provider {
+    const fn derive(_ record: Record) -> Code<Item> {
+        let zero: usize = 0
+        let n = 1 / zero
+        quote { const fn value() -> usize { ${n} } }
+    }
+}
+struct S {}
+impl Value for S with (Provider)
+const fn run() -> usize { S::value() }
+"#;
+
+/// A header that lowering drops requests nothing, after the view that shows
+/// written headers as implementors has been entered.
+const DROPPED_HEADER: &str = r#"use core::derive::{Derive, DeriveInherent}
+use core::meta::{Record, Code, Item}
+
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { pub const fn marker() -> u256 { 7 } }
+    }
+}
+
+struct S { a: u256 }
+
+#[cfg(target_os = "linux")]
+impl S with (P)
+const fn run() -> u256 { 7 }
+"#;
+
+/// After a refusal, or when nothing is requested, the caller's database is in
+/// the authored view, and a later preparation of an edited text equals one in
+/// a database that never failed.
+fn assert_in_place_restores(name: &str, failing: &str, expect_error: bool) {
+    let fixed = FAULTING_PROVIDER.replace("let n = 1 / zero", "let n = 1 + zero");
+    let working = fixed.replace(
+        "const fn run() -> usize { S::value() }",
+        "const fn run() -> usize { S::value() }\nfn bad() -> u256 { true }",
+    );
+    let (fresh, fresh_file) = input_file(&working);
+    let fresh_view = prepare_file(&fresh, fresh_file).unwrap().unwrap();
+
+    let (db, file) = input_file(failing);
+    let copy_result = prepare_file(&db, file);
+    let (mut in_place, in_place_file) = input_file(failing);
+    let result = prepare_file_in_place(&mut in_place, in_place_file);
+    assert_eq!(result.is_err(), expect_error, "{name}");
+    assert_eq!(result.as_ref().err(), copy_result.as_ref().err(), "{name}");
+    assert!(authored_view_holds(&in_place), "{name}");
+    assert_eq!(in_place_file.text(&in_place).as_str(), failing, "{name}");
+    assert_eq!(
+        program_text(&in_place),
+        written_diagnostics(failing),
+        "{name}"
+    );
+
+    // The same database prepares the edited text as a new one does.
+    let url = Url::parse(URL).unwrap();
+    in_place
+        .workspace()
+        .update(&mut in_place, url, working.clone());
+    let handle = prepare_file_in_place(&mut in_place, in_place_file).unwrap();
+    assert_eq!(handle, in_place_file, "{name}");
+    assert_eq!(
+        in_place.generation_inputs().requests(&in_place),
+        fresh_view.generation_inputs().requests(&fresh_view),
+        "{name}"
+    );
+    assert_eq!(program_text(&in_place), program_text(&fresh_view), "{name}");
+    assert!(program_text(&in_place).contains("type mismatch"), "{name}");
+    assert_eq!(eval(&in_place, "run"), eval(&fresh_view, "run"), "{name}");
+}
+
+#[test]
+fn a_standalone_preparation_in_place_that_fails_leaves_the_authored_view() {
+    assert_in_place_restores("a provider fault", FAULTING_PROVIDER, true);
+}
+
+#[test]
+fn a_standalone_preparation_in_place_without_requests_leaves_the_authored_view() {
+    assert_in_place_restores("a dropped header", DROPPED_HEADER, false);
+}
+
+/// A database that holds output is refused without being changed.
+#[test]
+fn a_prepared_standalone_database_refuses_a_second_preparation_in_place() {
+    let (mut db, file) = input_file(EXPANDED_TYPE_HEADERS);
+    prepare_file_in_place(&mut db, file).unwrap();
+    let requests = db.generation_inputs().requests(&db).clone();
+    assert!(!requests.is_empty());
+    let error = prepare_file_in_place(&mut db, file).expect_err("output is checked once");
+    assert!(error.cause.contains("authored input view"), "{error}");
+    assert_eq!(*db.generation_inputs().requests(&db), requests);
 }

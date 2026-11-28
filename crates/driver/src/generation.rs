@@ -395,18 +395,33 @@ pub fn prepare_file(
     prepare_file_within(db, file, MAX_PREPARATION_ROUNDS)
 }
 
-/// Install the prepared view and return its handle for the source file.
+/// Install the prepared view and return its handle for the source file. When
+/// the database holds nothing but the source file and the builtin libraries,
+/// the view is prepared in the database itself and the handle is `file`;
+/// otherwise a copy is prepared and replaces the database. Without output, and
+/// on every error, the database is in the authored view.
 pub fn prepare_file_in_place(db: &mut DriverDataBase, file: File) -> Result<File, GenerationError> {
-    let Some(prepared) = prepare_file(db, file)? else {
-        return Ok(file);
-    };
     let url = file.url(db).expect("indexed generation input");
-    let prepared_file = prepared
+    let holds_only_the_file = db
         .workspace()
-        .get(&prepared, &url)
-        .expect("prepared view keeps the source file");
-    *db = prepared;
-    Ok(prepared_file)
+        .all_files(db)
+        .iter()
+        .all(|(candidate, _)| candidate == url || is_embedded_builtin(&candidate));
+    if !holds_only_the_file {
+        let Some(prepared) = prepare_file(db, file)? else {
+            return Ok(file);
+        };
+        let prepared_file = prepared
+            .workspace()
+            .get(&prepared, &url)
+            .expect("prepared view keeps the source file");
+        *db = prepared;
+        return Ok(prepared_file);
+    }
+    prepare_in_place(db, &url, |working| {
+        prepare_file_with(working, file, MAX_PREPARATION_ROUNDS)
+    })?;
+    Ok(file)
 }
 
 /// `prepare_file` with the number of rounds a transaction may build.
@@ -415,37 +430,145 @@ fn prepare_file_within(
     file: File,
     max_rounds: usize,
 ) -> Result<Option<DriverDataBase>, GenerationError> {
-    let url = file.url(db).expect("indexed generation input");
-    let error = |range, cause| GenerationError {
-        file: url.clone(),
-        range,
-        cause,
+    let mut working = Working::Copy {
+        authored: db,
+        copy: None,
     };
+    Ok(prepare_file_with(&mut working, file, max_rounds)?.then(|| {
+        working
+            .into_copy()
+            .expect("a prepared standalone view is a copy")
+    }))
+}
+
+/// The refusal of a database that is not in the authored view: it holds output,
+/// or counts written headers as implementors.
+fn require_authored_view(db: &DriverDataBase, file: &url::Url) -> Result<(), GenerationError> {
     if !db.generation_inputs().functions(db).is_empty()
         || !db.generation_inputs().requests(db).is_empty()
+        || *db.generation_inputs().declared_headers(db)
     {
-        return Err(error(
-            parser::TextRange::empty(0.into()),
-            "generation requires the authored input view; output is checked once".into(),
-        ));
+        return Err(GenerationError {
+            file: file.clone(),
+            range: parser::TextRange::empty(0.into()),
+            cause: "generation requires the authored input view; output is checked once".into(),
+        });
     }
-    let Some(syntax) = scan_syntax(db, file) else {
-        return Ok(None);
+    Ok(())
+}
+
+/// The database a preparation works in.
+enum Working<'a> {
+    /// A copy of a shared authored database, made when a view is first needed.
+    Copy {
+        authored: &'a DriverDataBase,
+        copy: Option<DriverDataBase>,
+    },
+    /// The caller's database, which the prepared view replaces.
+    InPlace(&'a mut DriverDataBase),
+}
+
+impl<'a> Working<'a> {
+    /// The database in whatever view it is in. Only what no view changes is
+    /// read through it: the workspace, the dependency graph, the text of a file
+    /// and its parse.
+    fn current(&self) -> &DriverDataBase {
+        match self {
+            Working::Copy { authored, copy } => copy.as_ref().unwrap_or(authored),
+            Working::InPlace(db) => db,
+        }
+    }
+
+    /// The authored view: the shared authored database, or the caller's
+    /// database moved back to it.
+    fn authored_view(&mut self) -> &DriverDataBase {
+        match self {
+            Working::Copy { authored, .. } => authored,
+            Working::InPlace(db) => {
+                enter_authored_view(db);
+                db
+            }
+        }
+    }
+
+    /// The database a view is entered in: the copy over `basis`, made when
+    /// absent, or the caller's database.
+    fn view_db(&mut self, basis: &ViewBasis<'_>) -> &mut DriverDataBase {
+        match self {
+            Working::Copy { authored, copy } => {
+                copy.get_or_insert_with(|| copy_view(authored, basis))
+            }
+            Working::InPlace(db) => db,
+        }
+    }
+
+    fn into_copy(self) -> Option<DriverDataBase> {
+        match self {
+            Working::Copy { copy, .. } => copy,
+            Working::InPlace(_) => None,
+        }
+    }
+}
+
+/// Returns a caller's database to the authored view when dropped, unless the
+/// preparation ended in output. It runs on every exit of a preparation in
+/// place: an error, a request that lowering dropped, no output, and a panic.
+struct RestoreAuthoredView<'a> {
+    db: &'a mut DriverDataBase,
+    keep: bool,
+}
+
+impl Drop for RestoreAuthoredView<'_> {
+    fn drop(&mut self) {
+        if !self.keep {
+            enter_authored_view(self.db);
+        }
+    }
+}
+
+/// Run a preparation in the caller's database. The caller's database must be
+/// in the authored view; it is returned to it unless `prepare` reports output.
+fn prepare_in_place(
+    db: &mut DriverDataBase,
+    first_file: &url::Url,
+    prepare: impl FnOnce(&mut Working<'_>) -> Result<bool, GenerationError>,
+) -> Result<bool, GenerationError> {
+    // A database that holds output is refused without being changed.
+    require_authored_view(db, first_file)?;
+    let mut guard = RestoreAuthoredView { db, keep: false };
+    let prepared = prepare(&mut Working::InPlace(&mut *guard.db))?;
+    guard.keep = prepared;
+    Ok(prepared)
+}
+
+/// Prepare `file` in `working`. `true` means output was generated and the
+/// working database is in the output view.
+fn prepare_file_with(
+    working: &mut Working<'_>,
+    file: File,
+    max_rounds: usize,
+) -> Result<bool, GenerationError> {
+    let url = file
+        .url(working.current())
+        .expect("indexed generation input");
+    require_authored_view(working.current(), &url)?;
+    let Some(syntax) = scan_syntax(working.current(), file) else {
+        return Ok(false);
     };
     // A standalone file has no dependencies whose output could be read, so the
     // authored view shows its openings.
-    let Some(scan) = scan_standalone_file(db, file, syntax)? else {
-        return Ok(None);
+    let Some(scan) = scan_standalone_file(working.authored_view(), file, syntax)? else {
+        return Ok(false);
     };
-    // The one database the transaction works in. It is a copy of the authored
-    // text over the builtin libraries, moved between the views below, so the
-    // caller's database is unchanged. The input view is the one every provider
-    // is admitted and evaluated in: the authored text, with the implementation
-    // headers an author wrote counted as facts.
-    let mut working = copy_view(db, &ViewBasis::Standalone(file));
-    enter_input_view(&mut working, &[]);
+    // The one database the transaction works in: a copy of the authored text
+    // over the builtin libraries, or the caller's database. It is moved between
+    // the views below. The input view is the one every provider is admitted and
+    // evaluated in: the authored text, with the implementation headers an
+    // author wrote counted as facts.
+    let view = working.view_db(&ViewBasis::Standalone(file));
+    enter_input_view(view, &[]);
     let (own, sites, root_range, file) = {
-        let input = &working;
+        let input = &*view;
         let file = input
             .workspace()
             .get(input, &url)
@@ -453,14 +576,14 @@ fn prepare_file_within(
         let found = file_requests(input, file, scan)?;
         // Lowering dropped every header of the file: nothing is requested.
         if found.is_empty() && !found.has_scoped_opening {
-            return Ok(None);
+            return Ok(false);
         }
         let root_range = found.root_range;
         let (own, sites) = run_authored_requests(input, &[found])?;
         (own, sites, root_range, file)
     };
     match serve_rounds(
-        &mut working,
+        view,
         &Transaction {
             basis: ViewBasis::Standalone(file),
             modules: &[url],
@@ -472,7 +595,7 @@ fn prepare_file_within(
         own,
         sites,
     )? {
-        Preparation::Complete(_) => Ok(Some(working)),
+        Preparation::Complete(_) => Ok(true),
         Preparation::NeedsDependencies(_) => {
             unreachable!("standalone preparation has no dependencies")
         }
@@ -564,19 +687,28 @@ pub fn prepare_ingots(
     db: &DriverDataBase,
     roots: &[url::Url],
 ) -> Result<Option<DriverDataBase>, GenerationError> {
-    let Some(first) = roots.first() else {
-        return Ok(None);
+    let mut working = Working::Copy {
+        authored: db,
+        copy: None,
     };
-    if !db.generation_inputs().functions(db).is_empty()
-        || !db.generation_inputs().requests(db).is_empty()
-    {
-        return Err(GenerationError {
-            file: first.clone(),
-            range: parser::TextRange::empty(0.into()),
-            cause: "generation requires the authored input view; output is checked once".into(),
-        });
-    }
-    let plans = plan_ingots(db, roots);
+    Ok(prepare_ingots_with(&mut working, roots)?.then(|| {
+        working
+            .into_copy()
+            .expect("a prepared package view is a copy")
+    }))
+}
+
+/// `prepare_ingots` in `working`. `true` means output was generated and the
+/// working database is in the output view.
+fn prepare_ingots_with(
+    working: &mut Working<'_>,
+    roots: &[url::Url],
+) -> Result<bool, GenerationError> {
+    let Some(first) = roots.first() else {
+        return Ok(false);
+    };
+    require_authored_view(working.current(), first)?;
+    let plans = plan_ingots(working.current(), roots);
     // The sealed output of each prepared ingot, by its index in `plans`. A
     // seal lasts for this preparation only: it is the output of the ingot's
     // text, of the seals of its dependencies and of the settings the database
@@ -586,11 +718,9 @@ pub fn prepare_ingots(
     let mut seals = vec![Vec::new(); plans.len()];
     let mut additions = vec![Vec::new(); plans.len()];
     let mut opening_files = vec![Vec::new(); plans.len()];
-    // The one working database of this call: a copy of the authored inputs,
-    // made when a view is first needed and moved to the input view of each
-    // ingot and each retry. The scan of an ingot that needs no view stays on
-    // the authored `db`.
-    let mut working: Option<DriverDataBase> = None;
+    // The working database moves to the input view of each ingot and each
+    // retry. The scan of an ingot that needs no view stays in the authored
+    // view.
     // The requests of the most recent completed transaction, which its output
     // view holds.
     let mut last: Option<Vec<FrozenGenerationRequest>> = None;
@@ -598,6 +728,7 @@ pub fn prepare_ingots(
         // A first look at the text decides which ingots can need preparing
         // before any view is copied.
         let mut syntaxes = Vec::new();
+        let db = working.current();
         for url in &plan.files {
             let file = db
                 .workspace()
@@ -641,14 +772,12 @@ pub fn prepare_ingots(
             let wants_view = !sealed.is_empty() || writes_headers;
             // A database left in the output view by an earlier transaction or
             // retry is moved back to the input view over this ingot's seals.
-            if wants_view {
-                let view = working.get_or_insert_with(|| copy_view(db, &ViewBasis::Package));
+            let scanned_in: &DriverDataBase = if wants_view {
+                let view = working.view_db(&ViewBasis::Package);
                 enter_input_view(view, &sealed);
-            }
-            let scanned_in = if wants_view {
-                working.as_ref().expect("the working database exists")
+                view
             } else {
-                db
+                working.authored_view()
             };
             let pending = if opening_files[index].is_empty() && dependency_openings.is_empty() {
                 Vec::new()
@@ -671,7 +800,7 @@ pub fn prepare_ingots(
                 if !writes_headers && pending.is_empty() {
                     break;
                 }
-                let input_db = working.get_or_insert_with(|| copy_view(db, &ViewBasis::Package));
+                let input_db = working.view_db(&ViewBasis::Package);
                 enter_input_view(input_db, &sealed);
                 let (own, sites) = {
                     let input = &*input_db;
@@ -714,32 +843,39 @@ pub fn prepare_ingots(
                 ));
             }
             retries += 1;
-            prepare_dependency_requests(db, &plans, plan, &seals, &mut additions, waiting)?;
+            prepare_dependency_requests(
+                working.current(),
+                &plans,
+                plan,
+                &seals,
+                &mut additions,
+                waiting,
+            )?;
         }
     }
     // No ingot needed preparing: consumers keep using the authored view.
     let total = seals.iter().chain(&additions).map(Vec::len).sum::<usize>();
     if total == 0 {
-        return Ok(None);
+        return Ok(false);
     }
     // The last transaction's view holds the output of its own ingot and of the
     // ones it depends on. Other ingots (several roots) need a view of
     // everything. Later ingots and retries may have moved the working database
     // to an input view, so the output view is entered again.
-    let mut view = working.unwrap_or_else(|| copy_view(db, &ViewBasis::Package));
+    let view = working.view_db(&ViewBasis::Package);
     if let Some(requests) = last
         && requests.len() == total
     {
-        enter_output_view(&mut view, &requests);
-        return Ok(Some(view));
+        enter_output_view(view, &requests);
+        return Ok(true);
     }
     let mut everything = Vec::new();
     for (seal, extra) in seals.into_iter().zip(additions) {
         everything.extend(seal);
         everything.extend(extra);
     }
-    enter_output_view(&mut view, &everything);
-    Ok(Some(view))
+    enter_output_view(view, &everything);
+    Ok(true)
 }
 
 fn sealed_dependencies(
@@ -834,15 +970,17 @@ fn prepare_dependency_requests(
     Ok(())
 }
 
-/// Replace an authored database with the prepared view of `roots` when they
-/// request generation, so every later consumer reads the generated program.
+/// Prepare `roots` in the caller's database when they request generation, so
+/// every later consumer reads the generated program. Without output, and on
+/// every error, the database is in the authored view.
 pub fn prepare_ingots_in_place(
     db: &mut DriverDataBase,
     roots: &[url::Url],
 ) -> Result<(), GenerationError> {
-    if let Some(prepared) = prepare_ingots(db, roots)? {
-        *db = prepared;
-    }
+    let Some(first) = roots.first() else {
+        return Ok(());
+    };
+    prepare_in_place(db, first, |working| prepare_ingots_with(working, roots))?;
     Ok(())
 }
 
@@ -2211,6 +2349,11 @@ fn enter_input_view(
     set_view(db, true, sealed);
 }
 
+/// The authored view: no generation output, no declared headers.
+fn enter_authored_view(db: &mut DriverDataBase) {
+    set_view(db, false, &[]);
+}
+
 /// The output view over `requests`: the authored text with every request
 /// served. The prepared program is read in it.
 fn enter_output_view(
@@ -2719,5 +2862,84 @@ mod round_limit_tests {
         assert_eq!(moved_diagnostics, fresh_diagnostics);
         assert_eq!(eval_run(&moved), "12");
         assert_eq!(eval_run(&fresh), "12");
+    }
+}
+
+#[cfg(test)]
+mod in_place_tests {
+    use super::*;
+
+    const FILE: &str = "file:///tmp/fe-in-place.fe";
+    const SOURCE: &str = "use core::derive::Derive\nuse core::meta::{Code, Item, Record}\n\
+        trait Value { const fn value() -> u256 }\n\
+        struct Provider {}\n\
+        impl Derive<trait Value> for Provider {\n\
+        \x20   const fn derive(_ record: Record) -> Code<Item> {\n\
+        \x20       quote { const fn value() -> u256 { 1 } }\n\
+        \x20   }\n}\n\
+        struct S {}\nimpl Value for S with (Provider)\n";
+
+    fn authored() -> (DriverDataBase, File) {
+        let mut db = DriverDataBase::default();
+        let file =
+            db.workspace()
+                .touch(&mut db, url::Url::parse(FILE).unwrap(), Some(SOURCE.into()));
+        (db, file)
+    }
+
+    fn in_authored_view(db: &DriverDataBase) -> bool {
+        !*db.generation_inputs().declared_headers(db)
+            && db.generation_inputs().requests(db).is_empty()
+    }
+
+    /// A panic while the caller's database is in the input view, as a provider
+    /// that panics would leave it, still returns it to the authored view, and
+    /// the next preparation gives the result of a new database.
+    #[test]
+    fn a_panic_in_a_preparation_in_place_restores_the_authored_view() {
+        let (mut db, file) = authored();
+        let url = url::Url::parse(FILE).unwrap();
+        let plans = {
+            let (other, other_file) = authored();
+            let prepared = prepare_file(&other, other_file).unwrap().unwrap();
+            prepared.generation_inputs().requests(&prepared).clone()
+        };
+        assert!(!plans.is_empty());
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = prepare_in_place(&mut db, &url, |working| {
+                let view = working.view_db(&ViewBasis::Standalone(file));
+                enter_output_view(view, &plans);
+                enter_input_view(view, &[]);
+                panic!("a provider panicked");
+            });
+        }));
+        assert!(unwound.is_err());
+        assert!(in_authored_view(&db));
+
+        let again = prepare_file_in_place(&mut db, file).unwrap();
+        assert_eq!(again, file);
+        let (fresh, fresh_file) = authored();
+        let fresh_view = prepare_file(&fresh, fresh_file).unwrap().unwrap();
+        assert_eq!(
+            db.generation_inputs().requests(&db),
+            fresh_view.generation_inputs().requests(&fresh_view)
+        );
+        assert!(!db.generation_inputs().requests(&db).is_empty());
+    }
+
+    /// A database that counts written headers as implementors, with no output,
+    /// is not the authored view: preparation refuses it, in a copy and in
+    /// place, and does not change it.
+    #[test]
+    fn a_database_in_the_input_view_is_refused() {
+        let (mut db, file) = authored();
+        enter_input_view(&mut db, &[]);
+        let error = prepare_file(&db, file)
+            .err()
+            .expect("not the authored view");
+        assert!(error.cause.contains("authored input view"), "{error}");
+        let error = prepare_file_in_place(&mut db, file).expect_err("not the authored view");
+        assert!(error.cause.contains("authored input view"), "{error}");
+        assert!(*db.generation_inputs().declared_headers(&db));
     }
 }

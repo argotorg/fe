@@ -1,7 +1,10 @@
 //! Generation in packages: one prepared view per package revision, with
 //! providers imported across files and from dependencies.
 use common::{InputDb, dependencies::DependencyArguments};
-use fe_driver::{DriverDataBase, generation::prepare_ingots};
+use fe_driver::{
+    DriverDataBase,
+    generation::{prepare_ingots, prepare_ingots_in_place},
+};
 use hir::{
     analysis::{
         semantic::{
@@ -2072,4 +2075,210 @@ pub const fn result() -> u8 { Target::score() }
         diagnostics.contains("2-0003") && diagnostics.contains("`Marker` is not visible"),
         "{diagnostics}"
     );
+}
+
+fn assert_authored_view(db: &DriverDataBase, files: &[(&str, &str)]) {
+    assert_authored_unchanged(db, files);
+    assert!(!db.generation_inputs().declared_headers(db));
+}
+
+/// The file sets of `edits_and_restores_agree_with_fresh_preparation`, each
+/// with the value of `total` it must give.
+fn edit_steps() -> Vec<(Vec<(&'static str, String)>, &'static str)> {
+    let original = same_ingot_files();
+    let edit = |path: &str, from: &str, to: &str| {
+        original
+            .iter()
+            .map(|(name, text)| {
+                let text = if *name == path {
+                    assert!(text.contains(from), "{path} lacks {from:?}");
+                    text.replace(from, to)
+                } else {
+                    text.clone()
+                };
+                (*name, text)
+            })
+            .collect::<Vec<_>>()
+    };
+    let aliased = edit(
+        "app/src/lib.fe",
+        "use ingot::providers::FieldCount\n",
+        "use ingot::providers::FieldCount as Counter\n",
+    );
+    let aliased = aliased
+        .into_iter()
+        .map(|(name, text)| {
+            let text = if name == "app/src/lib.fe" {
+                text.replace("with (FieldCount)", "with (Counter)")
+            } else {
+                text
+            };
+            (name, text)
+        })
+        .collect();
+    vec![
+        (original.clone(), "2"),
+        (
+            edit(
+                "app/src/model.fe",
+                "    pub b: u256,\n",
+                "    pub b: u256,\n    pub c: bool,\n",
+            ),
+            "3",
+        ),
+        (
+            edit("app/src/providers.fe", "{ ${n} }", "{ ${n} + 10 }"),
+            "12",
+        ),
+        (aliased, "2"),
+    ]
+}
+
+/// Preparation in the caller's database agrees with preparation in a copy for
+/// every file set that the warm-edit test uses.
+#[test]
+fn in_place_preparation_agrees_with_a_copy() {
+    for (index, (files, expected)) in edit_steps().iter().enumerate() {
+        let copied_from = project(&borrow(files));
+        let copied = prepare(&copied_from, "app/");
+        let mut in_place = project(&borrow(files));
+        prepare_ingots_in_place(&mut in_place, &[url("app/")])
+            .unwrap_or_else(|error| panic!("step {index}: {error}"));
+        assert_eq!(
+            in_place.generation_inputs().requests(&in_place),
+            copied.generation_inputs().requests(&copied),
+            "frozen requests at step {index}"
+        );
+        assert!(!in_place.generation_inputs().declared_headers(&in_place));
+        assert_eq!(
+            ingot_errors(&in_place, "app/"),
+            ingot_errors(&copied, "app/"),
+            "diagnostics at step {index}"
+        );
+        let value = eval(&in_place, "app/src/lib.fe", "total");
+        assert_eq!(
+            value,
+            eval(&copied, "app/src/lib.fe", "total"),
+            "step {index}"
+        );
+        assert_eq!(value, *expected, "step {index}");
+    }
+}
+
+#[test]
+fn a_failed_in_place_preparation_restores_the_authored_view() {
+    let faulting = LIB_GENERATE.replace(
+        "    let n = field_count(record)\n",
+        "    let zero: usize = 0\n    let n = field_count(record) / zero\n",
+    );
+    let files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", faulting.as_str()),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let never_prepared = project(&files);
+    let copy_error = prepare_ingots(&never_prepared, &[url("app/")])
+        .err()
+        .expect("a provider fault refuses preparation");
+
+    let mut db = project(&files);
+    let error = prepare_ingots_in_place(&mut db, &[url("app/")])
+        .expect_err("a provider fault refuses preparation");
+    assert_eq!(error, copy_error);
+    assert!(error.cause.contains("division by zero"), "{error}");
+    assert_authored_view(&db, &files);
+    assert_eq!(
+        ingot_errors(&db, "app/"),
+        ingot_errors(&never_prepared, "app/")
+    );
+}
+
+/// After a failure the same database prepares the repaired package as a new
+/// database does.
+#[test]
+fn a_database_that_failed_in_place_prepares_the_repaired_package() {
+    let faulting = LIB_GENERATE.replace(
+        "    let n = field_count(record)\n",
+        "    let zero: usize = 0\n    let n = field_count(record) / zero\n",
+    );
+    let broken = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", faulting.as_str()),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let mut db = project(&broken);
+    prepare_ingots_in_place(&mut db, &[url("app/")]).expect_err("a provider fault refuses");
+    let repaired = [("lib/src/lib.fe", LIB_GENERATE)];
+    for (path, text) in repaired {
+        db.workspace().update(&mut db, url(path), text.to_string());
+    }
+    prepare_ingots_in_place(&mut db, &[url("app/")]).unwrap();
+
+    let fresh_files = [
+        ("lib/fe.toml", LIB_TOML),
+        ("lib/src/lib.fe", LIB_GENERATE),
+        ("app/fe.toml", APP_WITH_LIB_TOML),
+        ("app/src/model.fe", APP_GENERATE_MODEL),
+        ("app/src/lib.fe", APP_GENERATE_LIB),
+    ];
+    let fresh = prepare(&project(&fresh_files), "app/");
+    assert_eq!(
+        db.generation_inputs().requests(&db),
+        fresh.generation_inputs().requests(&fresh)
+    );
+    assert_eq!(ingot_errors(&db, "app/"), ingot_errors(&fresh, "app/"));
+}
+
+#[test]
+fn a_package_without_output_keeps_its_authored_view_in_place() {
+    // An ordinary named choice is lexical selection, not a generation demand.
+    let files = [
+        ("app/fe.toml", APP_TOML),
+        (
+            "app/src/lib.fe",
+            "trait Score { const fn score() -> u256 }\nstruct Pair {}\nimpl Score for Pair as Named { const fn score() -> u256 { 7 } }\nconst fn run() -> u256 { with (Named) { Pair::score() } }\n",
+        ),
+    ];
+    let mut db = project(&files);
+    prepare_ingots_in_place(&mut db, &[url("app/")]).unwrap();
+    assert_authored_view(&db, &files);
+}
+
+/// A header that lowering drops is no request: the view that counts written
+/// headers as implementors was entered, and is left again.
+#[test]
+fn a_package_whose_only_header_is_dropped_keeps_its_authored_view_in_place() {
+    let dropped = [
+        ("app/fe.toml", APP_TOML),
+        (
+            "app/src/lib.fe",
+            "use core::derive::{Derive, DeriveInherent}\nuse core::meta::{Record, Code, Item}\nstruct P {}\nimpl DeriveInherent for P {\n    const fn derive(_ record: Record) -> Code<Item> {\n        quote { pub const fn marker() -> u256 { 7 } }\n    }\n}\nstruct S { a: u256 }\n#[cfg(target_os = \"linux\")]\nimpl S with (P)\n",
+        ),
+    ];
+    let mut db = project(&dropped);
+    prepare_ingots_in_place(&mut db, &[url("app/")]).unwrap();
+    assert_authored_view(&db, &dropped);
+    assert_eq!(
+        ingot_errors(&db, "app/"),
+        ingot_errors(&project(&dropped), "app/")
+    );
+}
+
+/// A database that holds output is refused without being changed.
+#[test]
+fn a_prepared_package_in_place_refuses_a_second_preparation_and_keeps_its_output() {
+    let files = same_ingot_files();
+    let mut db = project(&borrow(&files));
+    prepare_ingots_in_place(&mut db, &[url("app/")]).unwrap();
+    let requests = db.generation_inputs().requests(&db).clone();
+    assert!(!requests.is_empty());
+    let error =
+        prepare_ingots_in_place(&mut db, &[url("app/")]).expect_err("output is checked once");
+    assert!(error.cause.contains("authored input view"), "{error}");
+    assert_eq!(*db.generation_inputs().requests(&db), requests);
+    assert_eq!(eval(&db, "app/src/lib.fe", "total"), "2");
 }
