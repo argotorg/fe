@@ -1,5 +1,6 @@
 ---
 source: crates/uitest/tests/ty_check.rs
+assertion_line: 29
 expression: diags
 input_file: fixtures/ty_check/recv_arm_ref_fields.fe
 ---
@@ -32,3 +33,15 @@ error[8-0169]: a `ref` field cannot be read where it lies
    │             ^^^^^ `Plain` does not implement `std::abi::Part<CallData, Sol>`
    │
    = declare `Plain` with `#[abi]`, or bind the field by its plain name to decode it
+
+error[16-0024]: the entry code of contract `NotFieldwise` cannot be generated
+   ┌─ recv_arm_ref_fields.fe:77:9
+   │
+77 │         Hand { ref v } -> u256 {
+   │         ^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Hand: AbiFields` is not satisfied
+
+error[16-0024]: the entry code of contract `NotPart` cannot be generated
+   ┌─ recv_arm_ref_fields.fe:86:9
+   │
+86 │         V { ref p } -> u256 {
+   │         ^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Plain: Part<CallData, Sol>` is not satisfied

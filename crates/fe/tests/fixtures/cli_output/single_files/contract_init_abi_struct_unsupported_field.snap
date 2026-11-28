@@ -1,0 +1,24 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_init_abi_struct_unsupported_field.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_init_abi_struct_unsupported_field.fe
+
+error[18-0004]: unsupported `#[abi]` struct field type
+  ┌─ contract_init_abi_struct_unsupported_field.fe:5:40
+  │
+5 │ pub struct Inner { pub x: u256, pub n: NoCodec }
+  │                                        ^^^^^^^ `NoCodec` does not implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>`, `Decode<Sol>`
+  │
+  = `#[abi]` struct fields must implement `AbiSize`, `AbiSpan<Sol>`, `Encode<Sol>` and `Decode<Sol>`, as ABI types and other `#[abi]` structs do
+
+error[16-0024]: the entry code of contract `C` cannot be generated
+  ┌─ contract_init_abi_struct_unsupported_field.fe:7:10
+  │
+7 │     init(i: Inner) {}
+  │          ^^^^^^^^ the dispatcher cannot decode this `init` argument: `Inner: Decode<Sol>` is not satisfied
+
+
+=== EXIT CODE: 1 ===

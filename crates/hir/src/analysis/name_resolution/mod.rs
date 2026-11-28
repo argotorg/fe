@@ -12,6 +12,7 @@ mod visibility_checker;
 pub use visibility_checker::{Viewer, is_scope_visible_from};
 
 use crate::core::hir_def::TopLevelMod;
+pub(crate) use changed_choices::package_name;
 pub use changed_choices::{ChangedChoice, Decision, DecisionSite, GeneratedItem, changed_choices};
 use common::ingot::Ingot;
 pub use hidden_items::{

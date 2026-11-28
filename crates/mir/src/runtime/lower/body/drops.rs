@@ -11,8 +11,7 @@ use common::compilation::Target;
 use cranelift_entity::EntityRef;
 use hir::analysis::{
     semantic::{
-        DropFlagPoint, DropPart, DropStep, FieldIndex, SemanticInstance, VariantIndex,
-        core_method_callee_key,
+        DropFlagPoint, DropPart, DropStep, FieldIndex, SemanticInstance, VariantIndex, drop_callee,
         normalized::{
             NDataProjection, NDropTarget, NIndex, NPlace, NPlaceBase, NRootKind, NStatementId,
             NStatementKind, NValueDefinition,
@@ -237,7 +236,10 @@ impl<'db> RmirEmitter<'db> {
         }
         if !field_wise && has_drop_impl(self.db, ty) {
             let value = self.read_part(bb, source, &path, ty);
-            let drop = self.resolve_core_method(&["ops", "Drop"], "drop", vec![ty], ty);
+            let drop = drop_callee(self.db, ty).unwrap_or_else(|error| {
+                panic!("failed to finalize generated call to `drop`: {error:?}")
+            });
+            let drop = SemanticInstance::new(self.db, drop);
             self.call_generated(bb, drop, &[value]);
             return bb;
         }
@@ -627,17 +629,7 @@ pub(crate) fn runtime_needs_drop<'db>(db: &'db dyn MirDb, ty: TyId<'db>) -> bool
     if let Some(adt) = ty.adt_def(db)
         && adt_drop_impl(db, adt.adt_ref(db)).is_some()
     {
-        let Some(scope) = ty.as_scope(db) else {
-            return true;
-        };
-        let Ok(key) = core_method_callee_key(
-            db,
-            scope,
-            PredicateListId::empty_list(db),
-            &["ops", "Drop"],
-            "drop",
-            vec![ty],
-        ) else {
+        let Ok(key) = drop_callee(db, ty) else {
             return true;
         };
         let semantic = SemanticInstance::new(db, key);

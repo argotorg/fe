@@ -480,7 +480,7 @@ fn describe<'db>(
     format!("written implementation of `{trait_}` for `{ty}` in {place}")
 }
 
-fn package_name<'db>(
+pub(crate) fn package_name<'db>(
     db: &'db dyn SpannedHirAnalysisDb,
     ingot: common::ingot::Ingot<'db>,
 ) -> String {

@@ -1,0 +1,19 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_return_tuple_std_blanket_not_blamed.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_return_tuple_std_blanket_not_blamed.fe
+
+error[16-0024]: the entry code of contract `C` cannot be generated
+   ┌─ contract_return_tuple_std_blanket_not_blamed.fe:14:12
+   │
+14 │     Get -> (S, u256),
+   │            ^^^^^^^^^ the dispatcher cannot encode this return type: `(S, u256): Encode<Sol>` is not satisfied, because `S: Encode<Sol>` is not satisfied
+   ·
+18 │         Get -> (S, u256) { (S { v: 1 }, 2) }
+   │         --- returned by this arm
+
+
+=== EXIT CODE: 1 ===

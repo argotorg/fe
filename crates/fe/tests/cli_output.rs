@@ -412,6 +412,145 @@ fn trigger() {
 }
 
 #[test]
+fn test_cli_build_contract_whose_return_encode_bound_holds() {
+    // The program of `contract_return_unencodable.fe` with the bound `u8: Marker` met.
+    let source = include_str!("fixtures/cli_output/single_files/contract_return_unencodable.fe");
+    let marker = "pub trait Marker {}\n";
+    assert!(source.contains(marker));
+    let temp = tempdir().expect("tempdir");
+    let file = temp.path().join("contract_return_encodable.fe");
+    fs::write(
+        &file,
+        source.replace(marker, &format!("{marker}impl Marker for u8 {{}}\n")),
+    )
+    .expect("write fixture");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("out dir utf8"),
+        file.to_str().expect("fixture path utf8"),
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+}
+
+// A program that passes `fe check` must build: each entry plan that the
+// dispatcher can run is accepted by both commands.
+fn check_and_build_succeed(path: &str) {
+    let (output, exit_code) = run_fe_check(path);
+    assert_eq!(exit_code, 0, "fe check failed:\n{output}");
+    let temp = tempdir().expect("tempdir");
+    let out_dir = temp.path().join("out");
+    let (output, exit_code) = run_fe_main(&[
+        "build",
+        "--out-dir",
+        out_dir.to_str().expect("out dir utf8"),
+        path,
+    ]);
+    assert_eq!(exit_code, 0, "fe build failed:\n{output}");
+}
+
+#[dir_test(
+    dir: "$CARGO_MANIFEST_DIR/tests/fixtures/cli_output/entry_builds",
+    glob: "*.fe",
+)]
+fn test_cli_entry_plans_that_check_also_build(fixture: Fixture<&str>) {
+    check_and_build_succeed(fixture.path());
+}
+
+#[test]
+fn test_cli_entry_plan_with_dependency_codec_checks_and_builds() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build_ingots/entry_dep_sound_consumer");
+    check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
+}
+
+// A blanket implementation over a trait that sits in a private module of the
+// dependency but that the dependency re-exports publicly: the consumer can
+// implement it through the alias, so the cause names it by the alias
+// (`Local: PublicDeep`, not the private `Deep`), and the contract builds once
+// the implementation is written.
+#[test]
+fn test_cli_entry_cause_names_a_trait_the_dependency_re_exports() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
+    let bad = root.join("ingots/entry_reexport_consumer");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("Local: PublicDeep"), "{output}");
+    assert!(!output.contains("Local: Deep"), "{output}");
+    check_and_build_succeed(
+        root.join("build_ingots/entry_reexport_fixed_consumer")
+            .to_str()
+            .unwrap(),
+    );
+}
+
+// The same, where the re-export is made by another dependency than the one
+// that defines the trait: the consumer reaches the trait through its direct
+// dependency, so the cause names the alias that the consumer can write.
+#[test]
+fn test_cli_entry_cause_names_a_trait_a_direct_dependency_re_exports() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
+    let bad = root.join("ingots/entry_reexport_chain_consumer");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("Local: PublicDeep"), "{output}");
+    assert!(!output.contains("Local: Deep"), "{output}");
+}
+
+// A trait that only a dependency of a dependency re-exports cannot be named by
+// the consumer, which would have to add that ingot to its own dependencies:
+// the cause stops at the trait that the consumer can name.
+#[test]
+fn test_cli_entry_cause_stops_at_a_trait_no_direct_dependency_re_exports() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_output");
+    let bad = root.join("ingots/entry_reexport_far_consumer");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("Local: Codec2"), "{output}");
+    assert!(!output.contains("Deep"), "{output}");
+}
+
+// The bound of a dependency's codec that the consumer leaves unmet is named
+// where it can be satisfied; with `impl Extra for Local {}` the contract builds.
+#[test]
+fn test_cli_entry_plan_with_the_named_bound_met_checks_and_builds() {
+    let fixture_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_output/build_ingots/entry_unmet_fixed_consumer");
+    check_and_build_succeed(fixture_dir.to_str().expect("fixture dir utf8"));
+}
+
+// The entry check reads the plan that the lowering builds, which finds the
+// library by its own resolver. A local module named `std` hides the library
+// from a lexical lookup and changes neither the plan nor the check.
+#[test]
+fn test_cli_entry_check_is_not_hidden_by_a_module_named_std() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let bad = dir.join("entry_shadowed_std_undecodable.fe");
+    let (output, exit) = run_fe_main(&["check", bad.to_str().unwrap()]);
+    assert_eq!(exit, 1, "{output}");
+    assert!(output.contains("16-0024"), "{output}");
+    assert!(output.contains("NoCodec: Decode<Sol>"), "{output}");
+    // The contract whose entry code is valid checks and its bytecode builds.
+    // The default build also writes the ABI, which looks `std` up lexically and
+    // fails under the local module (the same at the base, not part of the
+    // entry code).
+    let good = dir.join("entry_shadowed_std_valid.fe");
+    let (output, exit) = run_fe_check(good.to_str().unwrap());
+    assert_eq!(exit, 0, "{output}");
+    let temp = tempdir().expect("tempdir");
+    let (output, exit) = run_fe_main(&[
+        "build",
+        "--emit",
+        "bytecode",
+        "--out-dir",
+        temp.path().join("out").to_str().unwrap(),
+        good.to_str().unwrap(),
+    ]);
+    assert_eq!(exit, 0, "{output}");
+}
+
+#[test]
 fn test_cli_build_generic_oversized_size_reports_error_instead_of_panicking() {
     let temp = tempdir().expect("tempdir");
     let file = temp.path().join("generic_oversized_size.fe");
@@ -3975,6 +4114,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "delegatecall_state_effects",
     "deploy_and_call",
     "deposit_contract",
+    "drop_without_proof_after_revert",
     "dyn_array_from_slice",
     "dyn_array_get",
     "dynamic_offset_overflow",
@@ -4017,6 +4157,7 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "lane_holds_before_halts",
     "lane_pattern_writes",
     "lane_projection_spaces",
+    "lane_reads_skip_setter",
     "leading_zeros",
     "library_state_index",
     "long_error_event_names",
@@ -7083,7 +7224,10 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
 // implied bounds from dictionaries. A message field of a recursive type has no
 // `Encode<Sol>` dictionary, so the instance of `encode_field` has none to read
 // `Node: AbiSize` from; the instance stays admitted, as it was before those
-// checks. The refusal where a named implementation is involved is covered by
+// checks, and no conflicting-dictionaries error (16-0019) is reported. The
+// entry code of the contract cannot be generated, since the message has no
+// `Decode<Sol>`, and `fe check` reports that as `fe build` does (16-0024). The
+// refusal where a named implementation is involved is covered by
 // `instance_missing_dictionary_refuses_only_with_a_named_implementation` in
 // `fe-hir`.
 #[test]
@@ -7096,7 +7240,8 @@ fn named_checks_leave_recursive_message_fields_without_choices_alone() {
             .join("tests/fixtures")
             .join(fixture);
         let (output, exit) = run_fe_main(&["check", path.to_str().unwrap()]);
-        assert_eq!(exit, 0, "{fixture}: {output}");
+        assert_eq!(exit, 1, "{fixture}: {output}");
+        assert!(output.contains("16-0024"), "{fixture}: {output}");
         assert!(!output.contains("16-0019"), "{fixture}: {output}");
     }
 }

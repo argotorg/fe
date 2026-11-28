@@ -1,0 +1,12 @@
+// An array of length zero has no element to destroy.
+use core::ops::Drop
+pub trait Chime { fn ring(self) }
+pub struct Bell {}
+pub impl Chime for Bell as Loud { fn ring(self) { assert(false) } }
+pub struct Ring<T: Chime> { t: T }
+impl<T: Chime> Drop for Ring<T> { fn drop(own self) { self.t.ring() } }
+
+enum Maybe<T: Chime> { No, Yes([Ring<T>; 0]) }
+fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::No }
+#[test]
+fn t() { with (Loud) { pick(Bell {}) } }

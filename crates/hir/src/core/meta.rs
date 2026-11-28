@@ -2199,6 +2199,7 @@ fn finalized_derive_provider<'db>(
         db,
         scope,
         assumptions,
+        None,
         derive_method,
         Some(inst),
         &[],

@@ -1,0 +1,16 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_entry_arm_second_message_unreadable_first_readable.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_entry_arm_second_message_unreadable_first_readable.fe
+
+error[16-0024]: the entry code of contract `C` cannot be generated
+   ┌─ contract_entry_arm_second_message_unreadable_first_readable.fe:34:1
+   │
+34 │ W<Raw> { ref tag, v } -> u8 { tag }
+   │ ^^^^^^^^^^^^^^^^^^^^^ the dispatcher cannot read the message of this arm: `Raw: Decode<Sol>` is not satisfied
+
+
+=== EXIT CODE: 1 ===

@@ -1,0 +1,14 @@
+// A `Return` with no `Decode<Sol>` is reported where the message declares it.
+// The entry code of the contract is reported as well, so that no program that
+// passes `fe check` fails in `fe build`.
+// Return type is a plain struct with no Encode at all.
+pub struct S2 { x: u8 }
+msg M {
+    #[selector = 0x01]
+    Get -> S2,
+}
+pub contract R {
+    recv M {
+        Get -> S2 { S2 { x: 1 } }
+    }
+}

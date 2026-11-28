@@ -1,0 +1,53 @@
+use core::ops::Drop
+
+// Associated constants are roots of the access walk: their initializers are
+// walked, and a constant read on a path that runs follows the initializer.
+// Neither changes which drops are judged. `hold` destroys a value whose `Drop`
+// implementation needs `Tag2: Show` in the type's own scope, where the choice
+// of the `with` does not apply, so the call from the test is refused; the
+// constants and the function that reads one add no error of their own.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+const fn base() -> u256 {
+    40
+}
+
+pub trait HasValue {
+    const N: u256 = base() + 1
+}
+
+pub struct W {}
+
+impl HasValue for W {
+    const N: u256 = base() + 2
+}
+
+fn hold<T: Show>(_ t: own T) -> u256 {
+    let _held = Holder { t }
+    W::N
+}
+
+#[test]
+fn a_chosen_implementation_does_not_prove_a_drop_beside_a_constant() {
+    with (Loud2) {
+        assert(hold(Tag2 {}) == 42)
+    }
+}

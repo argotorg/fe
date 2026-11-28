@@ -1,0 +1,18 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[16-0024]: the entry code of contract `R` cannot be generated
+   ┌─ src/lib.fe:4:16
+   │
+ 4 │         Get -> Out<u8> { Out<u8> { v: 1 } }
+   │                ^^^^^^^ the dispatcher cannot encode this return type: `Out<u8>: Encode<Sol>` is not satisfied, because `u8: Marker` is not satisfied
+   │
+   ┌─ src/lib.fe:18:12
+   │
+18 │     Get -> Out<u8>,
+   │            ------- the `Return` type is declared here (in package `entry_dep_provider`)
+
+
+=== EXIT CODE: 1 ===

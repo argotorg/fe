@@ -10,6 +10,7 @@ use crate::{
         HirAnalysisDb,
         diagnostics::DiagnosticVoucher,
         diagnostics::SpannedHirAnalysisDb,
+        name_resolution::package_name,
         semantic::{
             SLocalId, SemOrigin, SemanticInstance,
             normalized::{
@@ -22,6 +23,28 @@ use crate::{
     hir_def::{Body, ExprId, ImplTrait, Partial},
     span::LazySpan,
 };
+
+/// ` (in package `name`)` when `label` is in another ingot than `primary`.
+/// Files of different ingots can have the same path, so the file name alone
+/// does not tell them apart.
+pub(crate) fn foreign_ingot_note(
+    db: &dyn SpannedHirAnalysisDb,
+    primary: Option<&Span>,
+    label: Option<&Span>,
+) -> String {
+    let (Some(primary), Some(label)) = (primary, label) else {
+        return String::new();
+    };
+    match (
+        primary.file.containing_ingot(db),
+        label.file.containing_ingot(db),
+    ) {
+        (Some(from), Some(to)) if from != to => {
+            format!(" (in package `{}`)", package_name(db, to))
+        }
+        _ => String::new(),
+    }
+}
 
 pub(crate) fn operand_origin<'db>(operand: NOperand, fallback: SemOrigin<'db>) -> SemOrigin<'db> {
     operand.origin.map_or(fallback, SemOrigin::Expr)
@@ -178,6 +201,10 @@ impl DiagnosticVoucher for SemanticDiagnosticId<'_> {
 
 impl DiagnosticVoucher for SemanticDiagnostic<'_> {
     fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        // The numbers of pass 16 have three homes: this table, the unsafe trust
+        // error (15, `access/trust.rs`) and the entry code error of a contract
+        // (24, `ty_check/contract.rs`, `ContractEntryFailure`). A new number is
+        // checked against all three.
         let local_code = match self.kind {
             SemanticDiagnosticKind::AccessConflict => 1,
             SemanticDiagnosticKind::MoveConflict => 2,
@@ -195,6 +222,7 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
             SemanticDiagnosticKind::UnencodablePanic => 18,
             SemanticDiagnosticKind::ConflictingDictionaries => 19,
             SemanticDiagnosticKind::ChoiceOutputDisagreement => 20,
+            SemanticDiagnosticKind::UnprovedDrop => 21,
             SemanticDiagnosticKind::CompileTimePhase => 22,
             SemanticDiagnosticKind::DeclaredOnlyImplementation => 23,
         };
@@ -211,10 +239,21 @@ impl DiagnosticVoucher for SemanticDiagnostic<'_> {
                 self.primary.span.resolve(db),
             ))
             .chain(self.secondaries.iter().map(|secondary| {
+                let span = secondary.span.resolve(db);
+                // The drop of a generic body can be in another ingot than the
+                // call that is reported.
+                let note = match self.kind {
+                    SemanticDiagnosticKind::UnprovedDrop => foreign_ingot_note(
+                        db,
+                        self.primary.span.resolve(db).as_ref(),
+                        span.as_ref(),
+                    ),
+                    _ => String::new(),
+                };
                 SubDiagnostic::new(
                     LabelStyle::Secondary,
-                    secondary.message.clone(),
-                    secondary.span.resolve(db),
+                    format!("{}{note}", secondary.message),
+                    span,
                 )
             }))
             .collect(),
@@ -262,6 +301,7 @@ impl SemanticDiagnosticKind {
             Self::ConflictingDictionaries => {
                 format!("conflicting implementations of a bound in `{item}`")
             }
+            Self::UnprovedDrop => format!("`Drop` without an ordinary proof in `{item}`"),
         }
     }
 }
@@ -474,4 +514,8 @@ pub enum SemanticDiagnosticKind {
     /// An instance whose dictionaries, or a proof written for one of its bounds,
     /// name different implementations of an implied bound, or cannot supply it.
     ConflictingDictionaries,
+    /// A value is destroyed whose type has a `Drop` implementation that is
+    /// not proved outside the `with` that made its bounds hold: a drop is a
+    /// fact of the type and reads no lexical choice.
+    UnprovedDrop,
 }

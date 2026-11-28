@@ -822,6 +822,25 @@ impl<'db> Callable<'db> {
         });
     }
 
+    /// The closed goals of the callee's bounds that the call holds no proof of
+    /// (see `EvidenceList::missing_bound_goals`).
+    pub(crate) fn missing_bound_evidence(
+        &self,
+        db: &'db dyn HirAnalysisDb,
+    ) -> Vec<TraitInstId<'db>> {
+        let CallableDef::Func(func) = self.callable_def else {
+            return Vec::new();
+        };
+        let Some(evidence) = self.use_evidence.bound_proofs() else {
+            return Vec::new();
+        };
+        let Ok(subst) = CompleteSubst::for_owner(db, func.into(), self.generic_args.clone()) else {
+            return Vec::new();
+        };
+        let mode = BodyOwner::func_at(db, func, self.mode).mode();
+        evidence.missing_bound_goals(db, func_signature(db, func, mode), &subst)
+    }
+
     /// Proofs of the assumptions the callee's body is checked under, as the
     /// caller's checked body gives them.
     pub fn bound_evidence(&self) -> Option<EvidenceList<'db>> {

@@ -16,162 +16,79 @@ use rustc_hash::FxHashSet;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        name_resolution::Tier,
         semantic::{
-            DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex,
-            core_method_callee_key, drop_elaboration, generated_callee_key,
+            DropStep, SemOrigin, SemanticInstance, SemanticInstanceKey, VariantIndex, drop_callee,
+            drop_elaboration,
             normalized::{
                 NDropTarget, NPlaceBase, NRootKind, NStatementId, NValueDefinition, NormalizedBody,
             },
         },
         ty::{
             adt_def::AdtRef,
-            corelib::{resolve_core_trait, resolve_lib_type_path},
             drop_glue::{adt_drop_impl, implements_drop, ty_has_drop_glue},
-            provider::registered_root_providers,
-            trait_def::TraitInstId,
-            trait_resolution::PredicateListId,
-            ty_check::{BodyOwner, EffectParamSite},
+            trait_resolution::TraitSolveCx,
+            ty_check::BodyOwner,
             ty_def::TyId,
         },
     },
-    hir_def::{Contract, IdentId},
-    semantic::{RecvArmInput, RecvView},
+    semantic::{RecvArmInput, UnmetGoal, contract_entry_plan},
 };
-
-/// The instance of `trait_inst`'s method `name` that a compiler-generated call
-/// reaches, for the trait's own arguments `own_args`.
-fn trait_method_callee<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    trait_inst: TraitInstId<'db>,
-    name: &str,
-    own_args: &[TyId<'db>],
-) -> Option<SemanticInstanceKey<'db>> {
-    let func = *trait_inst
-        .def(db)
-        .method_defs(db)
-        .get(&IdentId::new(db, name.to_string()))?;
-    generated_callee_key(
-        db,
-        contract.scope(),
-        PredicateListId::empty_list(db),
-        func,
-        Some(trait_inst),
-        own_args,
-    )
-    .ok()
-}
-
 /// The instances the dispatcher runs for `owner`, which is an `init` or a
 /// `recv` arm of a contract: the decode of the arguments, and for an arm the
-/// encode of its return value. The arm and the entry resolve the same
-/// instances when the contract is lowered.
-pub(super) fn dispatcher_callees<'db>(
+/// read of the message and the encode of its return value. They are the steps
+/// of the contract's entry plan, which the lowering of the contract and the
+/// contract's check read too. A step without an instance is reported by the
+/// check, and the walk has nothing to follow for it.
+pub fn dispatcher_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
 ) -> Vec<SemanticInstanceKey<'db>> {
     match owner {
-        BodyOwner::ContractInit { contract } => init_callees(db, contract),
+        BodyOwner::ContractInit { contract } => contract_entry_plan(db, contract, None)
+            .init
+            .iter()
+            .flatten()
+            .copied()
+            .collect(),
         BodyOwner::ContractRecvArm {
             contract,
             recv_idx,
             arm_idx,
-        } => recv_arm_callees(db, contract, recv_idx, arm_idx),
+        } => {
+            let Some(arm) = contract_entry_plan(db, contract, None).arm(recv_idx, arm_idx) else {
+                return Vec::new();
+            };
+            let mut callees = Vec::new();
+            match &arm.input {
+                Ok(RecvArmInput::Whole { decode }) => callees.push(*decode),
+                Ok(RecvArmInput::InPlace { args, reads }) => {
+                    callees.push(*args);
+                    callees.extend(reads.iter().map(|(_, read)| *read));
+                }
+                Ok(RecvArmInput::None) | Err(_) => {}
+            }
+            callees.extend(arm.ret.iter().flatten().copied());
+            callees
+        }
         _ => Vec::new(),
     }
 }
 
-fn init_callees<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-) -> Vec<SemanticInstanceKey<'db>> {
-    let args_ty = contract.init_args_ty(db);
-    if contract.init(db).is_none() || args_ty == TyId::unit(db) {
-        return Vec::new();
-    }
-    let scope = contract.scope();
-    let (Some(abi_ty), Some(decoder_ty), Some(input_ty), Some(decode)) = (
-        resolve_lib_type_path(db, scope, "std::abi::Sol"),
-        resolve_lib_type_path(db, scope, "std::abi::sol::SolDecoder"),
-        resolve_lib_type_path(db, scope, "core::ptr::MemSpan"),
-        resolve_core_trait(db, scope, &["abi", "Decode"]),
-    ) else {
-        return Vec::new();
-    };
-    let inst = TraitInstId::new_simple(db, decode, vec![args_ty, abi_ty]);
-    trait_method_callee(
-        db,
-        contract,
-        inst,
-        "decode_payload",
-        &[decoder_ty, input_ty],
-    )
-    .into_iter()
-    .collect()
-}
-
-fn recv_arm_callees<'db>(
-    db: &'db dyn HirAnalysisDb,
-    contract: Contract<'db>,
-    recv_idx: u32,
-    arm_idx: u32,
-) -> Vec<SemanticInstanceKey<'db>> {
-    let scope = contract.scope();
-    let Some(abi_ty) = resolve_lib_type_path(db, scope, "std::abi::Sol") else {
-        return Vec::new();
-    };
-    let Some(arm) = RecvView::new(db, contract, recv_idx).arm(db, arm_idx) else {
-        return Vec::new();
-    };
-    let info = arm.abi_info(db, abi_ty);
-    let Some(host_ty) = registered_root_providers(
-        db,
-        EffectParamSite::ContractRecvArm {
-            contract,
-            recv_idx,
-            arm_idx,
-        },
-    )
-    .first()
-    .map(|registration| registration.provider_ty) else {
-        return Vec::new();
-    };
-    let mut callees = Vec::new();
-    match arm.input(db) {
-        Ok(RecvArmInput::Whole { decode }) => callees.push(*decode),
-        Ok(RecvArmInput::InPlace { args, reads }) => {
-            callees.push(*args);
-            callees.extend(reads.iter().map(|(_, read)| *read));
-        }
-        Ok(RecvArmInput::None) | Err(_) => {}
-    }
-    if let Some(ret_ty) = info.ret_ty
-        && let Some(host) = resolve_core_trait(db, scope, &["contracts", "ContractHost"])
-    {
-        let inst = TraitInstId::new_simple(db, host, vec![host_ty]);
-        callees.extend(trait_method_callee(
-            db,
-            contract,
-            inst,
-            "return_value",
-            &[abi_ty, ret_ty],
-        ));
-    }
-    callees
-}
 /// The `Drop::drop` implementations that drop elaboration inserts for the
 /// drop `statement` of `instance`'s `body`: for each part of the target that
 /// is initialized there, the `drop` of its type if it has one, else those of
-/// the parts it owns. A `drop` destroys its own `self` field by field.
+/// the parts it owns. A `drop` destroys its own `self` field by field. A
+/// type whose `Drop` implementation has no proof is reported in `unproved`.
 pub(super) fn drop_callees<'db>(
     db: &'db dyn HirAnalysisDb,
     instance: SemanticInstance<'db>,
     body: &NormalizedBody<'db>,
     statement: NStatementId,
     target: &NDropTarget<'db>,
-) -> Vec<SemanticInstanceKey<'db>> {
+) -> DropCallees<'db> {
     let Some(elaboration) = drop_elaboration(db, instance) else {
-        return Vec::new();
+        return DropCallees::default();
     };
     let ty = match target {
         NDropTarget::Value(value) => body.values[value.index()].ty,
@@ -182,16 +99,45 @@ pub(super) fn drop_callees<'db>(
         instance,
         seen: FxHashSet::default(),
         callees: Vec::new(),
+        unproved: Vec::new(),
     };
     let own_self = drops_own_self(db, instance, body, target);
     for part in elaboration.parts(statement) {
-        let part_ty = part
-            .path
-            .iter()
-            .fold(ty, |ty, step| walk.part_ty(ty, *step));
-        walk.destroy(part_ty, own_self && part.path.is_empty());
+        let mut part_ty = ty;
+        let mut possible = true;
+        for step in &part.path {
+            // A part below a variant that cannot be constructed is never
+            // destroyed.
+            if let DropStep::Variant { variant, .. } = step
+                && walk.variant_uninhabited(part_ty, *variant)
+            {
+                possible = false;
+                break;
+            }
+            part_ty = walk.part_ty(part_ty, *step);
+        }
+        if possible {
+            walk.destroy(part_ty, own_self && part.path.is_empty());
+        }
     }
-    walk.callees
+    DropCallees {
+        keys: walk.callees,
+        unproved: walk.unproved,
+    }
+}
+
+/// A type that is destroyed whose `Drop` implementation has no ordinary proof,
+/// and the goal that the implementation lacks, when known.
+pub(super) struct UnprovedDrop<'db> {
+    pub(super) ty: TyId<'db>,
+    pub(super) unmet: Option<UnmetGoal>,
+}
+
+/// The result of `drop_callees`.
+#[derive(Default)]
+pub(super) struct DropCallees<'db> {
+    pub(super) keys: Vec<SemanticInstanceKey<'db>>,
+    pub(super) unproved: Vec<UnprovedDrop<'db>>,
 }
 
 /// Whether `target` is the `self` of the `Drop::drop` that `instance` runs.
@@ -229,9 +175,34 @@ struct DropWalk<'db> {
     instance: SemanticInstance<'db>,
     seen: FxHashSet<TyId<'db>>,
     callees: Vec<SemanticInstanceKey<'db>>,
+    /// The types whose `Drop` implementation has no proof, in the order met.
+    unproved: Vec<UnprovedDrop<'db>>,
 }
 
 impl<'db> DropWalk<'db> {
+    /// Whether no value of `ty` can exist in the body's instance: the
+    /// predicate that runtime lowering asks before it destroys a value
+    /// (`TyId::is_uninhabited_in`), with the scope and assumptions of the
+    /// instance.
+    fn uninhabited(&self, ty: TyId<'db>) -> bool {
+        ty.is_uninhabited_in(
+            self.db,
+            Some(self.instance.key(self.db).owner(self.db).scope()),
+            self.instance.assumptions(self.db),
+        )
+    }
+
+    /// Whether `variant` of the enum type `ty` cannot be constructed, as
+    /// runtime lowering asks before it destroys the fields of a variant.
+    fn variant_uninhabited(&self, ty: TyId<'db>, variant: u16) -> bool {
+        ty.is_enum_variant_uninhabited_in(
+            self.db,
+            usize::from(variant),
+            Some(self.instance.key(self.db).owner(self.db).scope()),
+            self.instance.assumptions(self.db),
+        )
+    }
+
     /// The type at `step` from a value of `ty`.
     fn part_ty(&self, ty: TyId<'db>, step: DropStep) -> TyId<'db> {
         match step {
@@ -254,26 +225,30 @@ impl<'db> DropWalk<'db> {
     /// `drop`, whose fields are destroyed without calling it again.
     fn destroy(&mut self, ty: TyId<'db>, field_wise: bool) {
         let db = self.db;
-        if (!field_wise && !self.seen.insert(ty)) || !ty_has_drop_glue(db, ty) {
+        if (!field_wise && !self.seen.insert(ty))
+            || !ty_has_drop_glue(db, ty)
+            || self.uninhabited(ty)
+        {
             return;
         }
         let adt = ty.adt_def(db);
-        if !field_wise
-            && adt
-                .as_ref()
-                .is_some_and(|adt| adt_drop_impl(db, adt.adt_ref(db)).is_some())
-        {
-            if let Some(scope) = ty.as_scope(db)
-                && let Ok(key) = core_method_callee_key(
-                    db,
-                    scope,
-                    PredicateListId::empty_list(db),
-                    &["ops", "Drop"],
-                    "drop",
-                    vec![ty],
-                )
-            {
-                self.callees.push(key);
+        let drop_impl = adt
+            .as_ref()
+            .and_then(|adt| adt_drop_impl(db, adt.adt_ref(db)));
+        if !field_wise && let Some(drop_impl) = drop_impl {
+            match drop_callee(db, ty) {
+                Ok(key) => self.callees.push(key),
+                // A type with parameters is proved where it is instantiated.
+                Err(_) if ty.has_param(db) => {}
+                Err(_) => {
+                    // The type's `Drop` has no proof in its own scope: name
+                    // the first bound of the implementation that it lacks.
+                    let goal = drop_impl.trait_inst(db).with_self_ty(db, ty);
+                    let unmet = ty.as_scope(db).and_then(|scope| {
+                        UnmetGoal::of(db, TraitSolveCx::new(db, scope, Tier::All), goal)
+                    });
+                    self.unproved.push(UnprovedDrop { ty, unmet });
+                }
             }
             return;
         }
@@ -281,6 +256,9 @@ impl<'db> DropWalk<'db> {
             && matches!(adt.adt_ref(db), AdtRef::Enum(_))
         {
             for variant in 0..adt.fields(db).len() as u16 {
+                if self.variant_uninhabited(ty, variant) {
+                    continue;
+                }
                 for field in
                     self.instance
                         .normalized_enum_variant_field_tys(db, ty, VariantIndex(variant))

@@ -1,0 +1,4 @@
+use entry_dep_sound_provider::W
+pub contract C {
+    init(items: W<u8>) {}
+}

@@ -1,0 +1,3 @@
+pub trait Codec2 {}
+mod inner { pub trait Deep {} }
+impl<T: inner::Deep> Codec2 for T {}

@@ -28,7 +28,7 @@ use crate::{
             shape::Shape,
             trait_def::{ImplementorOrigin, MethodArgMapError, ResolvedImplInstance, TraitInstId},
             trait_resolution::{
-                GoalSatisfiability, PredicateListId, TraitSolveCx,
+                ChosenImpls, GoalSatisfiability, PredicateListId, TraitSolveCx,
                 constraint::collect_func_decl_constraints, is_goal_satisfiable,
             },
             ty_check::{
@@ -437,23 +437,33 @@ pub(super) fn root_impl_env<'db>(
 pub struct FinalizedGeneratedCall<'db> {
     pub key: SemanticInstanceKey<'db>,
     pub evidence: Option<crate::analysis::ty::evidence::EvidenceId<'db>>,
+    /// A bound of the callee that no implementation satisfies. The call has no
+    /// instance a lowering can build, but the preparation of generation, which
+    /// finalizes calls before the implementations it admits exist, ignores it.
+    pub unproved_bound: Option<TraitInstId<'db>>,
 }
 
 pub fn generated_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     func: Func<'db>,
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
 ) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
-    Ok(generated_callee(db, scope, assumptions, func, trait_inst, own_args)?.key)
+    let call = generated_callee(db, scope, assumptions, choices, func, trait_inst, own_args)?;
+    match call.unproved_bound {
+        Some(goal) => Err(MethodArgMapError::UnprovedBound { goal }),
+        None => Ok(call.key),
+    }
 }
 
 pub fn generated_callee<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     func: Func<'db>,
     trait_inst: Option<TraitInstId<'db>>,
     own_args: &[TyId<'db>],
@@ -482,7 +492,9 @@ pub fn generated_callee<'db>(
     );
     // The call proves its goal and its callee's bounds where it is made, as
     // the checker proves a written call's.
-    let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions);
+    let solve_cx = TraitSolveCx::new(db, scope, Tier::All)
+        .with_assumptions(assumptions)
+        .with_choices(choices);
     callable.record_evidence(db, solve_cx);
     // A generated call carries no effect arguments.
     callable.record_bound_evidence(db, solve_cx, &[]);
@@ -505,10 +517,46 @@ pub fn generated_callee<'db>(
     if !callee.concrete_dispatch {
         return Err(MethodArgMapError::MissingBody);
     }
+    // A closed bound with no recorded proof is left to ordinary selection where
+    // the callee is instantiated, so a bound that no implementation satisfies
+    // leaves the call with no instance a lowering can build.
+    let unproved_bound = callable
+        .missing_bound_evidence(db)
+        .into_iter()
+        .find(|&goal| {
+            matches!(
+                is_goal_satisfiable(db, solve_cx, goal),
+                GoalSatisfiability::UnSat(_)
+            )
+        });
     Ok(FinalizedGeneratedCall {
         key: callee.key,
         evidence: callable.evidence(),
+        unproved_bound,
     })
+}
+
+/// The `Drop::drop` that destroys a value of `ty`. It is a fact of the type:
+/// proved in the type's own scope, under no assumptions and no chosen
+/// implementations. The trust walk, the test for whether a drop does anything
+/// and the lowering of the drop all reach this one instance, and a `with` that
+/// surrounds the creation or the move of the value does not change it. A type
+/// whose `Drop` implementation has no such proof is an error.
+#[salsa::tracked(returns(clone))]
+pub fn drop_callee<'db>(
+    db: &'db dyn HirAnalysisDb,
+    ty: TyId<'db>,
+) -> Result<SemanticInstanceKey<'db>, MethodArgMapError<'db>> {
+    let scope = ty.as_scope(db).ok_or(MethodArgMapError::MissingBody)?;
+    core_method_callee_key(
+        db,
+        scope,
+        PredicateListId::empty_list(db),
+        None,
+        &["ops", "Drop"],
+        "drop",
+        vec![ty],
+    )
 }
 
 /// The instance a compiler-generated call of core trait `trait_path`'s
@@ -518,6 +566,7 @@ pub fn core_method_callee_key<'db>(
     db: &'db dyn HirAnalysisDb,
     scope: ScopeId<'db>,
     assumptions: PredicateListId<'db>,
+    choices: Option<ChosenImpls<'db>>,
     trait_path: &[&str],
     name: &str,
     args: Vec<TyId<'db>>,
@@ -530,7 +579,7 @@ pub fn core_method_callee_key<'db>(
         .copied()
         .unwrap_or_else(|| panic!("{trait_path:?} declares {name}"));
     let trait_inst = TraitInstId::new_simple(db, trait_def, args);
-    generated_callee_key(db, scope, assumptions, func, Some(trait_inst), &[])
+    generated_callee_key(db, scope, assumptions, choices, func, Some(trait_inst), &[])
 }
 
 #[allow(clippy::too_many_arguments)]

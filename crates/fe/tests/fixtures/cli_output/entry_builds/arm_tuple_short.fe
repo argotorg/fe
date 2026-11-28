@@ -1,0 +1,23 @@
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::message::MsgVariant
+use std::abi::{AbiFields, Sol}
+type Data = (u8, u8)
+pub struct M { pub x: Data, pub y: u8 }
+impl AbiFields for M {}
+impl AbiSize for M {
+    const HEAD_SIZE: u256 = 608
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for M { fn encode(self, _ f: AbiFrame) {} }
+impl Decode<Sol> for M {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ i: I) -> Self { M { x: (1, 1), y: 2 } }
+}
+impl MsgVariant<Sol> for M {
+    const SELECTOR: u32 = 19
+    type Return = u8
+}
+pub contract C {
+    recv {
+        M { x, ref y } -> u8 { y }
+    }
+}

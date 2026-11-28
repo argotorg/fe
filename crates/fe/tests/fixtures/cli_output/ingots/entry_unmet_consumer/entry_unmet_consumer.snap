@@ -1,0 +1,13 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+---
+=== STDERR ===
+error[16-0024]: the entry code of contract `Reader` cannot be generated
+  ┌─ src/lib.fe:6:10
+  │
+6 │     init(w: Wire) {}
+  │          ^^^^^^^ the dispatcher cannot decode this `init` argument: `Packet<Local>: Decode<Sol>` is not satisfied, because `Local: Extra` is not satisfied
+
+
+=== EXIT CODE: 1 ===

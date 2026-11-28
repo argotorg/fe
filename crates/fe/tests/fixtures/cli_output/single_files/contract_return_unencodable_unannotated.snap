@@ -1,0 +1,25 @@
+---
+source: crates/fe/tests/cli_output.rs
+expression: output
+input_file: tests/fixtures/cli_output/single_files/contract_return_unencodable_unannotated.fe
+---
+=== STDERR ===
+errors in file://<project>/crates/fe/tests/fixtures/cli_output/single_files/contract_return_unencodable_unannotated.fe
+
+error[8-0043]: recv arm return type annotation required
+   ┌─ contract_return_unencodable_unannotated.fe:38:9
+   │
+38 │         M {} { Out<u8> { v: 1 } }
+   │         ^^^^ return type must be annotated as `Out<u8>` to match the msg variant
+
+error[16-0024]: the entry code of contract `R` cannot be generated
+   ┌─ contract_return_unencodable_unannotated.fe:25:19
+   │
+25 │     type Return = Out<u8>
+   │                   ^^^^^^^ the dispatcher cannot encode this return type: `Out<u8>: Encode<Sol>` is not satisfied, because `u8: Marker` is not satisfied
+   ·
+38 │         M {} { Out<u8> { v: 1 } }
+   │         ---- returned by this arm
+
+
+=== EXIT CODE: 1 ===

@@ -557,6 +557,133 @@ pub enum ViewAccess {
     Read,
 }
 
+/// How a statement or expression uses a place, which decides what runtime
+/// lowering does with a lane that the place ends at, or runs through (an
+/// element that a collection packs into part of a storage word, which has no
+/// address and which its lane codec's methods read and write):
+///
+/// - `Read` extracts the lane with the getter, or holds a copy of it that
+///   nothing stores back: a load, a view, a shared borrow, a read-only effect
+///   argument, a drop (which reads the parts it destroys);
+/// - `Write` stores into the place: where the place ends at the lane, the
+///   setter alone masks the value in; where a projection continues from it,
+///   the lane is held as a copy, which the store changes and stores back;
+/// - `Update` holds a copy of the lane for an extent and stores it back at the
+///   end: a `mut` borrow, a `mut` effect argument.
+///
+/// This is the only classification of a use by what it does to a lane. Runtime
+/// lowering asks it where it decides to store a held copy back, and the
+/// analysis of what runs asks it which codec methods the use reaches
+/// (`lane_methods`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PlaceUse {
+    Read,
+    Write,
+    Update,
+}
+
+/// The methods of a lane codec that a use of an entry runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LaneMethods {
+    pub get: bool,
+    pub set: bool,
+}
+
+impl PlaceUse {
+    /// The use that a borrow of the given kind makes of its place.
+    pub fn of_borrow(kind: BorrowKind) -> Self {
+        match kind {
+            BorrowKind::Mut => Self::Update,
+            BorrowKind::Ref => Self::Read,
+        }
+    }
+
+    /// The use that an effect argument makes of its place.
+    pub fn of_effect_arg(arg: &NEffectArg<'_>) -> Self {
+        if arg.required_mut {
+            Self::Update
+        } else {
+            Self::Read
+        }
+    }
+
+    /// Whether a lane held as a copy for this use is stored back, with the
+    /// setter, where the access ends.
+    pub fn stores_back(self) -> bool {
+        self == Self::Update
+    }
+
+    /// The codec methods that this use runs for an entry of a place.
+    /// `continues` is whether a projection of the place continues from the
+    /// entry, so that the lane is held as a copy instead of being the place.
+    pub fn lane_methods(self, continues: bool) -> LaneMethods {
+        match self {
+            Self::Read => LaneMethods {
+                get: true,
+                set: false,
+            },
+            Self::Update => LaneMethods {
+                get: true,
+                set: true,
+            },
+            Self::Write => LaneMethods {
+                get: continues,
+                set: true,
+            },
+        }
+    }
+}
+
+impl<'db> NExpr<'db> {
+    /// Calls `f` with each place the expression uses and how it uses it.
+    pub fn for_each_place_use(&self, mut f: impl FnMut(&NPlace<'db>, PlaceUse)) {
+        match self {
+            Self::Load { place, .. } | Self::MakeView { place, .. } => f(place, PlaceUse::Read),
+            Self::Borrow { place, kind, .. } => f(place, PlaceUse::of_borrow(*kind)),
+            Self::Call { effect_args, .. } => {
+                for arg in effect_args {
+                    f(&arg.place, PlaceUse::of_effect_arg(arg));
+                }
+            }
+            Self::ItemQuote { .. }
+            | Self::Forward { .. }
+            | Self::ProjectValue { .. }
+            | Self::StructuralRepack { .. }
+            | Self::CodeRegionRef { .. }
+            | Self::Const(_)
+            | Self::Unary { .. }
+            | Self::Binary { .. }
+            | Self::PointerCast { .. }
+            | Self::ScalarCast { .. }
+            | Self::ArrayRepeat { .. }
+            | Self::AggregateMake { .. }
+            | Self::EnumMake { .. }
+            | Self::GetEnumTag { .. }
+            | Self::IsEnumVariant { .. }
+            | Self::CodeRegionOffset { .. }
+            | Self::CodeRegionLen { .. } => {}
+        }
+    }
+}
+
+impl<'db> NStatementKind<'db> {
+    /// Calls `f` with each place the statement uses and how it uses it.
+    pub fn for_each_place_use(&self, mut f: impl FnMut(&NPlace<'db>, PlaceUse)) {
+        match self {
+            Self::Define { expr, .. } => expr.for_each_place_use(f),
+            Self::Store { destination, .. } => f(destination, PlaceUse::Write),
+            Self::Drop {
+                target: NDropTarget::Place(place),
+            } => f(place, PlaceUse::Read),
+            Self::Drop {
+                target: NDropTarget::Value(_),
+            }
+            | Self::End { .. }
+            | Self::CheckIndex { .. } => {}
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum NExpr<'db> {
     /// Operation-preserving compile-time construction. It has no runtime

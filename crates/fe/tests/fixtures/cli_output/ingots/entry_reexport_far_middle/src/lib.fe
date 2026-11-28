@@ -1,0 +1,7 @@
+// `Codec2` is implemented for every type that implements `Deep`, which this
+// ingot imports without re-exporting it.
+use entry_reexport_far_provider::Deep
+
+pub trait Codec2 {}
+
+impl<T: Deep> Codec2 for T {}

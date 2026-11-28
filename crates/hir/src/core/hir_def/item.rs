@@ -11,8 +11,8 @@ use parser::ast;
 use super::{
     AttrListId, Body, CompBinOp, EffectParamListId, FuncParamListId, FuncParamName,
     GenericParamListId, HirIngot, IdentId, InlineAttr, InlineAttrErrorKind, InlineHint, KindBound,
-    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, TupleTypeId, TypeBound, TypeId,
-    UseAlias, WhereClauseId,
+    ManualContractRootAttr, Partial, Pat, PatId, QuoteChain, StringId, TupleTypeId, TypeBound,
+    TypeId, UseAlias, WhereClauseId,
     scope_graph::{ScopeGraph, ScopeId},
 };
 use crate::{
@@ -825,6 +825,33 @@ impl<'db> Func<'db> {
                 self.scope().parent_item(db),
                 Some(ItemKind::TopMod(top_mod)) if top_mod == top_mod.ingot(db).root_mod(db)
             )
+    }
+
+    /// The contract name of a function with a well-formed `#[contract_init(..)]`
+    /// or `#[contract_runtime(..)]` attribute: the root of a manual contract
+    /// object.
+    pub fn manual_contract_root_name(self, db: &'db dyn HirDb) -> Option<StringId<'db>> {
+        match self.manual_contract_root_attr(db)? {
+            ManualContractRootAttr::Init { contract_name }
+            | ManualContractRootAttr::Runtime { contract_name } => Some(contract_name),
+            ManualContractRootAttr::Error(_) => None,
+        }
+    }
+
+    pub fn is_manual_contract_root(self, db: &'db dyn HirDb) -> bool {
+        self.manual_contract_root_name(db).is_some()
+    }
+
+    /// A function that runs when a test run or a build enters its program: a
+    /// test, a manual contract root, an exported function and the executable's
+    /// `main`. Code that no such function reaches is not run, and is not
+    /// generated for any target. The builds find their roots with the same
+    /// predicates (`ingot_contracts`, `exported_funcs`, `main_entry`).
+    pub fn is_runtime_root(self, db: &'db dyn HirDb) -> bool {
+        self.is_test(db)
+            || self.is_manual_contract_root(db)
+            || self.is_exported(db)
+            || self.is_main_entry(db)
     }
 
     fn inline_attr(self, db: &'db dyn HirDb) -> Option<InlineAttr> {

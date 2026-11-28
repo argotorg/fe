@@ -1,0 +1,59 @@
+use core::abi::{AbiFrame, AbiSize, Encode}
+use core::ops::Drop
+use core::panic_with_value
+use std::abi::Sol
+
+// As `cli_output/single_files/drop_without_ordinary_proof_panic_payload.fe`,
+// but the panic follows a `return`, so it does not run and the `Encode`
+// implementation that would build its revert data is not judged.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) -> u256 {
+    let _held = Holder { t }
+    1
+}
+
+pub struct E {
+    pub v: u256,
+}
+
+impl AbiSize for E {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+
+impl Encode<Sol> for E {
+    fn encode(self, _ f: AbiFrame) {
+        with (Loud2) {
+            let _ = hold(Tag2 {})
+        }
+    }
+}
+
+fn fail() {
+    return
+    panic_with_value(E { v: 1 })
+}
+
+#[test]
+fn a_panic_after_return_builds_no_revert_data() {
+    fail()
+}

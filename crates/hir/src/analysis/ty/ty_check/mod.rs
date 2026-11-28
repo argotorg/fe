@@ -32,7 +32,9 @@ pub use self::contract::{
     check_contract_recv_arm_body, check_contract_recv_block, check_contract_recv_blocks,
     recv_arm_resolution, recv_msg,
 };
-pub(crate) use self::contract::{contract_field_slot, eval_msg_variant_selector};
+pub(crate) use self::contract::{
+    contract_entry_failures, contract_field_slot, eval_msg_variant_selector,
+};
 pub(crate) use self::env::{func_declared_bounds, func_signature};
 pub use self::path::RecordLike;
 use crate::analysis::name_resolution::Tier;

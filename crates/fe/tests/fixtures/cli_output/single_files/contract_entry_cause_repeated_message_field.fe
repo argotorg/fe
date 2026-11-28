@@ -1,0 +1,27 @@
+// A message field with no `Decode<Sol>` is reported where the message declares it
+// and where the arm reads it. The entry code of the contract is reported as
+// well, so that no program that passes `fe check` fails in `fe build`.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use std::abi::Sol
+pub trait Marker {}
+// A message field W<u8> whose Decode needs u8: Marker (unmet); arm reads the whole message.
+pub struct W<T> { v: u256 }
+impl<T> AbiSize for W<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T: Marker> Decode<Sol> for W<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { W { v: d.read_word(input) } }
+}
+impl<T> Encode<Sol> for W<T> {
+    fn encode(self, _ out: AbiFrame) { out.store_word(at: 0, value: self.v) }
+}
+msg M {
+    #[selector = 0x01]
+    Put { w: W<u8> } -> u256,
+}
+pub contract C {
+    recv M {
+        Put { w } -> u256 { w.v }
+    }
+}

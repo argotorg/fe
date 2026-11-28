@@ -1,0 +1,6 @@
+[ingot]
+name = "drop_dep_consumer"
+version = "0.1.0"
+
+[dependencies]
+drop_dep_provider = { path = "../drop_dep_provider" }

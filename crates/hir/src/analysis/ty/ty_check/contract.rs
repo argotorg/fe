@@ -4,6 +4,9 @@
 //! recv blocks, and recv arm bodies.
 
 use crate::analysis::name_resolution::Tier;
+use common::diagnostics::{
+    CompleteDiagnostic, DiagnosticPass, GlobalErrorCode, LabelStyle, Severity, SubDiagnostic,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::{TypedBody, owner::BodyOwner};
@@ -14,13 +17,14 @@ use ruint::aliases::U256;
 use crate::{
     analysis::{
         HirAnalysisDb,
+        diagnostics::{DiagnosticVoucher, SpannedHirAnalysisDb},
         name_resolution::{
             ExpectedPathKind, PathRes, PathResError, Viewer, diagnostics::PathResDiag,
             resolve_path_with_observer_and_minter,
         },
         semantic::{
             ConstUsePolicy, EvalOutcome, GenericSubst, SemConstScalar, SemConstValue,
-            contract_init_assigned_fields, eval_body_owner_const,
+            contract_init_assigned_fields, diagnostics::foreign_ingot_note, eval_body_owner_const,
         },
         ty::{
             adt_def::AdtRef,
@@ -43,14 +47,15 @@ use crate::{
         },
     },
     core::semantic::{
-        RecvArmView, RecvView, ValidatedFieldLayoutPlan, msg_variant_impl, resolve_sol_abi_ty,
+        RecvArmView, RecvView, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
+        resolve_sol_abi_ty,
     },
     hir_def::{
         Body, Contract, ContractRecvArm, FieldParent, IdentId, ItemKind, Mod, Partial, Pat, PathId,
         PathKind, Struct, scope_graph::ScopeId,
     },
     semantic::FieldView,
-    span::{DynLazySpan, pat::LazyPatSpan, path::LazyPathSpan},
+    span::{DynLazySpan, LazySpan, pat::LazyPatSpan, path::LazyPathSpan},
 };
 
 /// Returns true if `ty` implements the core MsgVariant trait for the ABI of
@@ -1028,4 +1033,146 @@ pub(super) fn get_msg_variant_return_type<'db>(
     // Get the Return associated type from the impl
     let return_name = IdentId::new(db, "Return".to_string());
     msg_variant_impl.assoc_ty(db, return_name)
+}
+
+/// A step of the entry code of a contract that cannot be generated. The entry
+/// plan holds the instances, and the lowering of the contract reads the same
+/// plan, so every step that lowering would fail is reported here, also where
+/// a check of the message or of an implementation reports the cause as well.
+pub(crate) struct ContractEntryFailure<'db> {
+    contract_name: String,
+    span: DynLazySpan<'db>,
+    message: String,
+    /// Another place that the failure is about, with what it is.
+    secondary: Option<(DynLazySpan<'db>, &'static str)>,
+}
+
+impl DiagnosticVoucher for ContractEntryFailure<'_> {
+    fn to_complete(&self, db: &dyn SpannedHirAnalysisDb) -> CompleteDiagnostic {
+        let primary = self.span.resolve(db);
+        let mut labels = vec![SubDiagnostic::new(
+            LabelStyle::Primary,
+            self.message.clone(),
+            primary.clone(),
+        )];
+        if let Some((span, what)) = &self.secondary {
+            let span = span.resolve(db);
+            let note = foreign_ingot_note(db, primary.as_ref(), span.as_ref());
+            labels.push(SubDiagnostic::new(
+                LabelStyle::Secondary,
+                format!("{what}{note}"),
+                span,
+            ));
+        }
+        CompleteDiagnostic::new(
+            Severity::Error,
+            format!(
+                "the entry code of contract `{}` cannot be generated",
+                self.contract_name
+            ),
+            labels,
+            Vec::new(),
+            GlobalErrorCode::new(DiagnosticPass::SemanticAccess, 24),
+        )
+    }
+}
+
+/// The steps of the entry code of `contract` that have no instance to run.
+pub(crate) fn contract_entry_failures<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> Vec<ContractEntryFailure<'db>> {
+    let contract_name = contract
+        .name(db)
+        .to_opt()
+        .map_or("<unnamed>", |name| name.data(db))
+        .to_string();
+    let plan = contract_entry_plan(db, contract, None);
+    let span = contract.span();
+    let mut failures = Vec::new();
+    let mut fail = |span, message, secondary| {
+        failures.push(ContractEntryFailure {
+            contract_name: contract_name.clone(),
+            span,
+            message,
+            secondary,
+        })
+    };
+    if let Err(error) = &plan.init {
+        let params = span.clone().init_block().params();
+        for (arg, text) in error.parts() {
+            match arg {
+                Some(idx) => fail(
+                    params.clone().param(idx).into(),
+                    format!("the dispatcher cannot decode this `init` argument: {text}"),
+                    None,
+                ),
+                None => fail(
+                    params.clone().into(),
+                    format!("the dispatcher cannot decode the arguments of `init`: {text}"),
+                    None,
+                ),
+            }
+        }
+    }
+    for arm in &plan.arms {
+        let arm_span = span
+            .clone()
+            .recv(arm.recv_idx as usize)
+            .arms()
+            .arm(arm.arm_idx as usize);
+        if let Err(error) = &arm.input {
+            for (_, text) in error.parts() {
+                fail(
+                    arm_span.clone().pat().into(),
+                    format!("the dispatcher cannot read the message of this arm: {text}"),
+                    None,
+                );
+            }
+        }
+        if let Err(error) = &arm.ret {
+            let declared = RecvView::new(db, contract, arm.recv_idx)
+                .arms(db)
+                .find(|view| view.arm_idx(db) == arm.arm_idx)
+                .and_then(|view| view.return_decl_span(db));
+            let pat_span: DynLazySpan<'db> = arm_span.clone().pat().into();
+            for (_, text) in error.parts() {
+                let message = format!("the dispatcher cannot encode this return type: {text}");
+                match &declared {
+                    // A declaration in the contract's own ingot is where the
+                    // error is, with the arm as the secondary label. In
+                    // another ingot, the arm stays primary.
+                    Some(declared)
+                        if declared.top_mod(db).map(|top_mod| top_mod.ingot(db))
+                            == Some(contract.top_mod(db).ingot(db)) =>
+                    {
+                        fail(
+                            declared.clone(),
+                            message,
+                            Some((pat_span.clone(), "returned by this arm")),
+                        )
+                    }
+                    Some(declared) => {
+                        let written = contract.recvs(db).data(db)[arm.recv_idx as usize]
+                            .arms
+                            .data(db)[arm.arm_idx as usize]
+                            .ret_ty
+                            .is_some();
+                        let primary = if written {
+                            arm_span.clone().ret_ty().into()
+                        } else {
+                            pat_span.clone()
+                        };
+                        fail(
+                            primary,
+                            message,
+                            Some((declared.clone(), "the `Return` type is declared here")),
+                        )
+                    }
+                    None => fail(pat_span.clone(), message, None),
+                }
+            }
+        }
+    }
+    failures
 }

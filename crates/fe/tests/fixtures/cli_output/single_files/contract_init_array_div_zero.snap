@@ -18,5 +18,11 @@ error[3-0025]: division by zero in const context
 4 │     x: [u8; { 10 / N }],
   │               ^^^^^^ cannot divide by zero
 
+error[16-0024]: the entry code of contract `StructArg` cannot be generated
+   ┌─ contract_init_array_div_zero.fe:12:10
+   │
+12 │     init(value: S<0>) {}
+   │          ^^^^^^^^^^^ the dispatcher cannot decode this `init` argument: `S<0>: Decode<Sol>` is not satisfied
+
 
 === EXIT CODE: 1 ===

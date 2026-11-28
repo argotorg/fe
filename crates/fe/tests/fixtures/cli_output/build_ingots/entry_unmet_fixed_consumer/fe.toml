@@ -1,0 +1,6 @@
+[ingot]
+name = "entry_unmet_fixed_consumer"
+version = "0.1.0"
+
+[dependencies]
+entry_unmet_provider = { path = "../../ingots/entry_unmet_provider" }

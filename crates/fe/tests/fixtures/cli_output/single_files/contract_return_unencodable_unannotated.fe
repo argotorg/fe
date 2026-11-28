@@ -1,0 +1,40 @@
+// The return type of the message is declared, but the arm omits its annotation.
+// The arm is reported for the missing annotation. The declared `Out<u8>` also
+// has no encoding, and that is reported at the message's `Return` declaration,
+// where it is written.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::message::MsgVariant
+use std::abi::Sol
+
+pub trait Marker {}
+pub struct Out<T> { v: u256 }
+impl<T> AbiSize for Out<T> {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl<T: Marker> Encode<Sol> for Out<T> {
+    fn encode(self, _ out: AbiFrame) { out.store_word(at: 0, value: self.v) }
+}
+impl<T> Decode<Sol> for Out<T> {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { Out { v: d.read_word(input) } }
+}
+
+pub struct M {}
+impl MsgVariant<Sol> for M {
+    const SELECTOR: u32 = 0x55667788
+    type Return = Out<u8>
+}
+impl AbiSize for M {
+    const HEAD_SIZE: u256 = 0
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for M { fn encode(self, _ out: AbiFrame) {} }
+impl Decode<Sol> for M {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self { M {} }
+}
+
+pub contract R {
+    recv {
+        M {} { Out<u8> { v: 1 } }
+    }
+}

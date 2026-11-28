@@ -1,0 +1,6 @@
+[ingot]
+name = "entry_hidden_consumer"
+version = "0.1.0"
+
+[dependencies]
+entry_hidden_provider = { path = "../entry_hidden_provider" }

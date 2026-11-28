@@ -8,12 +8,12 @@ use hir::analysis::{
         BinaryOp, DropFlagPoint, EvalOutcome, FailReason, FieldIndex, Overflow, RuntimeSizeError,
         SConst, SLocalId, SStmtId, SemConstId, SemConstScalar, SemConstValue, SemOrigin,
         SemanticCalleeRef, SemanticCodeRegionRef, SemanticCodeRegionTarget, SemanticConstRef,
-        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex,
-        core_method_callee_key, eval_const_ref, generated_callee_key,
+        SemanticInstance, SemanticInstanceKey, SemanticLocalRole, VariantIndex, eval_const_ref,
+        generated_callee_key,
         normalized::{
             NBlockId, NDataPath, NDataProjection, NEffectArg, NExpr, NIndex, NOperand, NPlace,
             NPlaceBase, NRootKind, NStatement, NStatementId, NStatementKind, NSuccessor,
-            NTerminator, NTerminatorKind, NValueDefinition, NValueId, ReadMode,
+            NTerminator, NTerminatorKind, NValueDefinition, NValueId, PlaceUse, ReadMode,
         },
         panic_payload_encodable, panic_payload_revert_key, reify_runtime_const_for_ty,
         runtime_size_bytes, sem_const_ty,
@@ -26,7 +26,7 @@ use hir::analysis::{
             runtime_builtin_func_kind,
         },
         ty_check::{BodyOwner, LocalBinding},
-        ty_def::{BorrowKind, TyId},
+        ty_def::TyId,
     },
 };
 use hir::hir_def::{ArithBinOp, BinOp, CompBinOp, Expr, Func, Partial, UnOp};
@@ -1288,10 +1288,10 @@ impl<'db> RmirEmitter<'db> {
                     place,
                     dst_class,
                 );
-                if let NExpr::Borrow {
-                    kind: BorrowKind::Mut,
-                    ..
-                } = expr
+                // A copy is stored back only for a use that updates the lane
+                // (`PlaceUse`); a view and a shared borrow only read it.
+                if let NExpr::Borrow { kind, .. } = expr
+                    && PlaceUse::of_borrow(*kind).stores_back()
                     && let Some(copy) = copy
                 {
                     let owned = self.open_lane_hold(bb, copy);
@@ -2963,9 +2963,9 @@ impl<'db> RmirEmitter<'db> {
         let lane_copies: Vec<_> = std::mem::take(&mut self.call_lane_copies)
             .into_iter()
             .filter(|(place, _)| {
-                effect_args
-                    .iter()
-                    .any(|effect| effect.required_mut && effect.place == *place)
+                effect_args.iter().any(|effect| {
+                    PlaceUse::of_effect_arg(effect).stores_back() && effect.place == *place
+                })
             })
             .map(|(_, copy)| (copy, self.open_lane_hold(bb, copy)))
             .collect();
@@ -4183,6 +4183,7 @@ impl<'db> RmirEmitter<'db> {
             self.db,
             impl_env.normalization_scope(self.db),
             impl_env.assumptions(self.db),
+            None,
             routine,
             None,
             &generic_args,
@@ -5602,29 +5603,6 @@ impl<'db> RmirEmitter<'db> {
             },
         );
         result
-    }
-
-    /// The instance of core trait `trait_path`'s method `name` for the
-    /// trait arguments `args`, resolved in the scope of `scope_ty` when the
-    /// body has none.
-    fn resolve_core_method(
-        &self,
-        trait_path: &[&str],
-        name: &str,
-        args: Vec<TyId<'db>>,
-        scope_ty: TyId<'db>,
-    ) -> SemanticInstance<'db> {
-        let scope = self
-            .env
-            .scope
-            .or_else(|| scope_ty.as_scope(self.db))
-            .expect("core trait resolution requires a scope");
-        let key =
-            core_method_callee_key(self.db, scope, self.env.assumptions, trait_path, name, args)
-                .unwrap_or_else(|error| {
-                    panic!("failed to finalize generated call to `{name}`: {error:?}")
-                });
-        SemanticInstance::new(self.db, key)
     }
 
     fn read_semantic_value(&mut self, bb: RBlockId, local: SLocalId) -> RLocalId {

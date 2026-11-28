@@ -1107,6 +1107,37 @@ impl<'db> EvidenceList<'db> {
         Ok(Self::of(db, entries).with_rows(db, rows))
     }
 
+    /// The closed goals of the bounds in `signature`, instantiated by `subst`,
+    /// that have no proof in this list, and of its effect rows without one. A
+    /// slot without a proof is pending: the instance that the call reaches
+    /// supplies it by ordinary selection, which fails for a goal that no
+    /// implementation satisfies. A generated call, which no lexical choice
+    /// governs, asks for these to refuse a call that has no instance to build.
+    pub(crate) fn missing_bound_goals(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        signature: PredicateListId<'db>,
+        subst: &CompleteSubst<'db>,
+    ) -> Vec<TraitInstId<'db>> {
+        signature
+            .list(db)
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &bound)| {
+                if self.get(db, index).is_some() {
+                    return None;
+                }
+                let goal = substitute_complete(db, bound, subst).ok()?;
+                if mentions_effect_provider(db, goal) {
+                    return None;
+                }
+                (!collect_flags(db, goal).intersects(TyFlags::HAS_VAR | TyFlags::HAS_INVALID))
+                    .then_some(goal)
+            })
+            .chain(self.unproved_rows(db))
+            .collect()
+    }
+
     /// The goals of this list's effect rows that have no proof and no unsettled
     /// type. Under a lexical choice they are refused.
     pub(crate) fn unproved_rows(self, db: &'db dyn HirAnalysisDb) -> Vec<TraitInstId<'db>> {

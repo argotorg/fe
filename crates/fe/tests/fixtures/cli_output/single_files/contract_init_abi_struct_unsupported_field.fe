@@ -1,0 +1,8 @@
+// #[abi] struct as init argument whose own field type has no codec.
+use std::abi::Sol
+pub struct NoCodec { v: u256 }
+#[abi]
+pub struct Inner { pub x: u256, pub n: NoCodec }
+pub contract C {
+    init(i: Inner) {}
+}

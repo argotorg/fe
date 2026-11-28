@@ -38,6 +38,7 @@ use super::{
     closure::{CallableTrait, callable_params},
     diagnostics::{ImplDiag, TyDiagCollection},
     fold::{TyFoldable, TyFolder},
+    normalize::normalize_ty,
     shape::Shape,
     trait_lower::collect_implementor_methods,
     trait_resolution::{
@@ -49,7 +50,10 @@ use super::{
     unify::{PersistentUnificationTable, UnificationTable},
     visitor::{TyVisitable, TyVisitor, collect_flags},
 };
-use crate::analysis::{HirAnalysisDb, name_resolution::Tier};
+use crate::analysis::{
+    HirAnalysisDb,
+    name_resolution::{Tier, is_scope_visible_from},
+};
 
 /// The trait environment of `ingot` in `tier`: in the authored tier, without
 /// the implementations generated in the ingot itself. The generated
@@ -767,9 +771,14 @@ pub struct ResolvedMethodInstance<'db> {
     declared_only: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, SalsaValue)]
 pub enum MethodArgMapError<'db> {
     MissingBody,
+    /// A bound of the callee, instantiated for a generated call, has no proof
+    /// where the call is made.
+    UnprovedBound {
+        goal: TraitInstId<'db>,
+    },
     /// The call goes through an implementation that a written header declares
     /// and preparation has not produced.
     DeclaredOnly,
@@ -942,6 +951,198 @@ pub(crate) fn impls_for_trait_inst_with_possible_constraints<'db>(
         None,
         true,
     )
+}
+
+/// Whether `trait_` can be named by a path from `from`: its own module and
+/// every module around it are visible there.
+fn is_trait_path_visible<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> bool {
+    std::iter::successors(Some(trait_.scope()), |scope| scope.parent(db))
+        .all(|scope| is_scope_visible_from(db, scope, from))
+}
+
+/// The names under which code at `from` can write `trait_` through a `use` of
+/// another module, in order: a module of an ingot that `from` depends on
+/// directly, which it can reach with every module around it, imports the trait
+/// by a name or a glob, and the `use` is visible from `from`. A trait that
+/// sits in a private module can be public by such a re-export, under a name of
+/// the `use`, which need not be its own. An ingot that only a dependency
+/// depends on is not reachable: the consumer would have to add it to its own
+/// dependencies.
+fn reexported_names<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> Vec<&'db str> {
+    use crate::analysis::name_resolution::{NameDerivation, NameDomain, items_in_scope};
+
+    let mut names: Vec<_> = from
+        .ingot(db)
+        .resolved_external_ingots(db)
+        .iter()
+        .flat_map(|(_, ingot)| ingot.all_modules(db).iter())
+        .flat_map(|top_mod| {
+            std::iter::once(top_mod.scope())
+                .chain(top_mod.all_mods(db).iter().map(|mod_| mod_.scope()))
+        })
+        .filter(|scope| {
+            std::iter::successors(Some(*scope), |scope| scope.parent(db))
+                .all(|scope| is_scope_visible_from(db, scope, from))
+        })
+        .flat_map(|scope| {
+            items_in_scope(db, scope, NameDomain::TYPE)
+                .iter()
+                .filter(move |(_, res)| {
+                    res.trait_() == Some(trait_)
+                        && matches!(
+                            res.derivation,
+                            NameDerivation::NamedImported(_) | NameDerivation::GlobImported(_)
+                        )
+                        && res.is_visible(db, from)
+                })
+                .map(|(name, _)| name.as_str())
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The name that code at `from` writes for `trait_` where it cannot name its
+/// definition by a path: the first name that a visible re-export gives it
+/// (`reexported_names`). `None` where `from` is in the ingot of the trait, or
+/// can name its definition, or cannot reach a re-export.
+pub(crate) fn reexported_name<'db>(
+    db: &'db dyn HirAnalysisDb,
+    trait_: Trait<'db>,
+    from: ScopeId<'db>,
+) -> Option<&'db str> {
+    if trait_.scope().ingot(db) == from.ingot(db) || is_trait_path_visible(db, trait_, from) {
+        return None;
+    }
+    reexported_names(db, trait_, from).first().copied()
+}
+
+/// The constraint that stops the one implementation that could prove `goal`:
+/// the first constraint, that no implementation satisfies, of the only
+/// implementation whose head and associated types match `goal`.
+/// Implementations for a type constructor are considered before blanket ones.
+/// A blanket implementation with an unmet constraint of a trait that no code
+/// of the origin ingot can name (another ingot's, private to it or in a
+/// private module, which no ingot that the origin ingot depends on directly
+/// re-exports publicly) is not considered: no code of the origin ingot can
+/// satisfy it, so it is no cause to name. `None` when no implementation matches, or
+/// when several do.
+pub(crate) fn blocking_constraint<'db>(
+    db: &'db dyn HirAnalysisDb,
+    solve_cx: TraitSolveCx<'db>,
+    goal: TraitInstId<'db>,
+) -> Option<TraitInstId<'db>> {
+    let ingot = solve_cx.origin_ingot();
+    let env = ingot_trait_env(db, ingot, solve_cx.tier().in_ingot(db, ingot));
+    let ty = goal.self_ty(db);
+    if ty.has_invalid(db) {
+        return None;
+    }
+    let origin_scope = solve_cx.origin_scope(db);
+    let sealed = |constraint: &TraitInstId<'db>| {
+        let trait_ = constraint.def(db);
+        trait_.scope().ingot(db) != ingot
+            && !is_trait_path_visible(db, trait_, origin_scope)
+            && reexported_names(db, trait_, origin_scope).is_empty()
+    };
+    let (mut nominal, mut blanket) = (Vec::new(), Vec::new());
+    for impl_ in env.impls_for_trait(db, goal.def(db)) {
+        if !impl_self_ty_may_match(db, impl_.self_ty(db), ty) {
+            continue;
+        }
+        // The associated types that `goal` binds are those of the candidate.
+        let Some(impl_) = goal
+            .assoc_type_bindings(db)
+            .keys()
+            .try_fold(impl_, |impl_, binding| {
+                super::trait_lower::complete_candidate_impl_assoc_ty(db, impl_, binding.name)
+            })
+        else {
+            continue;
+        };
+        let mut table = UnificationTable::new(db);
+        let inst = table.instantiate_with_fresh_vars(impl_);
+        let impl_ty = table.instantiate_to_term(inst.self_ty(db));
+        let ty_term = table.instantiate_to_term(ty);
+        let head_matches = table.unify_for_overlap(impl_ty, ty_term).is_ok()
+            && inst
+                .trait_(db)
+                .args(db)
+                .iter()
+                .zip(goal.args(db))
+                .all(|(&impl_arg, &arg)| {
+                    let arg = table.instantiate_to_term(arg);
+                    table.unify_for_overlap(impl_arg, arg).is_ok()
+                });
+        // An implementation that binds an associated type to another type than
+        // `goal` does is not the one that could prove it, whatever its bounds.
+        // The types are compared as the solver does, after normalization; one
+        // that is still a projection cannot be confirmed to match.
+        let assumptions = solve_cx.assumptions();
+        let assoc_matches = head_matches
+            && goal
+                .assoc_type_bindings(db)
+                .iter()
+                .all(|(&binding, &want)| {
+                    let Some(have) = inst.trait_inst(db).bound_assoc_ty(db, binding) else {
+                        return false;
+                    };
+                    let mut normal = |ty: TyId<'db>| {
+                        let ty = ty.fold_with(db, &mut table);
+                        normalize_ty(db, ty, origin_scope, assumptions)
+                    };
+                    let (have, want) = (normal(have), normal(want));
+                    if have.has_projection(db) || want.has_projection(db) {
+                        return false;
+                    }
+                    let (have, want) = (
+                        table.instantiate_to_term(have),
+                        table.instantiate_to_term(want),
+                    );
+                    table.unify_for_overlap(have, want).is_ok()
+                });
+        if !assoc_matches {
+            continue;
+        }
+        // The constraints that no implementation satisfies, once the arguments
+        // of the goal are substituted.
+        let unmet: Vec<_> = inst
+            .constraints(db)
+            .list(db)
+            .iter()
+            .map(|&constraint| constraint.fold_with(db, &mut table))
+            .filter(|&constraint| {
+                !matches!(
+                    is_goal_satisfiable(db, solve_cx, constraint),
+                    GoalSatisfiability::Satisfied(_) | GoalSatisfiability::NeedsConfirmation { .. }
+                )
+            })
+            .collect();
+        let nominal_impl = matches!(impl_.self_ty(db).base_ty(db).data(db), TyData::TyBase(_));
+        if unmet.is_empty() || (!nominal_impl && unmet.iter().any(sealed)) {
+            continue;
+        }
+        let unmet = unmet[0];
+        if nominal_impl {
+            nominal.push(unmet)
+        } else {
+            blanket.push(unmet)
+        }
+    }
+    let candidates = if nominal.is_empty() { blanket } else { nominal };
+    match candidates[..] {
+        [only] => Some(only),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2463,8 +2664,29 @@ impl<'db> TraitInstId<'db> {
     }
 
     pub fn pretty_print(self, db: &dyn HirAnalysisDb, as_pred: bool) -> String {
+        self.pretty_print_named(db, as_pred, None)
+    }
+
+    /// `pretty_print` for a reader at `from`: where `from` cannot name the
+    /// trait by its path but a re-export gives it a name, the trait prints
+    /// under the name that the reader can write (`reexported_name`).
+    pub fn pretty_print_from(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        as_pred: bool,
+        from: ScopeId<'db>,
+    ) -> String {
+        self.pretty_print_named(db, as_pred, reexported_name(db, self.def(db), from))
+    }
+
+    fn pretty_print_named(
+        self,
+        db: &dyn HirAnalysisDb,
+        as_pred: bool,
+        name: Option<&str>,
+    ) -> String {
         if as_pred {
-            let inst = self.pretty_print(db, false);
+            let inst = self.pretty_print_named(db, false, name);
             let self_ty = self.self_ty(db);
             format!("{}: {}", self_ty.pretty_print(db), inst)
         } else if let Some(callable) = CallableTrait::of(db, self.def(db))
@@ -2491,12 +2713,12 @@ impl<'db> TraitInstId<'db> {
             format!("{name}({}){ret}", params.join(", "))
         } else {
             let mut s = self.mode(db).prefix().to_string();
-            s.push_str(
+            s.push_str(name.unwrap_or_else(|| {
                 self.def(db)
                     .name(db)
                     .to_opt()
-                    .map_or("<unknown>", |n| n.data(db).as_str()),
-            );
+                    .map_or("<unknown>", |n| n.data(db).as_str())
+            }));
 
             let mut args = self.args(db).iter().map(|ty| ty.pretty_print(db));
             // Skip the first type parameter since it's the implementor type.

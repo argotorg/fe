@@ -1,0 +1,12 @@
+// The variant Yes holds a value of the uninhabited type Void, so it cannot exist and its Ring<T> is never destroyed: no drop proof is asked for it.
+use core::ops::Drop
+pub trait Chime { fn ring(self) }
+pub struct Bell {}
+pub impl Chime for Bell as Loud { fn ring(self) { assert(false) } }
+pub struct Ring<T: Chime> { t: T }
+impl<T: Chime> Drop for Ring<T> { fn drop(own self) { self.t.ring() } }
+enum Void {}
+enum Maybe<T: Chime> { No, Yes(Void, Ring<T>) }
+fn pick<T: Chime>(_ t: own T) { let _x: Maybe<T> = Maybe::No }
+#[test]
+fn t() { with (Loud) { pick(Bell {}) } }

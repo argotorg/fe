@@ -1,0 +1,9 @@
+use entry_unmet_provider::{Commands, Extra, Open, Packet}
+pub struct Local {}
+impl Open for Local {}
+pub type Wire = Packet<Local>
+pub contract Reader {
+    init(w: Wire) {}
+    recv Commands { Ping -> u8 { 1 } }
+}
+impl Extra for Local {}

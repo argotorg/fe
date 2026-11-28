@@ -1,0 +1,76 @@
+// A `mut` reference to a packed entry stores its copy back with the setter of its lane codec, even where the reference is only read, so a drop in the setter is judged.
+use core::marker::{Pinned, Storage}
+use core::ops::{LaneCodec, Location, StateIndex, Drop}
+
+pub struct Pair {
+    pub a: u16,
+    pub b: u16,
+}
+
+struct Codec {}
+impl LaneCodec<Pair> for Codec {
+    const BITS: u256 = 32
+    fn get(_ word: u256, offset: u256) -> Pair {
+        let raw: u256 = (word >> offset) & 0xffffffff
+        Pair {
+            a: (raw & 0xffff).downcast_truncate(),
+            b: ((raw >> 16) & 0xffff).downcast_truncate(),
+        }
+    }
+    fn set(_ word: u256, offset: u256, value: own Pair) -> u256 {
+        with (Loud2) { hold(Tag2 {}) }
+        let packed: u256 = (value.a as u256) | ((value.b as u256) << 16)
+        (word & !(0xffffffff << offset)) | (packed << offset)
+    }
+}
+struct Pairs<C> {}
+impl<C> Pinned for Pairs<C> { type Space = Storage }
+unsafe impl<C> StateIndex for Pairs<C> {
+    type Key = u256
+    type Entry = Pair
+    type Lanes = C
+    fn locate(self, _ root: u256, _ key: u256) -> Location {
+        Location { slot: root + key / 8, offset: (key % 8) * 32 }
+    }
+}
+
+// `hold` accepts `Tag2` because the block chooses `Loud2` for `Show`. The
+// `Drop` implementation of `Holder<Tag2>` needs `Tag2: Show` in the type's own
+// scope, where no choice applies, so the drop of `_held` has no proof.
+pub trait Show {
+    fn show(self)
+}
+
+pub struct Tag2 {}
+
+pub impl Show for Tag2 as Loud2 {
+    fn show(self) {}
+}
+
+pub struct Holder<T: Show> {
+    t: T,
+}
+
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+fn hold<T: Show>(_ t: own T) {
+    let _held = Holder { t }
+}
+
+msg M {
+    #[selector = 1]
+    Run -> u16,
+}
+pub contract K {
+    mut p: Pairs<Codec>
+    recv M {
+        Run -> u16 uses (mut p) {
+            let r = mut p[1]
+            r.a
+        }
+    }
+}
