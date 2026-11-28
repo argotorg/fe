@@ -239,7 +239,7 @@ fn held_at_entry(body: &RuntimeBody<'_>) -> Vec<Option<Held>> {
             };
             if entry[successor.index()].as_ref() != Some(&joined) {
                 entry[successor.index()] = Some(joined);
-                pending.push(successor);
+                pending.push(*successor);
             }
         }
     }
@@ -418,7 +418,7 @@ impl<'db> Unwinder<'_, 'db> {
                 expr: RExpr::ConstScalar(ConstScalar::Bool(false)),
             });
             for stmt in &self.flushes[&copy] {
-                for local in stmt.locals(&self.body.provider_bindings) {
+                for local in stmt.resolved_locals(&self.body.provider_bindings) {
                     let data = &self.body.locals[local.index()];
                     if let (
                         RuntimeCarrier::Value(class),
