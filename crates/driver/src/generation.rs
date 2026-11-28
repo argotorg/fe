@@ -437,23 +437,30 @@ fn prepare_file_within(
     let Some(scan) = scan_standalone_file(db, file, syntax)? else {
         return Ok(None);
     };
-    // The one view every provider is admitted and evaluated in: the authored
-    // text, with the implementation headers an author wrote counted as facts.
-    let basis = ViewBasis::Standalone(file);
-    let input_db = input_view(db, &basis, &[]);
-    let db = &input_db;
-    let file = db
-        .workspace()
-        .get(db, &url)
-        .expect("the input view holds the authored file");
-    let found = file_requests(db, file, scan)?;
-    // Lowering dropped every header of the file: nothing is requested.
-    if found.is_empty() && !found.has_scoped_opening {
-        return Ok(None);
-    }
-    let root_range = found.root_range;
-    match admit_requests(
-        db,
+    // The one database the transaction works in. It is a copy of the authored
+    // text over the builtin libraries, moved between the views below, so the
+    // caller's database is unchanged. The input view is the one every provider
+    // is admitted and evaluated in: the authored text, with the implementation
+    // headers an author wrote counted as facts.
+    let mut working = copy_view(db, &ViewBasis::Standalone(file));
+    enter_input_view(&mut working, &[]);
+    let (own, sites, root_range, file) = {
+        let input = &working;
+        let file = input
+            .workspace()
+            .get(input, &url)
+            .expect("the input view holds the authored file");
+        let found = file_requests(input, file, scan)?;
+        // Lowering dropped every header of the file: nothing is requested.
+        if found.is_empty() && !found.has_scoped_opening {
+            return Ok(None);
+        }
+        let root_range = found.root_range;
+        let (own, sites) = run_authored_requests(input, &[found])?;
+        (own, sites, root_range, file)
+    };
+    match serve_rounds(
+        &mut working,
         &Transaction {
             basis: ViewBasis::Standalone(file),
             modules: &[url],
@@ -462,9 +469,10 @@ fn prepare_file_within(
             max_rounds,
         },
         Vec::new(),
-        &[found],
+        own,
+        sites,
     )? {
-        Preparation::Complete(output, _) => Ok(Some(output)),
+        Preparation::Complete(_) => Ok(Some(working)),
         Preparation::NeedsDependencies(_) => {
             unreachable!("standalone preparation has no dependencies")
         }
@@ -624,7 +632,11 @@ pub fn prepare_ingots(
             let sealed = sealed_dependencies(plan, &seals, &additions);
             let writes_headers = syntaxes.iter().any(|(_, syntax)| syntax.has_requests);
             let wants_view = !sealed.is_empty() || writes_headers;
-            let input_db = wants_view.then(|| input_view(db, &ViewBasis::Package, &sealed));
+            let input_db = wants_view.then(|| {
+                let mut view = copy_view(db, &ViewBasis::Package);
+                enter_input_view(&mut view, &sealed);
+                view
+            });
             let scanned_in = input_db.as_ref().unwrap_or(db);
             let pending = if opening_files[index].is_empty() && dependency_openings.is_empty() {
                 Vec::new()
@@ -647,30 +659,37 @@ pub fn prepare_ingots(
                 if !writes_headers && pending.is_empty() {
                     break;
                 }
-                let input_db =
-                    input_db.unwrap_or_else(|| input_view(db, &ViewBasis::Package, &sealed));
-                let found_requests = syntaxes
-                    .iter()
-                    .filter(|(_, syntax)| syntax.has_requests)
-                    .map(|(url, syntax)| {
-                        let file = input_db
-                            .workspace()
-                            .get(&input_db, url)
-                            .expect("the input view holds every authored file");
-                        file_requests(
-                            &input_db,
-                            file,
-                            FileScan {
-                                root: syntax.root.clone(),
-                                has_scoped_opening: false,
-                            },
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                match admit_requests(&input_db, &transaction, sealed, &found_requests)? {
-                    Preparation::Complete(output, own) => {
+                let mut input_db = input_db.unwrap_or_else(|| {
+                    let mut view = copy_view(db, &ViewBasis::Package);
+                    enter_input_view(&mut view, &sealed);
+                    view
+                });
+                let (own, sites) = {
+                    let input = &input_db;
+                    let found_requests = syntaxes
+                        .iter()
+                        .filter(|(_, syntax)| syntax.has_requests)
+                        .map(|(url, syntax)| {
+                            let file = input
+                                .workspace()
+                                .get(input, url)
+                                .expect("the input view holds every authored file");
+                            file_requests(
+                                input,
+                                file,
+                                FileScan {
+                                    root: syntax.root.clone(),
+                                    has_scoped_opening: false,
+                                },
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    run_authored_requests(input, &found_requests)?
+                };
+                match serve_rounds(&mut input_db, &transaction, sealed, own, sites)? {
+                    Preparation::Complete(own) => {
                         seals[index] = own;
-                        last = Some(output);
+                        last = Some(input_db);
                         break;
                     }
                     Preparation::NeedsDependencies(waiting) => waiting,
@@ -703,7 +722,9 @@ pub fn prepare_ingots(
         everything.extend(seal);
         everything.extend(extra);
     }
-    Ok(Some(prepared_view(db, &ViewBasis::Package, &everything)))
+    let mut view = copy_view(db, &ViewBasis::Package);
+    enter_output_view(&mut view, &everything);
+    Ok(Some(view))
 }
 
 fn sealed_dependencies(
@@ -771,18 +792,22 @@ fn prepare_dependency_requests(
         // Rebind the downstream demand in the owner's source view before it
         // can supply type identities to the provider. Its own generated
         // implementations are visible only for output admission.
-        let input = input_view(db, &ViewBasis::DependencyOwner(&owner_sources), &requests);
-        let added = evaluate_scoped_request(&input, demand)?;
+        let mut view = copy_view(db, &ViewBasis::DependencyOwner(&owner_sources));
+        enter_input_view(&mut view, &requests);
+        let added = evaluate_scoped_request(&view, demand)?;
         requests.extend(seals[index].iter().cloned());
         requests.extend(additions[index].iter().cloned());
         requests.push(added.clone());
-        let output = prepared_view(&input, &ViewBasis::Package, &requests);
+        // The same filtered database moves to the output view; the owner's
+        // boundary is the filtered copy.
+        enter_output_view(&mut view, &requests);
+        let output = &view;
         for url in &owner.files {
-            check_preparation_module(&output, url)?;
+            check_preparation_module(output, url)?;
         }
-        check_scoped_implementation(&output, &added)?;
+        check_scoped_implementation(output, &added)?;
         check_conservative_extension(
-            &output,
+            output,
             &owner.files,
             &Requested {
                 requests: &[],
@@ -1204,7 +1229,9 @@ struct Transaction<'a> {
 }
 
 enum Preparation {
-    Complete(DriverDataBase, Vec<FrozenGenerationRequest>),
+    /// The requests the transaction added; the working database is in the
+    /// output view.
+    Complete(Vec<FrozenGenerationRequest>),
     NeedsDependencies(Vec<ScopedDeriveDemand>),
 }
 
@@ -1354,37 +1381,17 @@ fn check_scoped_implementation(
     Ok(())
 }
 
-/// One preparation transaction over its modules. `sealed` is the output of the
-/// ingots the modules depend on, already prepared and part of every view;
-/// `authored` are the requests the modules write. The providers of the derive
-/// headers of every file run first, and every view holds their output; each
-/// round then discovers scoped demands in the output view and serves them.
-/// Every provider, whichever
-/// channel names it, is admitted and evaluated in the input view `db`, so the
-/// order of the channels affects only how refusals are reported. A
-/// standalone transaction also admits the whole output once, as before; a
-/// package view is returned with its ordinary diagnostics for consumers to
-/// report. The result is the output view and the requests the transaction
-/// added to `sealed`.
-fn admit_requests(
-    db: &DriverDataBase,
-    transaction: &Transaction<'_>,
-    sealed: Vec<common::generation::FrozenGenerationRequest>,
-    authored: &[FileRequests<'_>],
-) -> Result<Preparation, GenerationError> {
-    let basis = &transaction.basis;
-    let modules = transaction.modules;
-    let (standalone_root, max_rounds) = (transaction.standalone_root, transaction.max_rounds);
-    let sealed_len = sealed.len();
-    let mut requests = sealed;
-    let error_at = |file: &url::Url, range, cause| GenerationError {
-        file: file.clone(),
-        range,
-        cause,
-    };
-    let fallback_file = &modules[0];
-    let whole_input = standalone_root.unwrap_or_else(|| parser::TextRange::empty(0.into()));
-    let mut completed = std::collections::HashSet::new();
+/// Admit, check and run the authored requests of a transaction's modules in
+/// the input view `db`. `authored` are the requests the modules write. The
+/// providers of the derive headers of every file run first, and every view
+/// holds their output. Every provider is admitted and evaluated in the input
+/// view, so the order of the channels affects only how refusals are reported.
+/// The result is the plan of each request and the place it was written, in the
+/// order they are written.
+fn run_authored_requests<'db>(
+    db: &'db DriverDataBase,
+    authored: &[FileRequests<'db>],
+) -> Result<(Vec<FrozenGenerationRequest>, Vec<RequestSite>), GenerationError> {
     // Every authored request is admitted before any provider runs. Admission
     // reads only the input view `db`, which no provider's output changes, so
     // a request that admission refuses is refused before the compile-time code
@@ -1395,8 +1402,8 @@ fn admit_requests(
     // prepared. Their output is part of the first view, so a written header
     // is a fact when the code that a scoped request generates is checked, as
     // a written implementation is.
-    // `own` holds the places of the modules' own derive headers in `requests`,
-    // and `sites` where each one was written, in the same order.
+    // `plans` holds the places of the modules' own derive headers, and `sites`
+    // where each one was written, in the same order.
     // Every provider is checked before any runs, so a refusal does not depend
     // on which provider is written first.
     let mut sites = Vec::new();
@@ -1411,41 +1418,73 @@ fn admit_requests(
         )?);
         sites.push(request.site.clone());
     }
+    let mut plans = Vec::new();
     for (provider, request) in checked.into_iter().zip(&admitted) {
         let mut plan = run_provider_instance(db, provider)?;
         plan.request_impl = Some(request.site.range);
         plan.request_slot = request.slot;
-        requests.push(plan);
+        plans.push(plan);
     }
-    debug_assert_eq!(
-        requests.len() - sealed_len,
-        sites.len(),
-        "every request has a site"
-    );
+    debug_assert_eq!(plans.len(), sites.len(), "every request has a site");
+    Ok((plans, sites))
+}
+
+/// The rounds of one preparation transaction over its modules, in the working
+/// database `db`. `sealed` is the output of the ingots the modules depend on,
+/// already prepared and part of every view; `own` and `sites` are the result
+/// of `run_authored_requests`. Each round moves `db` to the output view, which
+/// holds the plan so far, and discovers the scoped demands there; the demands
+/// are then served in the input view over `sealed`. A standalone transaction
+/// also admits the whole output once, as before; a package view is returned
+/// with its ordinary diagnostics for consumers to report. Only owned data
+/// (URLs, ranges, frozen requests, demands) passes from one view to the next.
+/// On completion `db` is in the output view and the result is the requests the
+/// transaction added to `sealed`.
+fn serve_rounds(
+    db: &mut DriverDataBase,
+    transaction: &Transaction<'_>,
+    sealed: Vec<common::generation::FrozenGenerationRequest>,
+    own: Vec<common::generation::FrozenGenerationRequest>,
+    sites: Vec<RequestSite>,
+) -> Result<Preparation, GenerationError> {
+    let basis = &transaction.basis;
+    let modules = transaction.modules;
+    let (standalone_root, max_rounds) = (transaction.standalone_root, transaction.max_rounds);
+    let sealed_len = sealed.len();
+    let mut requests = sealed;
+    requests.extend(own);
     let own = sealed_len..requests.len();
+    let error_at = |file: &url::Url, range, cause| GenerationError {
+        file: file.clone(),
+        range,
+        cause,
+    };
+    let fallback_file = &modules[0];
+    let whole_input = standalone_root.unwrap_or_else(|| parser::TextRange::empty(0.into()));
+    let mut completed = std::collections::HashSet::new();
     // The first request of the last round, for the limit's message.
     let mut last_round_first = None;
     // Every retry starts from unchanged authored text and the cumulative plan.
     // A bounded transaction never recursively treats generated output as input.
     for _ in 0..max_rounds {
-        let output = prepared_view(db, basis, &requests);
+        enter_output_view(db, &requests);
+        let output = &*db;
         let output_module = |url: &url::Url| {
             let file = output
                 .workspace()
-                .get(&output, url)
+                .get(output, url)
                 .expect("prepared view keeps every authored file");
             (file, output.top_mod(file))
         };
         for url in modules {
-            check_preparation_module(&output, url)?;
+            check_preparation_module(output, url)?;
         }
         // A generated header is not eligible merely because it was lowered.
         // Validate conformance before retrying any goal against the new plan.
         for request in &requests[sealed_len..] {
-            check_scoped_implementation(&output, request)?;
+            check_scoped_implementation(output, request)?;
         }
-        let pending =
-            package_preparation_demands(&output, modules, transaction.dependency_openings);
+        let pending = package_preparation_demands(output, modules, transaction.dependency_openings);
         if !pending.is_empty() {
             let mut new_requests = Vec::new();
             let mut batch = std::collections::HashSet::new();
@@ -1474,11 +1513,20 @@ fn admit_requests(
             if !dependency_demands.is_empty() {
                 return Ok(Preparation::NeedsDependencies(dependency_demands));
             }
-            // The prepared view only reports which implementations are wanted.
+            // The output view only reports which implementations are wanted.
             // Every provider is admitted and run in the input view, the same one
             // that header providers run in, so no provider reads
             // what another provider produced and the demands of one round are
-            // independent of each other.
+            // independent of each other. The type-definition cycle search is
+            // entered first in it, as in every other view.
+            enter_input_view(db, &requests[..sealed_len]);
+            {
+                let first = db
+                    .workspace()
+                    .get(db, &modules[0])
+                    .expect("the working database keeps every authored file");
+                analyze_type_definitions_first(db, db.top_mod(first));
+            }
             for demand in pending {
                 let file = demand.opening.file.clone();
                 let range = demand.opening.binding_range;
@@ -1495,11 +1543,11 @@ fn admit_requests(
                     ));
                 }
                 completed.insert(demand.clone());
-                checked.push(check_scoped_request(db, demand)?);
+                checked.push(check_scoped_request(&*db, demand)?);
             }
             // Every provider of the round is admitted before any runs.
             for request in checked {
-                new_requests.push(run_scoped_request(db, request)?);
+                new_requests.push(run_scoped_request(&*db, request)?);
             }
             last_round_first = examined
                 .first()
@@ -1511,19 +1559,19 @@ fn admit_requests(
             requests: &requests[own.clone()],
             sites: &sites,
         };
-        check_conservative_extension(&output, modules, &requested)?;
+        check_conservative_extension(output, modules, &requested)?;
         if let ViewBasis::Standalone(_) = basis {
             let (_, module) = output_module(fallback_file);
             let diagnostics = output.run_on_top_mod(module);
-            if diagnostics.has_errors(&output) {
-                let complete = diagnostics.finalize(&output);
+            if diagnostics.has_errors(output) {
+                let complete = diagnostics.finalize(output);
                 // Written errors are reported by the ordinary check of the prepared view.
                 if complete.iter().any(|diagnostic| {
                     matches!(diagnostic.severity, common::diagnostics::Severity::Error)
-                        && !in_written_code(&output, diagnostic)
+                        && !in_written_code(output, diagnostic)
                 }) {
                     return Err(diagnostic_error(
-                        &output,
+                        output,
                         &complete,
                         error_at(
                             fallback_file,
@@ -1535,12 +1583,9 @@ fn admit_requests(
             }
             drop(diagnostics);
         }
-        return Ok(Preparation::Complete(
-            output,
-            requests.split_off(sealed_len),
-        ));
+        return Ok(Preparation::Complete(requests.split_off(sealed_len)));
     }
-    // A round rebuilds the whole view, so the limit bounds the work spent.
+    // Each round checks the whole output view, so the limit bounds the work spent.
     let (file, range) = last_round_first.unwrap_or_else(|| (fallback_file.clone(), whole_input));
     Err(error_at(
         &file,
@@ -2121,30 +2166,50 @@ fn provider_error(
     )
 }
 
-/// The authored text of `basis` as the one view every provider runs in, with
-/// the `sealed` output of the ingots it depends on as ordinary code. Written
-/// implementation headers, `impl Trait for T with (Provider)`, that no sealed
-/// output serves are implementors in it whose members are unavailable. What
-/// generation produces in the ingot being prepared is absent. It is a copy, so
-/// the caller's authored view is unchanged.
-fn input_view(
-    db: &DriverDataBase,
-    basis: &ViewBasis<'_>,
-    sealed: &[common::generation::FrozenGenerationRequest],
-) -> DriverDataBase {
-    let mut view = prepared_view(db, basis, sealed);
-    view.generation_inputs()
-        .set_declared_headers(&mut view)
-        .to(true);
-    view
+/// Sets the generation inputs of `db`, writing only fields that differ. A
+/// transaction moves one working database between its views with it, so the
+/// queries that do not read a changed field keep their memos.
+fn set_view(
+    db: &mut DriverDataBase,
+    declared_headers: bool,
+    requests: &[common::generation::FrozenGenerationRequest],
+) {
+    let inputs = db.generation_inputs();
+    if *inputs.declared_headers(db) != declared_headers {
+        inputs.set_declared_headers(db).to(declared_headers);
+    }
+    if inputs.requests(db).as_slice() != requests {
+        inputs.set_requests(db).to(requests.to_vec());
+    }
 }
 
-fn prepared_view(
-    db: &DriverDataBase,
-    basis: &ViewBasis<'_>,
+/// The input view over `sealed`: the authored text, the `sealed` output of the
+/// ingots the modules depend on as ordinary code, and the implementation
+/// headers an author wrote, `impl Trait for T with (Provider)`, that no sealed
+/// output serves as implementors whose members are unavailable. What
+/// generation produces in the ingot being prepared is absent. Every provider is
+/// admitted and evaluated in it.
+fn enter_input_view(
+    db: &mut DriverDataBase,
+    sealed: &[common::generation::FrozenGenerationRequest],
+) {
+    set_view(db, true, sealed);
+}
+
+/// The output view over `requests`: the authored text with every request
+/// served. The prepared program is read in it.
+fn enter_output_view(
+    db: &mut DriverDataBase,
     requests: &[common::generation::FrozenGenerationRequest],
-) -> DriverDataBase {
-    let mut output = match basis {
+) {
+    set_view(db, false, requests);
+}
+
+/// A copy of the authored inputs of `basis`, in the authored view. It reads no
+/// generation input, so it may copy from a database in any view. The caller's
+/// database is unchanged. Database-local identities do not carry over.
+fn copy_view(db: &DriverDataBase, basis: &ViewBasis<'_>) -> DriverDataBase {
+    let mut copy = match basis {
         // The file over the builtin sources of the database it is prepared in,
         // which may differ from the embedded ones (`fe doc --stdlib-path`).
         ViewBasis::Standalone(file) => {
@@ -2161,19 +2226,13 @@ fn prepared_view(
             !url.path().ends_with(".fe") || is_embedded_builtin(url) || sources.contains(url)
         }),
     };
-    output
-        .compilation_settings()
-        .set_target(&mut output)
+    copy.compilation_settings()
+        .set_target(&mut copy)
         .to(db.compilation_settings().target(db));
-    output
-        .compilation_settings()
-        .set_platform(&mut output)
+    copy.compilation_settings()
+        .set_platform(&mut copy)
         .to(db.compilation_settings().platform(db));
-    output
-        .generation_inputs()
-        .set_requests(&mut output)
-        .to(requests.to_vec());
-    output
+    copy
 }
 
 /// A provider instance that admission accepted and that has not run: every
@@ -2542,5 +2601,38 @@ mod round_limit_tests {
         let start = usize::from(error.range.start());
         let end = usize::from(error.range.end());
         assert_eq!(&source[start..end], "Provider", "{error}");
+    }
+
+    /// The working database that a transaction moves between its views answers
+    /// as a database copied for the output view: same requests, same
+    /// diagnostics of the prepared program.
+    #[test]
+    fn views_moved_in_place_match_fresh_copies() {
+        let source = breadth(12);
+        let mut db = DriverDataBase::default();
+        let url = url::Url::parse(FILE).unwrap();
+        let file = db
+            .workspace()
+            .touch(&mut db, url.clone(), Some(source.clone()));
+        let moved = prepare_file(&db, file)
+            .unwrap()
+            .expect("the source requests generation");
+        let requests = moved.generation_inputs().requests(&moved);
+        assert!(!requests.is_empty());
+
+        let mut fresh = copy_view(&db, &ViewBasis::Standalone(file));
+        enter_output_view(&mut fresh, requests);
+        assert_eq!(fresh.generation_inputs().requests(&fresh), requests);
+        assert!(!fresh.generation_inputs().declared_headers(&fresh));
+        assert!(!moved.generation_inputs().declared_headers(&moved));
+
+        let diagnostics = |view: &DriverDataBase| {
+            let file = view
+                .workspace()
+                .get(view, &url)
+                .expect("the view keeps the source file");
+            view.run_on_top_mod(view.top_mod(file)).format_diags(view)
+        };
+        assert_eq!(diagnostics(&moved), diagnostics(&fresh));
     }
 }
