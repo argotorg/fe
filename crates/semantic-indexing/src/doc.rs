@@ -43,7 +43,6 @@ pub fn regenerate(db: &driver::DriverDataBase) -> (String, Option<String>) {
     let standalone_files: Vec<url::Url> = db
         .workspace()
         .all_files(db)
-        .iter()
         .filter_map(|(url, _file)| {
             if db.workspace().containing_ingot(db, url.clone()).is_none() {
                 Some(url)

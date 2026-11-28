@@ -10,7 +10,7 @@ use crate::{
     config::{ArithmeticMode, Config, IngotConfig, WorkspaceConfig, resolve_arithmetic_mode},
     dependencies::DependencyLocation,
     file::{File, Workspace},
-    stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL},
+    stdlib::{BUILTIN_CORE_BASE_URL, BUILTIN_STD_BASE_URL, is_embedded_builtin},
     urlext::UrlExt,
 };
 
@@ -168,10 +168,15 @@ impl<'db> Ingot<'db> {
         self.parse_config(db).as_ref()?.as_ref().err().cloned()
     }
 
+    /// The root of the workspace this ingot is a member of. An embedded
+    /// library is a member of none, and does not read the dependency graph.
     #[salsa::tracked]
     pub fn workspace_root(self, db: &'db dyn InputDb) -> Option<Url> {
-        db.dependency_graph()
-            .workspace_root_for_member(db, self.base(db))
+        let base = self.base(db);
+        if is_embedded_builtin(base) {
+            return None;
+        }
+        db.dependency_graph().workspace_root_for_member(db, base)
     }
 
     #[salsa::tracked(returns(copy))]
@@ -207,11 +212,15 @@ impl<'db> Ingot<'db> {
             .cloned()
     }
 
+    /// The arithmetic mode of this ingot's code. No dependent can force an
+    /// embedded library's mode, so it does not read the dependency graph.
     #[salsa::tracked(returns(copy))]
     pub fn arithmetic_mode(self, db: &'db dyn InputDb) -> Option<ArithmeticMode> {
-        if let Some(mode) = db
-            .dependency_graph()
-            .forced_dependency_arithmetic_for(db, self.base(db))
+        let base = self.base(db);
+        if !is_embedded_builtin(base)
+            && let Some(mode) = db
+                .dependency_graph()
+                .forced_dependency_arithmetic_for(db, base)
         {
             return Some(mode);
         }
@@ -228,64 +237,66 @@ impl<'db> Ingot<'db> {
         self.config(db).as_ref()?.metadata.version.clone()
     }
 
+    /// The ingots this ingot depends on, by alias. An embedded `std`
+    /// depends on the embedded `core`, and an embedded `core` on nothing;
+    /// neither reads the dependency graph.
     #[salsa::tracked]
     pub fn dependencies(self, db: &'db dyn InputDb) -> Vec<(SmolStr, Url)> {
         let kind = self.kind(db);
         let base_url = self.base(db);
-        let skip_config = matches!((kind, base_url.scheme()), (IngotKind::Std, "builtin-std"));
+        if is_embedded_builtin(base_url) {
+            return match kind {
+                IngotKind::Core => Vec::new(),
+                _ => vec![(
+                    "core".into(),
+                    Url::parse(BUILTIN_CORE_BASE_URL).expect("couldn't parse core ingot URL"),
+                )],
+            };
+        }
 
-        let mut deps = if skip_config {
-            Vec::new()
+        let graph_deps = db.dependency_graph().direct_dependencies(db, base_url);
+        let mut deps = if !graph_deps.is_empty() {
+            graph_deps
         } else {
-            let graph_deps = db
-                .dependency_graph()
-                .direct_dependencies(db, base_url)
-                .into_iter()
-                .collect::<Vec<_>>();
-
-            if !graph_deps.is_empty() {
-                graph_deps
-            } else {
-                match self.config(db) {
-                    Some(config) => {
-                        let (dependencies, _) = config.dependencies(base_url);
-                        dependencies
-                            .into_iter()
-                            .filter_map(|dependency| {
-                                let url = match &dependency.location {
-                                    DependencyLocation::Remote(remote) => db
+            match self.config(db) {
+                Some(config) => {
+                    let (dependencies, _) = config.dependencies(base_url);
+                    dependencies
+                        .into_iter()
+                        .filter_map(|dependency| {
+                            let url = match &dependency.location {
+                                DependencyLocation::Remote(remote) => db
+                                    .dependency_graph()
+                                    .local_for_remote_git(db, remote)
+                                    .unwrap_or_else(|| remote.source.clone()),
+                                DependencyLocation::Local(local) => local.url.clone(),
+                                DependencyLocation::WorkspaceCurrent => {
+                                    let name = dependency.arguments.name.clone()?;
+                                    let workspace_root = db
                                         .dependency_graph()
-                                        .local_for_remote_git(db, remote)
-                                        .unwrap_or_else(|| remote.source.clone()),
-                                    DependencyLocation::Local(local) => local.url.clone(),
-                                    DependencyLocation::WorkspaceCurrent => {
-                                        let name = dependency.arguments.name.clone()?;
-                                        let workspace_root = db
-                                            .dependency_graph()
-                                            .workspace_root_for_member(db, base_url)?;
-                                        let candidates = db
-                                            .dependency_graph()
-                                            .workspace_members_by_name(db, &workspace_root, &name);
-                                        let selected =
-                                            if let Some(version) = &dependency.arguments.version {
-                                                candidates.iter().find(|member| {
-                                                    member.version.as_ref() == Some(version)
-                                                })
-                                            } else if candidates.len() == 1 {
-                                                candidates.first()
-                                            } else {
-                                                None
-                                            };
-                                        let member = selected?;
-                                        member.url.clone()
-                                    }
-                                };
-                                Some((dependency.alias, url))
-                            })
-                            .collect()
-                    }
-                    None => vec![],
+                                        .workspace_root_for_member(db, base_url)?;
+                                    let candidates = db
+                                        .dependency_graph()
+                                        .workspace_members_by_name(db, &workspace_root, &name);
+                                    let selected =
+                                        if let Some(version) = &dependency.arguments.version {
+                                            candidates.iter().find(|member| {
+                                                member.version.as_ref() == Some(version)
+                                            })
+                                        } else if candidates.len() == 1 {
+                                            candidates.first()
+                                        } else {
+                                            None
+                                        };
+                                    let member = selected?;
+                                    member.url.clone()
+                                }
+                            };
+                            Some((dependency.alias, url))
+                        })
+                        .collect()
                 }
+                None => vec![],
             }
         };
 

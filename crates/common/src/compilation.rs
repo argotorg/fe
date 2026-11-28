@@ -1,5 +1,6 @@
 use std::fmt;
 
+use salsa::Durability;
 use smol_str::SmolStr;
 
 use crate::{InputDb, layout::MemoryLayout};
@@ -209,6 +210,9 @@ impl fmt::Display for Platform {
     }
 }
 
+/// The settings of a compilation. They rarely change, so they have medium
+/// durability: a query over the builtins that reads them stays verified
+/// without walking its dependencies when the user's files change.
 #[salsa::input]
 #[derive(Debug)]
 pub struct CompilationSettings {
@@ -224,6 +228,8 @@ pub struct CompilationSettings {
 #[salsa::tracked]
 impl CompilationSettings {
     pub fn default(db: &dyn InputDb) -> Self {
-        Self::new(db, SmolStr::new("dev"), Target::Evm, None)
+        Self::builder(SmolStr::new("dev"), Target::Evm, None)
+            .durability(Durability::MEDIUM)
+            .new(db)
     }
 }

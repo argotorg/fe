@@ -48,17 +48,18 @@ impl BuiltinLibrary {
 /// Returns whether `ingot` is authorized to act as compiler-provided library
 /// source.
 ///
-/// Embedded libraries carry authority in their URL scheme. A source workspace
-/// may explicitly replace one by registering a unique member under the
-/// reserved `core` or `std` name; config metadata alone is not authoritative.
+/// Embedded libraries carry authority in their URL scheme, and do not read the
+/// dependency graph. A source workspace may explicitly replace one by
+/// registering a unique member under the reserved `core` or `std` name; config
+/// metadata alone is not authoritative.
 pub fn is_authorized_builtin_library(
     db: &dyn InputDb,
     ingot: Ingot<'_>,
     library: BuiltinLibrary,
 ) -> bool {
     let base = ingot.base(db);
-    if base.scheme() == library.scheme() {
-        return true;
+    if is_embedded_builtin(base) {
+        return base.scheme() == library.scheme();
     }
     let graph = db.dependency_graph();
     let Some(workspace_root) = graph.workspace_root_for_member(db, base) else {
@@ -129,8 +130,11 @@ fn load_library_dir(db: &mut dyn InputDb, base_url: &str, root: &Utf8Path) -> Re
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| "Library path escaped root".to_string())?;
+            // A builtin URL's scheme is not special, so `\` in a Windows path
+            // would not separate its segments.
+            let segments: Vec<_> = relative.components().map(|c| c.as_str()).collect();
             let url = base
-                .join(relative.as_str())
+                .join(&segments.join("/"))
                 .map_err(|_| "Failed to join library path".to_string())?;
             let content = fs::read_to_string(path.as_std_path())
                 .map_err(|err| format!("Failed to read {path}: {err}"))?;

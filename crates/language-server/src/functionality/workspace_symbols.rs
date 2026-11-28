@@ -18,7 +18,7 @@ pub async fn handle_workspace_symbols(
 
     // Iterate through all files in the workspace
     let workspace = backend.db.workspace();
-    for (url, file) in workspace.all_files(&backend.db).iter() {
+    for (url, file) in workspace.all_files(&backend.db) {
         // Only process .fe files
         if !url.path().ends_with(".fe") {
             continue;
