@@ -47,18 +47,33 @@ flowchart TD
   on its own path. The resume block destroys what the scopes the yield
   leaves hold: before the slide, those of a `yield` statement's operand,
   whose own scope holds its temporaries and the bindings of an access block
-  in it, which has no scope of its own; or every scope. A
-  compound yield site, a tuple or variant constructor, yields once after
-  its elements: a block among them passes what it holds to the enclosing
-  scope, a branch of an `if` or `match` among them destroys what it holds
-  where it ends, and a `return` or `yield` statement inside one yields on
-  its own.
+  in it, which has no scope of its own; or every scope. A tuple or variant
+  constructor yielded takes its elements in order on each path and yields
+  its value at the end of each. An element whose shape holds an access is
+  a yield site: one that branches continues the constructor in each
+  branch, with the branch's scopes open, so the elements after it are
+  lowered once per path, each lowering with locals of its own for the
+  bindings declared in it. An owned element is no yield site and is
+  lowered as a value in place. A block ending in a statement or an `if`
+  without `else` that is a yield site, an access to `()`, grants a frame
+  temporary holding `()` within its scope. A `return` or `yield` statement
+  inside one yields on its own.
 - `end` elaboration (`lower/elaborate.rs`) computes liveness on the raw body.
   An access (a borrow or a projection call's session) stays open while its
   carrier or any carrier derived from it may be used. It ends right after its
   last use on each path; an access that dies on a control-flow edge ends at
   the start of the successor, on an edge block of its own when the successor
-  has other predecessors. The accesses ending at one point end newest first,
+  has other predecessors. A `with` provider that is a projection's result
+  gets a drop scope of its own, begun right after it is lowered, which
+  holds its carrier: each exit of the scope records a `Hold`, a use of the
+  carrier and nothing else, after the drops of its owners, all newer than
+  it, so the session lasts at least until the block, or a later provider's
+  expression, is left. A yield site inside the block yields with the scope
+  open, so it ends where that path's session resumes, as a `yield`
+  statement's operand does. A path that ends execution (`Unreachable`, `Fail`)
+  holds every such carrier at its terminator, and elaboration ends nothing
+  held there, so no slide runs; a loop no `break` leaves holds them at its
+  header. The accesses ending at one point end newest first,
   so an access ends before any access it depends on: a session finishes
   before the borrow passed to its call closes, and its slide can still write
   through the borrow.

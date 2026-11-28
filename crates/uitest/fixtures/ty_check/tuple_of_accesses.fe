@@ -7,3 +7,33 @@ fn safe_tuple(_ xs: mut MemArray<u256>, _ ys: mut MemArray<u256>) {
     x = 1
     y = 2
 }
+
+struct Quad { a: u256, b: u256, c: u256 }
+
+fn get_ref(_ q: ref Quad) -> ref u256 {
+    ref q.c
+}
+
+fn get_mut(_ q: mut Quad) -> mut u256 {
+    mut q.c
+}
+
+// Rejected: an owned element of a yielded tuple is an ordinary element.
+fn owned_ref_element(_ q: mut Quad) -> (u256, mut u256) {
+    (get_ref(ref q), mut q.a)
+}
+
+fn owned_mut_element(_ q: mut Quad) -> (u256, mut u256) {
+    (get_mut(mut q), mut q.b)
+}
+
+// Accepted: an element whose shape is an access yields the grant.
+fn granted_element(_ q: ref Quad) -> (ref u256, ref u256) {
+    (get_ref(ref q), ref q.a)
+}
+
+// Accepted: a `let` copies the `ref` result of a `Copy` type first.
+fn copied_element(_ q: mut Quad) -> (u256, mut u256) {
+    let v = get_ref(ref q)
+    (v, mut q.a)
+}

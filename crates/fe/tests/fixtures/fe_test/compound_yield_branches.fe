@@ -1,0 +1,1177 @@
+use core::Option
+use core::ops::Drop
+use core::ptr
+
+// A tuple or variant constructor a projection yields takes its elements in
+// order on each path, so a branch of an element yields on its own path, with
+// its scope open until the session resumes. Each event appends a digit to a
+// trace a raw pointer reaches, so destructors log too:
+//
+// 1-4 an element is evaluated, or a binding of a branch is destroyed
+// 5 the caller uses the grant        6 the caller sees the empty variant
+// 9 the `yield` statement's slide runs
+fn log(_ trace: *u256, _ event: u256) {
+    unsafe { *trace = *trace * 10 + event }
+}
+
+fn new_trace() -> *u256 {
+    let trace = ptr::alloc<u256>()
+    unsafe { *trace = 0 }
+    trace
+}
+
+fn read(_ trace: *u256) -> u256 {
+    unsafe { *trace }
+}
+
+struct Guard {
+    trace: *u256,
+    event: u256,
+}
+
+impl Drop for Guard {
+    fn drop(own self) {
+        log(self.trace, self.event)
+    }
+}
+
+struct Quad {
+    a: u256,
+    b: u256,
+    c: u256,
+    d: u256,
+}
+
+fn quad() -> Quad {
+    Quad { a: 0, b: 0, c: 0, d: 0 }
+}
+
+fn sum(_ q: Quad) -> u256 {
+    q.a * 1000 + q.b * 100 + q.c * 10 + q.d
+}
+
+fn bump(_ x: mut u256, _ trace: *u256) {
+    log(trace, 5)
+    x += 1
+}
+
+fn look(_ x: ref u256, _ trace: *u256) -> u256 {
+    log(trace, 5)
+    x
+}
+
+fn look_guard(_ guard: ref Guard) {
+    log(guard.trace, 5)
+}
+
+// Branches ending in accesses, in a `yield` statement and in the tail.
+fn pick(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        mut q.b
+    })
+    log(trace, 9)
+}
+
+fn pick_tail(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        mut q.b
+    })
+}
+
+// An owned element is an ordinary value: no access comes out of it, so
+// what its branches bind ends with them, before the next element.
+fn counted(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        7
+    } else {
+        let _h = Guard { trace, event: 4 }
+        8
+    }, mut q.a)
+    log(trace, 9)
+}
+
+// The grant borrows a binding of the branch that reaches the yield.
+fn guarded(_ trace: *u256, _ c: bool) -> Option<ref Guard> {
+    yield Option::Some(if c {
+        return Option::None
+    } else {
+        let g = Guard { trace, event: 2 }
+        ref g
+    })
+    log(trace, 9)
+}
+
+// A `return` in one branch yields on its own.
+fn returned(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+        return Option::Some(mut q.b)
+    } else {
+        let _h = Guard { trace, event: 4 }
+        mut q.a
+    })
+    log(trace, 9)
+}
+
+fn arms(_ q: mut Quad, _ trace: *u256, _ k: u256) -> Option<mut u256> {
+    yield Option::Some(match k {
+        0 => {
+            let _g = Guard { trace, event: 3 }
+            mut q.a
+        }
+        1 => mut q.b
+        _ => {
+            let _h = Guard { trace, event: 4 }
+            mut q.c
+        }
+    })
+    log(trace, 9)
+}
+
+// Two branching elements: four paths, each with its own grants.
+fn two(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> (mut u256, mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        mut q.b
+    }, if d {
+        let _h = Guard { trace, event: 4 }
+        mut q.c
+    } else {
+        mut q.d
+    })
+    log(trace, 9)
+}
+
+// The elements around a branching one run once on each path, in order.
+fn ordered(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (mut u256, mut u256, mut u256) {
+    yield ({
+        log(trace, 1)
+        mut q.a
+    }, if c {
+        log(trace, 2)
+        mut q.b
+    } else {
+        log(trace, 3)
+        mut q.c
+    }, {
+        log(trace, 4)
+        mut q.d
+    })
+    log(trace, 9)
+}
+
+fn nested(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<(mut u256, mut u256)> {
+    yield Option::Some((if c {
+        let _g = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        mut q.b
+    }, mut q.c))
+    log(trace, 9)
+}
+
+// An element that is a sum shape: one branch builds its empty variant.
+fn maybe(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Option<mut u256>, mut u256) {
+    yield (if c {
+        Option::None
+    } else {
+        Option::Some(mut q.a)
+    }, mut q.b)
+    log(trace, 9)
+}
+
+fn either(_ q: mut? Quad, _ trace: *u256, _ c: bool) -> Option<mut? u256> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+        mut? q.a
+    } else {
+        mut? q.b
+    })
+    log(trace, 9)
+}
+
+// A branch whose sibling never returns.
+fn diverging(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        panic()
+    })
+    log(trace, 9)
+}
+
+fn reborrow(_ x: mut u256) -> mut u256 {
+    yield mut x
+}
+
+// Each path lowers the elements after a branching one anew, with bindings
+// of its own, so an access bound there lives across the element's blocks
+// on each path.
+fn rebound(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> (mut u256, mut u256) {
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        let _g = Guard { trace, event: 3 }
+        let r = mut reborrow(mut q.c)
+        var i: u256 = 0
+        while i < 2 {
+            i += 1
+        }
+        if d {
+            mut r
+        } else {
+            mut q.d
+        }
+    })
+    log(trace, 9)
+}
+
+fn rebound_owned(_ q: mut Quad, _ c: bool) -> (u256, mut u256) {
+    (if c { 1 } else { 2 }, {
+        let r = mut q.c
+        var i: u256 = 0
+        while i < 1 {
+            i += 1
+        }
+        mut r
+    })
+}
+
+fn rebound_ref(_ q: ref Quad, _ c: bool, _ d: bool) -> (ref u256, ref u256) {
+    (if c { ref q.a } else { ref q.b }, {
+        let r = ref q.c
+        if d {
+            ref r
+        } else {
+            ref q.d
+        }
+    })
+}
+
+// Elements of `()` are owned: a block ending in a statement and an `if`
+// without `else` end where they end, before the next element.
+fn units(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((), (), (), mut u256) {
+    yield ({}, {
+        let _g = Guard { trace, event: 3 }
+    }, if c {
+        let _h = Guard { trace, event: 4 }
+        log(trace, 2)
+    }, mut q.a)
+    log(trace, 9)
+}
+
+fn units_tail(_ q: mut Quad) -> ((), mut u256) {
+    ({}, mut q.a)
+}
+
+// An owned tuple inside an element is an ordinary value as an owned element
+// is: what its branches bind ends with them, before the yield.
+fn owned_inner(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((u256, u256), mut u256) {
+    yield ((if c {
+        let _g = Guard { trace, event: 3 }
+        1
+    } else {
+        2
+    }, 3), mut q.a)
+    log(trace, 9)
+}
+
+struct Six {
+    a: u256,
+    b: u256,
+    c: u256,
+    d: u256,
+    e: u256,
+    f: u256,
+}
+
+fn three(_ q: mut Six, _ trace: *u256, _ x: bool, _ y: bool, _ z: bool) -> (mut u256, mut u256, mut u256) {
+    yield (if x {
+        let _a = Guard { trace, event: 1 }
+        mut q.a
+    } else {
+        mut q.b
+    }, if y {
+        let _b = Guard { trace, event: 2 }
+        mut q.c
+    } else {
+        mut q.d
+    }, if z {
+        let _c = Guard { trace, event: 3 }
+        mut q.e
+    } else {
+        mut q.f
+    })
+    log(trace, 9)
+}
+
+fn arm_branch(_ q: mut Quad, _ trace: *u256, _ k: u256, _ c: bool) -> Option<mut u256> {
+    yield Option::Some(match k {
+        0 => if c {
+            let _g = Guard { trace, event: 3 }
+            mut q.a
+        } else {
+            mut q.b
+        }
+        _ => mut q.c
+    })
+    log(trace, 9)
+}
+
+fn in_block(_ q: mut Quad, _ trace: *u256, _ c: bool) -> Option<mut u256> {
+    {
+        let _mid = Guard { trace, event: 4 }
+        Option::Some(if c {
+            let _g = Guard { trace, event: 3 }
+            mut q.a
+        } else {
+            mut q.b
+        })
+    }
+}
+
+// A loop around the `yield`: a branch leaves the compound by `continue` or
+// `break`, without yielding.
+fn looped(_ q: mut Quad, _ trace: *u256, _ skips: u256, _ quit: bool) -> Option<mut u256> {
+    var left = skips
+    loop {
+        yield Option::Some(if left > 0 {
+            let _g = Guard { trace, event: 2 }
+            left -= 1
+            continue
+        } else if quit {
+            let _h = Guard { trace, event: 3 }
+            break
+        } else {
+            let _k = Guard { trace, event: 4 }
+            mut q.a
+        })
+        log(trace, 9)
+        return
+    }
+    yield Option::None
+}
+
+fn either_then(_ q: mut? Quad, _ trace: *u256, _ c: bool) -> (mut? u256, ref u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        mut? q.a
+    } else {
+        mut? q.b
+    }, {
+        log(trace, 1)
+        ref q.c
+    })
+    log(trace, 9)
+}
+
+// An owned `Drop` value in the first element is moved into the tuple on
+// each path, or destroyed when a branch returns instead.
+fn handed(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Guard, mut u256) {
+    yield (Guard { trace, event: 2 }, if c {
+        let _h = Guard { trace, event: 3 }
+        mut q.a
+    } else {
+        return (Guard { trace, event: 4 }, mut q.b)
+    })
+    log(trace, 9)
+}
+
+fn handed_both(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Guard, mut u256) {
+    yield (Guard { trace, event: 2 }, if c {
+        mut q.a
+    } else {
+        mut q.b
+    })
+    log(trace, 9)
+}
+
+fn look_unit(_ u: ref (), _ trace: *u256) {
+    log(trace, 5)
+}
+
+// An access to `()` that a block ending in a statement or an `if` without
+// `else` yields grants a frame temporary holding it, as `()` itself does.
+fn unit_block(_ trace: *u256) -> ref () {
+    let _g = Guard { trace, event: 3 }
+}
+
+fn unit_empty() -> ref () {}
+
+fn unit_if(_ trace: *u256, _ c: bool) -> ref () {
+    if c {
+        let _g = Guard { trace, event: 3 }
+        ()
+    }
+}
+
+fn unit_mut(_ trace: *u256, _ c: bool) -> mut () {
+    yield if c {
+        let _g = Guard { trace, event: 3 }
+    }
+    log(trace, 9)
+}
+
+fn unit_pair(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (ref (), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+    }, mut q.a)
+    log(trace, 9)
+}
+
+fn unit_some(_ trace: *u256, _ c: bool) -> Option<ref ()> {
+    yield Option::Some(if c {
+        let _g = Guard { trace, event: 3 }
+    })
+    log(trace, 9)
+}
+
+// A `var` declared before the compound and assigned in an element lowered
+// on each path keeps one local, held by the block declaring it.
+fn assigned_late(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
+    var late: Guard
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        late = Guard { trace, event: 4 }
+        mut q.c
+    })
+    log(trace, 9)
+}
+
+// A closure in an element lowered on each path captures the outer `let`,
+// the outer `var` and the element's own `let`.
+fn captured(_ q: mut Quad, _ c: bool) -> (mut u256, mut u256) {
+    let outer: u256 = 3
+    var given: u256
+    yield (if c {
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        given = 4
+        let inner: u256 = 5
+        let f = || outer + given + inner
+        q.d = f()
+        mut q.c
+    })
+    q.d += 0
+}
+
+// A compound inside element 0's branch uses a binding of that branch.
+fn branch_binding(_ q: mut Quad, _ c: bool, _ d: bool) -> Option<(mut u256, u256)> {
+    yield Option::Some(if c {
+        let x: u256 = 42
+        (if d { mut q.a } else { mut q.b }, x)
+    } else {
+        (mut q.c, 7)
+    })
+    q.d += 0
+}
+
+fn diverging_then(_ q: mut Quad, _ trace: *u256, _ c: bool) -> ((), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        return ((), mut q.b)
+    }, mut q.a)
+    log(trace, 9)
+}
+
+fn nested_if(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> ((), mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        if d {
+            let _h = Guard { trace, event: 4 }
+            log(trace, 2)
+        }
+    }, mut q.a)
+    log(trace, 9)
+}
+
+// An owned element between two access elements is evaluated in place, once
+// on each path of the branching element before it, and ends there.
+fn between(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (mut u256, u256, mut u256) {
+    yield (if c {
+        let _a = Guard { trace, event: 2 }
+        mut q.a
+    } else {
+        mut q.b
+    }, {
+        log(trace, 1)
+        let _g = Guard { trace, event: 3 }
+        7
+    }, mut q.c)
+    log(trace, 9)
+}
+
+// An owned `Drop` value built in a block lives on in the tuple, or is
+// destroyed when a later element returns instead.
+fn built_then_returned(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (Guard, mut u256) {
+    yield ({
+        let _x = Guard { trace, event: 3 }
+        Guard { trace, event: 2 }
+    }, if c {
+        mut q.a
+    } else {
+        return (Guard { trace, event: 4 }, mut q.b)
+    })
+    log(trace, 9)
+}
+
+// A `return` inside an owned element yields on its own.
+fn owned_return(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield (if c {
+        let _g = Guard { trace, event: 3 }
+        return (7, mut q.b)
+    } else {
+        let _h = Guard { trace, event: 4 }
+        8
+    }, mut q.a)
+    log(trace, 9)
+}
+
+// In a nested mixed tuple the owned element ends in place, the access
+// element's branch at resume.
+fn mixed(_ q: mut Quad, _ trace: *u256, _ c: bool, _ d: bool) -> ((u256, mut u256), mut u256) {
+    yield ((if c {
+        let _g = Guard { trace, event: 3 }
+        7
+    } else {
+        8
+    }, if d {
+        let _h = Guard { trace, event: 4 }
+        mut q.a
+    } else {
+        mut q.b
+    }), mut q.c)
+    log(trace, 9)
+}
+
+// Owned elements that branch do not multiply the paths: one yield.
+fn owned_branches(_ q: mut Quad, _ x: bool, _ y: bool, _ z: bool) -> (u256, u256, u256, mut u256) {
+    (if x { 1 } else { 2 }, if y { 3 } else { 4 }, if z { 5 } else { 6 }, mut q.a)
+}
+
+// An owned element between two branching access elements keeps an access
+// open across a loop, with locals of its own on each path.
+fn owned_loop(_ q: mut Quad, _ c: bool, _ d: bool) -> (mut u256, u256, mut u256) {
+    yield (if c { mut q.a } else { mut q.b }, {
+        let r = ref q.c
+        var i: u256 = 0
+        while i < 2 {
+            i += 1
+        }
+        r + i
+    }, if d { mut q.d } else { mut q.c })
+    q.d += 0
+}
+
+// An owned `Drop` value is destroyed once when a later element breaks out
+// of an enclosing loop.
+fn broken_tuple(_ q: mut Quad, _ trace: *u256, _ quit: bool) -> (Guard, mut u256) {
+    loop {
+        yield (Guard { trace, event: 2 }, if quit {
+            break
+        } else {
+            mut q.a
+        })
+        log(trace, 9)
+        return
+    }
+    yield (Guard { trace, event: 4 }, mut q.b)
+    log(trace, 8)
+}
+
+// A `yield` statement inside an owned element yields on its own; the
+// element's binding ends with it on the other path.
+fn owned_nested_yield(_ q: mut Quad, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+    yield ({
+        let _g = Guard { trace, event: 3 }
+        if c {
+            yield (7, mut q.b)
+            log(trace, 8)
+            return
+        }
+        8
+    }, mut q.a)
+    log(trace, 9)
+}
+
+#[test]
+fn branches_ending_in_accesses() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = pick(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some(mut x) = pick(mut q, trace, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    if let Option::Some(mut x) = pick_tail(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 53)
+    assert(sum(q) == 2100)
+}
+
+#[test]
+fn branches_ending_in_owned_values() {
+    var q = quad()
+    let trace = new_trace()
+    let (n, mut x) = counted(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 359)
+    let trace = new_trace()
+    let (m, mut y) = counted(mut q, trace, false)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 459)
+}
+
+#[test]
+fn a_grant_of_a_branch_binding() {
+    let trace = new_trace()
+    match guarded(trace, false) {
+        Option::Some(ref g) => look_guard(ref g)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 529)
+    let trace = new_trace()
+    match guarded(trace, true) {
+        Option::Some(ref g) => look_guard(ref g)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 6)
+}
+
+#[test]
+fn a_return_in_a_branch() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = returned(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 53)
+    let trace = new_trace()
+    if let Option::Some(mut x) = returned(mut q, trace, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 549)
+    assert(sum(q) == 1100)
+}
+
+#[test]
+fn match_arms() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = arms(mut q, trace, 0) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some(mut x) = arms(mut q, trace, 1) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    if let Option::Some(mut x) = arms(mut q, trace, 2) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 549)
+    assert(sum(q) == 1110)
+}
+
+#[test]
+fn two_branching_elements() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, mut y) = two(mut q, trace, true, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 55439)
+    let trace = new_trace()
+    let (mut x, mut y) = two(mut q, trace, true, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5539)
+    let trace = new_trace()
+    let (mut x, mut y) = two(mut q, trace, false, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5549)
+    let trace = new_trace()
+    let (mut x, mut y) = two(mut q, trace, false, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 559)
+    assert(sum(q) == 2222)
+}
+
+#[test]
+fn elements_around_a_branch_run_once_in_order() {
+    var q = quad()
+    let trace = new_trace()
+    let (_, mut x, _) = ordered(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 12459)
+    let trace = new_trace()
+    let (_, mut y, _) = ordered(mut q, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 13459)
+    assert(sum(q) == 110)
+}
+
+#[test]
+fn a_branch_in_a_nested_constructor() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some((mut x, _)) = nested(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some((mut x, _)) = nested(mut q, trace, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 59)
+    assert(sum(q) == 1100)
+}
+
+#[test]
+fn an_empty_variant_in_one_branch() {
+    var q = quad()
+    let trace = new_trace()
+    match maybe(mut q, trace, true) {
+        (Option::Some(mut x), _) => bump(mut x, trace)
+        (Option::None, mut y) => {
+            log(trace, 6)
+            bump(mut y, trace)
+        }
+    }
+    assert(read(trace) == 659)
+    let trace = new_trace()
+    match maybe(mut q, trace, false) {
+        (Option::Some(mut x), _) => bump(mut x, trace)
+        (Option::None, mut y) => {
+            log(trace, 6)
+            bump(mut y, trace)
+        }
+    }
+    assert(read(trace) == 59)
+    assert(sum(q) == 1100)
+}
+
+#[test]
+fn a_maybe_mut_branch_at_both_modes() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = either(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some(ref x) = either(ref q, trace, true) {
+        assert(look(ref x, trace) == 1)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some(ref x) = either(ref q, trace, false) {
+        assert(look(ref x, trace) == 0)
+    }
+    assert(read(trace) == 59)
+}
+
+#[test]
+fn a_branch_whose_sibling_never_returns() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = diverging(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+}
+
+#[test]
+fn bindings_of_a_later_element_on_each_path() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, mut y) = rebound(mut q, trace, true, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5539)
+    let trace = new_trace()
+    let (mut x, mut y) = rebound(mut q, trace, false, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(read(trace) == 5539)
+    let (n, mut z) = rebound_owned(mut q, false)
+    z += n
+    let (ref a, ref b) = rebound_ref(ref q, true, true)
+    assert(a == 1 && b == 3)
+    assert(sum(q) == 1131)
+}
+
+#[test]
+fn unit_elements() {
+    var q = quad()
+    let trace = new_trace()
+    let (_, _, _, mut x) = units(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 32459)
+    let trace = new_trace()
+    let (_, _, _, mut y) = units(mut q, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 359)
+    let (_, mut z) = units_tail(mut q)
+    z += 1
+    assert(sum(q) == 3000)
+}
+
+#[test]
+fn an_owned_tuple_in_an_element_is_built_first() {
+    var q = quad()
+    let trace = new_trace()
+    let ((n, m), mut x) = owned_inner(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 1 && m == 3 && read(trace) == 359)
+}
+
+#[test]
+fn three_branching_elements() {
+    var q = Six { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 }
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, true, true, true)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 5553219)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, true, true, false)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 555219)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, true, false, true)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 555319)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, true, false, false)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 55519)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, false, true, true)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 555329)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, false, true, false)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 55529)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, false, false, true)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 55539)
+    let trace = new_trace()
+    let (mut a, mut b, mut c) = three(mut q, trace, false, false, false)
+    bump(mut a, trace)
+    bump(mut b, trace)
+    bump(mut c, trace)
+    assert(read(trace) == 5559)
+    assert(q.a == 4 && q.b == 4 && q.c == 4 && q.d == 4 && q.e == 4 && q.f == 4)
+}
+
+#[test]
+fn a_match_arm_that_branches() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = arm_branch(mut q, trace, 0, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 539)
+    let trace = new_trace()
+    if let Option::Some(mut x) = arm_branch(mut q, trace, 0, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    if let Option::Some(mut x) = arm_branch(mut q, trace, 1, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 59)
+    assert(sum(q) == 1110)
+}
+
+#[test]
+fn a_compound_in_a_nested_tail_block() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = in_block(mut q, trace, true) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 534)
+    let trace = new_trace()
+    if let Option::Some(mut x) = in_block(mut q, trace, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 54)
+}
+
+#[test]
+fn branches_that_continue_or_break_a_loop() {
+    var q = quad()
+    let trace = new_trace()
+    if let Option::Some(mut x) = looped(mut q, trace, 2, false) {
+        bump(mut x, trace)
+    }
+    assert(read(trace) == 22549)
+    let trace = new_trace()
+    match looped(mut q, trace, 1, true) {
+        Option::Some(mut x) => bump(mut x, trace)
+        Option::None => log(trace, 6)
+    }
+    assert(read(trace) == 236)
+    assert(q.a == 1)
+}
+
+#[test]
+fn a_maybe_mut_branch_before_an_effect() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, ref r) = either_then(mut q, trace, true)
+    bump(mut x, trace)
+    assert(r == 0)
+    assert(read(trace) == 1539)
+    let trace = new_trace()
+    let (ref y, ref s) = either_then(ref q, trace, false)
+    assert(look(ref y, trace) == 0 && s == 0)
+    assert(read(trace) == 159)
+}
+
+#[test]
+fn an_owned_drop_value_before_a_branch() {
+    var q = quad()
+    let trace = new_trace()
+    {
+        let (g, mut x) = handed(mut q, trace, true)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 5392)
+    let trace = new_trace()
+    {
+        let (g, mut x) = handed(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 4)
+    }
+    assert(read(trace) == 524)
+    let trace = new_trace()
+    {
+        let (g, mut x) = handed_both(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 592)
+    assert(sum(q) == 1200)
+}
+
+#[test]
+fn unit_accesses_grant_a_frame_temporary() {
+    let trace = new_trace()
+    look_unit(ref unit_block(trace), trace)
+    assert(read(trace) == 53)
+    look_unit(ref unit_empty(), trace)
+    assert(read(trace) == 535)
+    let trace = new_trace()
+    look_unit(ref unit_if(trace, true), trace)
+    look_unit(ref unit_if(trace, false), trace)
+    assert(read(trace) == 535)
+    let trace = new_trace()
+    let u = mut unit_mut(trace, true)
+    look_unit(ref u, trace)
+    assert(read(trace) == 539)
+    var q = quad()
+    let trace = new_trace()
+    let (ref v, mut x) = unit_pair(mut q, trace, true)
+    look_unit(ref v, trace)
+    bump(mut x, trace)
+    assert(read(trace) == 5539)
+    let trace = new_trace()
+    if let Option::Some(ref w) = unit_some(trace, true) {
+        look_unit(ref w, trace)
+    }
+    assert(read(trace) == 539)
+}
+
+#[test]
+fn bindings_around_an_element_lowered_on_each_path() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, _) = assigned_late(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 594)
+    let (_, mut y) = captured(mut q, false)
+    y += 1
+    assert(q.d == 12)
+    if let Option::Some((mut z, n)) = branch_binding(mut q, true, false) {
+        z += n
+    }
+    assert(q.a == 1 && q.b == 42 && q.c == 1 && q.d == 12)
+}
+
+#[test]
+fn else_less_ifs_in_a_compound() {
+    var q = quad()
+    let trace = new_trace()
+    let (_, mut x) = diverging_then(mut q, trace, true)
+    bump(mut x, trace)
+    assert(read(trace) == 53)
+    let trace = new_trace()
+    let (_, mut y) = diverging_then(mut q, trace, false)
+    bump(mut y, trace)
+    assert(read(trace) == 59)
+    let trace = new_trace()
+    let (_, mut z) = nested_if(mut q, trace, true, true)
+    bump(mut z, trace)
+    assert(read(trace) == 24359)
+    let trace = new_trace()
+    let (_, mut w) = nested_if(mut q, trace, true, false)
+    bump(mut w, trace)
+    assert(read(trace) == 359)
+}
+
+#[test]
+fn an_owned_element_between_access_elements() {
+    var q = quad()
+    let trace = new_trace()
+    let (mut x, n, mut y) = between(mut q, trace, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(n == 7 && read(trace) == 135529)
+    let trace = new_trace()
+    let (mut x, m, mut y) = between(mut q, trace, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(m == 7 && read(trace) == 13559)
+    assert(sum(q) == 1120)
+}
+
+#[test]
+fn an_owned_drop_value_then_a_return() {
+    var q = quad()
+    let trace = new_trace()
+    {
+        let (g, mut x) = built_then_returned(mut q, trace, true)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 3592)
+    let trace = new_trace()
+    {
+        let (g, mut x) = built_then_returned(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 4)
+    }
+    assert(read(trace) == 3524)
+}
+
+#[test]
+fn a_return_in_an_owned_element() {
+    var q = quad()
+    let trace = new_trace()
+    let (n, mut x) = owned_return(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 53)
+    let trace = new_trace()
+    let (m, mut y) = owned_return(mut q, trace, false)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 459)
+}
+
+#[test]
+fn a_nested_mixed_tuple() {
+    var q = quad()
+    let trace = new_trace()
+    let ((n, mut x), mut y) = mixed(mut q, trace, true, true)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(n == 7 && read(trace) == 35549)
+    let trace = new_trace()
+    let ((m, mut x), mut y) = mixed(mut q, trace, false, false)
+    bump(mut x, trace)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 559)
+    let (a, b, c, mut z) = owned_branches(mut q, true, false, true)
+    z += a + b + c
+    assert(sum(q) == 11120)
+}
+
+#[test]
+fn an_owned_element_with_an_access_across_a_loop() {
+    var q = quad()
+    let (mut x, n, mut y) = owned_loop(mut q, true, true)
+    x += n
+    y += n
+    let (mut x, m, mut y) = owned_loop(mut q, false, false)
+    x += m
+    y += m
+    assert(sum(q) == 2222)
+}
+
+#[test]
+fn an_owned_drop_value_then_a_break() {
+    var q = quad()
+    let trace = new_trace()
+    {
+        let (g, mut x) = broken_tuple(mut q, trace, true)
+        bump(mut x, trace)
+        assert(g.event == 4)
+    }
+    assert(read(trace) == 2584)
+    let trace = new_trace()
+    {
+        let (g, mut x) = broken_tuple(mut q, trace, false)
+        bump(mut x, trace)
+        assert(g.event == 2)
+    }
+    assert(read(trace) == 592)
+}
+
+#[test]
+fn a_nested_yield_in_an_owned_element() {
+    var q = quad()
+    let trace = new_trace()
+    let (n, mut x) = owned_nested_yield(mut q, trace, true)
+    bump(mut x, trace)
+    assert(n == 7 && read(trace) == 583)
+    let trace = new_trace()
+    let (m, mut y) = owned_nested_yield(mut q, trace, false)
+    bump(mut y, trace)
+    assert(m == 8 && read(trace) == 359)
+}

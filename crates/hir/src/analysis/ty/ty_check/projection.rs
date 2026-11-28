@@ -61,9 +61,12 @@ impl<'db> TyChecker<'db> {
                     self.check_yield_site(*tail, shape);
                 }
             }
-            Expr::If(_, then, Some(else_)) => {
+            // An `if` without `else` yields `()` past it.
+            Expr::If(_, then, else_) => {
                 self.check_yield_site(*then, shape);
-                self.check_yield_site(*else_, shape);
+                if let Some(else_) = else_ {
+                    self.check_yield_site(*else_, shape);
+                }
             }
             Expr::Match(_, Partial::Present(arms)) => {
                 for arm in arms {
@@ -120,9 +123,13 @@ impl<'db> TyChecker<'db> {
                 }
             }
             Shape::Tuple(elems) => match data {
+                // An owned element is an ordinary value: no access comes out
+                // of it, so it holds nothing open across the yield.
                 Expr::Tuple(values) if values.len() == elems.len() => {
                     for (value, elem) in values.iter().zip(elems) {
-                        self.check_yield_site(*value, elem);
+                        if elem.has_access() {
+                            self.check_yield_site(*value, elem);
+                        }
                     }
                 }
                 _ => self.invalid_yield(expr, shape),
@@ -621,9 +628,10 @@ impl<'db> TyChecker<'db> {
                 primary: expr.span(self.body()).into(),
             });
         }
-        // A tuple holds accesses only as a projection's yield, an unsafe split
-        // or a product parameter's argument; elsewhere its projection-call
-        // elements would be copies.
+        // A tuple holds accesses only as yield sites of a projection's yield,
+        // an unsafe split or a product parameter's argument; elsewhere, as in
+        // an owned element of a yield, its projection-call elements would be
+        // copies.
         let tuples = self
             .body()
             .exprs(self.db)
@@ -633,16 +641,20 @@ impl<'db> TyChecker<'db> {
                     return false;
                 };
                 !self.env.is_unsafe_split(expr)
-                    && !self.env.is_yield_site(expr)
                     && !self.env.is_product_arg(expr)
                     && elems.iter().any(|elem| {
-                        !matches!(
-                            elem.data(self.db, self.body()),
-                            Partial::Present(Expr::Un(_, UnOp::Ref | UnOp::Mut | UnOp::MaybeMut))
-                        ) && self
-                            .env
-                            .typed_expr(*elem)
-                            .is_some_and(|prop| matches!(prop.shape, Some(Shape::Access(..))))
+                        !self.env.is_yield_site(*elem)
+                            && !matches!(
+                                elem.data(self.db, self.body()),
+                                Partial::Present(Expr::Un(
+                                    _,
+                                    UnOp::Ref | UnOp::Mut | UnOp::MaybeMut
+                                ))
+                            )
+                            && self
+                                .env
+                                .typed_expr(*elem)
+                                .is_some_and(|prop| matches!(prop.shape, Some(Shape::Access(..))))
                     })
             })
             .collect::<Vec<_>>();

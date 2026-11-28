@@ -1,0 +1,284 @@
+// A `with` provider that is a projection's result is held until control
+// leaves the block, on every exit, so the places its session reserves stay
+// reserved in the whole block: naming one there is a conflict, not a use of
+// the place after the projection's slide has run.
+pub struct Frame { indent: u256, log: u256 }
+
+impl Frame {
+    pub fn clipped(mut self, _ by: u256) -> mut Frame {
+        self.indent += by
+        yield mut self
+        self.indent -= by
+    }
+}
+
+pub fn indented(_ by: u256) -> mut Frame uses (frame: mut Frame) {
+    let old = frame.indent
+    frame.indent = old + by
+    yield mut frame
+    frame.indent = old
+}
+
+pub fn mark() uses (frame: mut Frame) {
+    frame.log = frame.log * 10 + frame.indent
+}
+
+pub fn depth() -> ref u256 uses (frame: Frame) {
+    ref frame.indent
+}
+
+pub fn read_u() -> u256 uses (n: u256) {
+    n
+}
+
+// Rejected: the block's only use is through the function's own effect.
+pub fn named() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        frame.log = frame.indent
+    }
+}
+
+// Rejected: the provider's last use does not end the block.
+pub fn named_after_use() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        mark()
+        frame.log = 0
+    }
+}
+
+// Rejected: the outer clip of the local holds it while the inner one is
+// taken.
+pub fn nested_local() {
+    var frame = Frame { indent: 0, log: 0 }
+    with (Frame = frame.clipped(1)) {
+        with (Frame = frame.clipped(2)) { mark() }
+    }
+}
+
+// Rejected: the provider is held on the path that leaves by `break`.
+pub fn on_break(_ c: bool) uses (frame: mut Frame) {
+    loop {
+        with (Frame = indented(4)) {
+            if c {
+                frame.log = 0
+                break
+            }
+            mark()
+        }
+    }
+}
+
+// Rejected: the same on the path that leaves by `return`.
+pub fn on_return(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        if c {
+            frame.log = 0
+            return
+        }
+        mark()
+    }
+}
+
+// Rejected: the provider is held on the path a failing `?` leaves by, and
+// through the panic on the other path.
+pub fn on_try(_ x: Option<u256>) -> Option<u256> uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        frame.log = 0
+        let _ = x?
+        core::panic()
+    }
+}
+
+// Rejected: a path that panics never leaves the block, so the provider is
+// held through it.
+pub fn on_panic() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        frame.log = frame.indent
+        core::panic()
+    }
+}
+
+// Rejected: the same on a diverging branch, the other one using the
+// provider.
+pub fn on_diverging_branch(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        if c {
+            frame.log = 0
+            core::panic()
+        }
+        mark()
+    }
+}
+
+// Rejected: the same in a `let .. else`.
+pub fn on_diverging_else(_ x: Option<u256>) -> u256 uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        let Option::Some(v) = x else {
+            frame.log = 0
+            core::panic()
+        }
+        mark()
+        v
+    }
+}
+
+// Rejected: a loop that never ends never leaves the block.
+pub fn in_endless_loop() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        loop {
+            frame.log = frame.indent
+        }
+    }
+}
+
+// Rejected: a loop that never ends holds the provider though an outer one
+// is left by `break`.
+pub fn in_nested_endless_loop(_ c: bool) uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        loop {
+            if c {
+                break
+            }
+            loop {
+                frame.log = 0
+            }
+        }
+    }
+}
+
+// Rejected: a field of a block's or a marked projection's grant is held.
+pub fn block_field() uses (frame: mut Frame) {
+    with (u256 = ({ indented(4) }).indent) {
+        frame.log = 0
+    }
+}
+
+pub fn marked_field() uses (frame: mut Frame) {
+    with (u256 = (mut indented(4)).indent) {
+        frame.log = 0
+    }
+}
+
+// Accepted: a place through a raw pointer a grant holds is not in the
+// grant, whose session ends once the pointer is read.
+pub struct PtrHolder {
+    p: *Frame,
+}
+
+pub fn proj_ptr(_ h: mut PtrHolder) -> ref *Frame {
+    ref h.p
+}
+
+pub fn pointer_field(_ h: mut PtrHolder) -> u256 {
+    unsafe {
+        with (u256 = proj_ptr(mut h).indent) {
+            h.p = h.p
+            read_u()
+        }
+    }
+}
+
+// Rejected: an earlier provider is held on an exit from a later one.
+pub fn later_provider_exit(_ c: bool, _ other: mut Frame) uses (frame: mut Frame) {
+    with (Frame = indented(1), u256 = {
+        if c {
+            frame.log = 0
+            return
+        }
+        other.log
+    }) {
+        mark()
+    }
+}
+
+// Rejected: a `ref` provider reserves its place for reading.
+pub fn ref_write() -> u256 uses (frame: mut Frame) {
+    with (u256 = depth()) {
+        let v = read_u()
+        frame.indent = 5
+        v
+    }
+}
+
+// Rejected: a yield site in the block is still in it.
+pub fn yielded() -> mut u256 uses (frame: mut Frame) {
+    with (Frame = indented(4)) { mut frame.log }
+}
+
+// Rejected: a `yield` statement's operand holds its provider until the
+// session resumes.
+pub fn yield_statement() -> mut u256 uses (frame: mut Frame) {
+    yield with (Frame = indented(4)) { mut frame.log }
+    frame.log += 1
+}
+
+// A call through a forwarded row takes the row's `Frame` from the row, not
+// from the block. Where the caller provides it with the place the block's
+// projection holds, the instance is rejected; a row without `Frame` is not.
+pub fn forwarded_row<F: Fn() -> u256>(_ f: F) -> u256 uses (frame: mut Frame, F::E) {
+    with (Frame = indented(1)) { f() }
+}
+
+pub fn row_reads_frame() -> u256 uses (frame: mut Frame) {
+    forwarded_row(|| depth())
+}
+
+pub fn row_without_frame() -> u256 uses (frame: mut Frame) {
+    forwarded_row(|| 5)
+}
+
+// Accepted: a `ref` provider's place may be read in the block.
+pub fn ref_read() -> u256 uses (frame: mut Frame) {
+    with (u256 = depth()) {
+        let v = frame.indent
+        v + read_u()
+    }
+}
+
+// Rejected: a later element of a yielded tuple names the place an element
+// the granted access comes out of still holds.
+pub fn access_element_then_named(_ q: mut u256) -> (mut u256, u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(4)) { mut q }, {
+        mark()
+        1
+    })
+}
+
+// Accepted: an owned element's `with` ends before the next element.
+pub fn owned_element_then_named(_ q: mut u256) -> (u256, mut u256) uses (frame: mut Frame) {
+    yield (with (Frame = indented(4)) {
+        mark()
+        1
+    }, {
+        mark()
+        mut q
+    })
+}
+
+// Accepted: a provider that names a place holds nothing between calls.
+pub fn place_provider(_ other: mut Frame) {
+    with (Frame = other) {
+        mark()
+        other.log = 0
+        mark()
+    }
+}
+
+// Accepted: a block borrowing a place is a place provider, not a projection.
+pub fn block_provider(_ other: mut Frame) {
+    with (Frame = { mut other }) {
+        mark()
+        other.log = 0
+    }
+}
+
+// Accepted: the effect is free again once the block is left, and a nested
+// block projects the enclosing block's provider.
+pub fn after_block() uses (frame: mut Frame) {
+    with (Frame = indented(4)) {
+        with (Frame = indented(2)) { mark() }
+        mark()
+    }
+    frame.log = 0
+    mark()
+}

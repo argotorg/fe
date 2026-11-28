@@ -1,0 +1,101 @@
+use core::ops::Drop
+use core::ptr
+
+// An arm whose pattern holds an or-pattern, `S { k: 0 | 1, a }`, is reached
+// through a leaf of the decision tree for each alternative, and each lowers
+// the arm on its own path, with locals of its own for what the arm binds.
+// Each event appends a digit to a trace a raw pointer reaches, so a
+// destructor logs too.
+fn log(_ trace: *u256, _ event: u256) {
+    unsafe { *trace = *trace * 10 + event }
+}
+
+fn new_trace() -> *u256 {
+    let trace = ptr::alloc<u256>()
+    unsafe { *trace = 0 }
+    trace
+}
+
+fn read(_ trace: *u256) -> u256 {
+    unsafe { *trace }
+}
+
+struct Guard {
+    trace: *u256,
+    event: u256,
+}
+
+impl Drop for Guard {
+    fn drop(own self) {
+        log(self.trace, self.event)
+    }
+}
+
+struct KQ {
+    k: u256,
+    a: u256,
+    b: u256,
+}
+
+fn pick(_ q: mut KQ) -> mut u256 {
+    match q {
+        KQ { k: 0 | 1, mut a, .. } => {
+            var i: u256 = 0
+            while i < 1 {
+                i += 1
+            }
+            mut a
+        }
+        KQ { mut b, .. } => mut b
+    }
+}
+
+fn read_arm(_ q: mut KQ, _ trace: *u256) -> u256 {
+    match q {
+        KQ { k: 0 | 1, a, .. } => {
+            let _g = Guard { trace, event: 2 }
+            let r = ref q.b
+            var i: u256 = 0
+            while i < 1 {
+                log(trace, 1)
+                i += 1
+            }
+            r + a
+        }
+        _ => 0
+    }
+}
+
+// A `Branch` target's leaves go to one block, which shares the bindings.
+fn tested(_ q: KQ) -> u256 {
+    if let KQ { k: 0 | 1, a, .. } = q {
+        a + 1
+    } else {
+        0
+    }
+}
+
+#[test]
+fn each_alternative_of_an_arm_lowers_it_anew() {
+    var q = KQ { k: 0, a: 5, b: 7 }
+    pick(mut q) += 1
+    q.k = 1
+    pick(mut q) += 1
+    q.k = 2
+    pick(mut q) += 1
+    assert(q.a == 7 && q.b == 8)
+    let trace = new_trace()
+    q.k = 0
+    assert(read_arm(mut q, trace) == 15)
+    assert(read(trace) == 12)
+    let trace = new_trace()
+    q.k = 1
+    assert(read_arm(mut q, trace) == 15)
+    assert(read(trace) == 12)
+}
+
+#[test]
+fn an_if_let_with_an_or_pattern() {
+    assert(tested(KQ { k: 1, a: 4, b: 0 }) == 5)
+    assert(tested(KQ { k: 2, a: 4, b: 0 }) == 0)
+}

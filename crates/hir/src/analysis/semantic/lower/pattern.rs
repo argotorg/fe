@@ -793,12 +793,16 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                 }
             },
             DecisionTree::Leaf(leaf) => match target {
-                // An arm's scope holds what it binds.
+                // An arm's scope holds what it binds. An arm with an
+                // or-pattern inside, `S { k: 0 | 1, a }`, has a leaf for each
+                // alternative, each lowering the arm anew with locals of its
+                // own, as each path lowers a compound yield's element.
                 DecisionTreeTarget::MatchArms {
                     result,
                     join_bb,
                     arms,
                 } => {
+                    let bindings = self.binding_locals.clone();
                     self.push_drop_scope(true);
                     self.bind_decision_tree_leaf(leaf, projections);
                     let arm = &arms[leaf.arm_index];
@@ -810,6 +814,7 @@ impl<'a, 'db> SmirLowerCtxt<'a, 'db> {
                         self.assign_branch_result(result, SOperand::expr(arm_value, arm.body));
                     }
                     self.pop_drop_scope(None);
+                    self.binding_locals = bindings;
                     if falls {
                         self.set_terminator(
                             self.current,

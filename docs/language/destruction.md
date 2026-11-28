@@ -27,6 +27,10 @@ value's lifetime ends, and a type that holds a resource releases it in its
       b.span()
   }
   ```
+- The temporaries of a `with` block's providers, and the bindings of a
+  block among them whose value is an access, are destroyed when the `with`
+  block is left, each provider's after the providers that follow it end
+  (see [effects](effects.md#providers)).
 - A loop body's bindings are destroyed at the end of each iteration.
 - `return`, `break`, `continue`, a failing `?` and a `let .. else` that
   leaves destroy what the scopes they leave hold.
@@ -35,13 +39,16 @@ value's lifetime ends, and a type that holds a resource releases it in its
   indexed element (`v[i] = x`) does the same.
 - A projection's own locals are destroyed when the access it grants ends,
   where its session resumes. A `yield` statement's operand ends there, not
-  with the enclosing block: its temporaries and what its blocks and arms
-  bind are destroyed innermost first before the slide runs, as are the
-  bindings of a block inside a yielded tuple or variant, as in
-  `Option::Some({ .. })`. After a `return` or a tail yield, every scope ends
-  there. What an `if` or `match` branch inside a yielded tuple or variant
-  binds, and its temporaries, are destroyed when the branch ends, before
-  the yield.
+  with the enclosing block: its temporaries, and what the scopes the
+  granted access comes out of bind, are destroyed innermost first before
+  the slide runs. The access comes out of blocks, `with` blocks, the
+  branches of an `if` or `match`, and the elements of a tuple or variant
+  whose shape holds an access, as in
+  `Option::Some(if c { .. } else { .. })`. Any other scope ends where it
+  ends: one inside an argument, or an element whose shape is owned, such
+  as the `u256` of `(u256, mut T)`, which is evaluated as a value before
+  the next element, its `with` providers ending with it. After a `return`
+  or a tail yield, every scope ends there.
 
 A value that moved is not destroyed where it moved from, and a partial move
 destroys only the fields left behind. Where a value moved on some paths

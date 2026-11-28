@@ -294,7 +294,7 @@ fn pair(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (mut u256, mut u256) {
     log(trace, 9)
 }
 
-// A block in a compound yield passes its bindings on to the resume.
+// A block in a compound yield keeps its bindings until the resume.
 fn opt_block(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
     yield Option::Some({
         let _g = Guard { trace, event: 2 }
@@ -303,6 +303,7 @@ fn opt_block(_ cell: mut Cell, _ trace: *u256) -> Option<mut u256> {
     log(trace, 9)
 }
 
+// An owned element's block ends before the next element.
 fn owned_block(_ cell: mut Cell, _ trace: *u256) -> (u256, mut u256) {
     yield ({
         let _g = Guard { trace, event: 3 }
@@ -537,6 +538,7 @@ fn maybe_set(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> Option<mut u256> {
     log(trace, 9)
 }
 
+// An owned element's block ends with it; the value it hands out lives on.
 fn handed_out(_ cell: mut Cell, _ trace: *u256) -> (Guard, mut u256) {
     yield ({
         let g = Guard { trace, event: 2 }
@@ -546,10 +548,9 @@ fn handed_out(_ cell: mut Cell, _ trace: *u256) -> (Guard, mut u256) {
     log(trace, 9)
 }
 
-// Pins current behavior, the documented limit of
-// `issues/fe/compound-yield-branches`: what a branch inside a compound yield
-// binds ends with the branch, before the yield. The model wants 539.
-fn branch_limit(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
+// An owned element is an ordinary value: no access comes out of it, so its
+// blocks and branches end where they end, before the yield.
+fn branch_in_compound(_ cell: mut Cell, _ trace: *u256, _ c: bool) -> (u256, mut u256) {
     yield (if c {
         let _g = Guard { trace, event: 3 }
         7
@@ -778,10 +779,6 @@ fn a_block_in_a_compound_yield_ends_at_resume() {
     }
     assert(read(trace) == 529)
     let trace = new_trace()
-    let (n, mut x) = owned_block(mut cell, trace)
-    bump(mut x, trace)
-    assert(n == 7 && read(trace) == 539)
-    let trace = new_trace()
     match tail_opt(mut cell, trace) {
         Option::Some(mut x) => bump(mut x, trace)
         Option::None => log(trace, 6)
@@ -942,14 +939,18 @@ fn passed_owners_initialized_or_moved_on_some_paths() {
         bump(mut x, trace)
         assert(g.event == 2)
     }
-    assert(read(trace) == 5392)
+    assert(read(trace) == 3592)
 }
 
 #[test]
-fn a_branch_in_a_compound_yield_ends_with_the_branch() {
+fn owned_elements_of_a_compound_yield_end_in_place() {
     var cell = Cell { a: 0, b: 0 }
     let trace = new_trace()
-    let (n, mut x) = branch_limit(mut cell, trace, true)
+    let (n, mut x) = owned_block(mut cell, trace)
     bump(mut x, trace)
     assert(n == 7 && read(trace) == 359)
+    let trace = new_trace()
+    let (m, mut y) = branch_in_compound(mut cell, trace, true)
+    bump(mut y, trace)
+    assert(m == 7 && read(trace) == 359)
 }

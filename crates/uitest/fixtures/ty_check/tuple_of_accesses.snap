@@ -12,6 +12,22 @@ error[8-0115]: a tuple does not hold accesses
   │
   = bind each access with its own `let`; accesses that are disjoint by a promise the checker cannot see form an unsafe split, `unsafe { (a, b) }`
 
+error[8-0115]: a tuple does not hold accesses
+   ┌─ tuple_of_accesses.fe:23:5
+   │
+23 │     (get_ref(ref q), mut q.a)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ this tuple's elements are accesses
+   │
+   = bind each access with its own `let`; accesses that are disjoint by a promise the checker cannot see form an unsafe split, `unsafe { (a, b) }`
+
+error[8-0115]: a tuple does not hold accesses
+   ┌─ tuple_of_accesses.fe:27:5
+   │
+27 │     (get_mut(mut q), mut q.b)
+   │     ^^^^^^^^^^^^^^^^^^^^^^^^^ this tuple's elements are accesses
+   │
+   = bind each access with its own `let`; accesses that are disjoint by a promise the checker cannot see form an unsafe split, `unsafe { (a, b) }`
+
 error[8-0120]: a `mut` binding needs a place or an access
   ┌─ tuple_of_accesses.fe:6:10
   │
