@@ -2603,36 +2603,106 @@ mod round_limit_tests {
         assert_eq!(&source[start..end], "Provider", "{error}");
     }
 
-    /// The working database that a transaction moves between its views answers
-    /// as a database copied for the output view: same requests, same
-    /// diagnostics of the prepared program.
-    #[test]
-    fn views_moved_in_place_match_fresh_copies() {
-        let source = breadth(12);
-        let mut db = DriverDataBase::default();
-        let url = url::Url::parse(FILE).unwrap();
+    /// The integer value of `const fn run`, or the unfinished outcome.
+    fn eval_run(db: &DriverDataBase) -> String {
+        use hir::analysis::{
+            semantic::{
+                EvalOutcome, GenericSubst, SemConstScalar, SemConstValue, eval_body_owner_const,
+            },
+            ty::ty_check::BodyOwner,
+        };
         let file = db
             .workspace()
-            .touch(&mut db, url.clone(), Some(source.clone()));
+            .get(db, &url::Url::parse(FILE).unwrap())
+            .expect("the view keeps the source file");
+        let function = db
+            .top_mod(file)
+            .all_funcs(db)
+            .iter()
+            .copied()
+            .find(|f| {
+                f.name(db)
+                    .to_opt()
+                    .is_some_and(|name| name.data(db) == "run")
+            })
+            .expect("the source defines `run`");
+        let owner = BodyOwner::Func(function, None);
+        let outcome = eval_body_owner_const(
+            db,
+            owner,
+            GenericSubst::for_body_owner(db, owner, Vec::new()),
+        );
+        let EvalOutcome::Ready(value) = outcome else {
+            panic!("`run` did not finish: {outcome:?}");
+        };
+        let SemConstValue::Scalar {
+            value: SemConstScalar::Int { value },
+            ..
+        } = value.value(db)
+        else {
+            panic!("`run` is not an integer");
+        };
+        value.to_string()
+    }
+
+    /// The diagnostics of the prepared program, from the type-definition
+    /// cycle search as the first query, like every view of a transaction.
+    fn diagnostics_of(view: &DriverDataBase) -> String {
+        let file = view
+            .workspace()
+            .get(view, &url::Url::parse(FILE).unwrap())
+            .expect("the view keeps the source file");
+        let module = view.top_mod(file);
+        analyze_type_definitions_first(view, module);
+        view.run_on_top_mod(module).format_diags(view)
+    }
+
+    /// The working database that a transaction moves between its views answers
+    /// as a database that was not used before: the reference is prepared on
+    /// its own, in another database, and its output view is copied cold. Both
+    /// hold the same requests, the same diagnostics of written code that does
+    /// not check, and the same value of the generated program.
+    #[test]
+    fn views_moved_in_place_match_fresh_copies() {
+        let source = breadth(12) + "fn bad() -> u256 { true }\n";
+        let url = url::Url::parse(FILE).unwrap();
+        let input = || {
+            let mut db = DriverDataBase::default();
+            let file = db
+                .workspace()
+                .touch(&mut db, url.clone(), Some(source.clone()));
+            (db, file)
+        };
+        let (db, file) = input();
         let moved = prepare_file(&db, file)
             .unwrap()
             .expect("the source requests generation");
-        let requests = moved.generation_inputs().requests(&moved);
+        let requests = moved.generation_inputs().requests(&moved).clone();
         assert!(!requests.is_empty());
-
-        let mut fresh = copy_view(&db, &ViewBasis::Standalone(file));
-        enter_output_view(&mut fresh, requests);
-        assert_eq!(fresh.generation_inputs().requests(&fresh), requests);
-        assert!(!fresh.generation_inputs().declared_headers(&fresh));
         assert!(!moved.generation_inputs().declared_headers(&moved));
 
-        let diagnostics = |view: &DriverDataBase| {
-            let file = view
-                .workspace()
-                .get(view, &url)
-                .expect("the view keeps the source file");
-            view.run_on_top_mod(view.top_mod(file)).format_diags(view)
-        };
-        assert_eq!(diagnostics(&moved), diagnostics(&fresh));
+        // The reference: its own preparation, then a cold output view.
+        let (other, other_file) = input();
+        let other_prepared = prepare_file(&other, other_file)
+            .unwrap()
+            .expect("the source requests generation");
+        let other_requests = other_prepared
+            .generation_inputs()
+            .requests(&other_prepared)
+            .clone();
+        assert_eq!(requests, other_requests);
+        let mut fresh = copy_view(&other, &ViewBasis::Standalone(other_file));
+        enter_output_view(&mut fresh, &other_requests);
+        assert!(!fresh.generation_inputs().declared_headers(&fresh));
+
+        let moved_diagnostics = diagnostics_of(&moved);
+        let fresh_diagnostics = diagnostics_of(&fresh);
+        assert!(
+            moved_diagnostics.contains("type mismatch"),
+            "{moved_diagnostics}"
+        );
+        assert_eq!(moved_diagnostics, fresh_diagnostics);
+        assert_eq!(eval_run(&moved), "12");
+        assert_eq!(eval_run(&fresh), "12");
     }
 }
