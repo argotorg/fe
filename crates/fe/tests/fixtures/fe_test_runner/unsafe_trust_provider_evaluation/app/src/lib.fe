@@ -1,0 +1,9 @@
+use u::Evil
+
+struct S { a: u256 }
+impl S with (Evil)
+
+#[test]
+fn uses_provider_with_unsafe_const_fn() {
+    assert(S::answer() == 42)
+}

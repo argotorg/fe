@@ -67,13 +67,26 @@ pub(super) struct UnsafeTrust<'db> {
 impl<'db> UnsafeTrust<'db> {
     /// The trust for a walk from `top_mod`, if its ingot is a trust root.
     pub(super) fn for_root(db: &'db dyn HirAnalysisDb, top_mod: TopLevelMod<'db>) -> Option<Self> {
-        let graph = db.dependency_graph();
-        let root = top_mod.ingot(db);
-        graph.is_trust_root(db, root.base(db)).then(|| Self {
-            trusted: graph.trusted_ingots(db),
-            root,
+        db.dependency_graph()
+            .is_trust_root(db, top_mod.ingot(db).base(db))
+            .then(|| Self::for_build(db, top_mod))
+    }
+
+    /// The trust of the build that `top_mod` is part of, whether or not its
+    /// ingot is a trust root: which ingots may contribute unsafe code is a
+    /// property of the whole dependency graph. Code that runs while a header
+    /// of a dependency is prepared is judged by it, since no walk from a root
+    /// reaches that code later.
+    pub(super) fn for_build(db: &'db dyn HirAnalysisDb, top_mod: TopLevelMod<'db>) -> Self {
+        Self {
+            trusted: db.dependency_graph().trusted_ingots(db),
+            root: top_mod.ingot(db),
             untrusted_impls: OnceCell::new(),
-        })
+        }
+    }
+
+    pub(super) fn root(&self) -> Ingot<'db> {
+        self.root
     }
 
     fn allows(&self, db: &dyn HirAnalysisDb, ingot: Ingot<'_>) -> bool {
@@ -278,9 +291,10 @@ fn author_ingot<'db>(db: &'db dyn HirAnalysisDb, owner: BodyOwner<'db>) -> Ingot
 }
 
 /// The modules of the quotations that wrote and placed the `unsafe impl` that
-/// `owner` is a member of, if it is one, writer first: a method of it, or the
-/// value of one of its associated constants. A header is written by the ingot
-/// that holds it, though a provider of another ingot supplies its members.
+/// `owner` is a member of, if it is one, writer first: a method of it, the
+/// value of one of its associated constants, or the default of a constant that
+/// it inherits. A header is written by the ingot that holds it, though a
+/// provider of another ingot supplies its members.
 fn unsafe_impl_chain<'db>(
     db: &'db dyn HirAnalysisDb,
     owner: BodyOwner<'db>,
@@ -301,6 +315,9 @@ fn unsafe_impl_chain<'db>(
             }
             _ => return None,
         },
+        // The default of a trait's constant that an implementation inherits is
+        // the implementation's own value of the constant where it is read.
+        BodyOwner::InheritedConst { implementation, .. } => implementation,
         _ => return None,
     };
     impl_trait.is_unsafe(db).then(|| impl_chain(db, impl_trait))

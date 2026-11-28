@@ -1,0 +1,20 @@
+trait Base {
+    const N: u256
+}
+trait T: Base {
+    type X
+    const C: Self::X = 10 / Self::N
+}
+
+struct Zero {}
+impl Base for Zero {
+    const N: u256 = 0
+}
+impl T for Zero {
+    type X = u256
+}
+
+#[test]
+fn read_c() {
+    let _x = <Zero as T>::C
+}

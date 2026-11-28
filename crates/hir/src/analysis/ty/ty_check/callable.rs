@@ -485,7 +485,7 @@ pub(crate) fn supply_direct_effect_evidence<'db>(
         declared,
         signature,
         &subst,
-        assumptions,
+        TraitSolveCx::new(db, func.scope(), Tier::All).with_assumptions(assumptions),
         |root, _, _| match root.self_ty(db).data(db) {
             TyData::TyParam(param) if param.is_effect_provider() => {
                 proofs.get(param.idx).copied().flatten()
@@ -719,7 +719,8 @@ impl<'db> Callable<'db> {
                 .into_iter()
                 .map(|goal| RefusedGoal {
                     goal,
-                    reason: Refusal::NoComponent { root: None },
+                    reason: Refusal::NoComponent { route: None },
+                    others: None,
                 }),
         );
         self.set_bound_evidence(db, func, mode, evidence);

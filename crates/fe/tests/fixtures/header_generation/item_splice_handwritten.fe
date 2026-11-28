@@ -1,0 +1,10 @@
+struct S {}
+impl S {
+    pub const fn run() -> u256 {
+        const fn helper() -> u256 { 41 }
+        const fn bump() -> u256 { helper() + 1 }
+        bump()
+    }
+}
+#[test]
+fn t() { assert(S::run() == 42) }

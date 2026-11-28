@@ -6469,6 +6469,7 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                 const_name,
                 assoc_types,
                 inner,
+                evaluation,
             } => {
                 let name = const_name.data(db);
                 let with = if assoc_types.is_empty() {
@@ -6507,16 +6508,26 @@ impl DiagnosticVoucher for BodyDiag<'_> {
                         span: label.span.clone(),
                     });
                 }
+                let (message, note) = if *evaluation {
+                    (
+                        format!(
+                            "the default value of `{name}` cannot be evaluated for this implementation"
+                        ),
+                        "the default is checked and evaluated for each implementation that inherits it, with the types of that implementation",
+                    )
+                } else {
+                    (
+                        format!(
+                            "the default value of `{name}` does not type-check for this implementation"
+                        ),
+                        "the default is checked for each implementation that inherits it, with the types of that implementation",
+                    )
+                };
                 CompleteDiagnostic {
                     severity,
-                    message: format!(
-                        "the default value of `{name}` does not type-check for this implementation"
-                    ),
+                    message,
                     sub_diagnostics,
-                    notes: vec![format!(
-                        "the default is checked for each implementation that inherits it, with the types of that implementation: {}",
-                        inner.message
-                    )],
+                    notes: vec![format!("{note}: {}", inner.message)],
                     error_code,
                 }
             }
@@ -6925,36 +6936,10 @@ impl DiagnosticVoucher for TraitConstraintDiag<'_> {
                 }
             }
 
-            Self::ConditionsDiffer {
-                span,
-                primary_goal,
-                a,
-                b,
-            } => primary_diag(
+            Self::ImplementationDiffers { span, label } => primary_diag(
                 severity,
                 "trait bound is not satisfied",
-                format!(
-                    "`{}`: `{}` and `{}` supply different implementations",
-                    primary_goal.pretty_print(db, true),
-                    a.pretty_print(db, true),
-                    b.pretty_print(db, true)
-                ),
-                span.resolve(db),
-                error_code,
-            ),
-
-            Self::ImplementationDiffers {
-                span,
-                primary_goal,
-                root,
-            } => primary_diag(
-                severity,
-                "trait bound is not satisfied",
-                format!(
-                    "`{}` is implemented; the implementation chosen here differs from the one in the dictionary of `{}`",
-                    primary_goal.pretty_print(db, true),
-                    root.pretty_print(db, true)
-                ),
+                label.clone(),
                 span.resolve(db),
                 error_code,
             ),

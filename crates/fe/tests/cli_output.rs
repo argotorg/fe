@@ -7958,11 +7958,13 @@ fn concrete_component_runtime() {
     // iteration, and an indexing read and a call read one lane codec.
     for fixture in [
         "concrete_component_call_bound.fe",
+        "concrete_component_through_implementation.fe",
         "concrete_component_impl_method.fe",
         "concrete_component_pinned_named_condition.fe",
         "concrete_component_closure_item.fe",
         "concrete_component_loop_plan.fe",
         "concrete_component_entry_codec.fe",
+        "concrete_component_growing_associated_types.fe",
     ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/fe_test")
@@ -8288,5 +8290,329 @@ fn path_applications_of_an_inherited_default_are_checked_for_the_implementation(
             && output.contains("the default value of `K` does not type-check")
             && output.contains("const requirement is not satisfied"),
         "expected the default refused at the implementation:\n{output}"
+    );
+}
+
+fn header_generation_fixture(name: &str) -> String {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/header_generation")
+        .join(name)
+        .to_str()
+        .expect("utf-8 path")
+        .to_string()
+}
+
+#[test]
+fn a_field_type_over_a_projection_or_a_compound_constant_is_spliced_under_a_generic_header() {
+    // The field type of `S<T: Has>` is `T::Out` and of `S<const N>` is
+    // `[u8; N + 1]`. A generic header gives the parameters its own names, and
+    // the spliced type is the declared field type at the header's arguments,
+    // as the handwritten implementation writes it.
+    for name in [
+        "field_type_projection_handwritten.fe",
+        "field_type_projection.fe",
+        "field_type_compound_const_handwritten.fe",
+        "field_type_compound_const.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+}
+
+#[test]
+fn items_spliced_into_a_block_bind_a_later_name_only_if_the_template_lists_it() {
+    // `${a}` declares `helper` and `bump` in the block that holds it. A call
+    // `bump()` after it names the spliced item when the template lists `bump`
+    // as open, `quote(bump) { .. }`, directly or inside a nested function, as
+    // it does for items written in the block.
+    for name in [
+        "item_splice_handwritten.fe",
+        "item_splice_binds_enclosing_call.fe",
+        "item_splice_binds_nested_call.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+
+    // A name that the template does not list resolves where the template is
+    // written, whatever the spliced code declares.
+    for name in [
+        "item_splice_unlisted_call_refused.fe",
+        "item_splice_unlisted_nested_call_refused.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("undefined variable `bump`"),
+            "{name}: expected `bump` to stay at the producer:\n{output}"
+        );
+    }
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("item_splice_unlisted_name_stays_at_producer.fe"),
+    ]);
+    assert_eq!(
+        exit, 0,
+        "an unlisted `helper` is the producer's, not the spliced one:\n{output}"
+    );
+    // The fragment of an untrusted package declares `check`; the trusted
+    // template calls its own `check`.
+    let fixture = fe_test_runner_fixture_dir("item_splice_untrusted_fragment");
+    let (output, exit) = run_fe_main(&["test", fixture.join("app").to_str().expect("utf-8 path")]);
+    assert_eq!(exit, 0, "the template keeps its own `check`:\n{output}");
+
+    // A fragment spliced beside the item does not capture its free names: the
+    // `helper` of the expression fragment is the producer's, which has none.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("item_splice_sibling_no_capture.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("undefined variable `helper`"),
+        "expected the sibling fragment not to capture `helper`:\n{output}"
+    );
+}
+
+#[test]
+fn a_where_fragment_may_name_a_generic_parameter_of_the_template_that_splices_it() {
+    for name in [
+        "where_open_type_param_handwritten.fe",
+        "where_open_type_param.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["test", &header_generation_fixture(name)]);
+        assert_eq!(exit, 0, "{name}: expected acceptance:\n{output}");
+    }
+
+    // The binder is a generic parameter of an item around the `where ${w}`
+    // hole, nothing else: `a<T>` does not give `T` to `b`, whichever of the two
+    // comes first, and `b` does not capture the `struct T` of the destination.
+    for name in [
+        "where_open_name_of_other_function.fe",
+        "where_open_name_of_other_function_later.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("quoted open name `T` has no enclosing binder"),
+            "{name}: expected the open name to be refused:\n{output}"
+        );
+    }
+
+    // A name that no enclosing binder declares keeps its diagnostic, in a
+    // where fragment as in an expression.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("where_open_type_param_unbound.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("quoted open name `U` has no enclosing binder"),
+        "expected the unbound name to be refused:\n{output}"
+    );
+    let (output, exit) =
+        run_fe_main(&["check", &header_generation_fixture("open_name_unlisted.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("undefined variable `other`"),
+        "expected the unlisted name to be refused:\n{output}"
+    );
+}
+
+fn unsafe_trust_app(fixture: &str, app: &str) -> String {
+    fe_test_runner_fixture_dir(fixture)
+        .join(app)
+        .to_str()
+        .expect("fixture dir utf8")
+        .to_string()
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_an_unsafe_impl_read_through_an_inherited_default_constant() {
+    // The default of `Magic::C` has the declared type `Self::X`, so a read of it
+    // runs the default checked for the implementation that inherits it. The
+    // `unsafe impl` of `u` is relied on there as it is for a constant that the
+    // implementation writes. `own` has the trait and the implementation in
+    // `u`; `split` has the trait in the trusted `t`.
+    for fixture in [
+        "unsafe_trust_inherited_default_own",
+        "unsafe_trust_inherited_default_split",
+    ] {
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+        assert_ne!(exit_code, 0, "{fixture}: expected a trust error:\n{output}");
+        assert!(
+            output.contains("error[16-0015]")
+                && output.contains("`u`, which is not allowed to use"),
+            "{fixture}: expected a trust error naming `u`:\n{output}"
+        );
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app_trusted")]);
+        assert_eq!(exit_code, 0, "{fixture}: trusting `u` allows it:\n{output}");
+    }
+}
+
+#[test]
+fn an_inherited_default_constant_is_access_checked_for_the_implementations_that_inherit_it() {
+    // `PAIR` copies a `Self::X`. For `Good`, `X` is `u256`, which is `Copy`, so
+    // the default is accepted; the trait itself is not checked with an
+    // abstract `X`.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("inherited_default_move_good_only.fe"),
+    ]);
+    assert_eq!(exit, 0, "expected acceptance:\n{output}");
+
+    // The same default for an implementation whose `X` is not `Copy` is
+    // refused, as the default written there would be.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("inherited_default_move_per_impl.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[16-0002]")
+            && output.contains("cannot use a value after it was moved"),
+        "expected a move conflict for the non-`Copy` implementation:\n{output}"
+    );
+
+    // A default that copies a value of a type that does not depend on the
+    // implementation is refused at the trait, with no implementation at all
+    // and when it is read through a bound.
+    for name in [
+        "default_access_error_without_implementation.fe",
+        "default_access_error_through_bound.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("error[16-0002]"),
+            "{name}: expected a move conflict:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn provider_failures_are_reported_in_words_at_the_providers_own_code() {
+    // A provider that does not end is refused with the documented message,
+    // although its loop has no expression to point at.
+    let (output, exit) =
+        run_fe_main(&["test", &header_generation_fixture("provider_never_ends.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("existing CTFE step limit exceeded")
+            && !output.contains("StepLimitExceeded"),
+        "expected the step limit message:\n{output}"
+    );
+
+    // A header that leaves the provider waiting on a value is described
+    // without the evaluator's internal state.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("provider_const_param_header.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("provider evaluation is blocked") && !output.contains("BlockedInfo"),
+        "expected a sentence for a blocked provider:\n{output}"
+    );
+
+    // A failure inside a library function that the provider called is
+    // reported at the call in the provider, not in the library.
+    let (output, exit) = run_fe_main(&[
+        "test",
+        &header_generation_fixture("provider_binder_of_another_variant.fe"),
+    ]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("`.at` field belongs to another owner or variant")
+            && output.contains("provider_binder_of_another_variant.fe:11:")
+            && !output.contains("builtin-core:"),
+        "expected the failure at the provider's call:\n{output}"
+    );
+}
+
+#[test]
+fn an_inherited_default_constant_is_evaluated_for_the_implementations_that_inherit_it() {
+    // `fe check` reports the failure that the test build reports for a default
+    // that is read, as for a constant that the implementation writes.
+    for name in [
+        "inherited_default_divides_by_zero.fe",
+        "inherited_default_divides_by_zero_through_supertrait.fe",
+    ] {
+        let (output, exit) = run_fe_main(&["check", &header_generation_fixture(name)]);
+        assert_ne!(exit, 0, "{name}: expected a refusal:\n{output}");
+        assert!(
+            output.contains("cannot be evaluated for this implementation")
+                && output.contains("division by zero in const context")
+                && output.contains("`C` is inherited here"),
+            "{name}: expected the failure at the implementation:\n{output}"
+        );
+    }
+}
+
+#[test]
+fn a_record_literal_of_a_struct_named_quote_is_read_as_a_quotation() {
+    // `quote` followed by `{` in an expression is always a quotation, so the
+    // record literal `quote { x: 42 }` of a struct named `quote` is refused.
+    // The limit is documented in the generation chapter.
+    let (output, exit) =
+        run_fe_main(&["check", &header_generation_fixture("struct_named_quote.fe")]);
+    assert_ne!(exit, 0, "{output}");
+    assert!(
+        output.contains("error[1-0001]") && output.contains("expected newline or `}`"),
+        "expected the literal to be read as a quotation:\n{output}"
+    );
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_the_unsafe_code_that_a_provider_runs() {
+    // The provider `u::Evil` runs `unsafe { 42 }` in `derive`. Evaluating it
+    // for `app` is unsafe code that `app` runs, so `u` must be trusted, and the
+    // header that runs the provider is where the refusal is reported.
+    let fixture = "unsafe_trust_provider_evaluation";
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("error[16-0015]")
+            && output.contains("`u`, which is not allowed to use")
+            && output.contains("src/lib.fe:4:1"),
+        "expected a trust error naming `u` at the header:\n{output}"
+    );
+    for app in ["app_trusted", "app_safe"] {
+        let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, app)]);
+        assert_eq!(exit_code, 0, "{app}: expected acceptance:\n{output}");
+    }
+}
+
+#[test]
+fn test_cli_test_unsafe_trust_judges_the_provider_that_a_dependencys_header_runs() {
+    // `t`, which `app` trusts, writes `impl S with (u::Evil)`, and `Evil::derive`
+    // runs `unsafe`. `t` does not trust `u`, so no package of the build does,
+    // although the header is written in a dependency and not in the package
+    // being checked.
+    let fixture = "unsafe_trust_provider_in_dependency";
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app")]);
+    assert_ne!(exit_code, 0, "expected a trust error:\n{output}");
+    assert!(
+        output.contains("error[16-0015]") && output.contains("`u`, which is not allowed to use"),
+        "expected a trust error naming `u`:\n{output}"
+    );
+    // The same build with `t` trusting `u`.
+    let (output, exit_code) = run_fe_main(&["test", &unsafe_trust_app(fixture, "app_ok")]);
+    assert_eq!(exit_code, 0, "trusting `u` allows it:\n{output}");
+}
+
+#[test]
+fn a_field_type_over_header_parameters_must_be_visible_where_it_is_generated() {
+    // `Hidden` is private to module `m`, and the generated method is public in
+    // the root. A generic header is refused as the ground header and the
+    // handwritten method are.
+    let (output, exit) = run_fe_main(&[
+        "check",
+        &header_generation_fixture("field_type_private_under_generic_header.fe"),
+    ]);
+    assert_ne!(exit, 0, "expected a refusal:\n{output}");
+    assert!(
+        output.contains("`Hidden` is not visible"),
+        "expected the private field type to be refused:\n{output}"
     );
 }

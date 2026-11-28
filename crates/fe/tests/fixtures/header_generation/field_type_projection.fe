@@ -1,0 +1,16 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, field, field_type}
+trait Has { type Out }
+struct A {}
+impl Has for A { type Out = u256 }
+struct S<T: Has> { f: T::Out }
+struct P {}
+impl DeriveInherent for P {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let t = field_type(field(r, 0))
+        quote { pub fn get(own self) -> ${t} { self.f } }
+    }
+}
+impl<X: Has> S<X> with (P)
+#[test]
+fn t() { assert(S<A> { f: 7 }.get() == 7) }

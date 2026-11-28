@@ -1,6 +1,7 @@
 use crate::core::hir_def::{
     GenericArgListId, IdentId, Partial, PathId, PathKind, TraitRefId, TypeId,
 };
+use common::generation::{FrozenCode, FrozenCodeKind, FrozenHoleValue};
 use parser::ast::{self, GenericArgsOwner, prelude::*};
 
 use super::FileLowerCtxt;
@@ -50,9 +51,14 @@ impl<'db> PathId<'db> {
                 {
                     let frame = ctxt.quote_frames.last().unwrap();
                     let origin = frame.path_origin();
-                    let is_bound =
-                        quote_name_is_bound(seg.syntax(), ident.text(), frame.is_sub_quote, None);
+                    let by_splice = open_name_bound_by_splice(ctxt, seg.syntax(), ident.text());
+                    let is_bound = quote_name_is_bound(ctxt, seg.syntax(), ident.text(), None)
+                        || frame.destination_names.contains(ident.text())
+                        || by_splice;
                     let is_member_quote = frame.is_member_quote;
+                    if by_splice {
+                        ctxt.record_bound_name(ident.text());
+                    }
                     let display_ident = IdentId::lower_token(ctxt, ident.clone());
                     let generic_args = GenericArgListId::lower_ast_opt(ctxt, seg.generic_args());
                     let kind = PathKind::Ident {
@@ -154,16 +160,22 @@ impl<'db> PathId<'db> {
 /// fragment's producer origin, even where the destination declares an item of
 /// the same name.
 ///
-/// The top-level items of a fragment spliced into a block (`spliced_into_body`)
-/// become items of that block, so they bind the fragment's own uses as well.
+/// The top-level items of a fragment spliced into a block (the active frame is
+/// a sub-quote) become items of that block, so they bind the fragment's own
+/// uses as well. The items that a statement `${items}` of a block splices bind
+/// a name of the template only if the template lists it (`open_name_bound_by_splice`).
 /// The members of a fragment spliced into an `impl` are not in scope as bare
 /// names, so they do not.
 pub(super) fn quote_name_is_bound(
+    ctxt: &FileLowerCtxt<'_>,
     syntax: &parser::SyntaxNode,
     name: &str,
-    spliced_into_body: bool,
     except_item: Option<&parser::SyntaxNode>,
 ) -> bool {
+    let spliced_into_body = ctxt
+        .quote_frames
+        .last()
+        .is_some_and(|frame| frame.is_sub_quote);
     let binds = |item: ast::Item| {
         except_item.is_none_or(|except| item.syntax() != except) && item_declares_name(&item, name)
     };
@@ -171,25 +183,9 @@ pub(super) fn quote_name_is_bound(
         .ancestors()
         .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
         .any(|node| {
-            if let Some(params) = node
-                .children()
-                .find_map(ast::GenericParamList::cast)
-                .or_else(|| {
-                    node.children()
-                        .find_map(ast::FuncSignature::cast)
-                        .and_then(|signature| signature.generic_params())
-                })
-                && params.into_iter().any(|param| match param.kind() {
-                    ast::GenericParamKind::Type(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                    ast::GenericParamKind::Const(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                    ast::GenericParamKind::Shape(param) => {
-                        param.name().is_some_and(|ident| ident.text() == name)
-                    }
-                })
+            if generic_param_names(&node)
+                .iter()
+                .any(|declared| declared == name)
             {
                 return true;
             }
@@ -228,6 +224,133 @@ pub(super) fn quote_name_is_bound(
             }
             false
         })
+}
+
+/// The generic parameters that `node` declares: those of its own parameter
+/// list, or of the signature of the function it is.
+fn generic_param_names(node: &parser::SyntaxNode) -> Vec<String> {
+    let list = node
+        .children()
+        .find_map(ast::GenericParamList::cast)
+        .or_else(|| {
+            node.children()
+                .find_map(ast::FuncSignature::cast)
+                .and_then(|signature| signature.generic_params())
+        });
+    list.into_iter()
+        .flatten()
+        .filter_map(|param| match param.kind() {
+            ast::GenericParamKind::Type(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+            ast::GenericParamKind::Const(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+            ast::GenericParamKind::Shape(param) => {
+                param.name().map(|ident| ident.text().to_string())
+            }
+        })
+        .collect()
+}
+
+/// The generic parameters of the items of the template around `syntax`, from
+/// the innermost outward: the binders that a `where` clause written there can
+/// name.
+pub(super) fn enclosing_generic_param_names(
+    syntax: &parser::SyntaxNode,
+) -> rustc_hash::FxHashSet<String> {
+    syntax
+        .ancestors()
+        .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
+        .flat_map(|node| generic_param_names(&node))
+        .collect()
+}
+
+/// Whether `name` is a name that the template lists as open and that an item
+/// spliced by a statement `${items}` of a block around `syntax` declares. The
+/// spliced item is then the binder of the name where the template is lowered,
+/// as a parameter or a `let` is for any open name; a name that the template
+/// does not list resolves where the template is written, whatever a caller
+/// splices in.
+pub(super) fn open_name_bound_by_splice(
+    ctxt: &FileLowerCtxt<'_>,
+    syntax: &parser::SyntaxNode,
+    name: &str,
+) -> bool {
+    ctxt.quote_frames
+        .last()
+        .is_some_and(|frame| frame.open_names.iter().any(|(open, _)| open == name))
+        && syntax
+            .ancestors()
+            .take_while(|node| ast::QuoteExpr::cast(node.clone()).is_none())
+            .filter_map(ast::BlockExpr::cast)
+            .any(|block| {
+                block
+                    .stmts()
+                    .any(|stmt| block_splice_declares(ctxt, &stmt, name))
+            })
+}
+
+/// Whether the statement `stmt` of a block is a hole that splices item code
+/// declaring `name`. Lowering declares those items in the block that holds the
+/// statement (`lower_block_item_code`).
+fn block_splice_declares(ctxt: &FileLowerCtxt<'_>, stmt: &ast::Stmt, name: &str) -> bool {
+    if let ast::StmtKind::Expr(expr_stmt) = stmt.kind()
+        && let Some(expr) = expr_stmt.expr()
+        && let ast::ExprKind::QuoteHole(hole) = expr.kind()
+        && let Some(FrozenHoleValue::Code(code)) = ctxt.current_hole(hole.syntax().text_range())
+    {
+        return item_code_declares(ctxt, &code, name);
+    }
+    false
+}
+
+/// Whether the items that the item code `code` splices into a block include one
+/// that declares `name`, directly or through the item code it splices in turn.
+fn item_code_declares(ctxt: &FileLowerCtxt<'_>, code: &FrozenCode, name: &str) -> bool {
+    let FrozenCode::Template {
+        kind: FrozenCodeKind::Item,
+        quote_file,
+        quote_range,
+        holes,
+        ..
+    } = code
+    else {
+        return false;
+    };
+    let (_, quote) = ctxt.quote_template_syntax(quote_file, *quote_range);
+    let holes: Vec<_> = crate::core::meta::quote_holes(&quote)
+        .expect("checked frozen quote retains valid bounded syntax")
+        .into_iter()
+        .map(|hole| hole.syntax().text_range())
+        .zip(holes)
+        .collect();
+    let splices = |hole: &parser::SyntaxNode| {
+        holes.iter().any(|(range, value)| {
+            *range == hole.text_range()
+                && matches!(value, FrozenHoleValue::Code(nested) if item_code_declares(ctxt, nested, name))
+        })
+    };
+    if let Some(item_list) = quote.item_list() {
+        item_list.syntax().children().any(|child| {
+            ast::Item::cast(child.clone()).is_some_and(|item| item_declares_name(&item, name))
+                || ast::QuoteHole::cast(child).is_some_and(|hole| splices(hole.syntax()))
+        })
+    } else if let Some(block) = quote.body() {
+        block.items().any(|item| item_declares_name(&item, name))
+            || block.stmts().any(|stmt| {
+                matches!(
+                    stmt.kind(),
+                    ast::StmtKind::Expr(expr_stmt)
+                        if matches!(
+                            expr_stmt.expr().map(|expr| expr.kind()),
+                            Some(ast::ExprKind::QuoteHole(hole)) if splices(hole.syntax())
+                        )
+                )
+            })
+    } else {
+        false
+    }
 }
 
 fn item_declares_name(item: &ast::Item, name: &str) -> bool {

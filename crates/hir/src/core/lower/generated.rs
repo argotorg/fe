@@ -24,6 +24,10 @@ pub(crate) struct ActiveQuoteFrame<'db> {
     pub(super) is_member_quote: bool,
     pub(super) open_names: Vec<(String, parser::TextRange)>,
     pub(super) bound_names: rustc_hash::FxHashSet<String>,
+    /// The open names of a where fragment that a binder of the template which
+    /// splices it declares (a generic parameter): they name that binder where
+    /// the fragment is spliced, so they are not resolved at the producer.
+    pub(super) destination_names: rustc_hash::FxHashSet<String>,
     pub(super) holes: Vec<(parser::TextRange, FrozenHoleValue)>,
 }
 
@@ -81,6 +85,7 @@ pub(super) fn append_functions<'db>(ctxt: &mut FileLowerCtxt<'db>) {
             is_member_quote: false,
             open_names,
             bound_names: rustc_hash::FxHashSet::default(),
+            destination_names: rustc_hash::FxHashSet::default(),
             holes,
         });
         let function = if let Some(items) = quote.item_list() {

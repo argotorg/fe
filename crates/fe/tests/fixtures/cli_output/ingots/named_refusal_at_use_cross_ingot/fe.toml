@@ -1,0 +1,6 @@
+[ingot]
+name = "named_refusal_at_use_cross_ingot"
+version = "0.1.0"
+
+[dependencies]
+dep = "../named_refusal_dep"

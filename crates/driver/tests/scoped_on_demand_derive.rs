@@ -147,7 +147,7 @@ const fn check_type_and_method_calls() -> u256 {
     let a = with (FieldCountScore) {
         Pair::score() + p.item_score()
     }
-    let b = with (VariantCountScore {}) {
+    let b = with (VariantCountScore) {
         Choice::score()
     }
     a + b
@@ -1592,34 +1592,69 @@ const fn run() -> u256 { with (A) { Out::value() } }
 }
 
 #[test]
-fn provider_literals_refuse_field_evaluation_without_losing_empty_literal_support() {
-    let source = r#"
+fn record_literals_in_with_are_effect_values_and_only_type_paths_open_providers() {
+    // `Provider` implements `Derive<trait Score>` and is also an effect type.
+    // `Pair` implements `Score` itself; `Bare` does not.
+    let prelude = r#"
 use core::derive::Derive
 use core::meta::{Record, Code, Item}
 trait Score { const fn score() -> u256 }
 struct Pair {}
 impl Score for Pair { const fn score() -> u256 { 100 } }
+struct Bare {}
 struct Provider { n: u256 }
 impl Derive<trait Score> for Provider {
     const fn derive(_ record: Record) -> Code<Item> {
         quote { const fn score() -> u256 { 42 } }
     }
 }
-const fn field_fault() -> u256 { let zero: u256 = 0
- 1 / zero }
-const fn run() -> u256 { with (Provider { n: field_fault() }) { Pair::score() } }
+fn needs_eff() -> u256 uses (e: Provider) { e.n }
+fn wants_score<T: Score>(_ x: T) {}
 "#;
-    let cause = prepare_err(source);
-    assert!(
-        cause.contains("provider literals must have no fields"),
-        "{cause}"
+    // A record literal is an ordinary value supplying an effect, with or
+    // without fields. It opens no provider, so the written implementation
+    // answers the goal and no generation takes place.
+    let literal = format!(
+        "{prelude}const fn run() -> u256 {{ with (Provider {{ n: 7 }}) {{ Pair::score() }} }}\n\
+         fn effect() -> u256 {{ with (Provider {{ n: 42 }}) {{ needs_eff() }} }}\n"
     );
-    assert!(!cause.contains("division by zero"), "{cause}");
-    let positive = source
-        .replace("struct Provider { n: u256 }", "struct Provider {}")
-        .replace("Provider { n: field_fault() }", "Provider {}");
-    let output = prepare(&positive).expect("empty literals remain valid provider operands");
+    let (db, file) = input(&literal);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "{}",
+        diagnostics.format_diags(&db)
+    );
+    assert_eq!(eval_const_fn_u256(&db, "run"), "100");
+
+    // A goal that only the provider could satisfy stays unsatisfied inside
+    // `with (Provider { .. })`, with the ordinary diagnostic and no
+    // generation.
+    let unsatisfied = format!(
+        "{prelude}fn run() {{ with (Provider {{ n: 7 }}) {{ wants_score(Bare {{}}) }} }}\n"
+    );
+    let (db, file) = input(&unsatisfied);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file)).format_diags(&db);
+    assert!(diagnostics.contains("trait bound"), "{diagnostics}");
+    assert!(!diagnostics.contains("provider"), "{diagnostics}");
+
+    // The type path names the provider: the same goal is answered by it.
+    let opened =
+        format!("{prelude}const fn run() -> u256 {{ with (Provider) {{ Bare::score() }} }}\n");
+    let output = prepare(&opened).unwrap();
+    assert_eq!(output_diagnostics(&output), "");
     assert_eq!(eval_const_fn_u256(&output, "run"), "42");
+
+    // A local binding named like the type still shadows it.
+    let shadowed = format!(
+        "{prelude}const fn local(_ Provider: ()) -> u256 {{ with (Provider) {{ Pair::score() }} }}\n\
+         const fn run() -> u256 {{ local(()) }}\n"
+    );
+    let (db, file) = input(&shadowed);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    assert_eq!(eval_const_fn_u256(&db, "run"), "100");
 }
 
 #[test]
@@ -2080,8 +2115,8 @@ pub fn run() -> usize {
 }
 
 #[test]
-fn record_literal_provider_through_invisible_alias_refuses_before_provider_execution() {
-    for literal in ["author::Hidden {}", "author::HiddenWithField { x: 1 }"] {
+fn provider_through_invisible_alias_refuses_before_provider_execution() {
+    for literal in ["author::Hidden", "author::HiddenWithField"] {
         let source = r#"
 use core::derive::Derive
 use core::meta::{Record, Code, Item}
@@ -3452,9 +3487,10 @@ fn caller() { broken<W>() }
         diagnostics.format_diags(&db)
     );
 
-    // A `Derive` implementation whose receiver can match the operand makes it
-    // a provider whose offers cannot be determined: it is refused where it is
-    // written, not accepted as a value.
+    // A `Derive` implementation whose receiver can match the type path makes
+    // it a provider whose offers cannot be determined: it is refused where it
+    // is written, not accepted as a value. The record literal of the same type
+    // stays an ordinary value.
     let provider = r#"
 use core::derive::Derive
 use core::meta::{Record, Code, Item, empty}
@@ -3469,7 +3505,7 @@ struct W {}
 impl Assoc for W { type Item = u8 }
 
 fn broken<T: Assoc>() {
-    with (Wrap<T::Item> {}) {}
+    with (Wrap<T::Item>) {}
 }
 
 fn caller() { broken<W>() }
@@ -3478,6 +3514,15 @@ fn caller() { broken<W>() }
     assert!(
         cause.contains("derive could not determine the type of a provider"),
         "{cause}"
+    );
+    let value = provider.replace("with (Wrap<T::Item>) {}", "with (Wrap<T::Item> {}) {}");
+    let (db, file) = input(&value);
+    assert!(prepare_file(&db, file).unwrap().is_none());
+    let diagnostics = db.run_on_top_mod(db.top_mod(file));
+    assert!(
+        !diagnostics.has_errors(&db),
+        "{}",
+        diagnostics.format_diags(&db)
     );
 }
 

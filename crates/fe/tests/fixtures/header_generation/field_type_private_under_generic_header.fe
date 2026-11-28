@@ -1,0 +1,21 @@
+use core::derive::DeriveInherent
+use core::meta::{Code, Item, Record, field, field_type}
+mod m {
+    struct Hidden<T> { v: T }
+    pub struct S<T> { pub f: Hidden<T> }
+    pub fn make() -> S<u256> { S { f: Hidden { v: 5 } } }
+}
+mod prov {
+    use core::derive::DeriveInherent
+    use core::meta::{Code, Item, Record, field, field_type}
+    pub struct P {}
+    impl DeriveInherent for P {
+        const fn derive(_ r: Record) -> Code<Item> {
+            let t = field_type(field(r, 0))
+            quote { pub fn get(own self) -> ${t} { self.f } }
+        }
+    }
+}
+impl<X> m::S<X> with (prov::P)
+#[test]
+fn t() { let _h = m::make().get() }

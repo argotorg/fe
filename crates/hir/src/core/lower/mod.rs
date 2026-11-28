@@ -760,6 +760,27 @@ impl<'db> FileLowerCtxt<'db> {
         (quote_ingot != self.top_mod().ingot(db)).then_some(frame.producer)
     }
 
+    /// The module and the syntax of the quotation that a frozen template names.
+    pub(super) fn quote_template_syntax(
+        &self,
+        quote_file: &url::Url,
+        quote_range: parser::TextRange,
+    ) -> (TopLevelMod<'db>, ast::QuoteExpr) {
+        let db = self.db();
+        let file = db
+            .workspace()
+            .get(db, quote_file)
+            .expect("validated frozen quote file exists in workspace");
+        let quote_top_mod = map_file_to_mod_impl(db, file);
+        let quote = top_mod_ast(db, quote_top_mod)
+            .syntax()
+            .descendants()
+            .filter_map(ast::QuoteExpr::cast)
+            .find(|quote| quote.syntax().text_range() == quote_range)
+            .expect("validated frozen quote belongs to unchanged input source");
+        (quote_top_mod, quote)
+    }
+
     pub(super) fn resolve_quote_template(
         &mut self,
         quote_file: &url::Url,
@@ -770,18 +791,7 @@ impl<'db> FileLowerCtxt<'db> {
         holes: Vec<common::generation::FrozenHoleValue>,
     ) -> (ast::QuoteExpr, generated::ActiveQuoteFrame<'db>) {
         let db = self.db();
-        let file = db
-            .workspace()
-            .get(db, quote_file)
-            .expect("validated frozen quote file exists in workspace");
-        let quote_top_mod = map_file_to_mod_impl(db, file);
-        let root = top_mod_ast(db, quote_top_mod);
-        let quote = root
-            .syntax()
-            .descendants()
-            .filter_map(ast::QuoteExpr::cast)
-            .find(|quote| quote.syntax().text_range() == quote_range)
-            .expect("validated frozen quote belongs to unchanged input source");
+        let (quote_top_mod, quote) = self.quote_template_syntax(quote_file, quote_range);
         let holes = crate::core::meta::quote_holes(&quote)
             .expect("checked frozen quote retains valid bounded syntax")
             .into_iter()
@@ -809,6 +819,7 @@ impl<'db> FileLowerCtxt<'db> {
                 is_member_quote: false,
                 open_names,
                 bound_names: rustc_hash::FxHashSet::default(),
+                destination_names: rustc_hash::FxHashSet::default(),
                 holes,
             },
         )

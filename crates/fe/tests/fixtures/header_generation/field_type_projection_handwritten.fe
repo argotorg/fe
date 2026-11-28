@@ -1,0 +1,9 @@
+trait Has { type Out }
+struct A {}
+impl Has for A { type Out = u256 }
+struct S<T: Has> { f: T::Out }
+impl<X: Has> S<X> {
+    pub fn get(own self) -> X::Out { self.f }
+}
+#[test]
+fn t() { assert(S<A> { f: 7 }.get() == 7) }

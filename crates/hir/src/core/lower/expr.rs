@@ -220,7 +220,14 @@ impl<'db> Expr<'db> {
                     && let Some(segment) = authored.segments().next()
                     && let Some(ast::PathSegmentKind::Ident(ident)) = segment.kind()
                 {
-                    ctxt.validate_open_name_use(ident.text(), ident.text_range());
+                    // An item that a block splices declares the name itself.
+                    if !super::path::open_name_bound_by_splice(
+                        ctxt.f_ctxt,
+                        path.syntax(),
+                        ident.text(),
+                    ) {
+                        ctxt.validate_open_name_use(ident.text(), ident.text_range());
+                    }
                 }
                 let path = PathId::lower_ast_partial(ctxt.f_ctxt, path.path());
                 Self::Path(path)

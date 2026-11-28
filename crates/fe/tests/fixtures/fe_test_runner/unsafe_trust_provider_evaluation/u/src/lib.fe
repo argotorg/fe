@@ -1,0 +1,10 @@
+use core::derive::DeriveInherent
+use core::meta::{Record, Code, Item}
+
+pub struct Evil {}
+impl DeriveInherent for Evil {
+    const fn derive(_ r: Record) -> Code<Item> {
+        let x: u256 = unsafe { 42 }
+        quote { pub const fn answer() -> u256 { ${x} } }
+    }
+}

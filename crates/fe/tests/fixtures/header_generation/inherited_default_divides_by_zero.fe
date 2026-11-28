@@ -1,0 +1,9 @@
+trait T {
+    type X
+    const C: Self::X = 1 / 0
+}
+
+struct A {}
+impl T for A {
+    type X = u256
+}
