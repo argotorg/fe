@@ -14,6 +14,7 @@
 use salsa::SalsaValue;
 
 use crate::{
+    Ingot,
     analysis::{
         HirAnalysisDb,
         name_resolution::{
@@ -36,7 +37,7 @@ use crate::{
             ty_def::{TyData, TyId},
         },
     },
-    hir_def::{ItemKind, PathId, PathKind, Trait, WithItem, scope_graph::ScopeId},
+    hir_def::{HirIngot, ItemKind, PathId, PathKind, Trait, WithItem, scope_graph::ScopeId},
     span::{DynLazySpan, path::LazyPathSpan},
 };
 
@@ -578,4 +579,26 @@ pub(crate) fn body_frame<'db>(
         BodyOwner::InheritedConst { body, .. } => scope_choices(db, body.scope()),
         _ => scope_choices(db, owner.scope()),
     }
+}
+
+/// Whether a module-level `with` is visible from `ingot`: some module of the
+/// ingot or of a transitive dependency declares one. It reads HIR items only
+/// (no frame is built and nothing is lowered or evaluated), so it cannot take
+/// part in a query cycle. A program for which it is false has no frame that
+/// could choose an implementation, and every decision that turns on a route
+/// the agreement check does not follow stays as it is without frames. If the
+/// core or std ingot ever declares a module-level `with`, it is true for every
+/// program, since every ingot depends on them.
+#[salsa::tracked(returns(copy))]
+pub(crate) fn frames_visible<'db>(db: &'db dyn HirAnalysisDb, ingot: Ingot<'db>) -> bool {
+    std::iter::once(ingot)
+        .chain(ingot.transitive_dependencies(db).iter().copied())
+        .any(|ingot| {
+            ingot.all_modules(db).iter().any(|module| {
+                module
+                    .scope_graph(db)
+                    .items_dfs()
+                    .any(|item| matches!(item, ItemKind::With(_)))
+            })
+        })
 }

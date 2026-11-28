@@ -161,6 +161,18 @@ premise can change when the element becomes packed.
   program whose dictionaries involve a named implementation is refused
   (16-0019) when a bound below that limit would add a new member, even along a
   single route; a program that involves none is unaffected.
+- In a program that can see a module-level `with` (one in the ingot or in a
+  dependency), a route the agreement check does not follow is refused as if a
+  named implementation were held: a bound below the four levels, a growing
+  associated type and a derivation that returns to a projection still being
+  computed. The walk cannot say whether a frame chooses an implementation below
+  that point, and it reads only HIR items to decide whether one is visible
+  (`frames_visible`). The rule is coarse: it refuses even where no frame can
+  reach the route. A rule that follows the traits a frame can answer would
+  accept more programs and is not built. A frame-chosen component of an
+  implementation that cannot be proved at its header
+  (`Projection::FrameUnavailable`) is refused wherever it is read, never
+  replaced by the ordinary implementation.
 - A route that returns to a goal through that goal's own dictionary counts as a
   second route: a named implementation whose associated type leads back to its
   own bound is refused wherever it is received as a concrete component.

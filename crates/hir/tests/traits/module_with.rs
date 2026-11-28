@@ -1,5 +1,10 @@
 //! A module's `with` declaration: the outermost frame of every body of its
 //! module.
+use common::{
+    InputDb,
+    file::File,
+    stdlib::{HasBuiltinCore, HasBuiltinStd},
+};
 use fe_hir::{
     analysis::{
         analysis_pass::AnalysisPassManager,
@@ -13,6 +18,7 @@ use fe_hir::{
     test_db::{HirAnalysisTestDb, find_func, format_diagnostics},
 };
 use num_traits::ToPrimitive;
+use url::Url;
 
 /// The program has no diagnostics, and each named `const fn` evaluates to its
 /// value.
@@ -1503,6 +1509,415 @@ fn demand() -> u256 { disagree() }
     .concat();
     assert!(diagnostics(&source).is_empty());
     assert!(access_report(&source).contains("error[16-0019]"));
+}
+
+/// The implementation of `Tr` for `n::N` is declared in a framed module, and
+/// the dictionary that reaches it is an ordinary one: `Bx: Holder` selects no
+/// implementation of a framed module and holds no named implementation. The
+/// proof that `n::N`'s associated type implements `Show` is still made under
+/// the frame of `n`, so `Foo: Show` is `Loud` through `H` and the ordinary
+/// implementation through `C`. The two routes disagree where they meet.
+fn holder_program(framed: bool, swapped: bool) -> String {
+    let frame = if framed { "with (Loud)" } else { "" };
+    let (bounds, arguments) = if swapped {
+        ("C: Tr2<A = Foo>, H: Holder<Out = n::N>", "V<Foo>, Bx")
+    } else {
+        ("H: Holder<Out = n::N>, C: Tr2<A = Foo>", "Bx, V<Foo>")
+    };
+    [
+        TWO_ROOTS,
+        &format!(
+            r#"
+pub trait Holder {{ type Out: Tr }}
+pub struct Bx {{}}
+impl Holder for Bx {{ type Out = n::N }}
+pub mod n {{
+    use super::*
+    {frame}
+    pub struct N {{}}
+    impl Tr for N {{
+        type A = Foo
+        fn via() -> u256 {{ Foo::show() }}
+    }}
+}}
+fn read<B: Tr>() -> u256 {{ <B::A as Show>::show() }}
+fn f2<{bounds}>() -> u256 {{ Foo::show() * 1000000 + read<H::Out>() * 1000 + C::via2() }}
+fn disagree() -> u256 {{ f2<{arguments}>() }}
+fn demand() -> u256 {{ disagree() }}
+"#
+        ),
+    ]
+    .concat()
+}
+
+#[test]
+fn a_component_reached_through_an_ordinary_dictionary_is_proved_under_its_frame() {
+    for swapped in [false, true] {
+        let source = holder_program(true, swapped);
+        assert!(diagnostics(&source).is_empty());
+        let report = access_report(&source);
+        assert!(report.contains("error[16-0019]"), "{report}");
+        assert!(
+            report.contains("`Loud` through `H: Holder<Out = N>`"),
+            "{report}"
+        );
+    }
+    let control = holder_program(false, false);
+    assert!(diagnostics(&control).is_empty());
+    let report = access_report(&control);
+    assert!(!report.contains("error["), "{report}");
+}
+
+/// `L` adds a level of associated types. The chain below `g`'s equality is
+/// `n::N` under four `L`s: the walk follows four levels and stops below
+/// `n::N: Step`, so the dictionary of `Foo: Show` that `n::N` holds under its
+/// frame is not read. It is refused, as the block form is, and not given the
+/// ordinary value. With three `L`s the bound is read and the frame's value
+/// is given.
+fn depth_program(levels: usize, bx_in_module: bool, constant: bool) -> String {
+    let fn_kw = if constant { "const fn" } else { "fn" };
+    let chain = |inner: &str| {
+        let mut ty = inner.to_string();
+        for _ in 0..levels {
+            ty = format!("L<{ty}>");
+        }
+        ty
+    };
+    let (framed_chain, root_chain) = (chain("n::N"), chain("N"));
+    let (bx_in_n, bx_in_root) = if bx_in_module {
+        (
+            format!(
+                "    pub struct Bx {{}}\n    impl Holder for Bx {{ type Out = {root_chain} }}\n"
+            ),
+            String::new(),
+        )
+    } else {
+        (
+            String::new(),
+            format!("pub struct Bx {{}}\nimpl Holder for Bx {{ type Out = {framed_chain} }}\n"),
+        )
+    };
+    let call = if bx_in_module { "n::Bx" } else { "Bx" };
+    format!(
+        r#"
+pub trait Show {{ {fn_kw} show() -> u256 }}
+pub struct Foo {{}}
+impl Show for Foo {{ {fn_kw} show() -> u256 {{ 100 }} }}
+pub impl Show for Foo as Loud {{ {fn_kw} show() -> u256 {{ 70 }} }}
+pub struct Bar {{}}
+impl Show for Bar {{ {fn_kw} show() -> u256 {{ 1 }} }}
+pub trait Step {{
+    type Next: Step
+    type A: Show
+}}
+pub struct L<T> {{}}
+impl<T: Step> Step for L<T> {{
+    type Next = T
+    type A = Bar
+}}
+pub trait Holder {{ type Out: Step }}
+{bx_in_root}pub mod n {{
+    use super::*
+    with (Loud)
+    pub struct N {{}}
+    impl Step for N {{
+        type Next = N
+        type A = Foo
+    }}
+{bx_in_n}}}
+{fn_kw} g<H: Holder<Out = {framed_chain}>>() -> u256 {{ Foo::show() }}
+{fn_kw} use_it() -> u256 {{ g<{call}>() }}
+{fn_kw} demand() -> u256 {{ use_it() }}
+"#
+    )
+}
+
+#[test]
+fn a_component_below_the_followed_levels_of_a_framed_dictionary_is_refused() {
+    for bx_in_module in [true, false] {
+        let source = depth_program(4, bx_in_module, false);
+        assert!(diagnostics(&source).is_empty());
+        let report = access_report(&source);
+        assert!(report.contains("error[16-0019]"), "{report}");
+        assert!(
+            report.contains("lies below the four associated-type levels"),
+            "{report}"
+        );
+        assert!(
+            report.contains("a module-level `with` can choose"),
+            "{report}"
+        );
+    }
+    values(&depth_program(3, true, true), &[("use_it", 70)]);
+}
+
+/// A chosen implementation whose conditions fail at the header of the
+/// implementation that reads it is an error, not a fallback to the ordinary
+/// implementation.
+fn failing_choice_program(failing: bool) -> String {
+    let condition = if failing { " where Foo: Missing" } else { "" };
+    format!(
+        r#"
+pub trait Show {{ const fn show() -> u256 }}
+pub trait Missing {{}}
+pub struct Foo {{}}
+impl Show for Foo {{ const fn show() -> u256 {{ 100 }} }}
+pub impl Show for Foo as Broken{condition} {{ const fn show() -> u256 {{ 70 }} }}
+pub trait Tr {{
+    type A: Show
+    const fn via() -> u256
+}}
+pub mod n {{
+    use super::*
+    with (Broken)
+    pub struct N {{}}
+    impl Tr for N {{
+        type A = Foo
+        const fn via() -> u256 {{ 1 }}
+    }}
+}}
+const fn read<B: Tr>() -> u256 {{ <B::A as Show>::show() }}
+const fn f() -> u256 {{ read<n::N>() }}
+"#
+    )
+}
+
+#[test]
+fn a_frame_choice_that_fails_at_a_header_is_not_replaced_by_the_ordinary_one() {
+    let report = access_report(&failing_choice_program(true));
+    assert!(report.contains("error[16-0019]"), "{report}");
+    values(&failing_choice_program(false), &[("f", 70)]);
+}
+
+/// The associated types of `n::N1` grow without end, so the walk below a
+/// dictionary of `g` returns to a projection that is still being computed.
+/// `Leaf: Br` is chosen by the frame of `n` (`LN`, 2) and not by ordinary
+/// resolution (1): the route is refused and the program ends.
+#[test]
+fn a_cycle_below_a_framed_dictionary_is_refused() {
+    let source = r#"
+pub trait Br {
+    type A: Br
+    type B: Br
+    fn v() -> u256
+}
+pub struct Leaf {}
+impl Br for Leaf {
+    type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 1 }
+}
+pub impl Br for Leaf as LN {
+    type A = Leaf
+    type B = Leaf
+    fn v() -> u256 { 2 }
+}
+pub mod n {
+    use super::*
+    with (LN)
+    pub struct N1<T> {}
+    pub struct N2<T> {}
+    impl<T: Br> Br for N1<T> {
+        type A = N1<N1<T>>
+        type B = Leaf
+        fn v() -> u256 { T::v() }
+    }
+    impl<T: Br> Br for N2<T> {
+        type A = N1<N2<T>>
+        type B = N2<N2<T>>
+        fn v() -> u256 { T::v() }
+    }
+}
+pub trait Hb { type O: Br }
+pub struct Bx<T> {}
+impl<T: Br> Hb for Bx<T> { type O = n::N1<T> }
+fn g<H: Hb<O = n::N1<Leaf>>>() -> u256 { <H::O as Br>::v() }
+fn plain() -> u256 { g<Bx<Leaf>>() }
+fn demand() -> u256 { plain() }
+"#;
+    assert!(diagnostics(source).is_empty());
+    let report = access_report(source);
+    assert!(report.contains("error[16-0019]"), "{report}");
+}
+
+/// Pinned limit. A chain of five associated-type levels below an equality is
+/// past the four levels that are followed. No implementation is named, so in
+/// a program with no module-level `with` the route is not read and ordinary
+/// resolution answers it. Where a module-level `with` is visible the route is
+/// refused, because the walk cannot say whether a frame answers below it. A
+/// later rule that follows the traits a frame can answer would accept more
+/// programs.
+#[test]
+fn a_visible_module_with_refuses_an_unfollowed_route() {
+    let chain = r#"
+pub trait Chain {
+    type Next: Chain
+    fn v() -> u256
+}
+pub struct End {}
+impl Chain for End {
+    type Next = End
+    fn v() -> u256 { 0 }
+}
+pub struct L<T> {}
+impl<T: Chain> Chain for L<T> {
+    type Next = T
+    fn v() -> u256 { T::v() + 1 }
+}
+pub trait Holder { type Out: Chain }
+pub struct Bx<T> {}
+impl<T: Chain> Holder for Bx<T> { type Out = L<L<L<L<L<T>>>>> }
+fn g<H: Holder<Out = L<L<L<L<L<End>>>>>>>() -> u256 { <H::Out as Chain>::v() }
+fn go() -> u256 { g<Bx<End>>() }
+fn demand() -> u256 { go() }
+"#;
+    let visible = [
+        chain,
+        "mod m {\n    use super::*\n    pub trait Q {}\n    pub struct Z {}\n    pub impl Q for Z as Zq {}\n    with (Zq)\n}\n",
+    ]
+    .concat();
+    assert!(diagnostics(&visible).is_empty());
+    let report = access_report(&visible);
+    assert!(report.contains("error[16-0019]"), "{report}");
+    assert!(diagnostics(chain).is_empty());
+    let report = access_report(chain);
+    assert!(!report.contains("error["), "{report}");
+}
+
+fn touch(db: &mut HirAnalysisTestDb, url: &str, content: &str) -> File {
+    db.workspace().touch(
+        db,
+        Url::parse(url).expect("valid test URL"),
+        Some(content.to_string()),
+    )
+}
+
+/// The access report of the root module of an ingot `app` that depends on an
+/// ingot `dep`.
+fn two_ingot_report(dep: &str, app: &str) -> String {
+    let mut db = HirAnalysisTestDb::default();
+    db.initialize_builtin_core();
+    db.initialize_builtin_std();
+    touch(
+        &mut db,
+        "file:///module-with-two-ingots/dep/fe.toml",
+        "[ingot]\nname = \"dep\"\nversion = \"0.1.0\"\n",
+    );
+    touch(
+        &mut db,
+        "file:///module-with-two-ingots/dep/src/lib.fe",
+        dep,
+    );
+    touch(
+        &mut db,
+        "file:///module-with-two-ingots/app/fe.toml",
+        "[ingot]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndep = { path = \"../dep\" }\n",
+    );
+    let app = touch(
+        &mut db,
+        "file:///module-with-two-ingots/app/src/lib.fe",
+        app,
+    );
+    let (module, _) = db.top_mod(app);
+    db.assert_no_diags(module);
+    let mut passes = AnalysisPassManager::new();
+    passes.add_module_pass("SemanticAccess", Box::new(SemanticAccessAnalysisPass));
+    format_diagnostics(&db, &passes.run_on_module(&db, module))
+}
+
+/// A trait constant is read inside a dependency, and its instance is built at
+/// types of the root ingot. The solve context of such an instance is the
+/// scope where the constant is written, in the dependency, which sees no
+/// module-level `with`. The frame of the root ingot answers `N: Tr` with `X`
+/// through `H` and the ordinary implementation answers it through `J`, so the
+/// routes disagree, as they do when the program is one file.
+const TWO_INGOT_DEP: &str = r#"
+pub trait Tr { const fn v() -> u256 }
+pub trait Holder { type Out: Tr }
+pub trait Holder2 { type Out: Tr }
+pub trait K { const C: u256 }
+pub struct W<T, H, J> {}
+impl<T: Tr, H: Holder<Out = T>, J: Holder2<Out = T>> K for W<T, H, J> { const C: u256 = T::v() }
+pub fn k<X: K>() -> u256 { X::C }
+"#;
+
+const TWO_INGOT_APP: &str = r#"
+pub struct N {}
+impl Tr for N { const fn v() -> u256 { 100 } }
+pub impl Tr for N as X { const fn v() -> u256 { 70 } }
+pub mod n {
+    use super::{Holder, N, X}
+    FRAME
+    pub struct Bx {}
+    impl Holder for Bx { type Out = N }
+}
+pub struct Ky {}
+impl Holder2 for Ky { type Out = N }
+fn via_dep() -> u256 { k<W<N, n::Bx, Ky>>() }
+fn demand() -> u256 { via_dep() }
+"#;
+
+#[test]
+fn a_frame_of_the_root_ingot_is_seen_by_a_trait_constant_read_in_a_dependency() {
+    let app =
+        |frame: &str, imports: &str| [imports, &TWO_INGOT_APP.replace("FRAME", frame)].concat();
+    let imports = "use dep::{Holder, Holder2, K, Tr, W, k}\n";
+    let report = two_ingot_report(TWO_INGOT_DEP, &app("with (X)", imports));
+    assert!(report.contains("error[16-0019]"), "{report}");
+    assert!(report.contains("receives `X`"), "{report}");
+    let report = two_ingot_report(TWO_INGOT_DEP, &app("", imports));
+    assert!(!report.contains("error["), "{report}");
+    // The same program in one file.
+    for (frame, refused) in [("with (X)", true), ("", false)] {
+        let source = [TWO_INGOT_DEP, "\n", &TWO_INGOT_APP.replace("FRAME", frame)].concat();
+        let report = access_report(&source);
+        assert_eq!(report.contains("error[16-0019]"), refused, "{report}");
+    }
+}
+
+/// Pinned. The chain and `g` are in a dependency, and the frame is in the root
+/// ingot. The bound of `g` names its innermost type as a parameter, so no route
+/// reaches the `Foo: Show` that `g` reads, and the ordinary value is the
+/// program's value, as it is when the program is one file.
+#[test]
+fn a_chain_over_a_parameter_in_a_dependency_keeps_the_ordinary_value() {
+    let dep = r#"
+pub trait Show { fn show() -> u256 }
+pub struct Foo {}
+impl Show for Foo { fn show() -> u256 { 100 } }
+pub impl Show for Foo as Loud { fn show() -> u256 { 70 } }
+pub struct Bar {}
+impl Show for Bar { fn show() -> u256 { 1 } }
+pub trait Step {
+    type Next: Step
+    type A: Show
+}
+pub struct L<T> {}
+impl<T: Step> Step for L<T> {
+    type Next = T
+    type A = Bar
+}
+pub trait Holder { type Out: Step }
+pub fn g<T: Step, H: Holder<Out = L<L<L<L<T>>>>>>() -> u256 { Foo::show() }
+"#;
+    let app = r#"
+use dep::{Foo, Holder, L, Loud, Show, Step, g}
+pub mod n {
+    use dep::{Foo, Holder, L, Loud, Show, Step}
+    with (Loud)
+    pub struct N {}
+    impl Step for N {
+        type Next = N
+        type A = Foo
+    }
+    pub struct Bx {}
+    impl Holder for Bx { type Out = L<L<L<L<N>>>> }
+}
+fn use_it() -> u256 { g<n::N, n::Bx>() }
+fn demand() -> u256 { use_it() }
+"#;
+    let report = two_ingot_report(dep, app);
+    assert!(!report.contains("error["), "{report}");
 }
 
 /// The operator `+` on a type that has nothing to do with the operand

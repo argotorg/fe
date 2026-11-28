@@ -12,10 +12,11 @@
 //! it again.
 
 use crate::analysis::name_resolution::Tier;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::SalsaValue;
 
 use super::{
+    adt_def::AdtDef,
     closure::{is_function_item_callable_goal, settle_function_item_providers},
     const_ty::const_body_assumptions,
     effects::rows::RowPath,
@@ -36,15 +37,19 @@ use super::{
         generation::GenerationRequest, has_concrete_components,
         normalize_trait_inst_preserving_validity, same_identity, step_bound,
     },
-    ty_check::{BodyOwner, func_declared_bounds, func_signature, module_with::scope_choices},
+    ty_check::{
+        BodyOwner, func_declared_bounds, func_signature,
+        module_with::{frames_visible, scope_choices},
+    },
     ty_def::{BorrowKind, TyFlags, TyId},
     ty_lower::CompleteSubst,
     unify::UnificationTable,
     visitor::{TyVisitable, TyVisitor, collect_flags, mentions_effect_provider},
 };
 use crate::{
+    Ingot,
     analysis::{HirAnalysisDb, semantic::GenericSubst},
-    hir_def::{Body, CallableDef, Func, ImplTrait, ItemKind, scope_graph::ScopeId},
+    hir_def::{Body, CallableDef, Contract, Func, ImplTrait, ItemKind, scope_graph::ScopeId},
 };
 
 /// Declaration that owns the numbering of a proof basis. A method adapter's
@@ -301,12 +306,15 @@ impl<'db> BoundEvidence<'db> {
                 Projection::Proof(next) => next,
                 // A route that cannot be followed gives the dictionary that
                 // ordinary resolution gives, unless a dictionary on it holds
-                // a named implementation.
-                Projection::Unfollowed if !named => ordinary_proof(db, goal)?,
+                // a named implementation or a module-level `with` is visible.
+                Projection::Unfollowed if !named && !frames_visible_for(db, goal) => {
+                    ordinary_proof(db, goal)?
+                }
                 Projection::Pending
                 | Projection::Refused
                 | Projection::Conflict(_)
-                | Projection::Unfollowed => return None,
+                | Projection::Unfollowed
+                | Projection::FrameUnavailable => return None,
             };
         }
         Some(proof)
@@ -973,6 +981,42 @@ fn refuses<'db>(db: &'db dyn HirAnalysisDb, dictionaries: &[Option<EvidenceId<'d
         .any(|proof| proof.is_some_and(|proof| proof.has_named_impl(db)))
 }
 
+/// Whether a route that is missing refuses: where a dictionary on it holds a
+/// named implementation, and, where `frames` (a module-level `with` is
+/// visible), also where the route is not followed (`Refusal::Unfollowed`),
+/// because the walk cannot say whether a frame chooses an implementation at
+/// the part it did not see. `Refusal::NoComponent` needs a named
+/// implementation. A `Projection::Conflict` and a `Projection::FrameUnavailable`
+/// refuse whatever the reader holds, and the reader says so itself.
+fn route_refuses<'db>(
+    db: &'db dyn HirAnalysisDb,
+    reason: &Refusal<'db>,
+    dictionaries: &[Option<EvidenceId<'db>>],
+    frames: bool,
+) -> bool {
+    refuses(db, dictionaries) || (frames && matches!(reason, Refusal::Unfollowed { .. }))
+}
+
+/// `reason` as it is recorded where a route refuses: a route not followed that
+/// refuses only because a module-level `with` is visible says so.
+fn blame_frame<'db>(
+    db: &'db dyn HirAnalysisDb,
+    reason: Refusal<'db>,
+    dictionaries: &[Option<EvidenceId<'db>>],
+) -> Refusal<'db> {
+    match reason {
+        Refusal::Unfollowed {
+            route, cut, named, ..
+        } => Refusal::Unfollowed {
+            route,
+            cut,
+            named,
+            by_frame: !route_refuses(db, &reason, dictionaries, false),
+        },
+        other => other,
+    }
+}
+
 #[salsa::tracked(returns(copy))]
 fn evidence_is_closed<'db>(db: &'db dyn HirAnalysisDb, evidence: EvidenceId<'db>) -> bool {
     match evidence.data(db) {
@@ -1453,10 +1497,15 @@ pub(crate) enum Refusal<'db> {
     /// The goal is reached by `route`, which is not followed, and the
     /// dictionary it starts from holds the named implementation `named`: no
     /// value is given where the walk cannot say whether the route reads it.
+    ///
+    /// `by_frame`: no dictionary on the route holds a named implementation, and
+    /// the route is refused because a module-level `with` is visible, which
+    /// can choose an implementation at the part the walk did not see.
     Unfollowed {
         route: RouteRef<'db>,
         cut: Cut,
         named: Option<ImplementorId<'db>>,
+        by_frame: bool,
     },
 }
 
@@ -1747,14 +1796,27 @@ pub(crate) enum Projection<'db> {
     /// The derivation returns to a projection that is still being computed (a
     /// salsa cycle): the route cannot be followed.
     Unfollowed,
+    /// The component was proved where the implementation is declared, under
+    /// its module's frame, and is not available there. A choice that fails is
+    /// an error, not a fallback, so it refuses whatever the reader holds.
+    FrameUnavailable,
 }
 
 impl<'db> Projection<'db> {
     pub(crate) fn proof(self) -> Option<EvidenceId<'db>> {
         match self {
             Self::Proof(proof) => Some(proof),
-            Self::Pending | Self::Refused | Self::Conflict(_) | Self::Unfollowed => None,
+            Self::Pending
+            | Self::Refused
+            | Self::Conflict(_)
+            | Self::Unfollowed
+            | Self::FrameUnavailable => None,
         }
+    }
+
+    /// A projection whose failure refuses whatever the reader holds.
+    fn refuses_unconditionally(self) -> bool {
+        matches!(self, Self::Conflict(_) | Self::FrameUnavailable)
     }
 }
 
@@ -1768,12 +1830,69 @@ fn ordinary_proof<'db>(
     if !is_closed_goal(db, goal) {
         return None;
     }
-    let scope = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+    prove(
+        db,
+        TraitSolveCx::new(db, ordinary_scope(db, goal), Tier::All),
+        goal,
+    )
+}
+
+/// The scope in which `ordinary_proof` proves `goal`.
+fn ordinary_scope<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> ScopeId<'db> {
+    TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
         db,
         goal.def(db).scope().top_mod(db).ingot(db),
         goal,
-    );
-    prove(db, TraitSolveCx::new(db, scope, Tier::All), goal)
+    )
+}
+
+/// Whether a module-level `with` is visible from the ingot of any type that
+/// occurs in `value`: every argument and every nested argument, associated
+/// type binding and constant argument is walked. A frame decides at the types
+/// of the ingot that declares it, and the solve context of an instance of a
+/// body of another ingot (a trait constant, an inherent constant or a method
+/// that is not context independent) is the scope where that body is written,
+/// so the origin of a context does not say whether a frame is visible. An
+/// ingot can only name types it can see, so the types of a goal or of an
+/// instantiated implementation reach every ingot whose frame can matter.
+fn frames_visible_in<'db, T: TyVisitable<'db>>(db: &'db dyn HirAnalysisDb, value: &T) -> bool {
+    struct Ingots<'db> {
+        db: &'db dyn HirAnalysisDb,
+        found: FxHashSet<Ingot<'db>>,
+    }
+    impl<'db> TyVisitor<'db> for Ingots<'db> {
+        fn db(&self) -> &'db dyn HirAnalysisDb {
+            self.db
+        }
+
+        fn visit_adt(&mut self, adt: AdtDef<'db>) {
+            self.found.insert(adt.ingot(self.db));
+        }
+
+        fn visit_contract(&mut self, contract: Contract<'db>) {
+            self.found.insert(contract.top_mod(self.db).ingot(self.db));
+        }
+
+        fn visit_func(&mut self, func: CallableDef<'db>) {
+            self.found.insert(func.ingot(self.db));
+        }
+    }
+    let mut ingots = Ingots {
+        db,
+        found: FxHashSet::default(),
+    };
+    value.visit_with(&mut ingots);
+    ingots
+        .found
+        .into_iter()
+        .any(|ingot| frames_visible(db, ingot))
+}
+
+/// Whether a module-level `with` is visible where `ordinary_proof` proves
+/// `goal`, or from the ingot of a type of `goal`.
+fn frames_visible_for<'db>(db: &'db dyn HirAnalysisDb, goal: TraitInstId<'db>) -> bool {
+    frames_visible(db, ordinary_scope(db, goal).top_mod(db).ingot(db))
+        || frames_visible_in(db, &goal)
 }
 
 /// Whether two proofs are one dictionary: the same proof, or the same
@@ -1981,14 +2100,23 @@ pub(crate) fn project_step<'db>(
     let received = received_conditions(db, proof, assumptions);
     let named = proof.has_named_impl(db);
     let component = impl_component(db, *selected, declared);
+    // A refusal in the dictionaries the implementation received is passed on
+    // whether or not the proof is named: under a module's frame a condition
+    // can select a named implementation that the proof itself does not hold.
+    if !named && let Some(first) = received.refused.first() {
+        return Projection::Conflict(first.reason);
+    }
     // The derivation returns to a projection that is still being computed. A
-    // dictionary that holds a named implementation is not read. Otherwise the
-    // goal has the dictionary that ordinary resolution gives it, except for
-    // an open bound that a condition answers, which the use leaves pending.
+    // dictionary that holds a named implementation is not read, and neither is
+    // one in a program that can see a module-level `with`. Otherwise the goal
+    // has the dictionary that ordinary resolution gives it, except for an open
+    // bound that a condition answers, which the use leaves pending.
     if received.unfollowed || component == ImplComponent::Unfollowed {
         if !named
             && !matches!(component, ImplComponent::Slot(_))
-            && let Some(ordinary) = goal.and_then(|goal| ordinary_proof(db, goal))
+            && let Some(ordinary) = goal
+                .filter(|&goal| !frames_visible_for(db, goal))
+                .and_then(|goal| ordinary_proof(db, goal))
         {
             return Projection::Proof(ordinary);
         }
@@ -2046,19 +2174,24 @@ pub(crate) fn project_step<'db>(
             // A header's requirements are proved at the header, under its
             // module's frame: the component is the one the declaring module
             // sees, whoever reads it.
+            let frame = scope_choices(db, implementation.scope());
             let proofs = basis_proofs(
                 db,
                 implementation.scope(),
-                scope_choices(db, implementation.scope()),
+                frame,
                 BoundOwner::ImplementationConditions(*selected),
                 declared_bounds,
                 declared,
                 declared,
             );
             let supplied = EvidenceList::of(db, received.entries.clone());
-            instantiate_proofs(db, &proofs, &subst, supplied)
-                .get(db, 0)
-                .map_or(Projection::Refused, Projection::Proof)
+            match instantiate_proofs(db, &proofs, &subst, supplied).get(db, 0) {
+                Some(proof) => Projection::Proof(proof),
+                // A frame's choice that cannot be proved at the header is an
+                // error, never the ordinary implementation.
+                None if frame.is_some() => Projection::FrameUnavailable,
+                None => Projection::Refused,
+            }
         }
     }
 }
@@ -2851,7 +2984,9 @@ pub(crate) fn instance_evidence<'db>(
         &inputs,
         supplied.rows(db),
         solve_cx,
-        Fallback::Instance,
+        Fallback::Instance {
+            frames: frames_visible_in(db, &goals),
+        },
     );
     InstanceEvidence {
         proofs: EvidenceList::of(db, received.entries).with_rows(db, supplied.rows(db).clone()),
@@ -2876,8 +3011,10 @@ pub(crate) fn instance_evidence<'db>(
 pub(crate) enum Fallback {
     /// An instance. A closed goal that no route reaches and no proof was
     /// supplied for is proved in the instance's own context, and a projection
-    /// is preferred to the supplied proof as the entry.
-    Instance,
+    /// is preferred to the supplied proof as the entry. `frames`: a module-level
+    /// `with` is visible from the ingot of a type of the instance's goals,
+    /// which the origin of the solve context does not say.
+    Instance { frames: bool },
     /// A use's proofs of the bounds a callee declares. A bound that is not
     /// proved yet stays pending, for the instance to supply, and a proof
     /// written for a declared bound is preferred as the entry. `chosen`: the
@@ -2885,8 +3022,11 @@ pub(crate) enum Fallback {
     /// where none of them names an implementation yet.
     Use { chosen: bool },
     /// The conditions of a selected implementation. A bound no route gives
-    /// stays empty, and the proof of a stated condition is preferred.
-    Conditions,
+    /// stays empty, and the proof of a stated condition is preferred. `frames`:
+    /// a module-level `with` is visible where the implementation's trait
+    /// instance is normalized, which the origin of the solve context does not
+    /// say.
+    Conditions { frames: bool },
 }
 
 /// What a body is given for one slot of its layout.
@@ -3023,6 +3163,18 @@ fn received_in_walk_order<'db>(
     debug_assert_eq!(inputs.len(), count);
     let edges = layout.implied_edges(db);
     let assumptions = cx.assumptions();
+    // A module-level `with` is visible: a frame can choose an implementation at
+    // a part of a dictionary that a route does not follow. A use does not
+    // read the components, so it does not ask.
+    let frames = match fallback {
+        Fallback::Use { .. } => false,
+        Fallback::Conditions { frames } => {
+            frames || frames_visible(db, cx.origin_scope(db).top_mod(db).ingot(db))
+        }
+        Fallback::Instance { frames } => {
+            frames || frames_visible(db, cx.origin_scope(db).top_mod(db).ingot(db))
+        }
+    };
     let goal_at = |index: usize| goals[index].expect("a slot with no goal is not read");
     // A slot is read where its goal is known; an instance reads only closed
     // goals, whose dictionary every slot that implies it must give.
@@ -3030,8 +3182,8 @@ fn received_in_walk_order<'db>(
         .iter()
         .map(|goal| {
             goal.is_some_and(|goal| match fallback {
-                Fallback::Instance => is_closed_goal(db, goal),
-                Fallback::Use { .. } | Fallback::Conditions => true,
+                Fallback::Instance { .. } => is_closed_goal(db, goal),
+                Fallback::Use { .. } | Fallback::Conditions { .. } => true,
             })
         })
         .collect();
@@ -3052,7 +3204,7 @@ fn received_in_walk_order<'db>(
             // dictionary is the proof written at the use. So is a stated
             // condition of an implementation.
             if (matches!(fallback, Fallback::Use { .. }) && inputs[at].declared)
-                || (matches!(fallback, Fallback::Conditions) && inputs[at].own.is_some())
+                || (matches!(fallback, Fallback::Conditions { .. }) && inputs[at].own.is_some())
             {
                 break;
             }
@@ -3119,13 +3271,21 @@ fn received_in_walk_order<'db>(
             route: slot_route(parent, Some(step), source, false),
             cut: Cut::Cycle,
             named: first_named_impl(db, source),
+            by_frame: false,
         },
         _ => no_component(parent),
     };
+    // Whether a projection of the slot being read failed in a way that refuses
+    // whatever the dictionaries hold (a conflict, or a frame's choice that is
+    // not available), which the ordinary proof never replaces.
+    let unconditional = std::cell::Cell::new(false);
     // A closed dictionary has no pending slot: it projects or refuses.
     let project = |proof, step, index: usize, parent: usize| {
         let projection = project_step(db, proof, step, Some(goal_at(index)), assumptions);
         debug_assert_ne!(projection, Projection::Pending);
+        if projection.refuses_unconditionally() {
+            unconditional.set(true);
+        }
         projection
             .proof()
             .ok_or_else(|| missing_route(parent, step, Some(proof), projection))
@@ -3147,9 +3307,9 @@ fn received_in_walk_order<'db>(
         // declared bound that stands after the bound it implies, and in where a
         // missing root is proved. Where a missing route is unnamed, the use keeps
         // the answer of another route and the instance gives the slot its own
-        // proof or the ordinary one, so the two bodies stay apart. `refuses` is
-        // the one test for where a missing route refuses.
-        if !matches!(fallback, Fallback::Instance) {
+        // proof or the ordinary one, so the two bodies stay apart.
+        // `route_refuses` is the one test for where a missing route refuses.
+        if !matches!(fallback, Fallback::Instance { .. }) {
             // A use or the conditions of an implementation.
             let goal = goal_at(index);
             let mut answer = own[index];
@@ -3192,8 +3352,9 @@ fn received_in_walk_order<'db>(
                     // yet, or none that can be.
                     let unreadable = parent_declared || !pending[parent];
                     blocked |= unreadable;
-                    if unreadable && refuses(db, &[own[index]]) {
-                        refusal = Some(no_component(parent));
+                    let reason = no_component(parent);
+                    if unreadable && route_refuses(db, &reason, &[own[index]], frames) {
+                        refusal = Some(reason);
                     }
                     continue;
                 };
@@ -3216,11 +3377,14 @@ fn received_in_walk_order<'db>(
                     // The dictionary is an assumption of the caller that has
                     // no slot for the goal yet: the instance supplies it.
                     Projection::Pending => {}
-                    Projection::Refused | Projection::Unfollowed => {
+                    Projection::Refused | Projection::Unfollowed | Projection::FrameUnavailable => {
                         blocked = true;
-                        if refuses(db, &[Some(offered), own[index]]) {
-                            refusal =
-                                Some(missing_route(parent, edge.step, Some(offered), projection));
+                        let dictionaries = [Some(offered), own[index]];
+                        let reason = missing_route(parent, edge.step, Some(offered), projection);
+                        if projection.refuses_unconditionally()
+                            || route_refuses(db, &reason, &dictionaries, frames)
+                        {
+                            refusal = Some(blame_frame(db, reason, &dictionaries));
                         }
                     }
                     Projection::Conflict(reason) => refusal = Some(reason),
@@ -3238,6 +3402,7 @@ fn received_in_walk_order<'db>(
         let mut candidates: Vec<(usize, BoundStep<'db>, EvidenceId<'db>)> = Vec::new();
         let mut refusal = None;
         let mut open_parent = false;
+        unconditional.set(false);
         for edge in edges
             .iter()
             .filter(|edge| edge.child as usize == index && (edge.parent as usize) < index)
@@ -3310,16 +3475,18 @@ fn received_in_walk_order<'db>(
         // A parent with no dictionary, or one that gives no component, refuses
         // the slot only where a dictionary involved holds a named
         // implementation: the slot's own proof, or the dictionary of a slot
-        // that implies it. Otherwise the slot keeps the proof it would have
+        // that implies it (or, for a route not followed, where a module-level
+        // `with` is visible). Otherwise the slot keeps the proof it would have
         // had without implied-bound agreement, and a goal no proof answers is
-        // reported where it is used.
-        let ordinary = refusal.is_some_and(|reason| reason.is_missing_route()) && {
+        // reported where it is used. A conflict or a frame's choice that is not
+        // available is never replaced.
+        let dictionaries: Vec<_> = if refusal.is_some() {
             let implying = edges
                 .iter()
                 .filter(|edge| edge.child as usize == index)
                 .map(|edge| edge.parent as usize)
                 .filter(|&parent| parent != index && closed[parent]);
-            let dictionaries: Vec<_> = std::iter::once(own[index])
+            std::iter::once(own[index])
                 .chain(implying.map(|parent| {
                     if parent < index {
                         entries[parent]
@@ -3327,26 +3494,39 @@ fn received_in_walk_order<'db>(
                         own[parent]
                     }
                 }))
-                .collect();
-            !refuses(db, &dictionaries)
+                .collect()
+        } else {
+            Vec::new()
         };
+        let ordinary = !unconditional.get()
+            && refusal.is_some_and(|reason| {
+                reason.is_missing_route() && !route_refuses(db, &reason, &dictionaries, frames)
+            });
         if ordinary {
             entries[index] = own[index].or_else(|| prove(db, cx, goal_at(index)));
         } else if let Some(reason) = refusal {
             entries[index] = None;
-            refuse_goal(&mut refused, goal_at(index), reason);
+            refuse_goal(
+                &mut refused,
+                goal_at(index),
+                blame_frame(db, reason, &dictionaries),
+            );
         }
     }
     // The gate. A refusal needs a named implementation in a dictionary the
-    // body received: where there is none, the slots are all there is. The
+    // body received: where there is none, the slots are all there is. A
+    // dictionary can also select a named implementation that it does not hold,
+    // through a component that a module's frame chose, and no tree says where:
+    // where a module-level `with` is visible the comparisons are made. The
     // dictionaries of the components of an implementation's conditions are
     // read, whatever they are.
     let active = inputs
         .iter()
         .any(|input| refuses(db, &[input.own, input.offer]))
         || rows.iter().any(|row| refuses(db, &[row.proof]))
-        || matches!(fallback, Fallback::Use { chosen: true });
-    let reads_components = matches!(fallback, Fallback::Conditions);
+        || matches!(fallback, Fallback::Use { chosen: true })
+        || frames;
+    let reads_components = matches!(fallback, Fallback::Conditions { .. });
     if !active && !reads_components {
         return Received {
             entries,
@@ -3377,11 +3557,13 @@ fn received_in_walk_order<'db>(
                 continue;
             };
             let projection = project_step(db, source, edge.step, Some(goal_at(child)), assumptions);
+            let dictionaries = [Some(source), Some(entry)];
             let reason = match projection {
-                Projection::Refused | Projection::Unfollowed
-                    if refuses(db, &[Some(source), Some(entry)]) =>
-                {
-                    Some(missing_route(parent, edge.step, Some(source), projection))
+                Projection::Refused | Projection::Unfollowed | Projection::FrameUnavailable => {
+                    let reason = missing_route(parent, edge.step, Some(source), projection);
+                    (projection.refuses_unconditionally()
+                        || route_refuses(db, &reason, &dictionaries, frames))
+                    .then(|| blame_frame(db, reason, &dictionaries))
                 }
                 Projection::Proof(component) if differ(component, entry) => {
                     Some(Refusal::Differs {
@@ -3447,14 +3629,35 @@ fn received_in_walk_order<'db>(
         let named = |slot: usize| closed[slot] && refuses(db, &[entries[slot]]);
         // A derivation that finds no dictionary or no component refuses only a
         // member read from a dictionary that holds a named implementation.
-        let applies = |member: &Component<'db>, reason: &Refusal<'db>| {
-            !reason.is_missing_route() || roots(member).into_iter().any(named)
+        // A conflict or a frame's choice that is not available always applies,
+        // and where a module-level `with` is visible so does a route that is
+        // not followed.
+        let applies = |member: &Component<'db>, reason: &Refusal<'db>, unconditional: bool| {
+            unconditional
+                || !reason.is_missing_route()
+                || roots(member).into_iter().any(named)
+                || (frames && matches!(reason, Refusal::Unfollowed { .. }))
+        };
+        // The reason as it is recorded for `member`.
+        let recorded = |member: &Component<'db>, reason: Refusal<'db>| match reason {
+            Refusal::Unfollowed {
+                route,
+                cut,
+                named: reached,
+                ..
+            } => Refusal::Unfollowed {
+                route,
+                cut,
+                named: reached,
+                by_frame: !roots(member).into_iter().any(named),
+            },
+            other => other,
         };
         // The dictionary a derivation entering `member` from `parent` gives.
         let derive = |values: &[Option<EvidenceId<'db>>],
                       member: &Component<'db>,
                       (parent, step): (u32, BoundStep<'db>)|
-         -> Result<Option<EvidenceId<'db>>, Refusal<'db>> {
+         -> Result<Option<EvidenceId<'db>>, (Refusal<'db>, bool)> {
             let parent = parent as usize;
             let source = if parent < count {
                 if !closed[parent] {
@@ -3464,9 +3667,12 @@ fn received_in_walk_order<'db>(
                     Some(source) => source,
                     None if pending[parent] => return Ok(None),
                     None => {
-                        return Err(Refusal::NoComponent {
-                            route: Some(node_route(parent, None, None)),
-                        });
+                        return Err((
+                            Refusal::NoComponent {
+                                route: Some(node_route(parent, None, None)),
+                            },
+                            false,
+                        ));
                     }
                 }
             } else {
@@ -3478,15 +3684,28 @@ fn received_in_walk_order<'db>(
             match project_step(db, source, step, Some(member.goal), assumptions) {
                 Projection::Proof(proof) => Ok(Some(proof)),
                 Projection::Pending => Ok(None),
-                Projection::Refused => Err(Refusal::NoComponent {
-                    route: Some(node_route(parent, None, Some(source))),
-                }),
-                Projection::Unfollowed => Err(Refusal::Unfollowed {
-                    route: node_route(parent, Some(step), Some(source)),
-                    cut: Cut::Cycle,
-                    named: first_named_impl(db, entries[root_of(parent)]),
-                }),
-                Projection::Conflict(reason) => Err(reason),
+                Projection::Refused => Err((
+                    Refusal::NoComponent {
+                        route: Some(node_route(parent, None, Some(source))),
+                    },
+                    false,
+                )),
+                Projection::FrameUnavailable => Err((
+                    Refusal::NoComponent {
+                        route: Some(node_route(parent, None, Some(source))),
+                    },
+                    true,
+                )),
+                Projection::Unfollowed => Err((
+                    Refusal::Unfollowed {
+                        route: node_route(parent, Some(step), Some(source)),
+                        cut: Cut::Cycle,
+                        named: first_named_impl(db, entries[root_of(parent)]),
+                        by_frame: false,
+                    },
+                    false,
+                )),
+                Projection::Conflict(reason) => Err((reason, true)),
             }
         };
         // Each member is read from the members before it, which hold the
@@ -3502,8 +3721,8 @@ fn received_in_walk_order<'db>(
                     continue;
                 }
                 match derive(&values, member, (parent, step)) {
-                    Err(reason) if applies(member, &reason) => {
-                        refuse_goal(&mut refused, member.goal, reason);
+                    Err((reason, unconditional)) if applies(member, &reason, unconditional) => {
+                        refuse_goal(&mut refused, member.goal, recorded(member, reason));
                         failed = true;
                         break;
                     }
@@ -3547,8 +3766,8 @@ fn received_in_walk_order<'db>(
                     continue;
                 }
                 match derive(&values, member, (parent, step)) {
-                    Err(reason) if applies(member, &reason) => {
-                        refuse_goal(&mut refused, member.goal, reason);
+                    Err((reason, unconditional)) if applies(member, &reason, unconditional) => {
+                        refuse_goal(&mut refused, member.goal, recorded(member, reason));
                     }
                     Ok(Some(proof)) if differ(value, proof) => {
                         refuse_goal(
@@ -3571,9 +3790,11 @@ fn received_in_walk_order<'db>(
         // A walk that stopped at its limit left bounds below its frontier
         // unread: a dictionary that holds a named implementation is refused,
         // not given a value that mixes the component it holds with an
-        // ordinary proof. Every member that was cut is checked, with the root
-        // of each derivation that enters it, so the answer does not depend on
-        // which bound comes first; a walk that reached its member limit cut
+        // ordinary proof; where a module-level `with` is visible, every cut
+        // member is refused, because a frame can choose an implementation
+        // below the frontier. Every member that was cut is checked, with the
+        // root of each derivation that enters it, so the answer does not depend
+        // on which bound comes first; a walk that reached its member limit cut
         // every member.
         for (position, member) in table.members.iter().enumerate() {
             if !(member.truncated || table.capped) {
@@ -3581,15 +3802,18 @@ fn received_in_walk_order<'db>(
             }
             let root = roots(member).into_iter().find(|&root| named(root));
             let value_named = refuses(db, &[values[position]]);
-            if let Some(root) = root.or_else(|| value_named.then_some(member.root as usize)) {
+            let root = root.or_else(|| value_named.then_some(member.root as usize));
+            if root.is_some() || frames {
+                let at = root.unwrap_or(member.root as usize);
                 refuse_goal(
                     &mut refused,
                     member.goal,
                     Refusal::Unfollowed {
                         route: node_route(count + position, None, values[position]),
                         cut: Cut::Depth,
-                        named: first_named_impl(db, entries[root])
+                        named: first_named_impl(db, entries[at])
                             .or_else(|| first_named_impl(db, values[position])),
+                        by_frame: root.is_none(),
                     },
                 );
             }
@@ -3734,6 +3958,15 @@ pub(crate) fn received_conditions<'db>(
             }
         })
         .collect();
+    // A module-level `with` visible where the trait instance of the
+    // implementation is normalized, or from the ingot of a type it is applied
+    // at, is as visible to its conditions as one visible from the scope of the
+    // implementation.
+    let normalized_in = TraitSolveCx::normalization_scope_for_trait_inst_with_origin(
+        db,
+        scope.top_mod(db).ingot(db),
+        selected.trait_inst(db),
+    );
     received(
         db,
         layout,
@@ -3741,7 +3974,10 @@ pub(crate) fn received_conditions<'db>(
         &inputs,
         &[],
         TraitSolveCx::new(db, scope, Tier::All).with_assumptions(assumptions),
-        Fallback::Conditions,
+        Fallback::Conditions {
+            frames: frames_visible(db, normalized_in.top_mod(db).ingot(db))
+                || frames_visible_in(db, instantiated),
+        },
     )
 }
 

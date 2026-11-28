@@ -366,6 +366,15 @@ Limits:
   module that declares `const K: u256 = Array<70>::show()` and
   `impl Show for Array<{ K }>`, the operand is refused with 2-0022, and the
   header with 8-0138.
+- In a program that can see a module-level `with`, whether in its own ingot
+  or in a dependency, a call whose dictionaries have bounds deeper than four
+  associated-type levels, or an associated type that grows without end, is
+  refused with 16-0019, even where the `with` cannot affect them. The compiler
+  stops following such bounds and cannot say whether a module's choice applies
+  there. The same program without a module-level `with` is accepted.
+- A component that a module's choice provides for an implementation declared
+  in that module, and that cannot be proved there, is an error wherever it is
+  read. It is never replaced by the ordinary implementation.
 - A default declared in a module without a declaration, and used in a
   signature of a framed module, takes the ordinary value: the default
   `Array<const N: u256 = { Item::price() }>` is `Array<100>` in the signature
