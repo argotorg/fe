@@ -1,6 +1,6 @@
 use common::{compilation::Target, indexmap::IndexMap, ingot::IngotKind};
 use hir::analysis::ty::AddressSpace;
-use hir::semantic::{RecvArmAbiInfo, RecvArmInput, RecvArmView, contract_entry_plan};
+use hir::semantic::{RecvArmAbiInfo, RecvArmInput, RecvArmView, contract_entry};
 use hir::{
     analysis::{
         semantic::{
@@ -1368,7 +1368,7 @@ fn contract_init_abi_plan<'db>(
             tuple_ty: contract.init_args_ty(db),
             decode_fn: entry_instance(
                 db,
-                match &contract_entry_plan(db, contract, None).init {
+                match &contract_entry(db, contract).init {
                     Ok(Some(key)) => *key,
                     Ok(None) => {
                         return Err(LowerError::Unsupported(
@@ -1403,7 +1403,7 @@ fn contract_recv_wrapper<'db>(
         validate_runtime_array_extents_in_env(db, type_env, ret_ty)?;
     }
     let recv = arm.recv(db);
-    let arm_entry = contract_entry_plan(db, contract, None).arm(recv.recv_idx(db), arm.arm_idx(db));
+    let arm_entry = contract_entry(db, contract).arm(recv.recv_idx(db), arm.arm_idx(db));
     let owner = BodyOwner::ContractRecvArm {
         contract,
         recv_idx: recv.recv_idx(db),
@@ -1431,8 +1431,9 @@ fn contract_recv_wrapper<'db>(
         RuntimeInputPlan::None
     } else {
         let host = host.clone().expect("non-unit recv args require a host");
-        match arm
-            .input(db)
+        match arm_entry
+            .ok_or_else(|| LowerError::Unsupported("a recv arm has no entry plan".to_string()))?
+            .input
             .clone()
             .map_err(|error| LowerError::Unsupported(error.message().to_string()))?
         {

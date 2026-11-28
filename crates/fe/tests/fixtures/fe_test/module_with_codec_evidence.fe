@@ -1,0 +1,117 @@
+// A derive header in a framed module proves the provider's bounds under that
+// module's frame: `DecodeWith<WirePolicy>` needs `WirePolicy: CodecPolicy`,
+// which only the module's named implementation provides. The receiver is in
+// an unframed module and uses the generated decoder: 7 + 5 + 10. A receiver in
+// a module that chooses a decoder uses it for the message: 7 + 9 + 10.
+use core::abi::{AbiDecoder, AbiFrame, AbiSize, ByteInput, Decode, Encode}
+use core::derive::Derive
+use core::message::MsgVariant
+use core::meta::{Code, Item, Record, type_ref}
+use std::abi::Sol
+use std::evm::{Call, Evm}
+
+struct WirePolicy {}
+trait CodecPolicy {
+    const fn bias() -> u256
+}
+
+impl CodecPolicy for WirePolicy as SelectedPolicy {
+    const fn bias() -> u256 {
+        5
+    }
+}
+
+const fn bias_of<P: CodecPolicy>() -> u256 {
+    P::bias()
+}
+
+struct Packet { amount: u256 }
+impl MsgVariant<Sol> for Packet {
+    const SELECTOR: u32 = 0x11223344
+    type Return = u256
+}
+impl AbiSize for Packet {
+    const HEAD_SIZE: u256 = 32
+    const IS_DYNAMIC: bool = false
+}
+impl Encode<Sol> for Packet {
+    fn encode(self, _ out: AbiFrame) {
+        out.store_word(at: 0, value: self.amount)
+    }
+}
+
+mod decoder {
+    use super::{
+        AbiDecoder,
+        ByteInput,
+        CodecPolicy,
+        Code,
+        Decode,
+        Derive,
+        Item,
+        Packet,
+        Record,
+        SelectedPolicy,
+        Sol,
+        WirePolicy,
+        bias_of,
+        type_ref,
+    }
+    with (SelectedPolicy)
+
+    struct DecodeWith<P> {}
+    impl<P: CodecPolicy> Derive<trait Decode<Sol>> for DecodeWith<P> {
+        const fn derive(_ record: Record) -> Code<Item> {
+            let word = type_ref<u256>()
+            let bias = bias_of<P>()
+            quote {
+                fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+                    let amount: ${word} = d.read_word(input) + ${bias}
+                    Packet { amount }
+                }
+            }
+        }
+    }
+    impl Decode<Sol> for Packet with (DecodeWith<WirePolicy>)
+}
+
+pub contract Receiver {
+    recv {
+        Packet { amount } -> u256 {
+            amount + 10
+        }
+    }
+}
+
+impl Decode<Sol> for Packet as AlternateDecode {
+    fn decode_payload<D: AbiDecoder<Sol>, I: ByteInput>(_ d: mut D, _ input: I) -> Self {
+        Packet { amount: d.read_word(input) + 9 }
+    }
+}
+
+mod selected_receive {
+    use super::{AlternateDecode, Packet}
+    with (AlternateDecode)
+
+    pub contract Receiver {
+        recv {
+            Packet { amount } -> u256 {
+                amount + 10
+            }
+        }
+    }
+}
+
+#[test]
+fn a_real_receiver_uses_the_generated_decode()
+uses (evm: mut Evm, call: mut Call)
+{
+    let addr = evm.create2<Receiver>(value: Wei::zero(), args: (), salt: 0)
+    let result = addr.try_call(Packet { amount: 7 })
+    assert!(result.success() && result.returndata_len() == 32)
+    assert!(result.returndata().word_at(0) == 22)
+    let selected = evm.create2<selected_receive::Receiver>(value: Wei::zero(), args: (), salt: 1)
+    let result = selected.try_call(Packet { amount: 7 })
+    assert!(result.success() && result.returndata_len() == 32)
+    assert!(result.returndata().word_at(0) == 26)
+}

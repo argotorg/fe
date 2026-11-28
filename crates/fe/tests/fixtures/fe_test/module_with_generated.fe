@@ -1,0 +1,32 @@
+// A derive header's generated members are bodies of the module the header
+// is in, so they are checked under that module's `with` declaration, as a
+// written implementation there is.
+use core::derive::Derive
+use core::meta::{Record, Code, Item as MetaItem}
+pub struct Item {}
+pub trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub impl Price for Item as W { fn price(self) -> u256 { 70 } }
+pub trait Total { fn total(self) -> u256 }
+pub struct Plain {}
+impl Derive<trait Total> for Plain {
+    const fn derive(_ record: Record) -> Code<MetaItem> {
+        quote { fn total(self) -> u256 { Item {}.price() } }
+    }
+}
+pub struct Outside {}
+impl Total for Outside with (Plain)
+pub mod m {
+    use super::*
+    with (W)
+    pub struct A {}
+    impl Total for A with (Plain)
+    pub struct H {}
+    impl Total for H { fn total(self) -> u256 { Item {}.price() } }
+}
+#[test]
+fn generated_members_see_the_frame_of_their_module() {
+    assert!(Outside {}.total() == 100)
+    assert!(m::A {}.total() == 70)
+    assert!(m::H {}.total() == 70)
+}

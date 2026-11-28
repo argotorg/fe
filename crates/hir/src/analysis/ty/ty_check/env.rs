@@ -371,6 +371,10 @@ impl<'db> TyCheckEnv<'db> {
         // default a trait gives a constant is the body of the implementation that
         // inherits it, as if that implementation had written the same text, so it
         // is opened for that default too.
+        // The choices of the module's `with` declaration, which every body of
+        // the module starts with.
+        let frame = super::module_with::body_frame(db, owner);
+
         let choices_owner = match owner {
             BodyOwner::InheritedConst { implementation, .. } => {
                 Some(ItemKind::ImplTrait(implementation))
@@ -394,12 +398,25 @@ impl<'db> TyCheckEnv<'db> {
             closure_infos: SecondaryMap::new(),
             resolved_field_index: SecondaryMap::new(),
             deferred: Vec::new(),
+            // An implementation's methods see their own implementation first,
+            // ordinary or named, after the module's choices. A named
+            // implementation always needs its own entry. An ordinary one
+            // needs it only when the module's frame chooses for its trait,
+            // the only way the frame could answer a goal of that trait ahead
+            // of the ordinary search. Otherwise the ordinary search already
+            // finds it, and its methods keep the frame as their choices.
             choices: match choices_owner {
-                Some(ItemKind::ImplTrait(implementation))
-                    if implementation.selection_name(db).is_some() =>
-                {
-                    super::super::trait_lower::lower_impl_trait(db, implementation).map(
-                        |implementation| {
+                Some(ItemKind::ImplTrait(impl_trait)) => {
+                    super::super::trait_lower::lower_impl_trait(db, impl_trait)
+                        .filter(|implementation| {
+                            impl_trait.selection_name(db).is_some()
+                                || super::module_with::frame_may_answer(
+                                    db,
+                                    frame,
+                                    implementation.trait_(db).def(db),
+                                )
+                        })
+                        .map(|implementation| {
                             let owner = implementation.hir_impl_trait(db);
                             let mut args = implementation.params(db).clone();
                             if let Some(parent) =
@@ -415,14 +432,14 @@ impl<'db> TyCheckEnv<'db> {
                                     .instantiate(db, &args);
                             super::super::trait_resolution::ChosenImpls::push_applied(
                                 db,
-                                None,
+                                frame,
                                 implementation,
                                 applied,
                             )
-                        },
-                    )
+                        })
+                        .or(frame)
                 }
-                _ => None,
+                _ => frame,
             },
             expr_choices: SecondaryMap::new(),
             stmt_choices: SecondaryMap::new(),

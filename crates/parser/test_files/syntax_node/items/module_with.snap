@@ -1,0 +1,109 @@
+---
+source: crates/parser/tests/syntax_node.rs
+expression: node
+input_file: test_files/syntax_node/items/module_with.fe
+---
+Root@0..92
+  ItemList@0..91
+    Item@0..8
+      WithItem@0..8
+        Ident@0..4 "with"
+        WhiteSpace@4..5 " "
+        WithItemList@5..8
+          LParen@5..6 "("
+          Path@6..7
+            PathSegment@6..7
+              Ident@6..7 "A"
+          RParen@7..8 ")"
+    Newline@8..10 "\n\n"
+    Item@10..91
+      Mod@10..91
+        ModKw@10..13 "mod"
+        WhiteSpace@13..14 " "
+        Ident@14..19 "inner"
+        WhiteSpace@19..20 " "
+        ItemList@20..91
+          LBrace@20..21 "{"
+          Newline@21..22 "\n"
+          WhiteSpace@22..26 "    "
+          Item@26..38
+            Use@26..38
+              UseKw@26..29 "use"
+              WhiteSpace@29..30 " "
+              UseTree@30..38
+                UsePath@30..38
+                  UsePathSegment@30..35
+                    SuperKw@30..35 "super"
+                  Colon2@35..37 "::"
+                  UsePathSegment@37..38
+                    Ident@37..38 "A"
+          Newline@38..39 "\n"
+          WhiteSpace@39..43 "    "
+          Item@43..75
+            WithItem@43..75
+              Ident@43..47 "with"
+              WhiteSpace@47..48 " "
+              WithItemList@48..75
+                LParen@48..49 "("
+                Path@49..50
+                  PathSegment@49..50
+                    Ident@49..50 "A"
+                Comma@50..51 ","
+                WhiteSpace@51..52 " "
+                Path@52..56
+                  PathSegment@52..53
+                    Ident@52..53 "m"
+                  Colon2@53..55 "::"
+                  PathSegment@55..56
+                    Ident@55..56 "B"
+                Comma@56..57 ","
+                WhiteSpace@57..58 " "
+                Path@58..63
+                  PathSegment@58..63
+                    Ident@58..59 "C"
+                    GenericArgList@59..63
+                      Lt@59..60 "<"
+                      TypeGenericArg@60..62
+                        PathType@60..62
+                          Path@60..62
+                            PathSegment@60..62
+                              Ident@60..62 "u8"
+                      Gt@62..63 ">"
+                Comma@63..64 ","
+                WhiteSpace@64..65 " "
+                Path@65..73
+                  PathSegment@65..73
+                    QualifiedType@65..73
+                      Lt@65..66 "<"
+                      PathType@66..67
+                        Path@66..67
+                          PathSegment@66..67
+                            Ident@66..67 "S"
+                      WhiteSpace@67..68 " "
+                      AsKw@68..70 "as"
+                      WhiteSpace@70..71 " "
+                      TraitRef@71..72
+                        Path@71..72
+                          PathSegment@71..72
+                            Ident@71..72 "T"
+                      Gt@72..73 ">"
+                Comma@73..74 ","
+                RParen@74..75 ")"
+          Newline@75..76 "\n"
+          WhiteSpace@76..80 "    "
+          Item@80..89
+            Func@80..89
+              FnKw@80..82 "fn"
+              WhiteSpace@82..83 " "
+              FuncSignature@83..86
+                Ident@83..84 "f"
+                FuncParamList@84..86
+                  LParen@84..85 "("
+                  RParen@85..86 ")"
+              WhiteSpace@86..87 " "
+              BlockExpr@87..89
+                LBrace@87..88 "{"
+                RBrace@88..89 "}"
+          Newline@89..90 "\n"
+          RBrace@90..91 "}"
+  Newline@91..92 "\n"

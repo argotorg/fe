@@ -1,0 +1,10 @@
+---
+source: crates/fmt/tests/format_snapshots.rs
+expression: output
+input_file: tests/fixtures/module_with.fe
+---
+with (A, m::B, C<u8>, <S as T>)
+mod inner {
+    with (D)
+    fn f() {}
+}

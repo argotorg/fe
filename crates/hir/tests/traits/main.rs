@@ -9,6 +9,7 @@ mod effect_key_normalization;
 mod evidence;
 mod generic_default_metadata;
 mod generic_elaboration_contracts;
+mod module_with;
 mod named_evidence;
 mod param_env;
 mod trait_families;

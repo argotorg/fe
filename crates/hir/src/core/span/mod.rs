@@ -6,7 +6,7 @@ use crate::{
     HirDb, SpannedHirDb,
     core::hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, Mod, StaticAssert, Struct, TopLevelMod,
-        Trait, TypeAlias, Use, scope_graph::ScopeId,
+        Trait, TypeAlias, Use, WithItem, scope_graph::ScopeId,
     },
     core::lower::top_mod_ast,
 };
@@ -44,7 +44,7 @@ pub mod lazy_spans {
             LazyFuncSignatureSpan, LazyFuncSpan, LazyImplSpan, LazyImplTraitSpan, LazyItemSpan,
             LazyModSpan, LazyRecvArmListSpan, LazyRecvArmSpan, LazyStaticAssertSpan,
             LazyStructSpan, LazyTopModSpan, LazyTraitSpan, LazyTypeAliasSpan, LazyUseSpan,
-            LazyVariantDefListSpan, LazyVariantDefSpan,
+            LazyVariantDefListSpan, LazyVariantDefSpan, LazyWithItemListSpan, LazyWithItemSpan,
         },
         params::{
             LazyConstGenericParamSpan, LazyFuncParamListSpan, LazyFuncParamSpan,
@@ -171,6 +171,13 @@ pub fn static_assert_ast<'db>(
     db: &'db dyn SpannedHirDb,
     item: StaticAssert<'db>,
 ) -> &'db HirOrigin<ast::StaticAssert> {
+    item.origin(db)
+}
+
+pub fn with_item_ast<'db>(
+    db: &'db dyn SpannedHirDb,
+    item: WithItem<'db>,
+) -> &'db HirOrigin<ast::WithItem> {
     item.origin(db)
 }
 

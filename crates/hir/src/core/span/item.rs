@@ -18,7 +18,7 @@ use super::{
 use crate::{
     hir_def::{
         Body, Const, Contract, Enum, Func, Impl, ImplTrait, ItemKind, Mod, StaticAssert, Struct,
-        TopLevelMod, Trait, TypeAlias, Use,
+        TopLevelMod, Trait, TypeAlias, Use, WithItem,
     },
     span::{
         DesugaredOrigin, DesugaredUseFocus, MsgDesugaredFocus,
@@ -696,6 +696,27 @@ impl<'db> LazyStaticAssertSpan<'db> {
         Self(crate::span::transition::SpanTransitionChain::new(a))
     }
 }
+
+define_lazy_span_node!(
+    LazyWithItemSpan,
+    ast::WithItem,
+    @node {
+        (operands, operands, LazyWithItemListSpan),
+    }
+);
+impl<'db> LazyWithItemSpan<'db> {
+    pub fn new(w: WithItem<'db>) -> Self {
+        Self(crate::span::transition::SpanTransitionChain::new(w))
+    }
+}
+
+define_lazy_span_node!(
+    LazyWithItemListSpan,
+    ast::WithItemList,
+    @idx {
+        (operand, LazyPathSpan),
+    }
+);
 
 define_lazy_span_node!(
     LazyUseSpan,

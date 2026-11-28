@@ -1,0 +1,7 @@
+with (A)
+
+mod inner {
+    use super::A
+    with (A, m::B, C<u8>, <S as T>,)
+    fn f() {}
+}

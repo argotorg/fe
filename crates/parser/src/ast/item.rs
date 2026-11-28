@@ -49,6 +49,7 @@ impl Item {
             .or_else(|| support::child(self.syntax()).map(ItemKind::StaticAssert))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Use))
             .or_else(|| support::child(self.syntax()).map(ItemKind::Extern))
+            .or_else(|| support::child(self.syntax()).map(ItemKind::With))
     }
 
     /// The attributes of the item, whatever its kind.
@@ -685,6 +686,28 @@ impl StaticAssert {
 }
 
 ast_node! {
+    /// `with (A, m::B, C<u8>, <S as T>)`: a module's declaration of the
+    /// implementations its bodies are checked under.
+    pub struct WithItem,
+    SK::WithItem,
+}
+impl super::AttrListOwner for WithItem {}
+impl super::ItemModifierOwner for WithItem {}
+impl WithItem {
+    /// Returns the operands of the declaration.
+    pub fn operands(&self) -> Option<WithItemList> {
+        support::child(self.syntax())
+    }
+}
+
+ast_node! {
+    /// The operands of a module's `with` declaration.
+    pub struct WithItemList,
+    SK::WithItemList,
+    IntoIterator<Item=super::Path>
+}
+
+ast_node! {
     /// `use foo::{bar, Baz::*}`
     pub struct Use,
     SK::Use,
@@ -948,6 +971,7 @@ pub enum ItemKind {
     StaticAssert(StaticAssert),
     Use(Use),
     Extern(Extern),
+    With(WithItem),
 }
 
 #[cfg(test)]

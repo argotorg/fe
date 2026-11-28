@@ -555,6 +555,10 @@ impl<'db> ItemKind<'db> {
                 );
                 StaticAssert::lower_ast(ctxt, assert_);
             }
+            // The parser refuses attributes on a module's `with` declaration.
+            ast::ItemKind::With(with) => {
+                WithItem::lower_ast(ctxt, with);
+            }
             ast::ItemKind::Use(use_) => {
                 validate_unsupported_item_attrs(ctxt, use_.attr_list(), "use", None);
                 Use::lower_ast(ctxt, use_);
@@ -1062,6 +1066,7 @@ impl<'db> Impl<'db> {
                         Some(ast::ItemKind::Msg(_)) => "a `msg`",
                         Some(ast::ItemKind::Extern(_)) => "an `extern`",
                         Some(ast::ItemKind::StaticAssert(_)) => "a static assertion",
+                        Some(ast::ItemKind::With(_)) => "a `with` declaration",
                         None => match member {
                             super::generated::QuotedMember::Shape(_) => "a `shape`",
                             super::generated::QuotedMember::Item(_) => "an item",
@@ -1685,6 +1690,25 @@ impl<'db> StaticAssert<'db> {
             origin,
         );
         ctxt.leave_item_scope(assert_)
+    }
+}
+
+impl<'db> WithItem<'db> {
+    pub(super) fn lower_ast(ctxt: &mut FileLowerCtxt<'db>, ast: ast::WithItem) -> Self {
+        let idx = ctxt.next_with_idx();
+        let id = ctxt.joined_id(TrackedItemVariant::With(idx));
+        ctxt.enter_item_scope(id, false);
+
+        let operands = ast
+            .operands()
+            .into_iter()
+            .flatten()
+            .map(|path| Partial::Present(PathId::lower_ast(ctxt, path)))
+            .collect();
+        let origin = HirOrigin::raw(&ast);
+
+        let with = Self::new(ctxt.db(), id, operands, ctxt.top_mod(), origin);
+        ctxt.leave_item_scope(with)
     }
 }
 

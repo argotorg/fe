@@ -3732,6 +3732,107 @@ fn f() -> u256 {{
     }
 }
 
+// A derive provider is named by its type path; a value expression is always an
+// effect value, even when its type implements `Derive`.
+const PROVIDER_OPERAND_PRELUDE: &str = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item}
+
+trait Tr { fn op(self) -> u256 }
+struct R { a: u256 }
+struct P {}
+impl Derive<trait Tr> for P {
+    const fn derive(_ record: Record) -> Code<Item> {
+        quote { fn op(self) -> u256 { 1 } }
+    }
+}
+fn takes() -> u256 uses (e: P) { 1 }
+"#;
+
+#[test]
+fn with_operand_names_a_provider_by_its_type_path() {
+    let source = format!(
+        "{PROVIDER_OPERAND_PRELUDE}fn f() -> u256 {{ with (P) {{ R {{ a: 0 }}.op() }} }}\n"
+    );
+    assert_eq!(prepared_diagnostics(&source), "");
+}
+
+/// A provider and the header that uses it are in a framed module. The frame is
+/// read while the header's members are generated, so building the frame must not
+/// wait on that generation.
+const GENERATED_IN_FRAMED_MODULE: &str = r#"
+use core::derive::Derive
+use core::meta::{Record, Code, Item as MetaItem}
+pub struct Item {}
+pub trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub impl Price for Item as W { fn price(self) -> u256 { 70 } }
+pub trait Total { fn total(self) -> u256 }
+pub mod m {
+    use super::*
+    with (W, OPERAND)
+    pub struct Plain {}
+    impl Derive<trait Total> for Plain {
+        const fn derive(_ record: Record) -> Code<MetaItem> {
+            quote { fn total(self) -> u256 { Item {}.price() } }
+        }
+    }
+    pub struct A {}
+    HEADER
+}
+"#;
+
+fn framed_module_diagnostics(operand: &str, header: &str) -> String {
+    let source = GENERATED_IN_FRAMED_MODULE
+        .replace("OPERAND", operand)
+        .replace("HEADER", header);
+    let (db, file) = input(&source);
+    let db = match prepare_file(&db, file) {
+        Ok(Some(output)) => output,
+        _ => db,
+    };
+    output_diagnostics(&db)
+}
+
+/// The operand `Nope` names nothing: it is refused, and the header beside it
+/// is generated.
+#[test]
+fn an_unknown_operand_beside_a_derive_header_in_the_same_module_is_refused() {
+    let found = framed_module_diagnostics("Nope", "impl Total for A with (Plain)");
+    assert!(found.contains("8-0012"), "{found}");
+    assert_eq!(found.matches("error[").count(), 1, "{found}");
+}
+
+/// The operand names the header, an implementation that a provider generates:
+/// the frame names it without waiting for the generation.
+#[test]
+fn an_operand_naming_a_derive_header_of_the_same_module_ends_without_a_cycle() {
+    assert_eq!(
+        framed_module_diagnostics("Gen", "impl Total for A as Gen with (Plain)"),
+        ""
+    );
+}
+
+/// `P {}` is an effect value: it offers no implementation of `Tr`, it is
+/// accepted where an effect `P` is asked for, and nothing provides it where
+/// none is given.
+#[test]
+#[ignore = "the literal route of check_with is removed on the metaprogramming layer (#2053); this base still has it"]
+fn with_operand_literal_of_a_provider_type_is_an_effect_value() {
+    let diagnostics_of = |body: &str| {
+        let source = format!("{PROVIDER_OPERAND_PRELUDE}fn f() -> u256 {{ {body} }}\n");
+        let (db, file) = input(&source);
+        let db = match prepare_file(&db, file) {
+            Ok(Some(output)) => output,
+            _ => db,
+        };
+        output_diagnostics(&db)
+    };
+    assert_ne!(diagnostics_of("with (P {}) { R { a: 0 }.op() }"), "");
+    assert_eq!(diagnostics_of("with (P {}) { takes() }"), "");
+    assert_ne!(diagnostics_of("takes()"), "");
+}
+
 #[test]
 fn open_provider_does_not_claim_traits_with_outputs() {
     let evaluated = |source: &str| {

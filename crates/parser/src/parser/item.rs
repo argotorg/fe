@@ -26,7 +26,7 @@ use crate::{
 
 define_scope! {
     #[doc(hidden)]
-    pub ItemListScope {inside_mod: bool},
+    pub ItemListScope {inside_mod: bool, seen_with: bool},
     ItemList,
     (
         ModKw,
@@ -80,7 +80,22 @@ impl super::Parse for ItemListScope {
             }
 
             let start = parser.token_pos;
-            let ok = parser.parse_ok(ItemScope::default())?;
+            // A module has one `with` declaration. It is found before the item
+            // is parsed, so that the second one is reported at its own start.
+            let is_with = parser.dry_run(|parser| {
+                let _ = attr::parse_attr_list(parser);
+                while matches!(parser.current_kind(), Some(PubKw | UnsafeKw)) {
+                    parser.bump();
+                }
+                is_with_declaration_head(parser)
+            });
+            if is_with && self.seen_with {
+                parser.error_msg_on_current_token(
+                    "a module has one `with` declaration; list every implementation in it",
+                );
+            }
+            self.seen_with |= is_with;
+            let ok = parser.parse_ok(ItemScope::new(true))?;
             if parser.current_kind().is_none() || (self.inside_mod && parser.bump_if(RBrace)) {
                 break;
             }
@@ -110,7 +125,7 @@ impl super::Parse for ItemListScope {
 
 define_scope! {
     #[doc(hidden)]
-    pub(super) ItemScope,
+    pub(super) ItemScope { at_module: bool },
     Item
 }
 impl super::Parse for ItemScope {
@@ -120,6 +135,7 @@ impl super::Parse for ItemScope {
         use crate::SyntaxKind::*;
 
         let mut checkpoint = attr::parse_attr_list(parser)?;
+        let has_attrs = checkpoint.is_some();
         let modifiers = parse_item_modifiers(parser, &mut checkpoint);
 
         if modifiers.is_unsafe
@@ -128,13 +144,28 @@ impl super::Parse for ItemScope {
         {
             parser.error("expected `fn`, `trait` or `impl` after `unsafe` keyword");
         } else if modifiers.is_pub
-            && matches!(parser.current_kind(), Some(ExternKw | StaticAssertKw))
+            && (matches!(parser.current_kind(), Some(ExternKw | StaticAssertKw))
+                || parser.is_ident("with"))
         {
             let error_msg = format!(
                 "`pub` can't be used for `{}`",
                 parser.current_token().unwrap().text()
             );
             parser.error(&error_msg);
+        }
+
+        // A module's `with` declaration: `with` is an identifier, so it is
+        // recognized by what follows it.
+        if is_with_declaration_head(parser) {
+            if !self.at_module {
+                parser.error("a `with` declaration is written at module level");
+            }
+            if has_attrs {
+                parser.error("a module's `with` declaration takes no attributes");
+            }
+            return parser
+                .parse_cp(WithItemScope::default(), checkpoint)
+                .map(|_| ());
         }
 
         // A quoted `type` is an associated type member; where it is spliced
@@ -243,6 +274,17 @@ fn is_fn_item_head<S: TokenStream>(parser: &mut Parser<S>) -> bool {
         ),
         _ => false,
     }
+}
+
+/// The head of a module's `with` declaration: the identifier `with` and a
+/// parenthesized list. `with` is not a keyword, so an item is recognized as
+/// this declaration by the `(` after it.
+fn is_with_declaration_head<S: TokenStream>(parser: &mut Parser<S>) -> bool {
+    parser.is_ident("with")
+        && matches!(
+            parser.peek_n_non_trivia(2).as_slice(),
+            [SyntaxKind::Ident, SyntaxKind::LParen]
+        )
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -381,7 +423,7 @@ impl super::Parse for ModScope {
             parser.bump();
         }
         if parser.find_and_pop(SyntaxKind::LBrace, ExpectedKind::Body(SyntaxKind::Mod))? {
-            parser.parse(ItemListScope::new(true))?;
+            parser.parse(ItemListScope::new(true, false))?;
         }
         Ok(())
     }
@@ -1176,6 +1218,58 @@ impl super::Parse for StaticAssertScope {
             parser.bump();
         }
         Ok(())
+    }
+}
+
+define_scope! { WithItemScope, WithItem }
+impl super::Parse for WithItemScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        parser.bump_expected(SyntaxKind::Ident); // `with`
+        parser.parse(WithItemListScope::default())?;
+        parser.set_newline_as_trivia(false);
+        if parser.current_kind() == Some(SyntaxKind::LBrace) {
+            parser.error_msg_on_current_token(
+                "a module's `with` declaration has no block; it applies to every item of the module",
+            );
+        }
+        Ok(())
+    }
+}
+
+define_scope! { WithItemListScope, WithItemList, (RParen, Comma) }
+impl super::Parse for WithItemListScope {
+    type Error = Recovery<ErrProof>;
+
+    fn parse<S: TokenStream>(&mut self, parser: &mut Parser<S>) -> Result<(), Self::Error> {
+        if parser.peek_n_non_trivia(2).as_slice() == [SyntaxKind::LParen, SyntaxKind::RParen] {
+            parser.error("a module's `with` declaration names at least one implementation");
+        }
+        parse_list(
+            parser,
+            false,
+            SyntaxKind::WithItemList,
+            (SyntaxKind::LParen, SyntaxKind::RParen),
+            |parser| {
+                const OPERAND: &str = "a module's `with` names implementations: `Name`, `path::Name`, `Name<Args>` or `<Type as Trait>`";
+                if !parser
+                    .current_kind()
+                    .is_some_and(super::path::is_path_segment)
+                {
+                    parser.error_msg_on_current_token(OPERAND);
+                    return Ok(());
+                }
+                parser.parse_or_recover(PathScope::default())?;
+                if !matches!(
+                    parser.current_kind(),
+                    Some(SyntaxKind::Comma | SyntaxKind::RParen)
+                ) {
+                    parser.error_msg_on_current_token(OPERAND);
+                }
+                Ok(())
+            },
+        )
     }
 }
 

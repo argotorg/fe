@@ -1203,6 +1203,7 @@ impl<'db> ItemKind<'db> {
             ItemKind::ImplTrait(i) => i.pretty_print(db),
             ItemKind::Const(c) => c.pretty_print(db),
             ItemKind::StaticAssert(a) => a.pretty_print(db),
+            ItemKind::With(w) => w.pretty_print(db),
             ItemKind::Use(u) => u.pretty_print(db),
             ItemKind::Body(_) => panic!("Body should not be printed as an item"),
         }
@@ -1775,6 +1776,19 @@ impl<'db> StaticAssert<'db> {
         result.push_str(&self.condition(db).pretty_print(db));
         result.push(')');
         result
+    }
+}
+
+impl<'db> WithItem<'db> {
+    /// Pretty-prints a module's `with` declaration.
+    pub fn pretty_print(self, db: &dyn HirDb) -> String {
+        let operands = self
+            .operands(db)
+            .iter()
+            .filter_map(|operand| operand.to_opt())
+            .map(|path| path.pretty_print(db))
+            .collect::<Vec<_>>();
+        format!("with ({})", operands.join(", "))
     }
 }
 

@@ -451,6 +451,7 @@ impl ToDoc for ast::Item {
             Some(ItemKind::ImplTrait(impl_trait)) => impl_trait.to_doc(ctx),
             Some(ItemKind::Const(const_)) => const_.to_doc(ctx),
             Some(ItemKind::StaticAssert(assert_)) => assert_.to_doc(ctx),
+            Some(ItemKind::With(with)) => with.to_doc(ctx),
             Some(ItemKind::Use(use_)) => use_.to_doc(ctx),
             Some(ItemKind::Extern(extern_)) => extern_.to_doc(ctx),
             Some(ItemKind::Msg(msg)) => msg.to_doc(ctx),
@@ -1644,6 +1645,23 @@ impl ToDoc for ast::StaticAssert {
         attrs
             .append(alloc.text("static_assert("))
             .append(condition)
+            .append(alloc.text(")"))
+    }
+}
+
+impl ToDoc for ast::WithItem {
+    fn to_doc<'a>(&self, ctx: &'a RewriteContext<'a>) -> Doc<'a> {
+        let alloc = &ctx.alloc;
+
+        token_doc_item_like_if_comments!(self, ctx);
+
+        let operands: Vec<_> = self.operands().map_or_else(Vec::new, |list| {
+            list.into_iter().map(|path| path.to_doc(ctx)).collect()
+        });
+
+        alloc
+            .text("with (")
+            .append(alloc.intersperse(operands, alloc.text(", ")))
             .append(alloc.text(")"))
     }
 }

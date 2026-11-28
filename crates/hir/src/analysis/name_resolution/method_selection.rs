@@ -19,7 +19,7 @@ use crate::analysis::{
         trait_resolution::{
             ChoiceEntry, ChosenImpl, ChosenImpls, GoalSatisfiability, PredicateListId,
             TraitSolveCx, generation::GenerationRequest, goal_query_has_solution,
-            is_goal_query_satisfiable,
+            is_goal_query_satisfiable, self_ty_may_match,
         },
         ty_def::{TyData, TyId},
         unify::UnificationTable,
@@ -424,8 +424,9 @@ pub(crate) fn select_trait_method_candidates<'db>(
     // operator names a trait of another package, which a scoped derive does
     // not serve, and the use is refused with the rule (see
     // `ops_trait_not_implemented`).
-    let choices = choices
-        .and_then(|choices| choices.retain(db, |_, entry| matches!(entry, ChoiceEntry::Impl(_))));
+    let choices = choices.and_then(|choices| {
+        choices.retain(db, |_, entry| !matches!(entry, ChoiceEntry::Provider(_)))
+    });
     // The caller names the trait and decides which tier to ask.
     let candidates = assemble_method_candidates(
         db,
@@ -649,7 +650,16 @@ impl<'db, 'a> CandidateAssembler<'db, 'a> {
             .choices
             .map(|choices| choices.items(self.db).clone())
             .unwrap_or_default();
-        for choice in chosen.into_iter().filter_map(ChoiceEntry::implementation) {
+        // A declared operand is chosen only when its trait declares the method
+        // and its self type can be the receiver's. An operator is looked up the
+        // same way.
+        let (db, method_name, receiver) = (self.db, self.method_name, self.receiver.original());
+        for choice in chosen.into_iter().filter_map(|entry| {
+            entry.implementation_if(db, |trait_, self_ty| {
+                trait_.method_defs(db).contains_key(&method_name)
+                    && self_ty_may_match(db, self_ty, receiver)
+            })
+        }) {
             self.insert_chosen_trait_method_cand(choice);
         }
 
@@ -1516,7 +1526,7 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                             ChoiceEntry::Provider(opening) => {
                                 opening.hints(self.db).traits.as_slice()
                             }
-                            ChoiceEntry::Impl(_) => &[],
+                            ChoiceEntry::Impl(_) | ChoiceEntry::Declared(_) => &[],
                         })
                         .copied(),
                 )
@@ -1524,8 +1534,13 @@ impl<'db, 'a> MethodSelector<'db, 'a> {
                     self.choices
                         .iter()
                         .flat_map(|choices| choices.items(self.db))
-                        .filter_map(|entry| entry.implementation())
-                        .map(|choice| choice.implementation().trait_def(self.db)),
+                        .filter_map(|entry| match entry {
+                            ChoiceEntry::Impl(choice) => {
+                                Some(choice.implementation().trait_def(self.db))
+                            }
+                            ChoiceEntry::Declared(operand) => Some(operand.trait_(self.db)),
+                            ChoiceEntry::Provider(_) => None,
+                        }),
                 ),
         )
     }

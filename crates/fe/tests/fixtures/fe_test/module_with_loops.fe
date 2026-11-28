@@ -1,0 +1,131 @@
+// Module-level `with` and loops: the declared module and its twin agree.
+// Loops, adapters and generic helpers need the proofs of the bounds of associated types.
+use core::iter::Collection
+use core::marker::Copy
+pub struct Item {}
+impl Copy for Item {}
+pub trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub impl Price for Item as W { fn price(self) -> u256 { 70 } }
+pub struct Seq { pub n: usize }
+impl Collection for Seq {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c
+        yield ref v }
+}
+pub impl Collection for Seq as Cubes {
+    type Cursor = usize
+    type Item = usize
+    fn start(self) -> usize { 0 }
+    fn has(self, _ c: usize) -> bool { c < self.n }
+    fn next(self, _ c: usize) -> usize { c + 1 }
+    fn at(self, _ c: usize) -> ref usize { let v = c * c * c
+        yield ref v }
+}
+pub fn total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E {
+    var sum: usize = 0
+    for x in xs { sum += x }
+    sum
+}
+pub fn total_price<C: Collection<Item = Item>>(_ xs: C) -> u256 uses C::E {
+    xs.fold(0, |acc, x| acc + x.price())
+}
+pub mod declared {
+    use super::*
+    with (W, Cubes)
+    pub fn array_loop() -> u256 {
+        let xs: [u256; 3] = [1, 2, 3]
+        var s: u256 = 0
+        for x in xs { s += x }
+        s
+    }
+    pub fn range_loop() -> usize {
+        var s: usize = 0
+        for i in 0..4 { s += i }
+        s
+    }
+    pub fn priced_loop() -> u256 {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        var s: u256 = 0
+        for x in xs { s += x.price() }
+        s
+    }
+    pub fn user_collection() -> usize {
+        var s: usize = 0
+        let seq = Seq { n: 4 }
+        for x in seq { s += x }
+        s
+    }
+    pub fn generic_helper() -> usize { total(Seq { n: 4 }) }
+    pub fn adapter() -> u256 {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        xs.fold(0, |acc, x| acc + x.price())
+    }
+    pub fn generic_adapter() -> u256 {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        total_price(xs)
+    }
+    pub fn local_total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E {
+        var sum: usize = 0
+        for x in xs { sum += x }
+        sum
+    }
+    pub fn via_local_total() -> usize { local_total(Seq { n: 4 }) }
+}
+pub mod twin {
+    use super::*
+    pub fn array_loop() -> u256 { with (W, Cubes) {
+        let xs: [u256; 3] = [1, 2, 3]
+        var s: u256 = 0
+        for x in xs { s += x }
+        s
+    } }
+    pub fn range_loop() -> usize { with (W, Cubes) {
+        var s: usize = 0
+        for i in 0..4 { s += i }
+        s
+    } }
+    pub fn priced_loop() -> u256 { with (W, Cubes) {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        var s: u256 = 0
+        for x in xs { s += x.price() }
+        s
+    } }
+    pub fn user_collection() -> usize { with (W, Cubes) {
+        var s: usize = 0
+        let seq = Seq { n: 4 }
+        for x in seq { s += x }
+        s
+    } }
+    pub fn generic_helper() -> usize { with (W, Cubes) { total(Seq { n: 4 }) } }
+    pub fn adapter() -> u256 { with (W, Cubes) {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        xs.fold(0, |acc, x| acc + x.price())
+    } }
+    pub fn generic_adapter() -> u256 { with (W, Cubes) {
+        let xs: [Item; 3] = [Item {}, Item {}, Item {}]
+        total_price(xs)
+    } }
+    pub fn local_total<C: Collection<Item = usize>>(_ xs: C) -> usize uses C::E { with (W, Cubes) {
+        var sum: usize = 0
+        for x in xs { sum += x }
+        sum
+    } }
+    pub fn via_local_total() -> usize { with (W, Cubes) { local_total(Seq { n: 4 }) } }
+}
+#[test]
+fn loop_twins() {
+    assert!(declared::array_loop() == 6 && twin::array_loop() == 6)
+    assert!(declared::range_loop() == 6 && twin::range_loop() == 6)
+    assert!(declared::priced_loop() == 210 && twin::priced_loop() == 210)
+    assert!(declared::user_collection() == 36 && twin::user_collection() == 36)
+    assert!(declared::generic_helper() == 36 && twin::generic_helper() == 36)
+    assert!(declared::adapter() == 210 && twin::adapter() == 210)
+    assert!(declared::generic_adapter() == 300 && twin::generic_adapter() == 300)
+    assert!(declared::via_local_total() == 36 && twin::via_local_total() == 36)
+    assert!(declared::local_total(Seq { n: 4 }) == 14 && twin::local_total(Seq { n: 4 }) == 14)
+}

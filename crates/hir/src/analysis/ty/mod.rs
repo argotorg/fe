@@ -378,6 +378,24 @@ impl ModuleAnalysisPass for AdtDefAnalysisPass {
     }
 }
 
+/// Reports the diagnostics of every module's `with` declaration. The frame of
+/// a module is built by `ty_check::module_with`.
+pub struct ModuleWithAnalysisPass {}
+
+impl ModuleAnalysisPass for ModuleWithAnalysisPass {
+    fn run_on_module<'db>(
+        &mut self,
+        db: &'db dyn HirAnalysisDb,
+        top_mod: TopLevelMod<'db>,
+    ) -> Vec<Box<dyn DiagnosticVoucher + 'db>> {
+        std::iter::once(top_mod.scope())
+            .chain(top_mod.all_mods(db).iter().map(|module| module.scope()))
+            .flat_map(|module| ty_check::module_with::module_with_check(db, module).iter())
+            .map(|diag| diag.to_voucher())
+            .collect()
+    }
+}
+
 /// Checks for name conflicts of item definitions.
 pub struct DefConflictAnalysisPass {}
 
@@ -432,6 +450,7 @@ fn walk<'db>(
 
                 ItemKind::TopMod(_)
                 | ItemKind::StaticAssert(_)
+                | ItemKind::With(_)
                 | ItemKind::Use(_)
                 | ItemKind::Impl(_)
                 | ItemKind::Body(_) => continue,

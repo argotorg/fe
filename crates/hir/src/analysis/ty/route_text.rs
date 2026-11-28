@@ -177,6 +177,16 @@ pub(crate) fn refusal_label<'db>(
             )
         })
     };
+    // The clause that ends a route that is not followed: the named
+    // implementation a dictionary on it holds, or, where the route is refused
+    // only because a module-level `with` is visible, that a frame can choose.
+    let reached = |named: Option<ImplementorId<'db>>, by_frame: bool, place: &str| {
+        if by_frame {
+            format!(", and a module-level `with` can choose an implementation {place}")
+        } else {
+            holds(named)
+        }
+    };
     match reason {
         Refusal::Differs { a, b } => {
             // The route written at the use comes first, then the routes in the
@@ -214,6 +224,7 @@ pub(crate) fn refusal_label<'db>(
             route,
             cut: Cut::Depth,
             named,
+            by_frame,
         } => {
             let limit = match COMPONENT_DEPTH_LIMIT {
                 4 => "four".to_string(),
@@ -222,17 +233,18 @@ pub(crate) fn refusal_label<'db>(
             format!(
                 "`{printed}` lies below the {limit} associated-type levels that are followed through {}{}",
                 route_text(db, scope, &route),
-                holds(named)
+                reached(named, by_frame, "below that point")
             )
         }
         Refusal::Unfollowed {
             route,
             cut: Cut::Cycle,
             named,
+            by_frame,
         } => format!(
             "`{printed}` is reached through {} by a derivation that returns to a dictionary still being formed{}",
             route_text(db, scope, &route),
-            holds(named)
+            reached(named, by_frame, "on it")
         ),
     }
 }

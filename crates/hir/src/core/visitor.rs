@@ -18,7 +18,7 @@ use crate::{
         PathKind, StaticAssert, Stmt, StmtId, Struct, TopLevelMod, Trait, TraitRefId, TupleTypeId,
         TypeAlias, TypeBound, TypeId, TypeKind, Use, UseAlias, UsePathId, UsePathSegment,
         VariantDef, VariantDefListId, VariantKind, WhereClauseId, WhereClausePredicate,
-        WherePredicate,
+        WherePredicate, WithItem,
         attr::{self, AttrArgValue},
         scope_graph::ScopeId,
     },
@@ -36,7 +36,7 @@ pub mod prelude {
         walk_static_assert, walk_stmt, walk_struct, walk_super_trait_list, walk_top_mod,
         walk_trait, walk_trait_ref, walk_type, walk_type_alias, walk_type_bound,
         walk_type_bound_list, walk_use, walk_use_path, walk_variant_def, walk_variant_def_list,
-        walk_where_clause, walk_where_predicate,
+        walk_where_clause, walk_where_predicate, walk_with_item,
     };
     pub use crate::core::span::lazy_spans::*;
 }
@@ -169,6 +169,14 @@ pub trait Visitor<'db> {
         assert_: StaticAssert<'db>,
     ) {
         walk_static_assert(self, ctxt, assert_)
+    }
+
+    fn visit_with_item(
+        &mut self,
+        ctxt: &mut VisitorCtxt<'db, LazyWithItemSpan<'db>>,
+        with: WithItem<'db>,
+    ) {
+        walk_with_item(self, ctxt, with)
     }
 
     fn visit_use(&mut self, ctxt: &mut VisitorCtxt<'db, LazyUseSpan<'db>>, use_: Use<'db>) {
@@ -477,6 +485,10 @@ pub fn walk_item<'db, V>(
         ItemKind::StaticAssert(assert_) => {
             let mut new_ctxt = VisitorCtxt::with_static_assert(ctxt.db, assert_);
             visitor.visit_static_assert(&mut new_ctxt, assert_)
+        }
+        ItemKind::With(with) => {
+            let mut new_ctxt = VisitorCtxt::with_with_item(ctxt.db, with);
+            visitor.visit_with_item(&mut new_ctxt, with)
         }
         ItemKind::Use(use_) => {
             let mut new_ctxt = VisitorCtxt::with_use(ctxt.db, use_);
@@ -1137,6 +1149,18 @@ pub fn walk_static_assert<'db, V>(
 
     let body = assert_.condition(ctxt.db);
     visitor.visit_body(&mut VisitorCtxt::with_body(ctxt.db, body), body);
+}
+
+/// Visits nothing: the operands of a module's `with` declaration name
+/// implementations, and the path visitors would resolve them as types and
+/// values.
+pub fn walk_with_item<'db, V>(
+    _visitor: &mut V,
+    _ctxt: &mut VisitorCtxt<'db, LazyWithItemSpan<'db>>,
+    _with: WithItem<'db>,
+) where
+    V: Visitor<'db> + ?Sized,
+{
 }
 
 pub fn walk_use<'db, V>(
@@ -2333,6 +2357,7 @@ where
             ChainRoot::ImplTrait(impl_trait) => impl_trait.top_mod(self.db),
             ChainRoot::Const(const_) => const_.top_mod(self.db),
             ChainRoot::StaticAssert(assert_) => assert_.top_mod(self.db),
+            ChainRoot::With(with) => with.top_mod(self.db),
             ChainRoot::Use(use_) => use_.top_mod(self.db),
             ChainRoot::Body(body) => body.top_mod(self.db),
             ChainRoot::AssocMember(member) => member.item().top_mod(self.db),
@@ -2510,6 +2535,7 @@ define_item_ctxt_ctor! {
     (LazyImplTraitSpan<'db>, with_impl_trait(impl_trait: ImplTrait<'db>)),
     (LazyConstSpan<'db>, with_const(const_: Const<'db>)),
     (LazyStaticAssertSpan<'db>, with_static_assert(assert_: StaticAssert<'db>)),
+    (LazyWithItemSpan<'db>, with_with_item(with: WithItem<'db>)),
     (LazyUseSpan<'db>, with_use(use_: Use<'db>)),
     (LazyBodySpan<'db>, with_body(body: Body<'db>)),
 }

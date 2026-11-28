@@ -25,7 +25,7 @@ use crate::{
             LazyConstSpan, LazyContractSpan, LazyEnumSpan, LazyFuncSpan, LazyImplSpan,
             LazyImplTraitSpan, LazyItemSpan, LazyModSpan, LazyStaticAssertSpan, LazyStructSpan,
             LazyTopModSpan, LazyTraitSpan, LazyTraitTypeSpan, LazyTypeAliasSpan, LazyUseSpan,
-            LazyVariantDefSpan,
+            LazyVariantDefSpan, LazyWithItemSpan,
         },
         params::LazyGenericParamListSpan,
     },
@@ -57,6 +57,8 @@ pub enum ItemKind<'db> {
     ImplTrait(ImplTrait<'db>),
     Const(Const<'db>),
     StaticAssert(StaticAssert<'db>),
+    /// A module's `with` declaration.
+    With(WithItem<'db>),
     Use(Use<'db>),
     /// Body is not an `Item`, but this makes it easier for analyzers to handle
     /// it.
@@ -87,7 +89,7 @@ impl<'db> ItemKind<'db> {
             // A named implementation's name is an item name, in its own
             // domain (`NameDomain::IMPL`).
             ImplTrait(impl_trait) => impl_trait.selection_name(db),
-            Use(_) | StaticAssert(_) | Body(_) | Impl(_) => None,
+            Use(_) | StaticAssert(_) | With(_) | Body(_) | Impl(_) => None,
         }
     }
 
@@ -127,6 +129,7 @@ impl<'db> ItemKind<'db> {
             ImplTrait(_) => "impl trait",
             Const(_) => "const",
             StaticAssert(_) => "static_assert",
+            With(_) => "with",
             Use(_) => "use",
             Body(_) => "body",
         }
@@ -143,7 +146,9 @@ impl<'db> ItemKind<'db> {
             TypeAlias(alias) => Some(alias.span().alias().into()),
             Trait(trait_) => Some(trait_.span().name().into()),
             Const(const_) => Some(const_.span().name().into()),
-            TopMod(_) | StaticAssert(_) | Use(_) | Body(_) | Impl(_) | ImplTrait(_) => None,
+            TopMod(_) | StaticAssert(_) | With(_) | Use(_) | Body(_) | Impl(_) | ImplTrait(_) => {
+                None
+            }
         }
     }
 
@@ -161,7 +166,7 @@ impl<'db> ItemKind<'db> {
             Const(const_) => const_.vis(db),
             Use(use_) => use_.vis(db),
             ImplTrait(impl_trait) => impl_trait.vis(db),
-            StaticAssert(_) | Impl(_) | Body(_) => Visibility::Private,
+            StaticAssert(_) | With(_) | Impl(_) | Body(_) => Visibility::Private,
         }
     }
 
@@ -179,6 +184,7 @@ impl<'db> ItemKind<'db> {
             ItemKind::ImplTrait(impl_trait) => impl_trait.top_mod(db),
             ItemKind::Const(const_) => const_.top_mod(db),
             ItemKind::StaticAssert(assert_) => assert_.top_mod(db),
+            ItemKind::With(with) => with.top_mod(db),
             ItemKind::Use(use_) => use_.top_mod(db),
             ItemKind::Body(body) => body.top_mod(db),
         }
@@ -1740,6 +1746,32 @@ impl<'db> StaticAssert<'db> {
     }
 }
 
+/// A module's `with` declaration: the implementations every body of the
+/// module is checked under.
+#[salsa::tracked]
+#[derive(Debug, PartialOrd, Ord)]
+pub struct WithItem<'db> {
+    #[returns(copy)]
+    id: TrackedItemId<'db>,
+
+    #[returns(ref)]
+    pub operands: Vec<Partial<PathId<'db>>>,
+    #[returns(copy)]
+    pub top_mod: TopLevelMod<'db>,
+
+    pub(crate) origin: HirOrigin<ast::WithItem>,
+}
+
+impl<'db> WithItem<'db> {
+    pub fn span(self) -> LazyWithItemSpan<'db> {
+        LazyWithItemSpan::new(self)
+    }
+
+    pub fn scope(self) -> ScopeId<'db> {
+        ScopeId::from_item(self.into())
+    }
+}
+
 #[salsa::tracked]
 #[derive(Debug, PartialOrd, Ord)]
 pub struct Use<'db> {
@@ -2082,6 +2114,7 @@ pub enum TrackedItemVariant<'db> {
     ImplTrait(u32),
     Const(Partial<IdentId<'db>>),
     StaticAssert(u32),
+    With(u32),
     ContractInit,
     ContractRecvArm { recv_idx: u32, arm_idx: u32 },
     Use(Partial<super::UsePathId<'db>>),

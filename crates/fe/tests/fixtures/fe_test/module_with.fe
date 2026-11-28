@@ -1,0 +1,124 @@
+// Module-level `with`: the declared module and its twin, whose bodies are
+// each wrapped in the same `with` list, give the same values.
+// The values are the rule's: 100 ordinary, 70 for `W`, 50 for `V`.
+pub struct Item {}
+pub trait Price { fn price(self) -> u256 }
+impl Price for Item { fn price(self) -> u256 { 100 } }
+pub impl Price for Item as W { fn price(self) -> u256 { 70 } }
+pub impl Price for Item as V { fn price(self) -> u256 { 50 } }
+pub fn price_of<T: Price>(_ t: T) -> u256 { t.price() }
+pub fn ordinary_helper() -> u256 { Item {}.price() }
+pub struct Box<T> { pub v: T }
+pub trait Total { fn total(self) -> u256 }
+impl<T: Price> Total for Box<T> { fn total(self) -> u256 { self.v.price() } }
+pub fn apply<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+pub fn charge() -> u256 uses (p: Price) { p.price() }
+pub trait Pair {
+    fn base(self) -> u256
+    fn doubled(self) -> u256
+}
+impl Pair for Item {
+    fn base(self) -> u256 { 100 }
+    fn doubled(self) -> u256 { self.base() * 2 }
+}
+pub impl Pair for Item as Big {
+    fn base(self) -> u256 { 1000 }
+    fn doubled(self) -> u256 { self.base() * 2 }
+}
+pub mod declared {
+    use super::*
+    with (W, Big)
+    pub fn direct() -> u256 { Item {}.price() }
+    pub fn through_bound() -> u256 { price_of(Item {}) }
+    pub fn same_module_helper() -> u256 { local_helper() }
+    fn local_helper() -> u256 { Item {}.price() }
+    pub fn other_module_helper() -> u256 { ordinary_helper() }
+    pub fn container() -> u256 { Box { v: Item {} }.total() }
+    pub fn closure_inside() -> u256 { apply(|| Item {}.price()) }
+    pub fn call_given<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { f() }
+    pub fn provider() -> u256 { with (Price = Item {}) { charge() } }
+    pub fn inner_block_wins() -> u256 { with (V) { Item {}.price() } }
+    pub fn opens_ordinary() -> u256 { with (<Item as Price>) { Item {}.price() } }
+    pub fn local_item() -> u256 {
+        fn inner() -> u256 { Item {}.price() }
+        inner()
+    }
+    pub fn generic_body<T: Price>(_ t: T) -> u256 { t.price() + (Item {}).price() }
+    pub fn pair_doubled() -> u256 { Item {}.doubled() }
+    impl Pair for Item as Small {
+        fn base(self) -> u256 { 7 }
+        fn doubled(self) -> u256 { self.base() * 2 }
+    }
+    pub fn small_doubled() -> u256 { with (Small) { Item {}.doubled() } }
+    pub mod child {
+        use super::super::*
+        pub fn inherited() -> u256 { Item {}.price() }
+    }
+    pub mod inner_wins {
+        use super::super::*
+        with (V)
+        pub fn inner() -> u256 { Item {}.price() }
+    }
+    #[test]
+    fn a_test_body_sees_the_frame_declared() { assert!(Item {}.price() == 70) }
+}
+pub mod twin {
+    use super::*
+    pub fn direct() -> u256 { with (W, Big) { Item {}.price() } }
+    pub fn through_bound() -> u256 { with (W, Big) { price_of(Item {}) } }
+    pub fn same_module_helper() -> u256 { with (W, Big) { local_helper() } }
+    fn local_helper() -> u256 { with (W, Big) { Item {}.price() } }
+    pub fn other_module_helper() -> u256 { with (W, Big) { ordinary_helper() } }
+    pub fn container() -> u256 { with (W, Big) { Box { v: Item {} }.total() } }
+    pub fn closure_inside() -> u256 { with (W, Big) { apply(|| Item {}.price()) } }
+    pub fn call_given<F: Fn() -> u256>(_ f: F) -> u256 uses F::E { with (W, Big) { f() } }
+    pub fn provider() -> u256 { with (W, Big) { with (Price = Item {}) { charge() } } }
+    pub fn inner_block_wins() -> u256 { with (W, Big) { with (V) { Item {}.price() } } }
+    pub fn opens_ordinary() -> u256 { with (W, Big) { with (<Item as Price>) { Item {}.price() } } }
+    pub fn local_item() -> u256 { with (W, Big) {
+        fn inner() -> u256 { with (W, Big) { Item {}.price() } }
+        inner()
+    } }
+    pub fn generic_body<T: Price>(_ t: T) -> u256 { with (W, Big) { t.price() + (Item {}).price() } }
+    pub fn pair_doubled() -> u256 { with (W, Big) { Item {}.doubled() } }
+    impl Pair for Item as Small {
+        fn base(self) -> u256 { with (W, Big) { with (Small) { 7 } } }
+        fn doubled(self) -> u256 { with (W, Big) { with (Small) { self.base() * 2 } } }
+    }
+    pub fn small_doubled() -> u256 { with (W, Big) { with (Small) { Item {}.doubled() } } }
+    pub mod child {
+        use super::super::*
+        pub fn inherited() -> u256 { with (W, Big) { Item {}.price() } }
+    }
+    pub mod inner_wins {
+        use super::super::*
+        pub fn inner() -> u256 { with (W, Big) { with (V) { Item {}.price() } } }
+    }
+    #[test]
+    fn a_test_body_sees_the_frame_twin() { with (W, Big) { assert!(Item {}.price() == 70) } }
+}
+fn same(_ d: u256, _ t: u256, _ expected: u256) -> bool { d == t && t == expected }
+#[test]
+fn twins() {
+    assert!(same(declared::direct(), twin::direct(), 70))
+    assert!(same(declared::through_bound(), twin::through_bound(), 70))
+    assert!(same(declared::same_module_helper(), twin::same_module_helper(), 70))
+    assert!(same(declared::other_module_helper(), twin::other_module_helper(), 100))
+    assert!(same(declared::container(), twin::container(), 70))
+    assert!(same(declared::closure_inside(), twin::closure_inside(), 70))
+    assert!(same(declared::call_given(|| Item {}.price()), twin::call_given(|| Item {}.price()), 100))
+    assert!(same(declared::provider(), twin::provider(), 70))
+    assert!(same(declared::inner_block_wins(), twin::inner_block_wins(), 50))
+    assert!(same(declared::opens_ordinary(), twin::opens_ordinary(), 100))
+    assert!(same(declared::local_item(), twin::local_item(), 70))
+    assert!(same(declared::generic_body(Item {}), twin::generic_body(Item {}), 170))
+    assert!(same(declared::pair_doubled(), twin::pair_doubled(), 2000))
+    assert!(same(declared::small_doubled(), twin::small_doubled(), 14))
+    assert!(same(declared::child::inherited(), twin::child::inherited(), 70))
+    assert!(same(declared::inner_wins::inner(), twin::inner_wins::inner(), 50))
+}
+#[test]
+fn outside_the_module_nothing_changes() {
+    assert!(Item {}.price() == 100)
+    assert!(price_of(Item {}) == 100)
+}

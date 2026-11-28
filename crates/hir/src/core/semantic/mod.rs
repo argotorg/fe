@@ -2154,7 +2154,11 @@ impl<'db> RecvArmView<'db> {
     /// (see `RecvArmInput`), or why it cannot. The arm's type check, the
     /// trust walk and the lowering of the contract read the same plan.
     #[salsa::tracked(returns(ref))]
-    pub fn input(self, db: &'db dyn HirAnalysisDb) -> Result<RecvArmInput<'db>, EntryPlanError> {
+    pub fn input(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        frame: Option<ChosenImpls<'db>>,
+    ) -> Result<RecvArmInput<'db>, EntryPlanError> {
         let contract = self.contract(db);
         let scope = contract.scope();
         let assumptions = PredicateListId::empty_list(db);
@@ -2189,11 +2193,11 @@ impl<'db> RecvArmView<'db> {
          -> Result<SemanticInstanceKey<'db>, EntryPlanError> {
             let func = resolve_lib_func_path(db, scope, path)
                 .ok_or_else(|| EntryPlanError::Failed(format!("missing required {path}")))?;
-            generated_callee_key(db, scope, assumptions, None, func, None, args).map_err(|error| {
+            generated_callee_key(db, scope, assumptions, frame, func, None, args).map_err(|error| {
                 let MethodArgMapError::UnprovedBound { goal } = error else {
                     return EntryPlanError::failed(path, &error);
                 };
-                let solve_cx = TraitSolveCx::new(db, scope, Tier::All);
+                let solve_cx = TraitSolveCx::new(db, scope, Tier::All).with_choices(frame);
                 EntryPlanError::unproved(db, solve_cx, goal)
             })
         };
@@ -2540,12 +2544,25 @@ impl<'db> ContractEntryPlan<'db> {
     }
 }
 
+/// The plan for the entry code of `contract`, under the frame of the module
+/// that holds the contract: the check, the trust walk and the lowering of the
+/// entry code read this one plan, so they never disagree about a choice.
+pub fn contract_entry<'db>(
+    db: &'db dyn HirAnalysisDb,
+    contract: Contract<'db>,
+) -> &'db ContractEntryPlan<'db> {
+    contract_entry_plan(
+        db,
+        contract,
+        crate::analysis::ty::ty_check::module_with::scope_choices(db, contract.scope()),
+    )
+}
+
 /// The plan for the entry code of `contract`. `frame` is the choice frame of
-/// the calls that decode the `init` arguments and encode the return values;
-/// no frame is passed yet, so they resolve as any generated call does. A recv
-/// arm's input is read from the arm's own plan (`RecvArmView::input`).
+/// the calls that read the `init` arguments, read the message of each arm and
+/// encode the return values.
 #[salsa::tracked(returns(ref))]
-pub fn contract_entry_plan<'db>(
+fn contract_entry_plan<'db>(
     db: &'db dyn HirAnalysisDb,
     contract: Contract<'db>,
     frame: Option<ChosenImpls<'db>>,
@@ -2673,7 +2690,7 @@ pub fn contract_entry_plan<'db>(
             arms.push(RecvArmEntry {
                 recv_idx,
                 arm_idx: arm.arm_idx(db),
-                input: arm.input(db).clone(),
+                input: arm.input(db, frame).clone(),
                 ret,
             });
         }

@@ -47,7 +47,7 @@ use crate::{
         },
     },
     core::semantic::{
-        RecvArmView, RecvView, ValidatedFieldLayoutPlan, contract_entry_plan, msg_variant_impl,
+        RecvArmView, RecvView, ValidatedFieldLayoutPlan, contract_entry, msg_variant_impl,
         resolve_sol_abi_ty,
     },
     hir_def::{
@@ -1087,7 +1087,7 @@ pub(crate) fn contract_entry_failures<'db>(
         .to_opt()
         .map_or("<unnamed>", |name| name.data(db))
         .to_string();
-    let plan = contract_entry_plan(db, contract, None);
+    let plan = contract_entry(db, contract);
     let span = contract.span();
     let mut failures = Vec::new();
     let mut fail = |span, message, secondary| {

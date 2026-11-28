@@ -1,0 +1,30 @@
+// A message's selector is a fact of the message: the same message written in
+// a module with a `with` declaration has the selector it has without one.
+use core::message::MsgVariant
+use std::abi::Sol
+
+pub trait Mark { const fn mark() -> u256 }
+pub struct Tag {}
+impl Mark for Tag { const fn mark() -> u256 { 1 } }
+pub impl Mark for Tag as Other { const fn mark() -> u256 { 2 } }
+
+pub mod plain {
+    pub msg M {
+        #[selector = sol("get(uint256)")]
+        Get { x: u256 } -> u256,
+    }
+}
+
+pub mod framed {
+    use super::*
+    with (Other)
+    pub msg M {
+        #[selector = sol("get(uint256)")]
+        Get { x: u256 } -> u256,
+    }
+}
+
+#[test]
+fn selectors_do_not_depend_on_a_module_frame() {
+    assert!(<plain::M::Get as MsgVariant<Sol>>::SELECTOR == <framed::M::Get as MsgVariant<Sol>>::SELECTOR)
+}

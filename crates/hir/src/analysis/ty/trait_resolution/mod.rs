@@ -6,6 +6,7 @@ use super::{
     fold::TyFoldable,
     normalize::{normalize_from_assumptions, normalize_ty},
     trait_def::{ImplementorId, TraitInstId},
+    ty_check::module_with::declared_choice,
     ty_def::{BorrowKind, TyData, TyFlags, TyId},
     visitor::{TyVisitable, TyVisitor, walk_ty},
 };
@@ -23,7 +24,7 @@ use crate::analysis::{
 };
 use crate::{
     Ingot,
-    hir_def::{HirIngot, IdentId, ModeMarker, scope_graph::ScopeId},
+    hir_def::{HirIngot, IdentId, ModeMarker, Trait, WithItem, scope_graph::ScopeId},
 };
 use common::indexmap::IndexSet;
 use constraint::collect_constraints;
@@ -40,6 +41,7 @@ pub(in crate::analysis::ty) use component_walk::component_path_goal;
 pub(crate) use table_solver::{
     ChoiceMatch, answering_assumption, assumption_matcher, common_choice_goal, match_chosen_header,
     match_header_args, match_header_args_possible, match_prepared_header, match_prepared_type,
+    self_ty_may_match,
 };
 
 pub(crate) const TRAIT_SOLVER_ROOT_ANSWER_LIMIT: usize = 2;
@@ -169,17 +171,77 @@ impl<'db> TyVisitable<'db> for ChosenImpl<'db> {
     }
 }
 
+/// An operand of a module's `with` declaration, as an entry of that module's
+/// frame. The entry names the trait the operand can answer and nothing else:
+/// the operand's implementation is chosen on first use, by
+/// `ty_check::module_with::declared_choice`, and only for a goal of that trait.
+/// A module has no generic parameters, so nothing in the entry is substituted.
+#[salsa::interned]
+#[derive(Debug)]
+pub struct DeclaredOperand<'db> {
+    /// The module's `with` declaration.
+    #[returns(copy)]
+    pub with: WithItem<'db>,
+    /// The operand's position in the declaration.
+    #[returns(copy)]
+    pub index: u32,
+    /// The trait the operand can answer, known without lowering its arguments.
+    #[returns(copy)]
+    pub trait_: Trait<'db>,
+    /// The self type of the operand's implementation, as its header states it
+    /// before anything is evaluated: an unevaluated constant stays unevaluated.
+    /// A goal or a receiver of a type that it cannot match never chooses the
+    /// operand (`self_ty_may_match`).
+    #[returns(copy)]
+    pub self_ty: TyId<'db>,
+}
+
+impl<'db> TyFoldable<'db> for DeclaredOperand<'db> {
+    fn super_fold_with<F: super::fold::TyFolder<'db>>(
+        self,
+        _db: &'db dyn HirAnalysisDb,
+        _folder: &mut F,
+    ) -> Self {
+        self
+    }
+}
+
+impl<'db> TyVisitable<'db> for DeclaredOperand<'db> {
+    fn visit_with<V: TyVisitor<'db> + ?Sized>(&self, _visitor: &mut V) {}
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SalsaValue)]
 pub enum ChoiceEntry<'db> {
     Impl(ChosenImpl<'db>),
     Provider(generation::ProviderOpening<'db>),
+    /// An operand of a module's `with`, chosen when a goal of its trait asks.
+    Declared(DeclaredOperand<'db>),
 }
 
 impl<'db> ChoiceEntry<'db> {
+    /// The implementation the entry holds. A declared operand holds none until
+    /// it is asked for (`implementation_if`).
     pub fn implementation(self) -> Option<ChosenImpl<'db>> {
         match self {
             Self::Impl(choice) => Some(choice),
+            Self::Provider(_) | Self::Declared(_) => None,
+        }
+    }
+
+    /// The implementation the entry holds, for a reader that wants an operand
+    /// of the trait and self type `wants` accepts. A declared operand is chosen
+    /// only then, so a reader never forces an operand it cannot use.
+    pub fn implementation_if(
+        self,
+        db: &'db dyn HirAnalysisDb,
+        wants: impl FnOnce(Trait<'db>, TyId<'db>) -> bool,
+    ) -> Option<ChosenImpl<'db>> {
+        match self {
+            Self::Impl(choice) => Some(choice),
             Self::Provider(_) => None,
+            Self::Declared(operand) => wants(operand.trait_(db), operand.self_ty(db))
+                .then(|| declared_choice(db, operand).choice)
+                .flatten(),
         }
     }
 }
@@ -193,6 +255,7 @@ impl<'db> TyFoldable<'db> for ChoiceEntry<'db> {
         match self {
             Self::Impl(choice) => Self::Impl(choice.fold_with(db, folder)),
             Self::Provider(opening) => Self::Provider(opening.fold_with(db, folder)),
+            Self::Declared(operand) => Self::Declared(operand),
         }
     }
 }
@@ -202,6 +265,7 @@ impl<'db> TyVisitable<'db> for ChoiceEntry<'db> {
         match self {
             Self::Impl(choice) => choice.visit_with(visitor),
             Self::Provider(opening) => opening.visit_with(visitor),
+            Self::Declared(operand) => operand.visit_with(visitor),
         }
     }
 }
@@ -282,38 +346,51 @@ impl<'db> ChosenImpls<'db> {
         (!items.is_empty()).then(|| Self::intern(db, items, frames))
     }
 
-    pub fn push(
+    /// `outer` with `entry` pushed after its entries.
+    fn push_entry(
         db: &'db dyn HirAnalysisDb,
         outer: Option<Self>,
-        implementation: ImplementorId<'db>,
+        entry: ChoiceEntry<'db>,
     ) -> Self {
         let mut items = outer
             .map(|outer| outer.items(db).clone())
             .unwrap_or_default();
-        items.push(ChoiceEntry::Impl(ChosenImpl::unapplied(db, implementation)));
+        items.push(entry);
         let frames = outer
             .map(|outer| outer.frames(db).clone())
             .unwrap_or_default();
         Self::intern(db, items, frames)
     }
+
+    pub fn push(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        implementation: ImplementorId<'db>,
+    ) -> Self {
+        let choice = ChosenImpl::unapplied(db, implementation);
+        Self::push_entry(db, outer, ChoiceEntry::Impl(choice))
+    }
+
     pub fn push_applied(
         db: &'db dyn HirAnalysisDb,
         outer: Option<Self>,
         template: ImplementorId<'db>,
         applied: ImplementorId<'db>,
     ) -> Self {
-        let mut items = outer
-            .map(|outer| outer.items(db).clone())
-            .unwrap_or_default();
-        items.push(ChoiceEntry::Impl(ChosenImpl {
+        let choice = ChosenImpl {
             template,
             applied: Some(applied),
             inherited: None,
-        }));
-        let frames = outer
-            .map(|outer| outer.frames(db).clone())
-            .unwrap_or_default();
-        Self::intern(db, items, frames)
+        };
+        Self::push_entry(db, outer, ChoiceEntry::Impl(choice))
+    }
+
+    pub(crate) fn push_declared(
+        db: &'db dyn HirAnalysisDb,
+        outer: Option<Self>,
+        operand: DeclaredOperand<'db>,
+    ) -> Self {
+        Self::push_entry(db, outer, ChoiceEntry::Declared(operand))
     }
 
     pub fn push_provider(
@@ -321,14 +398,7 @@ impl<'db> ChosenImpls<'db> {
         outer: Option<Self>,
         opening: generation::ProviderOpening<'db>,
     ) -> Self {
-        let mut items = outer
-            .map(|outer| outer.items(db).clone())
-            .unwrap_or_default();
-        items.push(ChoiceEntry::Provider(opening));
-        let frames = outer
-            .map(|outer| outer.frames(db).clone())
-            .unwrap_or_default();
-        Self::intern(db, items, frames)
+        Self::push_entry(db, outer, ChoiceEntry::Provider(opening))
     }
 }
 

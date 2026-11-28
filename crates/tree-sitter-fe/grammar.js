@@ -114,7 +114,7 @@ module.exports = grammar({
     // body or a braced `where` condition first.
     source_file: $ => seq(
       optional($.inner_attribute_list),
-      repeat(choice($._item, prec.dynamic(-1, $._statement))),
+      repeat(choice($._item, $.module_with, prec.dynamic(-1, $._statement))),
     ),
 
     // Statement terminator: either an explicit ';' or an automatic one
@@ -633,6 +633,15 @@ module.exports = grammar({
       '}',
     ),
 
+    // A module's `with` declaration: the implementations every body of the
+    // module is checked under. The compiler's parser decides which operands are
+    // allowed; a list followed by a block is a `with` expression.
+    module_with: $ => seq(
+      'with',
+      field('operands', $.with_param_list),
+      $._header_end,
+    ),
+
     // Type alias
     type_alias: $ => seq(
       optional($.attribute_list),
@@ -652,7 +661,7 @@ module.exports = grammar({
       field('name', $.identifier),
       '{',
       optional($.inner_attribute_list),
-      repeat($._item),
+      repeat(choice($._item, $.module_with)),
       '}',
     ),
 

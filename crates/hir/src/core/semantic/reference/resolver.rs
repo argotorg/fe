@@ -232,6 +232,6 @@ pub fn resolved_item_scope_targets<'db>(
         ItemKind::Contract(c) => resolved_contract_scope_targets(db, c),
         ItemKind::Const(c) => resolved_const_scope_targets(db, c),
         ItemKind::StaticAssert(assert_) => resolved_static_assert_scope_targets(db, assert_),
-        ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_RESOLVED,
+        ItemKind::TopMod(_) | ItemKind::Mod(_) | ItemKind::With(_) => EMPTY_RESOLVED,
     }
 }

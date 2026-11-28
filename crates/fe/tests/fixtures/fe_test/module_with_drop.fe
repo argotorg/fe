@@ -1,0 +1,53 @@
+// The `drop` of a value is a fact of its type, not a choice of the module of
+// the body that destroys it: the bound of the `Drop` implementation is
+// answered as the implementation of `Holder` is, where it is written, so a
+// module's `with` does not reach it. The same `drop` runs with and without a
+// declaration in the module of the body that ends the value's life. On the EVM
+// a drop that does nothing is skipped, so the `assert(false)` of the chosen
+// `show` would revert if the module's choice were applied.
+use core::ops::Drop
+
+pub trait Show {
+    fn show(self)
+}
+pub struct Tag {}
+impl Show for Tag {
+    fn show(self) {}
+}
+pub impl Show for Tag as Loud {
+    fn show(self) {
+        assert(false)
+    }
+}
+
+pub struct Holder<T: Show> { t: T }
+impl<T: Show> Drop for Holder<T> {
+    fn drop(own self) {
+        self.t.show()
+    }
+}
+
+pub mod chosen {
+    use super::*
+    with (Loud)
+    pub fn run() {
+        let _h = Holder { t: Tag {} }
+    }
+}
+
+pub mod ordinary {
+    use super::*
+    pub fn run() {
+        let _h = Holder { t: Tag {} }
+    }
+}
+
+#[test]
+fn a_drop_under_a_modules_choice_runs_the_ordinary_implementation() {
+    chosen::run()
+}
+
+#[test]
+fn a_drop_without_a_choice_runs_the_ordinary_implementation() {
+    ordinary::run()
+}

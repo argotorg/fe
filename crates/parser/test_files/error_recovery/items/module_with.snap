@@ -1,0 +1,253 @@
+---
+source: crates/parser/tests/error_recovery.rs
+expression: node
+input_file: test_files/error_recovery/items/module_with.fe
+---
+Root@0..301
+  ItemList@0..300
+    Item@0..39
+      Mod@0..39
+        ModKw@0..3 "mod"
+        WhiteSpace@3..4 " "
+        Ident@4..9 "twice"
+        WhiteSpace@9..10 " "
+        ItemList@10..39
+          LBrace@10..11 "{"
+          Newline@11..12 "\n"
+          WhiteSpace@12..16 "    "
+          Item@16..24
+            WithItem@16..24
+              Ident@16..20 "with"
+              WhiteSpace@20..21 " "
+              WithItemList@21..24
+                LParen@21..22 "("
+                Path@22..23
+                  PathSegment@22..23
+                    Ident@22..23 "A"
+                RParen@23..24 ")"
+          Newline@24..25 "\n"
+          WhiteSpace@25..29 "    "
+          Item@29..37
+            WithItem@29..37
+              Ident@29..33 "with"
+              WhiteSpace@33..34 " "
+              WithItemList@34..37
+                LParen@34..35 "("
+                Path@35..36
+                  PathSegment@35..36
+                    Ident@35..36 "B"
+                RParen@36..37 ")"
+          Newline@37..38 "\n"
+          RBrace@38..39 "}"
+    Newline@39..40 "\n"
+    Item@40..75
+      Mod@40..75
+        ModKw@40..43 "mod"
+        WhiteSpace@43..44 " "
+        Ident@44..54 "visibility"
+        WhiteSpace@54..55 " "
+        ItemList@55..75
+          LBrace@55..56 "{"
+          Newline@56..57 "\n"
+          WhiteSpace@57..61 "    "
+          Item@61..73
+            WithItem@61..73
+              PubKw@61..64 "pub"
+              WhiteSpace@64..65 " "
+              Ident@65..69 "with"
+              WhiteSpace@69..70 " "
+              WithItemList@70..73
+                LParen@70..71 "("
+                Path@71..72
+                  PathSegment@71..72
+                    Ident@71..72 "A"
+                RParen@72..73 ")"
+          Newline@73..74 "\n"
+          RBrace@74..75 "}"
+    Newline@75..76 "\n"
+    Item@76..124
+      Mod@76..124
+        ModKw@76..79 "mod"
+        WhiteSpace@79..80 " "
+        Ident@80..90 "attributes"
+        WhiteSpace@90..91 " "
+        ItemList@91..124
+          LBrace@91..92 "{"
+          Newline@92..93 "\n"
+          WhiteSpace@93..97 "    "
+          Item@97..122
+            WithItem@97..122
+              AttrList@97..110
+                Attr@97..109
+                  Pound@97..98 "#"
+                  LBracket@98..99 "["
+                  Path@99..102
+                    PathSegment@99..102
+                      Ident@99..102 "cfg"
+                  AttrArgList@102..108
+                    LParen@102..103 "("
+                    AttrArg@103..107
+                      Path@103..107
+                        PathSegment@103..107
+                          Ident@103..107 "test"
+                    RParen@107..108 ")"
+                  RBracket@108..109 "]"
+                Newline@109..110 "\n"
+              WhiteSpace@110..114 "    "
+              Ident@114..118 "with"
+              WhiteSpace@118..119 " "
+              WithItemList@119..122
+                LParen@119..120 "("
+                Path@120..121
+                  PathSegment@120..121
+                    Ident@120..121 "A"
+                RParen@121..122 ")"
+          Newline@122..123 "\n"
+          RBrace@123..124 "}"
+    Newline@124..125 "\n"
+    Item@125..150
+      Mod@125..150
+        ModKw@125..128 "mod"
+        WhiteSpace@128..129 " "
+        Ident@129..134 "empty"
+        WhiteSpace@134..135 " "
+        ItemList@135..150
+          LBrace@135..136 "{"
+          Newline@136..137 "\n"
+          WhiteSpace@137..141 "    "
+          Item@141..148
+            WithItem@141..148
+              Ident@141..145 "with"
+              WhiteSpace@145..146 " "
+              WithItemList@146..148
+                LParen@146..147 "("
+                RParen@147..148 ")"
+          Newline@148..149 "\n"
+          RBrace@149..150 "}"
+    Newline@150..151 "\n"
+    Item@151..187
+      Mod@151..187
+        ModKw@151..154 "mod"
+        WhiteSpace@154..155 " "
+        Ident@155..160 "keyed"
+        WhiteSpace@160..161 " "
+        ItemList@161..187
+          LBrace@161..162 "{"
+          Newline@162..163 "\n"
+          WhiteSpace@163..167 "    "
+          Item@167..185
+            WithItem@167..185
+              Ident@167..171 "with"
+              WhiteSpace@171..172 " "
+              WithItemList@172..185
+                LParen@172..173 "("
+                Path@173..176
+                  PathSegment@173..176
+                    Ident@173..176 "Key"
+                WhiteSpace@176..177 " "
+                Error@177..184
+                  Eq@177..178 "="
+                  WhiteSpace@178..179 " "
+                  Ident@179..184 "value"
+                RParen@184..185 ")"
+          Newline@185..186 "\n"
+          RBrace@186..187 "}"
+    Newline@187..188 "\n"
+    Item@188..223
+      Mod@188..223
+        ModKw@188..191 "mod"
+        WhiteSpace@191..192 " "
+        Ident@192..202 "expression"
+        WhiteSpace@202..203 " "
+        ItemList@203..223
+          LBrace@203..204 "{"
+          Newline@204..205 "\n"
+          WhiteSpace@205..209 "    "
+          Item@209..221
+            WithItem@209..221
+              Ident@209..213 "with"
+              WhiteSpace@213..214 " "
+              WithItemList@214..221
+                LParen@214..215 "("
+                Error@215..220
+                  Int@215..216 "1"
+                  WhiteSpace@216..217 " "
+                  Plus@217..218 "+"
+                  WhiteSpace@218..219 " "
+                  Int@219..220 "2"
+                RParen@220..221 ")"
+          Newline@221..222 "\n"
+          RBrace@222..223 "}"
+    Newline@223..224 "\n"
+    Item@224..262
+      Mod@224..262
+        ModKw@224..227 "mod"
+        WhiteSpace@227..228 " "
+        Ident@228..233 "block"
+        WhiteSpace@233..234 " "
+        ItemList@234..262
+          LBrace@234..235 "{"
+          Newline@235..236 "\n"
+          WhiteSpace@236..240 "    "
+          Item@240..249
+            WithItem@240..249
+              Ident@240..244 "with"
+              WhiteSpace@244..245 " "
+              WithItemList@245..248
+                LParen@245..246 "("
+                Path@246..247
+                  PathSegment@246..247
+                    Ident@246..247 "A"
+                RParen@247..248 ")"
+              WhiteSpace@248..249 " "
+          Error@249..250
+            LBrace@249..250 "{"
+          WhiteSpace@250..251 " "
+          Item@251..260
+            Func@251..260
+              FnKw@251..253 "fn"
+              WhiteSpace@253..254 " "
+              FuncSignature@254..257
+                Ident@254..255 "f"
+                FuncParamList@255..257
+                  LParen@255..256 "("
+                  RParen@256..257 ")"
+              WhiteSpace@257..258 " "
+              BlockExpr@258..260
+                LBrace@258..259 "{"
+                RBrace@259..260 "}"
+          WhiteSpace@260..261 " "
+          RBrace@261..262 "}"
+    Newline@262..263 "\n"
+    Item@263..300
+      Error@263..264
+        RBrace@263..264 "}"
+      Newline@264..265 "\n"
+      Func@265..300
+        FnKw@265..267 "fn"
+        WhiteSpace@267..268 " "
+        FuncSignature@268..279
+          Ident@268..277 "in_a_body"
+          FuncParamList@277..279
+            LParen@277..278 "("
+            RParen@278..279 ")"
+        WhiteSpace@279..280 " "
+        BlockExpr@280..300
+          LBrace@280..281 "{"
+          Newline@281..282 "\n"
+          WhiteSpace@282..286 "    "
+          Item@286..298
+            WithItem@286..298
+              PubKw@286..289 "pub"
+              WhiteSpace@289..290 " "
+              Ident@290..294 "with"
+              WhiteSpace@294..295 " "
+              WithItemList@295..298
+                LParen@295..296 "("
+                Path@296..297
+                  PathSegment@296..297
+                    Ident@296..297 "A"
+                RParen@297..298 ")"
+          Newline@298..299 "\n"
+          RBrace@299..300 "}"
+  Newline@300..301 "\n"

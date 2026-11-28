@@ -4174,6 +4174,11 @@ const EVM_ONLY_FE_TESTS: &[&str] = &[
     "minimum_gas_calls",
     "mixed_space_forwarding",
     "mode_receivers_contract",
+    "module_with_chosen_prerequisite",
+    "module_with_codec_evidence",
+    "module_with_entry_return",
+    "module_with_panic",
+    "module_with_storage",
     "msg_array_arg",
     "msg_enum_field",
     "msg_multiple_dynamic_bytes",
@@ -7218,6 +7223,32 @@ fn named_storage_preserves_dispatch_at_both_optimization_levels() {
             assert_eq!(exit, 0, "{fixture} at O{level}: {output}");
         }
     }
+}
+
+// The entry code of a contract is planned under the frame of the contract's
+// module. A choice of that frame whose prerequisite nothing satisfies is
+// refused by `fe check` and `fe build` alike, at the arm, with the same text.
+#[test]
+fn test_cli_module_frame_choice_with_an_unmet_prerequisite_is_refused_by_check_and_build() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/module_with_chosen_prerequisite_missing.fe");
+    let path = path.to_str().unwrap();
+    let (checked, exit) = run_fe_main(&["check", path]);
+    assert_eq!(exit, 1, "{checked}");
+    let temp = tempdir().unwrap();
+    let out_dir = temp.path().join("out");
+    let (built, exit) = run_fe_main(&["build", "--out-dir", out_dir.to_str().unwrap(), path]);
+    assert_eq!(exit, 1, "{built}");
+    let error = |output: &str| {
+        output
+            .lines()
+            .skip_while(|line| !line.contains("16-0024"))
+            .take_while(|line| !line.starts_with("==="))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert!(error(&checked).contains("16-0024"), "{checked}");
+    assert_eq!(error(&checked), error(&built));
 }
 
 // A program that names no implementation is unaffected by the checks that read

@@ -59,6 +59,34 @@ fn trait_inst_head<'db>(db: &'db dyn HirAnalysisDb, inst: TraitInstId<'db>) -> T
     TraitInstId::new_simple(db, inst.def(db), inst.args(db).to_vec())
 }
 
+/// Whether the types `header` and `goal` can unify, judged by their base types
+/// and applications alone. Parameters, projections, consts and error types are
+/// not compared.
+fn may_unify<'db>(db: &'db dyn HirAnalysisDb, header: TyId<'db>, goal: TyId<'db>) -> bool {
+    match (header.data(db), goal.data(db)) {
+        (TyData::TyApp(header_abs, header_arg), TyData::TyApp(goal_abs, goal_arg)) => {
+            may_unify(db, *header_abs, *goal_abs) && may_unify(db, *header_arg, *goal_arg)
+        }
+        (TyData::TyBase(_) | TyData::TyApp(..), TyData::TyBase(_) | TyData::TyApp(..)) => {
+            header == goal
+        }
+        _ => true,
+    }
+}
+
+/// Whether an implementation for the self type `header`, as a header states it
+/// before anything is evaluated, can serve a goal or a receiver of the self
+/// type `goal`. Unevaluated constants and inference variables can match, and a
+/// capability around either type is looked through.
+pub(crate) fn self_ty_may_match<'db>(
+    db: &'db dyn HirAnalysisDb,
+    header: TyId<'db>,
+    goal: TyId<'db>,
+) -> bool {
+    let bare = |ty: TyId<'db>| ty.as_capability(db).map_or(ty, |(_, inner)| inner);
+    may_unify(db, bare(header), bare(goal))
+}
+
 /// Whether the impl `header` can match the normalized `goal`, checked before
 /// the header is instantiated and normalized.
 ///
@@ -71,18 +99,6 @@ fn impl_header_may_match<'db>(
     header: ImplementorId<'db>,
     goal: TraitInstId<'db>,
 ) -> bool {
-    fn may_unify<'db>(db: &'db dyn HirAnalysisDb, header: TyId<'db>, goal: TyId<'db>) -> bool {
-        match (header.data(db), goal.data(db)) {
-            (TyData::TyApp(header_abs, header_arg), TyData::TyApp(goal_abs, goal_arg)) => {
-                may_unify(db, *header_abs, *goal_abs) && may_unify(db, *header_arg, *goal_arg)
-            }
-            (TyData::TyBase(_) | TyData::TyApp(..), TyData::TyBase(_) | TyData::TyApp(..)) => {
-                header == goal
-            }
-            _ => true,
-        }
-    }
-
     let inst = header.trait_(db);
     inst.args(db)
         .iter()
@@ -156,7 +172,7 @@ pub(super) fn matching_choice_in<'db>(
             }
             let opening = match entry {
                 ChoiceEntry::Provider(opening) => Some(opening),
-                ChoiceEntry::Impl(_) => None,
+                ChoiceEntry::Impl(_) | ChoiceEntry::Declared(_) => None,
             };
             match &selected {
                 Some((previous, _, earlier)) if opening.is_some() || earlier.is_some() => {
@@ -192,6 +208,16 @@ pub(super) fn match_choice_entry<'db>(
 ) -> Option<ChoiceMatch<'db>> {
     let choice = match entry {
         super::ChoiceEntry::Impl(choice) => choice,
+        // A declared operand answers only goals of its trait and self type, and
+        // is chosen only then: any other goal never forces it.
+        super::ChoiceEntry::Declared(operand) => {
+            if operand.trait_(db) != goal.def(db)
+                || !self_ty_may_match(db, operand.self_ty(db), goal.self_ty(db))
+            {
+                return None;
+            }
+            super::super::ty_check::module_with::declared_choice(db, operand).choice?
+        }
         super::ChoiceEntry::Provider(opening) => {
             if !opening.may_offer(db, goal.def(db)) {
                 return None;
@@ -993,6 +1019,11 @@ impl<'db> TraitResolutionContext<'db> {
                         || !choices.items(self.db).iter().any(|entry| match entry {
                             super::ChoiceEntry::Provider(opening) => {
                                 opening.may_offer(self.db, goal.def(self.db))
+                            }
+                            // A declared operand may answer a goal of its trait,
+                            // and is not chosen to say so.
+                            super::ChoiceEntry::Declared(operand) => {
+                                operand.trait_(self.db) == goal.def(self.db)
                             }
                             super::ChoiceEntry::Impl(choice) => {
                                 let implementation = choice

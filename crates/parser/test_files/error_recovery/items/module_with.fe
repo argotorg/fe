@@ -1,0 +1,26 @@
+mod twice {
+    with (A)
+    with (B)
+}
+mod visibility {
+    pub with (A)
+}
+mod attributes {
+    #[cfg(test)]
+    with (A)
+}
+mod empty {
+    with ()
+}
+mod keyed {
+    with (Key = value)
+}
+mod expression {
+    with (1 + 2)
+}
+mod block {
+    with (A) { fn f() {} }
+}
+fn in_a_body() {
+    pub with (A)
+}

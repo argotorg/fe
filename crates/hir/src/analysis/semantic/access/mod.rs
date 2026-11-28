@@ -492,6 +492,7 @@ fn collect_semantic_access_with_blocked<'db>(
             | ItemKind::Impl(_)
             | ItemKind::ImplTrait(_)
             | ItemKind::TypeAlias(_)
+            | ItemKind::With(_)
             | ItemKind::Use(_)
             | ItemKind::TopMod(_)
             | ItemKind::Body(_) => {}

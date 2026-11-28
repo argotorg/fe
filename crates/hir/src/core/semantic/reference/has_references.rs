@@ -69,6 +69,8 @@ impl<'db> HasReferences<'db> for ItemKind<'db> {
             ItemKind::Use(use_item) => use_references(db, *use_item),
             ItemKind::Const(c) => const_references(db, *c),
             ItemKind::StaticAssert(assert_) => static_assert_references(db, *assert_),
+            // The operands name implementations, which no reference domain covers yet.
+            ItemKind::With(_) => EMPTY_REFS,
             // Modules don't contain references themselves
             ItemKind::TopMod(_) | ItemKind::Mod(_) => EMPTY_REFS,
             ItemKind::Contract(contract) => contract_references(db, *contract),
